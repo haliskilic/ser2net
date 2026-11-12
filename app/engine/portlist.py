@@ -15,6 +15,7 @@ import asyncio
 import os
 import sys
 import threading
+import time
 from typing import Any, Callable, Optional
 
 BY_ID_DIR = "/dev/serial/by-id"
@@ -103,6 +104,24 @@ async def async_snapshot() -> list[dict[str, Any]]:
     return await asyncio.to_thread(snapshot)
 
 
+# the last list a PortWatcher took: (time.monotonic(), ports)
+_recent: tuple[float, list[dict[str, Any]]] = (0.0, [])
+
+
+def recent(max_age: float = 5.0) -> Optional[list[dict[str, Any]]]:
+    """The port list a running PortWatcher took at most ``max_age`` seconds ago, None
+    when there is none that fresh (no watcher: enumerate instead)."""
+    taken, ports = _recent
+    if not taken or time.monotonic() - taken > max_age:
+        return None
+    return list(ports)
+
+
+def _remember(ports: list[dict[str, Any]]) -> None:
+    global _recent
+    _recent = (time.monotonic(), list(ports))
+
+
 class PortWatcher:
     """Polls the serial port list on an interval and tracks the current snapshot.
 
@@ -130,6 +149,7 @@ class PortWatcher:
     async def start(self) -> None:
         # prime synchronously so the first UI render has data
         self._ports = await async_snapshot()
+        _remember(self._ports)
         self._version = 1
         self._stop.clear()
         self._task = asyncio.create_task(self._run(), name="port-watcher")
@@ -140,6 +160,8 @@ class PortWatcher:
         self._start_event_watcher()
 
     async def stop(self) -> None:
+        global _recent
+        _recent = (0.0, [])
         self._stop.set()
         if self._task:
             self._task.cancel()
@@ -196,6 +218,7 @@ class PortWatcher:
         return self.get()
 
     def _apply(self, new: list[dict[str, Any]]) -> None:
+        _remember(new)  # (before on_change: a mapping it wakes resolves its port from it)
         if {p["device"] for p in new} != {p["device"] for p in self._ports}:
             self._ports = new
             self._version += 1

@@ -1,4 +1,4 @@
-"""How a mapping keeps trying a serial port it can't open (POSIX PTYs, no socat).
+"""How a mapping keeps trying a serial port it can't open (no socat; PTY parts POSIX only).
 
   - the log: the first failure and each change of the error, then the same error only
     every FAILING_SUMMARY_S with how many attempts failed since when, and how long it was
@@ -7,6 +7,11 @@
     retries, nothing overwrites it with reconnecting), reconnecting right after an open
     port went away; open_failures and device_lost count the two (reconnects both, as
     before), also in /metrics;
+  - a port that appears (PortWatcher's on_change -> Supervisor.ports_changed) wakes the
+    mappings waiting to open theirs again (state device-missing / reconnecting) at once,
+    instead of after their backoff (up to ~10 s); one that is running is left alone;
+  - a mapping bound to a USB identity finds its port in the PortWatcher's list when that is
+    fresh, else by enumerating in a thread: never on the event loop;
   - serial<->serial bridge: while one port is missing, the other one is not opened and
     closed again at every retry (each open pulses DTR/RTS: a board that resets on DTR
     would reset every few seconds). The side that failed is opened first next time, so
@@ -24,15 +29,19 @@ import os
 import shutil
 import sys
 import tempfile
+import threading
+import time
+import types
 from unittest import mock
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "lib"))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from app.config import AppConfig, MappingConfig
-from app.engine import serial_io, serial_link
+from app.config import AppConfig, MappingConfig, SerialSettings
+from app.engine import portlist, serial_io, serial_link
 from app.engine.bridge import MappingRunner
-from app.engine.serial_link import FAILING_SUMMARY_S, FailureLog
+from app.engine.serial_link import FAILING_SUMMARY_S, Backoff, FailureLog
+from app.engine.supervisor import Supervisor
 
 
 class Pty:
@@ -240,6 +249,120 @@ def test_metrics():
     print("/metrics: reconnects as before, open failures and device losses apart  OK")
 
 
+async def _wake():
+    backoff = Backoff()
+    stop = asyncio.Event()
+    with mock.patch.object(Backoff, "pause", lambda self: 30.0):
+        t0 = time.monotonic()
+        waiting = asyncio.ensure_future(backoff.wait(stop))
+        await asyncio.sleep(0.05)
+        backoff.wake()
+        assert await waiting is True and time.monotonic() - t0 < 1, "woken: try now"
+        waiting = asyncio.ensure_future(backoff.wait(stop))
+        await asyncio.sleep(0.05)
+        stop.set()
+        assert await waiting is False, "stopped"
+    backoff.wake()  # (nothing waits: nothing happens)
+
+    # the supervisor wakes the mappings waiting for their port when a port appears
+    sup = Supervisor()
+    woken = []
+
+    def runner(name, state):
+        r = types.SimpleNamespace(status=types.SimpleNamespace(state=state))
+        r.wake_serial = lambda: woken.append(name)
+        return r
+
+    sup._runners = {"a": runner("a", "device-missing"), "b": runner("b", "reconnecting"),
+                    "c": runner("c", "running"), "d": runner("d", "stopped")}
+    ports = [{"device": "/dev/ttyS0", "by_id": None}]
+    sup.ports_changed(ports)
+    woken.clear()
+    sup.ports_changed([])  # a port went away: nothing to try
+    assert woken == [], woken
+    sup.ports_changed([{"device": "/dev/ttyUSB0", "by_id": "/dev/serial/by-id/usb-x"}])
+    assert sorted(woken) == ["a", "b"], woken
+
+
+async def _replug_wakes(folder):
+    link = os.path.join(folder, "port")
+    m = MappingConfig.from_dict({"name": "raw", "serial": {"port": link},
+                                 "network": {"mode": "client", "protocol": "raw",
+                                             "remote_host": "127.0.0.1", "remote_port": 9}})
+    runner = MappingRunner(m)
+    sup = Supervisor()
+    sup._runners = {m.id: runner}
+    pty = Pty()
+    task = None
+    try:
+        with mock.patch.object(Backoff, "pause", lambda self: 30.0):
+            task = asyncio.ensure_future(runner._link.run(runner._serial_session))
+            await until(lambda: runner.status.open_failures == 1)
+            os.symlink(pty.path, link)  # plugged in; the next try is 30 s away
+            await asyncio.sleep(0.1)
+            assert runner.status.state == "device-missing"
+            t0 = time.monotonic()
+            sup.ports_changed([{"device": pty.path, "by_id": None}])
+            await until(lambda: runner.status.state == "running", timeout=2)
+            assert time.monotonic() - t0 < 1, "opened at once, not after the backoff"
+    finally:
+        if task is not None:
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+        await runner._link.close()
+        pty.close()
+
+
+def test_a_new_port_wakes_the_waiting_mappings():
+    asyncio.run(_wake())
+    if os.name == "posix":
+        folder = tempfile.mkdtemp(prefix="s2n_retries_")
+        try:
+            asyncio.run(_replug_wakes(folder))
+        finally:
+            shutil.rmtree(folder, ignore_errors=True)
+    else:
+        print("SKIP (part): the PTY re-plug check is POSIX only")
+    print("a port that appears: the mappings waiting for theirs try at once (a running one is "
+          "left alone); a pause can be woken or stopped  OK")
+
+
+async def _resolved_off_the_loop():
+    from serial.tools import list_ports
+    settings = SerialSettings.from_dict({"port": "/dev/ttyUSB0",
+                                         "match": {"vid": "0403", "pid": "6001",
+                                                   "serial_number": "A1"}})
+    loop_thread = threading.current_thread()
+    calls = []
+
+    def comports():
+        calls.append(threading.current_thread())
+        return [types.SimpleNamespace(device="/dev/ttyUSB5", vid=0x0403, pid=0x6001,
+                                      serial_number="A1", location=None)]
+
+    with mock.patch.object(list_ports, "comports", comports):
+        portlist._remember([{"device": "/dev/ttyUSB7", "vid": "0403", "pid": "6001",
+                             "serial_number": "A1", "location": None}])
+        try:
+            assert await serial_io._resolve(settings) == "/dev/ttyUSB7" and not calls, \
+                "a fresh watcher list is used"
+            taken, ports = portlist._recent
+            portlist._recent = (taken - 60, ports)  # a minute old: not used
+            assert await serial_io._resolve(settings) == "/dev/ttyUSB5"
+            assert calls and loop_thread not in calls, "enumerated in a thread"
+        finally:
+            portlist._recent = (0.0, [])
+    plain = SerialSettings(port="/dev/ttyACM0")
+    assert await serial_io._resolve(plain) == "/dev/ttyACM0"
+
+
+def test_usb_identity_resolved_off_the_event_loop():
+    asyncio.run(_resolved_off_the_loop())
+    print("USB identity: found in the watcher's fresh list, else enumerated in a thread, "
+          "never on the event loop  OK")
+
+
 def test_bridge_opens_the_missing_side_first():
     if os.name != "posix":
         print("SKIP (part): the PTY checks are POSIX only")
@@ -257,5 +380,7 @@ if __name__ == "__main__":
     test_failure_log()
     test_states_and_counters()
     test_metrics()
+    test_a_new_port_wakes_the_waiting_mappings()
+    test_usb_identity_resolved_off_the_event_loop()
     test_bridge_opens_the_missing_side_first()
     print("\nPASS: how a mapping keeps trying a serial port it can't open")

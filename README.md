@@ -121,8 +121,10 @@ düzenlemeye gerek yok.
 - **IP seçici:** makineye atanmış IP'ler (localhost / LAN / 0.0.0.0) veya custom.
 - **Eksik ya da meşgul seri cihaz:** cihaz yokken (çıkarılmış, henüz tanınmamış) eşleme
   `cihaz yok`, açık port az önce kaybolduğunda ya da başka bir nedenle açılamadığında
-  `yeniden bağlanıyor` gösterir; birkaç saniyede bir (en fazla yaklaşık 10 sn arayla) yeniden
-  denenir. Log, her denemede bir satır yazmak yerine ilk hatayı ve hatanın her değişmesini,
+  `yeniden bağlanıyor` gösterir; birkaç saniyede bir (en fazla yaklaşık 10 sn arayla), port
+  listesi yeni bir cihaz gördüğünde ise hemen yeniden denenir (yeniden takılan bir adaptör
+  yaklaşık 2 sn içinde kullanılır). USB kimliğine bağlı bir eşleme, her denemede portları
+  taramak yerine cihazını bu listede bulur. Log, her denemede bir satır yazmak yerine ilk hatayı ve hatanın her değişmesini,
   aynı hatayı ise yalnızca 15 dakikada bir, ne zamandan beri kaç denemenin başarısız
   olduğuyla birlikte yazar; port yeniden açılınca ne kadar süre kapalı kaldığını söyler
   (başarısız olmayı sürdüren dışa bağlantılar için de aynısı). `/api/v1/status`, açılamayan

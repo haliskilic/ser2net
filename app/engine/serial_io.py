@@ -9,13 +9,14 @@ pyserial-asyncio-fast).
 """
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import sys
 import weakref
-from typing import Any
+from typing import Any, Optional
 
 from ..config import SerialSettings, url_port
-from . import portdiag
+from . import portdiag, portlist
 
 # StreamReader high-water for the serial side. The default (64 KB) makes the reader
 # pause/resume frequently under load; we read promptly in the bridge and apply our
@@ -38,18 +39,47 @@ def _match_port(p: Any, want: dict[str, Any]) -> bool:
     return True
 
 
-def resolve_device(settings: SerialSettings) -> str:
-    """Return the device path to open, preferring a stable-id match if configured."""
+def _match_listed(p: dict[str, Any], want: dict[str, Any]) -> bool:
+    """_match_port for a port of portlist's list (its IDs are hex strings already)."""
+    for key in ("vid", "pid"):
+        if want.get(key) and (p.get(key) or "") != str(want[key]).lower():
+            return False
+    for key in ("serial_number", "location"):
+        if want.get(key) and p.get(key) != want[key]:
+            return False
+    return True
+
+
+def resolve_device(settings: SerialSettings,
+                   ports: Optional[list[dict[str, Any]]] = None) -> str:
+    """Return the device path to open, preferring a stable-id match if configured: from
+    ``ports`` (portlist's list) when given, else by enumerating the ports (blocking)."""
     want = {k: v for k, v in (settings.match or {}).items() if v}
     if want:
-        from serial.tools import list_ports
+        if ports is not None:
+            for d in ports:
+                if _match_listed(d, want):
+                    return d["device"]
+        else:
+            from serial.tools import list_ports
 
-        for p in list_ports.comports():
-            if _match_port(p, want):
-                return p.device
+            for p in list_ports.comports():
+                if _match_port(p, want):
+                    return p.device
         # match not currently present -> fall back to the literal path (will error
         # at open if truly absent, which the supervisor reports as device-missing)
     return settings.port
+
+
+async def _resolve(settings: SerialSettings) -> str:
+    """resolve_device without blocking the event loop: from the port list the PortWatcher
+    keeps (fresh within a poll or two), else enumerated in a thread."""
+    if not any((settings.match or {}).values()):
+        return settings.port
+    ports = portlist.recent()
+    if ports is not None:
+        return resolve_device(settings, ports)
+    return await asyncio.to_thread(resolve_device, settings)
 
 
 def refuse_url(device: str) -> None:
@@ -92,7 +122,7 @@ async def open_serial(settings: SerialSettings):
     fail the open: open_notes(serial_instance) has it (portdiag.Note) for the caller to
     report. A refused RS-485 mode is also taken back, as pyserial keeps it and would fail
     every later change of the port's settings with it (an RFC 2217 client's baud rate)."""
-    device = resolve_device(settings)
+    device = await _resolve(settings)
     refuse_url(device)  # the one place every serial port is opened
     kwargs: dict[str, Any] = port_settings(settings)
     # `exclusive` is POSIX-only in pyserial; Windows ports are exclusive anyway.

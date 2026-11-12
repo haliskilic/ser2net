@@ -622,6 +622,7 @@ class MappingRunner:
         # the serial port shared by server/client/udp (a serial<->serial bridge opens its own)
         self._link = SerialLink(mapping.serial, self.status, self._stop, self._log,
                                 on_change=self._serial_changed, owner=mapping.name)
+        self._bridge_backoff: Optional[Backoff] = None  # a serial<->serial bridge's retries
         self._access = AccessPolicy(mapping.network)
         self._drop_log = _LogEvery(self._log)  # data for the device that was not written
         co = mapping.options.closeon
@@ -632,6 +633,13 @@ class MappingRunner:
     def serial_instance(self):
         """The open pyserial object (None while the port is closed)."""
         return self._link.serial
+
+    def wake_serial(self) -> None:
+        """A serial device was plugged in (PortWatcher): a port waiting to be opened again
+        is tried now instead of after its backoff."""
+        self._link.wake()
+        if self._bridge_backoff is not None:
+            self._bridge_backoff.wake()
 
     def _log(self, msg: str) -> None:
         # The logger (a per-mapping logger from AppState) adds the "[name]" prefix
@@ -1041,7 +1049,7 @@ class MappingRunner:
         while one port is missing, the other one is not opened and closed again at every
         retry (each open pulses its DTR and RTS: a board that resets on DTR would reset
         every few seconds)."""
-        backoff = Backoff()
+        backoff = self._bridge_backoff = Backoff()
         notes = NoteLog(self._log)
         failures = FailureLog(self._log, "serial bridge error")
         st = self.status

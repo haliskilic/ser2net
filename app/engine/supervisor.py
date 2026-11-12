@@ -124,6 +124,7 @@ class Supervisor:
         self._lock = asyncio.Lock()
         self._stopping: set[asyncio.Future] = set()  # stop_all()'s runners still stopping
         self._retries: dict[str, asyncio.Task] = {}  # mapping id -> its bind retry
+        self._ports: Optional[set[str]] = None  # the serial ports last seen (ports_changed)
 
     # ---------------- bulk ----------------
     async def start_all(self, config: AppConfig) -> None:
@@ -295,6 +296,20 @@ class Supervisor:
         # iterate a snapshot so a concurrent apply/remove can't change the dict
         # mid-iteration (defensive; also future-proofs against an async as_dict)
         return {mid: r.status.as_dict() for mid, r in list(self._runners.items())}
+
+    def ports_changed(self, ports: list[dict]) -> None:
+        """PortWatcher's on_change: when a serial port appeared, the mappings waiting to
+        open theirs again try now (a re-plugged adapter is used within the watcher's poll,
+        not after up to 10 s of backoff)."""
+        names = {n for p in ports for n in (p.get("device"), p.get("by_id")) if n}
+        new, self._ports = (names - self._ports if self._ports is not None else names), names
+        if not new:
+            return
+        for r in list(self._runners.values()):
+            if r.status.state in ("device-missing", "reconnecting"):
+                wake = getattr(r, "wake_serial", None)
+                if wake is not None:
+                    wake()
 
     def devices_in_use(self) -> set[str]:
         """The serial devices that running mappings hold open (for the Ports page): one per
