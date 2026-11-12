@@ -170,6 +170,11 @@ def _service_folder(directory: str) -> bool:
     return sec is not None and winservice.service_folder(*sec)
 
 
+def _choices(values) -> str:
+    """Allowed values for a message: "5, 6, 7, 8", not the tuple's "(5, 6, 7, 8)"."""
+    return ", ".join(str(v) for v in values)
+
+
 def _is_int(value: Any) -> bool:
     return isinstance(value, int) and not isinstance(value, bool)
 
@@ -269,13 +274,13 @@ class SerialSettings:
         if not isinstance(self.baudrate, int) or self.baudrate <= 0:
             raise ConfigError(_("Baud rate must be a positive integer."))
         if self.bytesize not in BYTESIZES:
-            raise ConfigError(_("Data bits must be one of {0}.").format(BYTESIZES))
+            raise ConfigError(_("Data bits must be one of {0}.").format(_choices(BYTESIZES)))
         if self.parity not in PARITIES:
-            raise ConfigError(_("Parity must be one of {0}.").format(PARITIES))
+            raise ConfigError(_("Parity must be one of {0}.").format(_choices(PARITIES)))
         if self.stopbits not in STOPBITS:
-            raise ConfigError(_("Stop bits must be one of {0}.").format(STOPBITS))
+            raise ConfigError(_("Stop bits must be one of {0}.").format(_choices(STOPBITS)))
         if self.flowcontrol not in FLOWCONTROLS:
-            raise ConfigError(_("Flow control must be one of {0}.").format(FLOWCONTROLS))
+            raise ConfigError(_("Flow control must be one of {0}.").format(_choices(FLOWCONTROLS)))
         if self.rts_on_open not in LINE_STATES or self.dtr_on_open not in LINE_STATES:
             raise ConfigError(_("RTS/DTR on open must be on|off|keep."))
         # rtscts (hardware) flow control conflicts with RS-485 RTS direction toggling.
@@ -362,9 +367,9 @@ class NetworkSettings:
 
     def validate(self) -> None:
         if self.mode not in NET_MODES:
-            raise ConfigError(_("Network mode must be one of {0}.").format(NET_MODES))
+            raise ConfigError(_("Network mode must be one of {0}.").format(_choices(NET_MODES)))
         if self.protocol not in PROTOCOLS:
-            raise ConfigError(_("Protocol must be one of {0}.").format(PROTOCOLS))
+            raise ConfigError(_("Protocol must be one of {0}.").format(_choices(PROTOCOLS)))
 
         if self.listens:
             try:
@@ -579,7 +584,7 @@ class MqttSettings:
         if self.qos not in (0, 1, 2):
             raise ConfigError(_("MQTT QoS must be 0, 1 or 2."))
         if self.payload_format not in MQTT_FORMATS:
-            raise ConfigError(_("MQTT payload format must be one of {0}.").format(MQTT_FORMATS))
+            raise ConfigError(_("MQTT payload format must be one of {0}.").format(_choices(MQTT_FORMATS)))
         if self.payload_format == "sparkplug_b":
             for label, value in ((_("group ID"), self.sparkplug_group_id),
                                  (_("edge node ID"), self.sparkplug_node_id)):
@@ -648,7 +653,7 @@ class ModbusPoll:
             if not (0 <= p.address <= 65535):
                 raise ConfigError(_("Point {0}: address must be 0-65535.").format(repr(p.name)))
             if p.dtype not in MODBUS_DTYPES:
-                raise ConfigError(_("Point {0}: dtype must be one of {1}.").format(repr(p.name), MODBUS_DTYPES))
+                raise ConfigError(_("Point {0}: dtype must be one of {1}.").format(repr(p.name), _choices(MODBUS_DTYPES)))
             if (p.fn in (1, 2)) != (p.dtype == "bool"):
                 raise ConfigError(_("Point {0}: coils / discrete inputs (fn 1, 2) use dtype "
                                     "'bool'; registers (fn 3, 4) a numeric dtype.").format(repr(p.name)))
@@ -701,7 +706,7 @@ class MappingConfig:
         if not self.name.strip():
             raise ConfigError(_("Mapping name is required."))
         if self.kind not in MAPPING_KINDS:
-            raise ConfigError(_("Mapping kind must be one of {0}.").format(MAPPING_KINDS))
+            raise ConfigError(_("Mapping kind must be one of {0}.").format(_choices(MAPPING_KINDS)))
         self.serial.validate()
         if self.kind == "serialbridge":
             self.serial_b.validate()
@@ -901,7 +906,7 @@ class LdapSettings:
             raise ConfigError(_("LDAP needs either a user DN template (direct bind) or a bind "
                                 "DN + user search base (search+bind)."))
         if self.default_role and self.default_role not in ROLES:
-            raise ConfigError(_("LDAP default role must be one of {0} or blank.").format(ROLES))
+            raise ConfigError(_("LDAP default role must be one of {0} or blank.").format(_choices(ROLES)))
 
 
 @dataclass
@@ -937,7 +942,7 @@ class OidcSettings:
         if not self.issuer.strip().lower().startswith("https://"):
             raise ConfigError(_("OIDC issuer must be an https:// URL."))
         if self.default_role and self.default_role not in ROLES:
-            raise ConfigError(_("OIDC default role must be one of {0} or blank.").format(ROLES))
+            raise ConfigError(_("OIDC default role must be one of {0} or blank.").format(_choices(ROLES)))
 
 
 _PEER_ZONE = re.compile(r"[A-Za-z0-9_.-]+")
@@ -1107,7 +1112,7 @@ class NotificationSettings:
             if not self.webhook_url.strip().lower().startswith(("https://", "http://")):
                 raise ConfigError(_("The webhook URL must start with https:// (or http://)."))
             if self.webhook_format not in WEBHOOK_FORMATS:
-                raise ConfigError(_("Webhook format must be one of {0}.").format(WEBHOOK_FORMATS))
+                raise ConfigError(_("Webhook format must be one of {0}.").format(_choices(WEBHOOK_FORMATS)))
             if self.webhook_format == "telegram" and not str(self.telegram_chat_id).strip():
                 raise ConfigError(_("Telegram needs a chat ID."))
         if self.recipients:
@@ -1116,7 +1121,7 @@ class NotificationSettings:
             if not _is_int(self.smtp_port) or not (1 <= self.smtp_port <= 65535):
                 raise ConfigError(_("SMTP port must be between 1 and 65535."))
             if self.smtp_security not in SMTP_SECURITY:
-                raise ConfigError(_("SMTP security must be one of {0}.").format(SMTP_SECURITY))
+                raise ConfigError(_("SMTP security must be one of {0}.").format(_choices(SMTP_SECURITY)))
             if any("@" not in a for a in self.recipients):
                 raise ConfigError(_("Each e-mail recipient needs an @."))
         if not _is_int(self.repeat_s) or not (0 <= self.repeat_s <= 86400):
@@ -1438,9 +1443,9 @@ class AppConfig:
                 raise ConfigError(
                     _("Invalid admin UI bind IP: {0}").format(self.admin_ui.bind_ip)) from None
         if self.admin_ui.language not in UI_LANGUAGES:
-            raise ConfigError(_("The default language must be one of {0}.").format(UI_LANGUAGES))
+            raise ConfigError(_("The default language must be one of {0}.").format(_choices(UI_LANGUAGES)))
         if self.admin_ui.anonymous_role not in ROLES:
-            raise ConfigError(_("Role for visitors without login must be one of {0}.").format(ROLES))
+            raise ConfigError(_("Role for visitors without login must be one of {0}.").format(_choices(ROLES)))
         if not _is_int(self.session_timeout_s) or not (
                 SESSION_TIMEOUT_MIN_S <= self.session_timeout_s <= SESSION_TIMEOUT_MAX_S):
             raise ConfigError(_("Session lifetime must be between {0} minutes and {1} days.").format(SESSION_TIMEOUT_MIN_S // 60, SESSION_TIMEOUT_MAX_S // 86400))

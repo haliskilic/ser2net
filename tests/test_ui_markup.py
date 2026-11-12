@@ -303,6 +303,28 @@ def test_mapping_form_udp_fields():
     print("mapping form: UDP reply address / peer timeout in one UDP-only block  OK")
 
 
+def test_number_fields_required():
+    """A number field whose blank value the server refuses is `required`, so the browser
+    says what is missing before the form is sent (hidden blocks are disabled by app.js,
+    so they don't hold the form up); the ones a blank value is fine for are not."""
+    class Req:
+        class state:
+            csrf_token = "t"
+            user = None
+    tpl = make_templates().env.get_template("_mapping_form.html")
+    m = MappingConfig.from_dict({"id": "n1", "name": "n", "serial": {"port": "COM3"}})
+    root = parse(tpl.render(request=Req, mapping=m, is_new=False, modbus_points_json="",
+                            ports=[], ips=[], error=None))
+    blank_ok = {"network_udp_peer_port", "network_udp_peer_timeout_s", "modbus_poll_interval_s",
+                "serial_rs485_delay_before_tx_ms", "serial_rs485_delay_after_tx_ms",
+                "serial_b_rs485_delay_before_tx_ms", "serial_b_rs485_delay_after_tx_ms"}
+    numbers = [n for n in root.walk() if n.tag == "input" and n.attrs.get("type") == "number"]
+    bad = [n.attrs["name"] for n in numbers if ("required" in n.attrs) == (n.attrs["name"] in blank_ok)]
+    assert numbers and not bad, bad
+    assert {"serial_custom_baud", "network_port", "opt_trace_keep"} <= {n.attrs["name"] for n in numbers}
+    print(f"mapping form: {len(numbers) - len(blank_ok)} number fields required, the optional ones not  OK")
+
+
 def test_mapping_form_rfc2217_restore():
     """'Restore the serial settings when the RFC 2217 client leaves' is offered for RFC 2217
     mappings only, its hidden presence marker in the same block (posted exactly when the
@@ -691,6 +713,7 @@ def main():
     test_ports_table_and_assets()
     test_mapping_form_modbus_fields()
     test_mapping_form_udp_fields()
+    test_number_fields_required()
     test_mapping_form_rfc2217_restore()
     test_mapping_form_kick_hint()
     test_mqtt_command_tags()

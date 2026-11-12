@@ -19,7 +19,7 @@
         {% for b in baudrates %}<option value="{{ b }}" {% if b == s.baudrate %}selected{% endif %}>{{ b }}</option>{% endfor %}
         <option value="custom" {% if s.baudrate not in baudrates %}selected{% endif %}>{{ _("Custom…") }}</option>
       </select>
-      <input type="number" name="{{ prefix }}custom_baud" class="custom-input" min="1"
+      <input type="number" required name="{{ prefix }}custom_baud" class="custom-input" min="1"
              value="{{ s.baudrate if s.baudrate not in baudrates else '' }}"
              placeholder="{{ _('e.g. %(example)s', example='250000') }}" {% if s.baudrate in baudrates %}hidden disabled{% endif %}>
     </label>
@@ -124,21 +124,21 @@
                value="{{ mapping.network.bind_ip if bind_is_custom else '' }}"
                placeholder="{{ _('e.g. %(example)s', example='10.0.0.5') }}" {% if not bind_is_custom %}hidden disabled{% endif %}>
       </label>
-      <label>{{ _("Listen port") }} <input type="number" name="network_port" min="1" max="65535" value="{{ mapping.network.port }}"></label>
+      <label>{{ _("Listen port") }} <input type="number" required name="network_port" min="1" max="65535" value="{{ mapping.network.port }}"></label>
     </div>
 
     <div class="grid3" data-show-when="network_mode=client">
       <label>{{ _("Remote host") }} <input type="text" name="network_remote_host" value="{{ mapping.network.remote_host }}" placeholder="{{ _('e.g. %(example)s', example='192.168.1.20') }}"></label>
-      <label>{{ _("Remote port") }} <input type="number" name="network_remote_port" min="1" max="65535" value="{{ mapping.network.remote_port or '' }}"></label>
+      <label>{{ _("Remote port") }} <input type="number" required name="network_remote_port" min="1" max="65535" value="{{ mapping.network.remote_port or '' }}"></label>
       <label>{{ _("Connect timeout (s)") }} <span class="muted">({{ _("0 = OS default") }})</span>
-        <input type="number" name="network_connect_timeout_s" min="0" max="3600" step="any" value="{{ '%g'|format(mapping.network.connect_timeout_s) }}"></label>
+        <input type="number" required name="network_connect_timeout_s" min="0" max="3600" step="any" value="{{ '%g'|format(mapping.network.connect_timeout_s) }}"></label>
     </div>
 
     <div data-show-when="network_mode=server">
       <div class="grid3">
-        <label>{{ _("Max connections") }} <input type="number" name="network_max_connections" min="1" value="{{ mapping.network.max_connections }}"></label>
+        <label>{{ _("Max connections") }} <input type="number" required name="network_max_connections" min="1" value="{{ mapping.network.max_connections }}"></label>
         <label class="chk chk-pad"><input type="checkbox" name="network_kick_old_user" {% if mapping.network.kick_old_user %}checked{% endif %}> {{ _("Kick old client") }}</label>
-        <label data-show-when="network_protocol=raw,telnet,rfc2217">{{ _("Client buffer (chunks)") }} <input type="number" name="network_client_queue_max" min="16" value="{{ mapping.network.client_queue_max }}"></label>
+        <label data-show-when="network_protocol=raw,telnet,rfc2217">{{ _("Client buffer (chunks)") }} <input type="number" required name="network_client_queue_max" min="16" value="{{ mapping.network.client_queue_max }}"></label>
       </div>
       <label>{{ _("High-priority client IPs / CIDRs") }} <span class="muted">({{ _("kick an existing client when full") }})</span>
         <input type="text" name="network_priority_client_ips" value="{{ mapping.network.priority_client_ips | join(' ') }}" placeholder="{{ _('e.g. %(example)s', example='192.168.1.10') }}">
@@ -176,9 +176,9 @@
     <div data-show-when="network_mode=server,client">
       <label class="chk"><input type="checkbox" name="network_tcp_keepalive" {% if mapping.network.tcp_keepalive %}checked{% endif %}> TCP keepalive <span class="muted">({{ _("detect a peer that vanished without closing — power loss, cable pull, VPN/NAT drop — and free its slot after ≈ idle + interval × count") }})</span></label>
       <div class="grid3">
-        <label>{{ _("Keepalive idle (s)") }} <input type="number" name="network_keepalive_idle_s" min="1" max="32767" value="{{ mapping.network.keepalive_idle_s }}"></label>
-        <label>{{ _("Probe interval (s)") }} <input type="number" name="network_keepalive_interval_s" min="1" max="32767" value="{{ mapping.network.keepalive_interval_s }}"></label>
-        <label>{{ _("Probe count") }} <input type="number" name="network_keepalive_count" min="1" max="127" value="{{ mapping.network.keepalive_count }}"></label>
+        <label>{{ _("Keepalive idle (s)") }} <input type="number" required name="network_keepalive_idle_s" min="1" max="32767" value="{{ mapping.network.keepalive_idle_s }}"></label>
+        <label>{{ _("Probe interval (s)") }} <input type="number" required name="network_keepalive_interval_s" min="1" max="32767" value="{{ mapping.network.keepalive_interval_s }}"></label>
+        <label>{{ _("Probe count") }} <input type="number" required name="network_keepalive_count" min="1" max="127" value="{{ mapping.network.keepalive_count }}"></label>
       </div>
     </div>
   </fieldset>
@@ -199,9 +199,9 @@
     </div>
     <div class="grid2">
       <label>{{ _("Idle timeout (s)") }} <span class="muted">({{ _("TCP; no traffic either way · 0 = off") }})</span>
-        <input type="number" name="opt_idle_timeout_s" min="0" value="{{ mapping.options.idle_timeout_s }}"></label>
+        <input type="number" required name="opt_idle_timeout_s" min="0" value="{{ mapping.options.idle_timeout_s }}"></label>
       <label>{{ _("Max connection time (s)") }} <span class="muted">({{ _("TCP; 0 = unlimited · 86400 = 24 h") }})</span>
-        <input type="number" name="opt_max_connection_time_s" min="0" value="{{ mapping.options.max_connection_time_s }}"></label>
+        <input type="number" required name="opt_max_connection_time_s" min="0" value="{{ mapping.options.max_connection_time_s }}"></label>
     </div>
     <div class="grid2">
       <label>{{ _("Trace file name") }} <span class="muted">({{ _('record the traffic; kept in the data folder’s <span class="mono">traces/</span> · empty = off') }})</span>
@@ -211,9 +211,9 @@
     </div>
     <div class="grid2">
       <label>{{ _("Trace file size (MB)") }} <span class="muted">({{ _("then it is rotated") }})</span>
-        <input type="number" name="opt_trace_max_mb" min="0.1" max="1024" step="any" value="{{ '%g'|format(mapping.options.trace_max_mb) }}"></label>
+        <input type="number" required name="opt_trace_max_mb" min="0.1" max="1024" step="any" value="{{ '%g'|format(mapping.options.trace_max_mb) }}"></label>
       <label>{{ _("Rotated trace files kept") }} <span class="muted">({{ _("0 = start over") }})</span>
-        <input type="number" name="opt_trace_keep" min="0" max="50" value="{{ mapping.options.trace_keep }}"></label>
+        <input type="number" required name="opt_trace_keep" min="0" max="50" value="{{ mapping.options.trace_keep }}"></label>
     </div>
     <div class="grid2">
       <label>{{ _("Console text encoding") }} <span class="muted">({{ _("how the web console and the hex view show the device’s text, and send what is typed; the bridge passes bytes unchanged") }})</span>
@@ -234,7 +234,7 @@
     <label class="chk"><input type="checkbox" name="mqtt_enabled" {% if mapping.mqtt.enabled %}checked{% endif %}> {{ _("Publish serial lines to MQTT") }}</label>
     <div class="grid3">
       <label>{{ _("Broker host") }} <input type="text" name="mqtt_host" value="{{ mapping.mqtt.host }}" placeholder="{{ _('e.g. %(example)s', example='192.168.1.5') }}"></label>
-      <label>{{ _("Port") }} <input type="number" name="mqtt_port" min="1" max="65535" value="{{ mapping.mqtt.port }}"></label>
+      <label>{{ _("Port") }} <input type="number" required name="mqtt_port" min="1" max="65535" value="{{ mapping.mqtt.port }}"></label>
       <label>QoS
         <select name="mqtt_qos">{% for q in [0, 1, 2] %}<option value="{{ q }}" {% if q == mapping.mqtt.qos %}selected{% endif %}>{{ q }}</option>{% endfor %}</select>
       </label>
