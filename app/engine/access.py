@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import contextlib
 import ipaddress
+import itertools
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Callable, Collection, Iterable, Optional, Protocol, Union
 
@@ -34,9 +35,21 @@ class Client(Protocol):
     """A connected client as the policy sees it."""
     peer: str            # "ip:port", for the log
     priority: bool       # admitted as a priority client
-    connected_at: float  # time.time() when it connected
+    seq: int             # its place in the order clients connected in (connection_order)
+    connected_at: float  # time.monotonic() when it connected: for how long it has been
 
     def kick(self, reason: str = ...) -> None: ...
+
+
+_ORDER = itertools.count(1)
+
+
+def connection_order() -> int:
+    """The next number in the order clients connect in (one count for every mapping): which
+    of two clients came first is told by it, never by a clock - a clock set back or
+    forward can't make the newest client the oldest, and two clients that connect within
+    one tick of a coarse clock (about 15.6 ms on Windows) still have an order."""
+    return next(_ORDER)
 
 
 def parse_nets(cidrs: Iterable[str]) -> list[Network]:
@@ -61,12 +74,12 @@ def ip_in_nets(ip: str, nets: Collection[Network]) -> bool:
 
 
 def pick_victim(clients: Collection[Client]) -> Optional[Client]:
-    """The client to evict when making room: the oldest non-priority one, falling back to
-    the oldest client overall."""
+    """The client to evict when making room: the oldest (first connected) non-priority one,
+    falling back to the oldest client overall."""
     if not clients:
         return None
     pool = [c for c in clients if not c.priority] or list(clients)
-    return min(pool, key=lambda c: c.connected_at)
+    return min(pool, key=lambda c: c.seq)
 
 
 @dataclass(frozen=True)

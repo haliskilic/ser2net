@@ -55,7 +55,7 @@ else:  # pragma: no cover - exercised only on Python 3.10
 from ..config import MappingConfig, mapping_file, udp_peer_address, udp_peer_timeout
 from . import netguard, serial_io, sockopts
 from .netguard import LogEvery as _LogEvery
-from .access import AccessPolicy, server_ssl
+from .access import AccessPolicy, connection_order, server_ssl
 from .protocols import make_session
 from .protocols.base import ProtocolError, ProtocolSession
 from .serial_link import Backoff, SerialLink, close_stream
@@ -284,7 +284,8 @@ class RunnerStatus:
     state: str = "stopped"  # stopped|running|reconnecting|device-missing|error
     device: str = ""
     client_count: int = 0
-    # connected peers: each {"peer": "ip:port", "connected_at": unix_ts}
+    # connected peers, in the order they connected: each {"peer": "ip:port",
+    # "connected_at": time.monotonic() then, "priority": bool}
     clients: list[dict] = field(default_factory=list)
     # counted at the device, once (not per client, no telnet/RFC2217 control bytes);
     # serial<->serial bridge: in = port A -> B, out = port B -> A
@@ -301,16 +302,14 @@ class RunnerStatus:
     devices: tuple[str, ...] = ()
 
     def set_clients(self, clients) -> None:
-        """Publish the connected clients (each has peer, connected_at and priority)."""
+        """Publish the connected clients (access.Client: peer, seq, connected_at, priority),
+        first connected first."""
         self.client_count = len(clients)
-        self.clients = sorted(
-            ({"peer": c.peer, "connected_at": c.connected_at, "priority": c.priority}
-             for c in clients),
-            key=lambda d: d["connected_at"],
-        )
+        self.clients = [{"peer": c.peer, "connected_at": c.connected_at, "priority": c.priority}
+                        for c in sorted(clients, key=lambda c: c.seq)]
 
     def as_dict(self) -> dict:
-        now = time.time()
+        now = time.monotonic()
         clients = [
             {"peer": c["peer"], "duration": fmt_duration(now - c["connected_at"]),
              "connected_s": max(0, int(now - c["connected_at"])),  # the same, as a number
@@ -355,7 +354,8 @@ class _ClientConn:
         self.peer_port = peer_port
         self.peer = f"{peer_ip}:{peer_port}" if peer_port else peer_ip
         self.priority = priority
-        self.connected_at = time.time()
+        self.seq = connection_order()
+        self.connected_at = time.monotonic()
         self._queue_max = runner.mapping.network.client_queue_max or CLIENT_QUEUE_MAX
         # None = graceful-close sentinel (see request_graceful_close)
         self._out: asyncio.Queue[Optional[bytes]] = asyncio.Queue(maxsize=self._queue_max)
@@ -869,7 +869,7 @@ class MappingRunner:
         finally:
             self._clients.discard(client)
             self._refresh_clients()
-            held = fmt_duration(time.time() - client.connected_at)
+            held = fmt_duration(time.monotonic() - client.connected_at)
             why = f" — {client.close_reason}" if client.close_reason else ""
             self._log(f"client disconnected: {peer_label} after {held}{why} "
                       f"({len(self._clients)} total)")
@@ -941,7 +941,7 @@ class MappingRunner:
                 finally:
                     self._clients.discard(client)
                     self._refresh_clients()
-                    held = fmt_duration(time.time() - client.connected_at)
+                    held = fmt_duration(time.monotonic() - client.connected_at)
                     why = f" — {client.close_reason}" if client.close_reason else ""
                     self._log(f"connect-out link to {target} closed after {held}{why}")
                     self._restore_port_settings()
@@ -1032,8 +1032,9 @@ class _UdpPeer:
         self.addr = addr
         self.peer = label or _udp_label(addr)
         self.priority = False
-        self.connected_at = time.time()     # since when it gets the output
-        self.last_heard = time.monotonic()  # its last datagram (for the peer timeout)
+        self.seq = connection_order()
+        self.connected_at = time.monotonic()  # since when it gets the output
+        self.last_heard = time.monotonic()    # its last datagram (for the peer timeout)
 
     def feed_from_serial(self, data: bytes) -> None:
         self.bridge.send(self, data)

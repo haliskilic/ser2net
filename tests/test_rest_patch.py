@@ -240,8 +240,8 @@ def test_connected_seconds():
     from app.engine.bridge import RunnerStatus
 
     st = RunnerStatus()
-    st.set_clients([types.SimpleNamespace(peer="10.0.0.5:5000", connected_at=time.time() - 125,
-                                          priority=False)])
+    st.set_clients([types.SimpleNamespace(peer="10.0.0.5:5000", seq=1, priority=False,
+                                          connected_at=time.monotonic() - 125)])
     client = st.as_dict()["clients"][0]
     assert client["duration"] and 124 <= client["connected_s"] <= 127, client
     print("status: a client's connection time also as a number (connected_s)  OK")

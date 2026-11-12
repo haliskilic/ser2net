@@ -32,7 +32,7 @@ from typing import TYPE_CHECKING, Optional
 
 from ..config import MappingConfig, ModbusPoint
 from . import modbus, netguard, sockopts
-from .access import AccessPolicy, server_ssl
+from .access import AccessPolicy, connection_order, server_ssl
 from .bridge import (
     FROM_DEVICE, TO_DEVICE, RunnerStatus, Tracer, describe_disconnect, fmt_duration, open_tracer,
 )
@@ -60,7 +60,8 @@ class _Master:
     writer: asyncio.StreamWriter
     peer: str
     priority: bool = False          # admitted from priority_client_ips
-    connected_at: float = field(default_factory=time.time)
+    seq: int = field(default_factory=connection_order)          # access.Client
+    connected_at: float = field(default_factory=time.monotonic)
     close_reason: str = ""          # why the gateway dropped it (first cause wins)
     refused: int = 0                # requests refused because the mapping is read-only
 
@@ -489,7 +490,7 @@ class ModbusGatewayRunner:
             reason = master.close_reason or reason
             if self._stop.is_set():
                 reason = "gateway stopped"
-            held = fmt_duration(time.time() - master.connected_at)
+            held = fmt_duration(time.monotonic() - master.connected_at)
             refused = f", {master.refused} request(s) refused (read-only)" if master.refused else ""
             self._log(f"modbus master disconnected: {peer} after {held} — {reason}{refused} "
                       f"({len(self._clients)} total)")

@@ -348,10 +348,13 @@ class ClusterDiscovery:
         self.config = config            # AppConfig (cluster + admin_ui + instance_id, read live)
         self.log = logger
         self.boot = secrets.token_hex(8)    # this process: tells a copy of this node from itself
-        self.started = time.time()
+        self.started = time.time()          # (wall clock: compared with the times peers send)
         self._transport = None
         self._beacon_task: asyncio.Task | None = None
-        self._peers: dict[tuple, dict] = {}  # (id, run) -> {id,name,ip,port,scheme,last_seen,...}
+        # (id, run) -> {id,name,ip,port,scheme,last_seen,...}. How old a row or a note below
+        # is goes by time.monotonic(): a step of the system clock (NTP after a boot without
+        # an RTC) neither keeps a node that left listed nor drops one that is there
+        self._peers: dict[tuple, dict] = {}
         self._ids: dict[str, dict] = {}      # peer id -> the runs (processes) heard with it
         self._opener = _peer_opener()
         self._problems: dict[str, str] = {}  # peer host:port -> why its last request failed
@@ -437,7 +440,7 @@ class ClusterDiscovery:
         src = str(addr[0]) if addr else ""
         if kidx is None:  # a different key (or tampered): not part of our cluster - only shown
             if src and str(p.get("b") or "") != self.boot:
-                _remember(self._other_key, src, time.time(), 16)
+                _remember(self._other_key, src, time.monotonic(), 16)
             return
         raw_t = p.get("t")   # every release since 2.5 dates its beacons
         if isinstance(raw_t, bool) or not isinstance(raw_t, (int, float)):
@@ -458,12 +461,11 @@ class ClusterDiscovery:
         row = self._accept(pid, boot, t)
         if row is None:
             return  # not newer than what this node has from that sender: a replay
-        now = time.time()
         scheme = p.get("scheme") if p.get("scheme") in ("http", "https") else "http"
         self._peers[row] = {
             "id": pid, "name": str(p.get("name", "?")), "ip": ip,
-            "port": port, "scheme": scheme, "last_seen": now,
-            "v": v, "key": kidx, "offset": t - now, "from_packet": from_packet,
+            "port": port, "scheme": scheme, "last_seen": time.monotonic(),
+            "v": v, "key": kidx, "offset": t - time.time(), "from_packet": from_packet,
         }
         self._other_key.pop(src, None)
 
@@ -498,7 +500,7 @@ class ClusterDiscovery:
         stored for it is forgotten: that is a restart, which may have set its clock back
         (no RTC, NTP not synced yet), not a replay - and a replayed beacon steers no
         request any more (signed requests; the raw key never goes to a packet's source)."""
-        now = time.time()
+        now = time.monotonic()   # rec's "seen" and "shared"; its times (t) are the sender's
         rec = self._ids.get(pid)
         if rec is not None and now - rec["seen"] > PEER_TTL:
             del self._ids[pid]
@@ -507,8 +509,8 @@ class ClusterDiscovery:
             if len(self._ids) >= 512:   # ids come and go: keep the ones heard from last
                 for gone in sorted(self._ids, key=lambda i: self._ids[i]["seen"])[:256]:
                     del self._ids[gone]
-            rec = self._ids[pid] = {"runs": {}, "max_t": t, "cur": boot, "shared": 0.0,
-                                    "seen": now}
+            rec = self._ids[pid] = {"runs": {}, "max_t": t, "cur": boot,
+                                    "shared": -math.inf, "seen": now}
         last = rec["runs"].get(boot)
         if last is not None and t <= last:
             return None
@@ -536,7 +538,8 @@ class ClusterDiscovery:
         where = peer_addr(ip or (addr[0] if addr else "?"), peer_port(p.get("port")) or "?")
         name = str(p.get("name", "?"))[:255]
         known = where in self._copies
-        _remember(self._copies, where, {"addr": where, "name": name, "last_seen": time.time()}, 16)
+        _remember(self._copies, where, {"addr": where, "name": name,
+                                        "last_seen": time.monotonic()}, 16)
         if not known:
             self.log(f"cluster: another node uses this node's identity "
                      f"({self.config.instance_id[:8]}): '{name}' at {where} — a copy of this "
@@ -545,7 +548,7 @@ class ClusterDiscovery:
 
     def peers(self) -> list[dict]:
         """Live peers (TTL-pruned), sorted by name then ip."""
-        now = time.time()
+        now = time.monotonic()
         self._peers = {k: p for k, p in self._peers.items() if now - p["last_seen"] <= PEER_TTL}
         return sorted(self._peers.values(), key=lambda p: (p["name"].lower(), p["ip"]))
 
@@ -609,7 +612,7 @@ class ClusterDiscovery:
 
     def copies(self) -> list[dict]:
         """Nodes heard recently with this node's own id ({addr, name}): copies of it."""
-        now = time.time()
+        now = time.monotonic()
         return [c for c in self._copies.values() if now - c["last_seen"] <= NOTE_TTL]
 
     def shared_ids(self) -> list[dict]:
@@ -624,7 +627,7 @@ class ClusterDiscovery:
     def other_key_nodes(self) -> list[str]:
         """Addresses that recently broadcast beacons signed with another key (never
         contacted: there is nothing to trust them with)."""
-        now = time.time()
+        now = time.monotonic()
         live = {p["ip"] for p in self.peers()}
         return sorted(ip for ip, when in self._other_key.items()
                       if now - when <= NOTE_TTL and ip not in live)
@@ -634,7 +637,7 @@ class ClusterDiscovery:
         and those that sent it here recently - none while legacy authentication is off."""
         if not self.cluster.legacy_auth:
             return []
-        now, out = time.time(), set()
+        now, out = time.monotonic(), set()
         for ip, when in self._legacy_in.items():
             if now - when <= LEGACY_SEEN_S:
                 out.add(ip)
@@ -782,7 +785,7 @@ class ClusterDiscovery:
             auth.again = self._refusals.pop(client, None) is not None
             if auth.legacy:
                 auth.first = client not in self._legacy_in
-                _remember(self._legacy_in, client, time.time(), 64)
+                _remember(self._legacy_in, client, time.monotonic(), 64)
         elif auth.reason not in ("recipient", "stale"):   # steps of the exchange, not failures
             auth.first = self._refusals.get(client) != auth.reason
             _remember(self._refusals, client, auth.reason, 256)
@@ -967,7 +970,7 @@ class ClusterDiscovery:
             link.id, link.offset, link.legacy = ans.peer_id or link.id, ans.offset, False
             if manual:
                 link.key = how["idx"]
-            _remember(self._signed_ok, k, time.time(), 1024)
+            _remember(self._signed_ok, k, time.monotonic(), 1024)
             if refused and ans.reason == "stale":
                 return self._failed(link, ans, "clock", retry="stale")
             if refused and ans.reason == "recipient":

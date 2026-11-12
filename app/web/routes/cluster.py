@@ -164,7 +164,7 @@ def routes(ctx: Ctx) -> list:
             })
         return {"id": cfg.instance_id, "name": socket.gethostname(),
                 "ip": ip, "port": port, "scheme": scheme,
-                "version": __version__, "uptime_s": int(time.time() - state.started_at),
+                "version": __version__, "uptime_s": int(time.monotonic() - state.started_mono),
                 "mapping_count": len(maps), "running_count": running, "mappings": maps}
 
     async def _peer_auth(request):

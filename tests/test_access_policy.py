@@ -1,6 +1,7 @@
 """Client admission shared by the transparent bridge and the Modbus gateway (access.py):
-allow-list, max connections, kick_old_user and priority clients, plus the reconnect
-backoff of serial_link.py. Pure: no sockets, no serial port, so it runs on any OS
+allow-list, max connections, kick_old_user and priority clients (the oldest client is the
+one that connected first, by a counter, not by a clock), plus the reconnect backoff of
+serial_link.py. Pure: no sockets, no serial port, so it runs on any OS
 (tests/test_access_priority.py drives the same rules end to end over socat PTYs).
 
 Run: python3 tests/test_access_policy.py
@@ -8,6 +9,7 @@ Run: python3 tests/test_access_policy.py
 import asyncio
 import os
 import sys
+import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "lib"))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
@@ -18,8 +20,9 @@ from app.engine.serial_link import Backoff
 
 
 class FakeClient:
-    def __init__(self, peer, connected_at, priority=False):
-        self.peer, self.connected_at, self.priority = peer, connected_at, priority
+    def __init__(self, peer, seq, priority=False, connected_at=None):
+        self.peer, self.seq, self.priority = peer, seq, priority
+        self.connected_at = time.monotonic() if connected_at is None else connected_at
         self.kicked = ""
 
     def kick(self, reason="kicked"):
@@ -87,6 +90,21 @@ def test_admit():
     print("admit: room / full / not allowed / kick_old_user / priority victim choice  OK")
 
 
+def test_connection_order():
+    order = [access.connection_order() for _ in range(1000)]
+    assert order == sorted(set(order)), "every client gets a later number than the one before"
+    # the order decides, whatever a clock says: two clients within one tick of a coarse
+    # clock (the same connected_at), or a client whose time reads earlier than the one
+    # before it (a wall clock set back between them, as 2.8 recorded connection times)
+    first, second = (FakeClient("10.0.0.1:1", access.connection_order(), connected_at=5.0),
+                     FakeClient("10.0.0.2:2", access.connection_order(), connected_at=5.0))
+    assert access.pick_victim({second, first}) is first
+    later = FakeClient("10.0.0.3:3", access.connection_order(), connected_at=1.0)
+    assert access.pick_victim({later, second}) is second, "the newest client was picked"
+    print("the oldest client is the first connected (a counter, no clock): ties and clock "
+          "steps can't change it  OK")
+
+
 def test_backoff():
     async def run():
         loop = asyncio.get_running_loop()
@@ -110,6 +128,7 @@ def test_backoff():
 def main():
     test_allow_list()
     test_admit()
+    test_connection_order()
     test_backoff()
     print("\nPASS: client admission policy + reconnect backoff")
 
