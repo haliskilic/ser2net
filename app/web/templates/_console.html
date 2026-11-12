@@ -3,6 +3,9 @@
   <div class="actions">
     {% if interactive %}<span class="muted" data-text-only>{{ _("type to send to the device") }}</span>
     <span class="muted">{{ _("Shift+Tab leaves the console") }}</span>
+    {#- a serial BREAK on the device's port (audited): the answer says it in the feedback
+        area, as a refusal (read-only, port not open) does #}
+    <button type="button" class="btn sm" id="console-break" hx-post="{{ base }}/api/mappings/{{ mid }}/break" hx-swap="none" hx-disabled-elt="this">{{ _("Send BREAK") }}</button>
     {% else %}<span class="muted">{{ _("read-only") }}</span>{% endif %}
     <button type="button" class="btn sm" data-term-mode>{{ _("Hex view") }}</button>
     <button type="button" class="btn sm" id="console-close" data-cancel>{{ _("Close") }}</button>

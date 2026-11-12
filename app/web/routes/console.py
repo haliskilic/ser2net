@@ -32,7 +32,7 @@ from ...engine import netguard
 from ...engine.bridge import TO_DEVICE
 from ...i18n import _
 from .. import auth, proxy
-from .common import Ctx, client_ip, console_interactive, current_user, sees_to_device
+from .common import Ctx, client_ip, console_interactive, current_user, notice, sees_to_device
 
 # the protocols whose runner sends a serial BREAK (not a Modbus gateway: an RTU bus)
 _BREAK_PROTOCOLS = ("raw", "telnet", "rfc2217")
@@ -280,8 +280,9 @@ def routes(ctx: Ctx) -> list:
         """POST /api/mappings/{mid}/break: a serial BREAK on the mapping's port (as a telnet
         client's IAC BRK: the line held in the break condition for bridge.BREAK_S). For
         whoever may type in the console (operators and admins, a network mapping that is
-        not read-only); audited as mapping_break. 204 when sent; 400 read-only or not a
-        serial-to-network mapping, 409 the port is not open (or can't send one)."""
+        not read-only); audited as mapping_break. 204 when sent (its X-Notice says so in
+        the console's feedback area); 400 read-only or not a serial-to-network mapping,
+        409 the port is not open (or can't send one): their text is shown there."""
         if deny := ctx.require_role(request, "operator"):
             return deny
         mid = request.path_params["mid"]
@@ -301,7 +302,8 @@ def routes(ctx: Ctx) -> list:
                                        "or it can't send one (see the mapping's log)."),
                                      status_code=409)
         ctx.audit(request, "mapping_break", mapping.name)
-        return Response(status_code=204)
+        return Response(status_code=204, headers=notice(
+            _("A serial BREAK was sent on “{0}”.").format(mapping.name)))
 
     return [
         WebSocketRoute("/api/mappings/{mid}/console", console_ws),

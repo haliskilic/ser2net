@@ -1309,5 +1309,7 @@
   "{0} day": "{0} gün",
   "'{0}' was removed from {1} configuration backup.": "'{0}', {1} yapılandırma yedeğinden çıkarıldı.",
   "{0} configuration backup deleted.": "{0} yapılandırma yedeği silindi.",
-  "{0} configuration backup still holds it (made before the deletion; a restore with accounts would bring it back): Configuration backups below can remove it from that backup.": "{0} yapılandırma yedeği hâlâ bu hesabı içeriyor (silmeden önce alınmış; hesaplarıyla birlikte geri yükleme onu geri getirir): aşağıdaki Yapılandırma yedekleri bölümünden o yedekten çıkarabilirsin."
+  "{0} configuration backup still holds it (made before the deletion; a restore with accounts would bring it back): Configuration backups below can remove it from that backup.": "{0} yapılandırma yedeği hâlâ bu hesabı içeriyor (silmeden önce alınmış; hesaplarıyla birlikte geri yükleme onu geri getirir): aşağıdaki Yapılandırma yedekleri bölümünden o yedekten çıkarabilirsin.",
+  "Send BREAK": "BREAK gönder",
+  "A serial BREAK was sent on “{0}”.": "“{0}” eşlemesinde seri BREAK gönderildi."
 }

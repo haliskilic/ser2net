@@ -469,7 +469,9 @@ The image has a `HEALTHCHECK` (`ser2net --healthcheck`). Behind a reverse proxy,
 - **Log:** the mapping's history (newest first, persists across restarts).
 - **Monitor:** live serial terminal in the browser (xterm.js); operators type to the
   device on network mappings that aren't read-only (a Modbus gateway's console only
-  watches its bus, and opens in the hex view). The hex view shows both directions; viewers
+  watches its bus, and opens in the hex view); their console's **Send BREAK** puts the
+  serial line in the break condition for 0.25 s, as a telnet client's BREAK does (audited
+  as `mapping_break`). The hex view shows both directions; viewers
   see only what the device sends. When the mapping stops or restarts, the console says so
   and connects again by itself; a browser that doesn't keep up is told how many bytes it
   missed. For a device that sends Turkish (or other) letters in a single-byte code page,
