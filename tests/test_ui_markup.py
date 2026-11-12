@@ -626,8 +626,29 @@ def test_console_says_why():
     for key in ("dropped", "ws_not_running", "ws_reconnected", "ws_reconnecting", "ws_refused",
                 "ws_busy", "ws_stopped", "ws_access", "ws_slow", "ws_gone"):
         assert f"'{key}': _(" in base and f'tr("{key}"' in js, key
+    # the console text encoding: the form offers exactly config.CONSOLE_ENCODINGS, for every
+    # kind and protocol (no data-show-when), and the panel carries the code page's table
+    from app.config import CONSOLE_ENCODINGS, console_charset
+
+    class Req:
+        class state:
+            csrf_token = "t"
+            user = None
+    m = MappingConfig.from_dict({"id": "e1", "name": "e", "serial": {"port": "COM3"},
+                                 "options": {"console_encoding": "cp857"}})
+    form = parse(make_templates().env.get_template("_mapping_form.html").render(
+        request=Req, mapping=m, is_new=False, modbus_points_json="", ports=[], ips=[], error=None))
+    select = next(n for n in form.walk() if n.attrs.get("name") == "opt_console_encoding")
+    options = [n for n in select.walk() if n.tag == "option"]
+    assert tuple(n.attrs["value"] for n in options) == CONSOLE_ENCODINGS
+    assert [n.attrs["value"] for n in options if "selected" in n.attrs] == ["cp857"]
+    assert not any("data-show-when" in a.attrs for a in select.ancestors())
+    page = tpl.render(mid="a", mapping_name="a", encoding="cp857", charset=console_charset("cp857"))
+    term = next(n for n in parse(page).walk() if n.attrs.get("id") == "term")
+    assert term.attrs["data-charset"] == console_charset("cp857") and "Text encoding: CP857." in page
     print("console: a Modbus gateway's opens in hex, the typing hint only in the text view, "
-          "every close says why (translated), connects again after a restart  OK")
+          "every close says why (translated), connects again after a restart; the form offers "
+          "the text encodings, the panel carries the code page  OK")
 
 
 def test_unsaved_form_is_guarded():

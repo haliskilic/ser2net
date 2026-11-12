@@ -12,7 +12,7 @@ import time
 from starlette.responses import FileResponse, PlainTextResponse, Response
 from starlette.routing import Route
 
-from ...config import ConfigError, MappingConfig
+from ...config import ConfigError, MappingConfig, console_charset, console_encoding
 from ...engine import netinfo, portlist
 from ...i18n import _
 from . import ops
@@ -221,7 +221,9 @@ def routes(ctx: Ctx) -> list:
                       interactive=console_interactive(me, m), to_device=sees_to_device(me, m),
                       bridge=m.kind == "serialbridge",
                       # a Modbus gateway's text view is binary noise: its frames in hex
-                      hex_first=m.kind == "net" and m.network.protocol == "modbus")
+                      hex_first=m.kind == "net" and m.network.protocol == "modbus",
+                      encoding=console_encoding(m.options),
+                      charset=console_charset(console_encoding(m.options)))
 
     async def mapping_save(request):
         if deny := require_role(request, "operator"):

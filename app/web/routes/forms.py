@@ -142,6 +142,8 @@ _OPTIONAL_FORM_FIELDS = {
     "network_connect_timeout_s": ("network", ("connect_timeout_s",)),
     "opt_max_connection_time_s": ("options", ("max_connection_time_s",)),
     "opt_trace_max_mb": ("options", ("trace_max_mb", "trace_keep")),
+    # forms before 2.9 don't have it
+    "opt_console_encoding": ("options", ("console_encoding",)),
     "mqtt_payload_format": ("mqtt", ("payload_format", "sparkplug_group_id", "sparkplug_node_id")),
     # a checkbox (absent when unticked) shown for plain-format Modbus points only
     "mqtt_apply_retained_set_shown": ("mqtt", ("apply_retained_set",)),
@@ -213,6 +215,8 @@ def _build_mapping_dict(form, strict: bool) -> dict:
     if "opt_trace_max_mb" in form:
         options["trace_max_mb"] = _num(form, "opt_trace_max_mb", 10.0, strict=strict, cast=float)
         options["trace_keep"] = _num(form, "opt_trace_keep", 3, strict=strict)
+    if "opt_console_encoding" in form:
+        options["console_encoding"] = form.get("opt_console_encoding", "").strip()
     if "opt_rfc2217_restore_on_disconnect_shown" in form:
         options["rfc2217_restore_on_disconnect"] = _checkbox(
             form, "opt_rfc2217_restore_on_disconnect")

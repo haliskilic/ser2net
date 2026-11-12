@@ -317,7 +317,11 @@ The image has a `HEALTHCHECK` (`ser2net --healthcheck`). Details:
   watches its bus, and opens in the hex view). The hex view shows both directions; viewers
   see only what the device sends. When the mapping stops or restarts, the console says so
   and connects again by itself; a browser that doesn't keep up is told how many bytes it
-  missed.
+  missed. For a device that sends Turkish (or other) letters in a single-byte code page,
+  set the mapping's *Console text encoding* (UTF-8 by default; ISO-8859-9, Windows-1254,
+  CP857, ISO-8859-1, Windows-1252, CP437): the console shows its text with it and sends
+  what is typed with it, and the hex view's text column too. The bridge passes the bytes
+  unchanged either way.
 - **Trace** (operators): the mapping's trace files, to list and download.
 - **Settings:** change password, **web UI access** (login required / open access with a
   role), admin TLS (provide paths or generate self-signed; a previous generated pair is kept
