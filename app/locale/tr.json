@@ -918,5 +918,6 @@
   "TLS key password": "TLS anahtar parolası",
   "only for an encrypted key": "yalnızca şifreli bir anahtar için",
   "Remove the stored password": "Kayıtlı parolayı sil",
-  "Key password": "Anahtar parolası"
+  "Key password": "Anahtar parolası",
+  "The TLS key {0} is the admin UI's own key. Give the mapping a certificate and key of its own.": "TLS anahtarı {0}, yönetim arayüzünün kendi anahtarı. Eşlemeye kendine ait bir sertifika ve anahtar ver."
 }

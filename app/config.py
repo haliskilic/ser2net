@@ -1678,6 +1678,25 @@ class AppConfig:
     def get_mapping(self, mapping_id: str) -> Optional[MappingConfig]:
         return next((m for m in self.mappings if m.id == mapping_id), None)
 
+    def admin_key_reuse(self, m: MappingConfig) -> str:
+        """Why mapping ``m`` can't be saved with its TLS key ("" when it can): the key is the
+        admin UI's own key file, so the mapping would present the admin UI's certificate on
+        another port of this host, and browsers send a site's cookies to every port of it.
+        Checked where a mapping is created or changed (the form, so also a cluster peer's
+        save on its own node, and the REST API), never by validate(): a stored one keeps
+        loading and saving."""
+        net, admin = m.network, self.admin_ui
+        if not (m.kind == "net" and net.tls and net.tls_key and admin.tls_key):
+            return ""
+        try:
+            same = os.path.samefile(net.tls_key, admin.tls_key)
+        except (OSError, TypeError, ValueError):  # one of them is missing: not the same file
+            return ""
+        if not same:
+            return ""
+        return _("The TLS key {0} is the admin UI's own key. Give the mapping a certificate "
+                 "and key of its own.").format(net.tls_key)
+
     def own_port_conflict(self, m: MappingConfig) -> str:
         """Why mapping ``m`` can't listen where it is set to next to ser2net's own
         listeners ("" when it can): a TCP listener on the admin UI's address and port, or a
