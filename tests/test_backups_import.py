@@ -234,10 +234,47 @@ def test_planner():
     print("planner: merge by id/name keeps ids, skips identical; replace lists removals  OK")
 
 
+def test_planner_keeps_absent_settings():
+    """A merge import of an export written by an older version (2.7.1's, which has no
+    "writable", trace rotation, Sparkplug ...) keeps the current values of the settings
+    the file doesn't have, a Modbus point's by its name; replace takes the defaults."""
+    with open(os.path.join(os.path.dirname(__file__), "fixtures", "config-2.7.1.json"),
+              encoding="utf-8") as fh:
+        old = next(m for m in json.load(fh)["mappings"] if m["name"] == "Modbus gateway")
+    now = MappingConfig.from_dict(old)
+    now.options.trace_max_mb, now.mqtt.payload_format = 2.5, "sparkplug_b"
+    for p in now.modbus_poll.points:
+        p.writable = p.fn in (1, 3)
+    assert any(p.writable for p in now.modbus_poll.points)
+    plan = parse_mappings_file(json.dumps({"mappings": [old]}).encode())
+    assert {"options.trace_max_mb", "modbus_poll.points[0].writable"} <= set(plan.absent[0])
+    note = next(w for w in plan.warnings if "the file has no" in w)
+    assert "options.trace_max_mb" in note and "mqtt.payload_format" in note, note
+    assert [r["action"] for r in plan_rows([now], plan.mappings, "merge", plan.absent)] == ["same"]
+    merged, touched = apply_import([now], plan.mappings, "merge", plan.absent)
+    assert merged[0].to_dict() == now.to_dict() and not touched, "nothing the file has changed"
+    # what the file has still wins
+    old2 = json.loads(json.dumps(old))
+    old2["modbus_poll"]["points"][0]["address"] += 1
+    old2["modbus_poll"]["points"][1]["fn"] = 4   # an input register now: can't be written
+    plan = parse_mappings_file(json.dumps({"mappings": [old2]}).encode())
+    merged, touched = apply_import([now], plan.mappings, "merge", plan.absent)
+    got = merged[0].modbus_poll.points
+    assert got[0].address == now.modbus_poll.points[0].address + 1 and touched
+    assert got[0].writable == now.modbus_poll.points[0].writable and not got[1].writable
+    assert merged[0].options.trace_max_mb == 2.5 and merged[0].mqtt.payload_format == "sparkplug_b"
+    replaced, _ = apply_import([now], plan.mappings, "replace", plan.absent)
+    assert replaced[0].options.trace_max_mb == 10.0 and not any(
+        p.writable for p in replaced[0].modbus_poll.points), "replace: the defaults"
+    print("planner: a merge keeps the settings an older export doesn't have (points by name); "
+          "the preview names them  OK")
+
+
 def main():
     test_store_backups()
     test_store_start_stop_and_clock()
     test_planner()
+    test_planner_keeps_absent_settings()
     users = [{"username": "admin", "password_hash": hash_password(PW), "role": "admin", "pwd_version": 1},
              {"username": "op", "password_hash": hash_password(PW), "role": "operator", "pwd_version": 1}]
     p1, p2, p3 = free_port(), free_port(), free_port()
