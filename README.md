@@ -662,6 +662,23 @@ içeren bir dosyaya (Docker secret) yönlendirin; ad için `SER2NET_ADMIN_USER` 
     tablo). Bu tür komutları `ser2net` kullanıcısıyla çalıştırın (`sudo -u ser2net …`),
     düz root ile değil; root, servisin okuyamayacağı dosyalar bırakır. Log'lar:
     `journalctl -u ser2net` ve veri dizinindeki `all.log`.
+- **1024 altı portlar** (Modbus/TCP'nin 502'si, 80 ya da 443'te web arayüzü): Linux bu
+  portlarda yalnızca root'un ya da `CAP_NET_BIND_SERVICE` yetkisi olan bir sürecin
+  dinlemesine izin verir; iki unit de ser2net'i yetkisiz bir kullanıcıyla çalıştırır. Böyle
+  bir porttaki eşleme panoda bir ipucuyla başarısız olur, 1024 altındaki bir admin arayüzü
+  portu için açılışta uyarı çıkar (web arayüzü başlayamaz). İzin vermek için servise
+  yalnızca bu yetkiyi `sudo systemctl edit ser2net` ile verin, ardından
+  `sudo systemctl restart ser2net`:
+  ```ini
+  [Service]
+  AmbientCapabilities=CAP_NET_BIND_SERVICE
+  CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+  ```
+  Unit'lerdeki `NoNewPrivileges=true` ile çalışır; eşleme düzenleyebilen herkes bundan sonra
+  1024 altındaki boş her portta dinleyebilir. python3'e `setcap cap_net_bind_service=+ep`
+  işe yaramaz (`NoNewPrivileges` dosya yetkilerini yok sayar) ve bu hakkı makinedeki her
+  Python programına verir. Ya da 1024 ya da üstünde bir port kullanın. Host ağında Docker:
+  `SER2NET_LOW_PORTS=1` ([`docs/DOCKER.md`](docs/DOCKER.md#ports-and-networking)).
 - **Windows:** ek bir program gerekmez. Yönetici olarak açılmış bir komut isteminde:
   ```bat
   ser2net-windows-x64.exe --install-service

@@ -62,6 +62,7 @@ PORTABLE = [
     "test_optional_packages.py",
     "test_cluster.py",
     "test_netinfo.py",        # interface lists also where /proc/net is hidden (systemd unit)
+    "test_bind_hint.py",      # a refused low port says why (CAP_NET_BIND_SERVICE), UI + log
     "test_ui_markup.py",
     "test_ui_layout.py",      # browser layout check; skips without Playwright (CI 'ui' job runs it)
     "test_tls_selfsigned.py",

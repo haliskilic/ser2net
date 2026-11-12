@@ -12,7 +12,7 @@ import contextlib
 from typing import Any, Callable, Optional, Protocol
 
 from ..config import AppConfig, MappingConfig
-from . import serial_io
+from . import bindhint, serial_io
 from .bridge import MappingRunner, RunnerStatus
 
 
@@ -149,7 +149,10 @@ class Supervisor:
         except Exception as e:
             runner.status.state = "error"
             runner.status.last_error = str(e)
+            runner.status.hint = bindhint.for_mapping(e, mapping)
             self.log(f"[{mapping.name}] start failed: {e}")
+            if runner.status.hint:
+                self.log(f"[{mapping.name}] {bindhint.explain(runner.status.hint)}")
             return False, str(e)
 
     async def start_mapping(self, mapping: MappingConfig) -> tuple[bool, str]:

@@ -72,6 +72,14 @@ SystemCallFilter=~@privileged @resources
 # A call the filter denies fails with EPERM, which ser2net reports like any other error,
 # instead of killing the process with SIGSYS (no traceback, and a restart every 3 s).
 SystemCallErrorNumber=EPERM
+# Ports below 1024 (Modbus/TCP's 502, the web UI on 80 or 443): an unprivileged user
+# can't listen on them. To allow it, uncomment both lines, or better add them with
+# "systemctl edit ser2net" (README: "Ports below 1024"). It works with
+# NoNewPrivileges=true; whoever may edit mappings can then listen on any free port
+# below 1024. (setcap on python3 does not help: NoNewPrivileges ignores file
+# capabilities, and it would give the right to every Python program on the machine.)
+#AmbientCapabilities=CAP_NET_BIND_SERVICE
+#CapabilityBoundingSet=CAP_NET_BIND_SERVICE
 # MemoryDenyWriteExecute=true   # enable only after verifying ctypes/Python startup
 # UMask=0077
 
