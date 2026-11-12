@@ -193,10 +193,20 @@ def build_api_routes(state):
             merged["id"] = mid
             try:
                 mapping = MappingConfig.from_dict(merged)
+                # the mask a viewer token reads, sent back: the stored secret stays
+                if mapping.mqtt.password == REDACTED:
+                    mapping.mqtt.password = existing.mqtt.password
+                if mapping.network.tls_key_password == REDACTED:
+                    mapping.network.tls_key_password = existing.network.tls_key_password
                 mapping.validate()
                 mapping.validate_input()
+                await _check_tls_files(mapping)
             except (ValueError, TypeError, AttributeError) as e:  # ConfigError is a ValueError
                 return JSONResponse({"error": "validation", "detail": str(e)}, status_code=400)
+            if conflict := (state.config.own_port_conflict(mapping)  # the admin UI's port, ...
+                            or state.config.serial_conflict(mapping)  # a port another one uses
+                            or state.config.admin_key_reuse(mapping)):
+                return JSONResponse({"error": "validation", "detail": conflict}, status_code=400)
             backup = list(state.config.mappings)
             state.config.mappings[state.config.mappings.index(existing)] = mapping
             try:
@@ -348,7 +358,11 @@ _NOTES = {
     ("NetworkSettings", "allowed_client_ips"): "The clients (IP or CIDR) that may connect; "
                                                "empty = any client.",
     ("NetworkSettings", "read_only"): "Clients only read: nothing they send reaches the device.",
-    ("MqttSettings", "password"): "Masked as ******** for a viewer token.",
+    ("MqttSettings", "password"): "Masked as ******** for a viewer token; sent back so in a PUT "
+                                  "or PATCH, the stored one stays.",
+    ("NetworkSettings", "tls_key_password"): "The password of an encrypted tls_key. Masked as "
+                                             "******** for a viewer token; sent back so in a "
+                                             "PUT or PATCH, the stored one stays.",
 }
 _JSON_TYPES = {str: "string", int: "integer", float: "number", bool: "boolean"}
 
@@ -474,7 +488,9 @@ def openapi_spec(admin, base: str = "") -> dict:
     responses = {
         "BadRequest": _json("Error", "The request is not valid: a body that is not a JSON "
                                      "object (invalid_json), a mapping or an import result "
-                                     "that is not valid (validation), an unknown action "
+                                     "that is not valid or a mapping that can't be started, "
+                                     "e.g. on a serial port another one uses (validation), "
+                                     "an unknown action "
                                      "(unknown_action) or query value (invalid_parameter), a "
                                      "body that is nothing importable (invalid_import)."),
         "Unauthorized": _json("Error", "No token, a wrong or expired one (unauthorized), or no API "
