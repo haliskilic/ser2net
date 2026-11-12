@@ -106,6 +106,7 @@ PORTABLE = [
     "test_downgrade.py",
     "test_supervisor_turns.py",
     "test_config_edits.py",
+    "test_start_idempotent.py",
 ]
 
 # Data-path tests that need socat-backed PTYs (Linux). Best-effort: skipped if the

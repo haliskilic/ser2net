@@ -14,6 +14,8 @@ Checks, with runners that open nothing (a shared dict stands for the port):
     runner of the current config, a deleted mapping is not started again, a stop that a
     later start overtook leaves the mapping running;
   * stop_all also stops what an operation under way starts; a failing stop() is logged;
+  * ensure_running leaves a runner that runs with the mapping's settings as it is (also
+    while it waits for its device), starts a failed or changed one again;
   * a real bridge / Modbus gateway stopped while its listener comes up closes it (and
     the gateway starts no MQTT client).
 
@@ -182,6 +184,34 @@ async def test_stop_all_and_stop_errors():
     print("stop_all stops what an operation under way started; a failing stop is logged  OK")
 
 
+async def test_ensure_running():
+    """A start leaves a runner that runs with the mapping's settings as it is."""
+    reset()
+    config = {"m": mapping("eeeeeeeeeee1", 7041)}
+    sup = Supervisor(lookup=lambda mid: config["m"])
+    await sup.apply_mapping(config["m"])
+    first = sup.get_runner("eeeeeeeeeee1")
+    assert await sup.ensure_running(config["m"]) == (True, "running", False)
+    assert sup.get_runner("eeeeeeeeeee1") is first and first in LIVE
+    for state in ("reconnecting", "device-missing"):  # waiting for its device: still runs
+        first.status.state = state
+        assert (await sup.ensure_running(config["m"]))[2] is False
+    first.status.state = "error"  # failed: started again
+    assert await sup.ensure_running(config["m"]) == (True, "started", True)
+    second = sup.get_runner("eeeeeeeeeee1")
+    assert second is not first and second.status.state == "running"
+    config["m"] = mapping("eeeeeeeeeee1", 7042)  # other settings: built again
+    assert (await sup.ensure_running(config["m"]))[2] is True and 7042 in PORTS
+    config["m"] = mapping("eeeeeeeeeee1", 7042, enabled=False)
+    assert await sup.stop_mapping("eeeeeeeeeee1") is True
+    assert await sup.stop_mapping("eeeeeeeeeee1") is False, "stopped already"
+    assert (await sup.ensure_running(config["m"]))[2] is True  # (built from the new settings)
+    assert await sup.ensure_running(config["m"]) == (True, "disabled", False)
+    await sup.stop_all()
+    print("ensure_running: a running mapping is left alone, a failed or changed one is "
+          "started again; a stopped one is not stopped again  OK")
+
+
 def _free_port():
     s = socket.socket()
     s.bind(("127.0.0.1", 0))
@@ -242,6 +272,7 @@ async def main():
         await test_other_mappings_side_by_side()
         await test_current_config_wins()
         await test_stop_all_and_stop_errors()
+        await test_ensure_running()
     finally:
         supervisor.make_runner = real
     await test_real_runner_stopped_while_listening_starts()
