@@ -345,12 +345,27 @@ curl -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/jso
   -d '{"name":"PLC-1","kind":"net","serial":{"port":"/dev/ttyUSB0","baudrate":9600},
        "network":{"mode":"server","bind_ip":"0.0.0.0","port":4001}}' \
   http://HOST:8080/api/v1/mappings
+# yalnızca bazı alanları değiştir (JSON merge patch): burada TCP portu
+curl -X PATCH -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/merge-patch+json" \
+  -d '{"network":{"port":4002}}' http://HOST:8080/api/v1/mappings/<id>
 # başlat / durdur / yeniden başlat
 curl -X POST -H "Authorization: Bearer $TOKEN" http://HOST:8080/api/v1/mappings/<id>/stop
 ```
-Uç noktalar: `GET/POST /mappings`, `GET/PUT/DELETE /mappings/{id}`,
+Uç noktalar: `GET/POST /mappings`, `GET/PUT/PATCH/DELETE /mappings/{id}`,
 `POST /mappings/{id}/{start|stop|restart}`, `GET /status`, `GET /ports`,
 `GET /health` (kimlik doğrulamasız), `GET /openapi.json`.
+
+**`PUT` eşlemenin tamamını değiştirir.** Gövdenin içermediği her alan, yeni bir eşlemedeki
+gibi varsayılanını alır: `0.0.0.0` üzerinde 4001 portunu dinler, istemci izin listesi yoktur,
+salt okunur değildir, etkindir (durdurulmuş bir eşleme başlar), TLS, MQTT ve trace kapalıdır,
+USB kimliği (`serial.match`) düşer ve `kind` `net` olur (seri↔seri köprü bir ağ dinleyicisine
+dönüşür). Bu yüzden ya eşlemeyi `GET` ile alın, değiştirin ve tamamını `PUT` ile geri
+gönderin, ya da **`PATCH`** kullanın: yalnızca gövdenin adını verdiği alanları değiştiren bir
+RFC 7396 JSON merge patch. Bir nesne kayıtlı olanla birleşir (`{"network":{"port":4002}}` bind
+adresini ve izin listesini korur), bir liste ya da değer eskisinin yerine geçer, `null` ise
+alanı varsayılanına döndürür (`{"network":{"allowed_client_ips":null}}`). Sonuç her düzenleme
+gibi denetlenir; reddedilen bir patch hiçbir şeyi değiştirmez (HTTP 400). Her değişiklikten
+önceki yapılandırma `backups/` içinde kalır.
 Token, üretilirken seçilen rolü taşır: `viewer` token'ı yalnızca okuyabilir (GET) ve kayıtlı
 sırları (MQTT parolası) maskeli görür. `config.json`'daki `api_token_role` bir rol değilse
 `viewer` sayılır ve açılış log'u bunu yazar.

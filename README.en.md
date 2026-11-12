@@ -336,12 +336,26 @@ curl -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/jso
   -d '{"name":"PLC-1","kind":"net","serial":{"port":"/dev/ttyUSB0","baudrate":9600},
        "network":{"mode":"server","bind_ip":"0.0.0.0","port":4001}}' \
   http://HOST:8080/api/v1/mappings
+# change some fields only (JSON merge patch): here the TCP port
+curl -X PATCH -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/merge-patch+json" \
+  -d '{"network":{"port":4002}}' http://HOST:8080/api/v1/mappings/<id>
 # start / stop / restart
 curl -X POST -H "Authorization: Bearer $TOKEN" http://HOST:8080/api/v1/mappings/<id>/stop
 ```
-Endpoints: `GET/POST /mappings`, `GET/PUT/DELETE /mappings/{id}`,
+Endpoints: `GET/POST /mappings`, `GET/PUT/PATCH/DELETE /mappings/{id}`,
 `POST /mappings/{id}/{start|stop|restart}`, `GET /status`, `GET /ports`,
 `GET /health` (unauthenticated), `GET /openapi.json`.
+
+**`PUT` replaces the whole mapping.** Every field the body leaves out gets its default, as in
+a new mapping: listen on `0.0.0.0` port 4001, no client allow-list, not read-only, enabled
+(a stopped mapping starts), TLS, MQTT and the trace off, no USB identity (`serial.match`),
+and `kind` `net` (a serial↔serial bridge becomes a network listener). So either `GET` the
+mapping, change it and `PUT` all of it back, or use **`PATCH`**: an RFC 7396 JSON merge patch
+that changes only what the body names. An object merges into the stored one
+(`{"network":{"port":4002}}` keeps the bind address and the allow-list), a list or a value
+replaces it, and `null` resets a field to its default (`{"network":{"allowed_client_ips":null}}`).
+The result is checked like any edit; a refused patch changes nothing (HTTP 400). The
+previous configuration of every change stays in `backups/`.
 The token has the role chosen when it was generated: a `viewer` token may only read (GET)
 and gets stored secrets (the MQTT password) masked. An `api_token_role` in `config.json`
 that is not a role counts as `viewer`, and the start-up log says so.

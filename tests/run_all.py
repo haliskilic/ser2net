@@ -46,6 +46,7 @@ PORTABLE = [
     "test_form_validation.py",
     "test_rest_api.py",
     "test_api_token_role.py",
+    "test_rest_patch.py",     # PATCH /api/v1/mappings/{id} (JSON merge patch)
     "test_modbus_frame.py",
     "test_modbus_gateway.py",
     "test_rbac.py",

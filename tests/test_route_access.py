@@ -109,6 +109,7 @@ ROUTES = {
     ("POST", "/api/v1/mappings"): (TOKEN_WRITE, NONE),
     ("GET", "/api/v1/mappings/{mid}"): (TOKEN_READ, NONE),
     ("PUT", "/api/v1/mappings/{mid}"): (TOKEN_WRITE, NONE),
+    ("PATCH", "/api/v1/mappings/{mid}"): (TOKEN_WRITE, NONE),
     ("DELETE", "/api/v1/mappings/{mid}"): (TOKEN_WRITE, NONE),
     ("POST", "/api/v1/mappings/{mid}/{action}"): (TOKEN_WRITE, NONE),
     # ---- routes/mappings.py ----
