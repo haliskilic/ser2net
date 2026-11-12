@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% from "_macros.html" import lang_switch %}
+{% block title %}{{ _("Two-factor sign-in") }} — ser2net{% endblock %}
+{% block body %}
+<div class="auth-wrap">
+  {{ lang_switch(request, request.state.lang) }}
+  <div class="panel">
+    <h1>⇄ ser2net</h1>
+    <p class="muted">{{ _('Enter the code your authenticator app shows for <span class="mono">%(user)s</span>.', user=username) }}</p>
+    {% if error %}<div class="banner error">{{ error }}</div>{% endif %}
+    <form method="post" action="/auth/totp" class="authform">
+      <input type="hidden" name="_csrf" value="{{ request.state.csrf_token }}">
+      <label>{{ _("Code") }}
+        <input type="text" name="code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9 ]{6,7}" maxlength="7" autocapitalize="none" autocorrect="off" spellcheck="false" required autofocus>
+      </label>
+      <button class="btn primary w-full" type="submit">{{ _("Sign in") }}</button>
+    </form>
+    <p class="muted mt-sm"><a href="/login">{{ _("Sign in again") }}</a> · {{ _("Lost your authenticator? An admin can turn two-factor sign-in off for your account.") }}</p>
+  </div>
+</div>
+{% endblock %}

@@ -20,16 +20,13 @@ from __future__ import annotations
 import time
 from typing import Optional
 
+from .clock import parse_stamp
 from .config import User, fold
-
-_TIME = "%Y-%m-%d %H:%M:%S"     # how the audit log writes times (local time)
 
 
 def _when(text: str) -> Optional[float]:
-    try:
-        return time.mktime(time.strptime(text[:19], _TIME))
-    except (ValueError, OverflowError):
-        return None
+    """An audit record's time: local time with its UTC offset, or without one (older)."""
+    return parse_stamp(text)
 
 
 def sign_in_of(record: dict) -> Optional[tuple[str, str]]:

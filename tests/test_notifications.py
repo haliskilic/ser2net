@@ -16,7 +16,13 @@ Checks:
   * personal data: with mask_personal_data a client's address goes out as its network
     (IPv4 /24, IPv6 /48; the repeat key stays the address) and a failed sign-in without
     the account name; with email_separately each recipient gets a message of their own;
-    Discord pings no one; the Settings boxes are kept by a form that doesn't have them.
+    Discord pings no one; the Settings boxes are kept by a form that doesn't have them;
+  * a mapping name with a line break still gets its e-mail (the subject is one line, no
+    header can be added through it), and a failed delivery's log line names the event
+    and the mapping;
+  * a webhook that redirects is followed but reported (log, test result): the message
+    may not have arrived; Settings warns that SMTP security "none" with a user name
+    sends the password unencrypted.
 
 Run: python3 tests/test_notifications.py
 """
@@ -44,7 +50,18 @@ class Hook(BaseHTTPRequestHandler):
     def do_POST(self):  # noqa: N802 (http.server API)
         body = self.rfile.read(int(self.headers.get("Content-Length", 0)))
         RECEIVED.append((self.path, json.loads(body)))
-        self.send_response(500 if self.path == "/fail" else 204)
+        if self.path == "/moved":  # as a receiver that moved (or answers a POST so) does
+            self.send_response(302)
+            self.send_header("Location", "/moved-here?token=secret")
+            self.send_header("Content-Length", "0")
+        else:
+            self.send_response(500 if self.path == "/fail" else 204)
+        self.end_headers()
+
+    def do_GET(self):  # noqa: N802 (http.server API) - where a redirect leads
+        RECEIVED.append((self.path, None))
+        self.send_response(200)
+        self.send_header("Content-Length", "0")
         self.end_headers()
 
     def log_message(self, *a):
@@ -265,11 +282,38 @@ async def test_delivery(hook_port, smtp_port):
     assert "Kazan dairesi ğüşıöç" in mail["Subject"] and lost in mail["Subject"], mail["Subject"]
     assert "Kazan dairesi ğüşıöç" in mail.get_content()
     st.config.admin_ui.language = "auto"
+    # a line break in a mapping name: the e-mail still goes, its subject on one line
+    errors = await n.deliver("device_lost", "PLC\r\nBcc: x@example.net\u2028\x85", "gone")
+    assert errors == [], errors
+    mail = email.message_from_string(MAILS[-1][1], policy=email.policy.default)
+    assert mail["Subject"].startswith("ser2net ") and "PLC  Bcc: x@example.net" in mail["Subject"], \
+        mail["Subject"]
+    assert mail["Bcc"] is None and "\n" not in mail["Subject"], mail.items()
+    assert RECEIVED[-1][1]["mapping"] == "PLC\r\nBcc: x@example.net\u2028\x85", "JSON keeps it"
     s.webhook_url = f"http://127.0.0.1:{hook_port}/fail"
     errors = await n.deliver("device_lost", "PLC", "gone")
     assert errors and "HTTP 500" in errors[0], errors
-    print("delivery: webhook + SMTP received (Turkish, 7-bit e-mail); a failing webhook is "
-          "reported, not raised  OK")
+    # a failed delivery from the queue: its log line names the event and the mapping
+    worker = asyncio.create_task(n._worker())  # (the first emit above is still queued)
+    assert n.emit("device_lost", "m2", "Pompa-2", "gone") is True
+    for _ in range(100):
+        if len(st.logs) >= 2:
+            break
+        await asyncio.sleep(0.05)
+    worker.cancel()
+    assert st.logs[-1] == ("notifications: webhook (json) failed: HTTP 500 Internal Server "
+                           "Error (device_lost, mapping 'Pompa-2')"), st.logs
+    # a redirect is followed (as a GET), and reported: the message may not have arrived
+    s.webhook_url = f"http://127.0.0.1:{hook_port}/moved"
+    warnings: list = []
+    errors = await n.deliver("device_lost", "PLC", "gone", warnings=warnings)
+    assert errors == [] and RECEIVED[-1] == ("/moved-here?token=secret", None), RECEIVED[-2:]
+    assert warnings == [f"webhook (json) was redirected to http://127.0.0.1:{hook_port}: if the "
+                        "message didn't arrive, set the address it redirects to"], warnings
+    assert await n.deliver("device_lost", "PLC", "gone") == [], "a warning is no error"
+    print("delivery: webhook + SMTP received (Turkish, 7-bit e-mail); a line break in a "
+          "mapping name can't stop its e-mail or add a header; a failing webhook is reported "
+          "(with event and mapping), not raised; a redirect is reported  OK")
 
 
 def test_settings_ui(hook_port):
@@ -296,6 +340,23 @@ def test_settings_ui(hook_port):
         assert srv.saved_config()["notifications"]["webhook_url"].endswith("/ui"), "blank URL must keep the stored one"
         st, _, page = b.post("/settings/notifications", {**form, "notify_webhook_url": "ftp://x"})
         assert "must start with https://" in page
+        # a redirecting webhook: sent, with a warning in the test result
+        st, _, page = b.post("/settings/notifications", {
+            **form, "notify_webhook_url": f"http://127.0.0.1:{hook_port}/moved", "then": "test"})
+        assert "the test notification was sent, but: webhook (slack) was redirected to " \
+            f"http://127.0.0.1:{hook_port}:" in page, page[page.find("banner"):][:400]
+        assert "moved-here" not in page, "only the redirect's scheme and host are shown"
+        # SMTP security "none" with a user name: the password goes unencrypted
+        hint = "the user name and password go to the mail server unencrypted"
+        assert hint not in page
+        st, _, page = b.post("/settings/notifications", {
+            **form, "notify_smtp_security": "none", "notify_smtp_username": "mailer",
+            "notify_smtp_host": "127.0.0.1", "notify_email_to": "ops@example.com"})
+        assert hint in page, page[page.find("E-mail"):][:2000]
+        st, _, page = b.post("/settings/notifications", {
+            **form, "notify_smtp_security": "none",
+            "notify_webhook_url": f"http://127.0.0.1:{hook_port}/ui"})
+        assert hint not in page, "no user name, no password sent"
         before = len(RECEIVED)
         Browser(srv.base).post("/login", {"username": "admin", "password": "wrong"})
         for _ in range(50):
@@ -304,7 +365,8 @@ def test_settings_ui(hook_port):
             time.sleep(0.1)
         assert len(RECEIVED) > before and "failed sign-in" in RECEIVED[-1][1]["text"], RECEIVED[-1:]
         assert "user 'admin' from 127.0.0.1" in RECEIVED[-1][1]["text"], RECEIVED[-1]
-        print("Settings: save (secret kept when blank), validation, test message, failed sign-in  OK")
+        print("Settings: save (secret kept when blank), validation, test message (a redirect "
+              "warned about), SMTP 'none' + user name hint, failed sign-in  OK")
 
         # the personal-data boxes: hints next to the events that carry personal data
         _, _, page = b.get("/settings")

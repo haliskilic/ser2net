@@ -5,19 +5,29 @@ Checks:
     sign-ins and failed sign-ins are recorded, REST API / cluster calls say so;
   * control characters in a field (a mapping name with a newline) can't create an
     extra, forged record;
+  * the same holds for all.log / stdout and a mapping's own log: a message is one line
+    (control characters become spaces, terminal escapes included), a traceback after it
+    stays as it is;
   * Settings -> Audit log (admin only): search, action/user filters, paging, CSV
-    export with formula-looking cells neutralised.
+    export with formula-looking cells neutralised;
+  * the mappings export (it holds MQTT passwords) and the audit CSV export are
+    recorded; a request refused before its handler (no session, CSRF) gets an all.log
+    line - one per address and answer a minute, the next says how many more - and the
+    security headers.
 
 Run: python3 tests/test_audit_log.py
 """
 import csv
 import io
+import logging
 import os
+import shutil
 import tempfile
+import urllib.request
 
 from _server import Browser, Server, free_port
 
-from app.config import AppConfig, ConfigStore
+from app.config import AppConfig, ConfigStore, MappingConfig
 from app.state import AppState
 from app.web.auth import hash_password
 
@@ -43,8 +53,50 @@ def test_records_and_injection():
     print("records: user column appended (2.7 lines still parse), newline can't forge a record  OK")
 
 
+def _close_loggers():
+    # AppState's FileHandlers keep the logs open (Windows can't remove the folder then)
+    for name in list(logging.root.manager.loggerDict):
+        if name == "ser2net" or name.startswith("ser2net."):
+            lg = logging.getLogger(name)
+            for h in list(lg.handlers):
+                h.close()
+                lg.removeHandler(h)
+
+
+def test_log_lines():
+    d = tempfile.mkdtemp(prefix="s2n_logline_")
+    try:
+        st = AppState(ConfigStore(os.path.join(d, "config.json")), AppConfig())
+        forged = "2026-11-04 00:00:00 login: admin (admin, local) from 6.6.6.6"
+        st.log(f"saved\r\n{forged}\x1b[2J\u2028\x85\x9b31m\tend")
+        log = st.make_mapping_logger(MappingConfig(id="m1", name="PLC\n1"))
+        log(f"point 'x\u2029y' failed\n{forged}")
+        try:
+            raise RuntimeError("boom")
+        except RuntimeError:
+            logging.getLogger("ser2net").exception("fatal\nerror")
+        with open(st.log_path, encoding="utf-8") as fh:
+            lines = fh.read().split("\n")
+        assert not any(ln.startswith(forged[:19]) for ln in lines), "a forged line got in"
+        assert any(ln.endswith(f"saved  {forged} [2J   31m end") for ln in lines), lines
+        assert any(ln.endswith(f"[PLC 1] point 'x y' failed {forged}") for ln in lines), lines
+        assert not any("\x1b" in ln or "\x9b" in ln or "\u2028" in ln for ln in lines)
+        assert any(ln.endswith(" fatal error") for ln in lines), lines
+        assert "Traceback (most recent call last):" in lines and "RuntimeError: boom" in lines
+        with open(st.mapping_log_path("m1"), encoding="utf-8") as fh:
+            own = fh.read().split("\n")
+        assert len(own) == 2 and own[0].endswith(f" point 'x y' failed {forged}"), own
+        assert st.read_mapping_log("m1") == own[:1]
+        print("all.log / stdout / mapping log: one line per message (no forged line, no "
+              "terminal escape); a traceback stays below its line  OK")
+    finally:
+        _close_loggers()
+        shutil.rmtree(d, ignore_errors=True)
+
+
 def main():
     test_records_and_injection()
+    test_log_lines()
     users = [{"username": "admin", "password_hash": hash_password(PW), "role": "admin", "pwd_version": 1},
              {"username": "op1", "password_hash": hash_password(PW), "role": "operator", "pwd_version": 1}]
     with Server({"users": users}) as srv:
@@ -77,6 +129,37 @@ def main():
         assert set(acts) >= {"login", "login_failed", "mapping_save"}, acts.keys()
         assert acts["mapping_save"][4].startswith("'="), "formula cell not neutralised"
         print("UI: admin-only page with search / filters, CSV export (formula cells defused)  OK")
+
+        st, h, _ = op.get("/settings/config/export")
+        assert st == 200 and "attachment" in h.get("Content-Disposition", "")
+        st, _, body = admin.get("/settings/audit.csv")
+        rows = {r[3]: r for r in csv.reader(io.StringIO(body))}
+        assert rows["config_export"][2] == "op1" and rows["config_export"][4] == "1 mappings", rows
+        admin.get("/settings/audit.csv?action=login")
+        with open(os.path.join(srv.data, "audit.log"), encoding="utf-8") as fh:
+            audit = fh.read()
+        assert "\taudit_export\t" in audit and "records (action=login)\tadmin\n" in audit, audit
+        print("exports: the mappings export and the audit CSV export are recorded  OK")
+
+        stranger = Browser(srv.base)
+        for _ in range(3):
+            st, h, _ = stranger.get("/settings")
+            assert st == 303 and h.get("X-Frame-Options") == "DENY", (st, dict(h))
+        st, h, _ = stranger.post("/api/mappings/save", {"name": "x"})
+        assert st == 401 and h.get("X-Content-Type-Options") == "nosniff", st
+        st, _, _ = op.post("/api/mappings/save", {"name": "x"}, htmx=True)
+        assert st == 400, st   # op's request reached its handler (logged as before)
+        csrf = urllib.request.Request(srv.base + "/api/mappings/save", data=b"name=x",
+                                      method="POST", headers={"X-CSRF-Token": "forged"})
+        assert op._open(csrf)[0] == 403
+        with open(os.path.join(srv.data, "all.log"), encoding="utf-8") as fh:
+            log = fh.read()
+        assert log.count("HTTP 127.0.0.1 GET /settings -> 303") == 1, log[-2000:]
+        assert log.count("HTTP 127.0.0.1 POST /api/mappings/save -> 401") == 1, log[-2000:]
+        assert log.count("HTTP 127.0.0.1 POST /api/mappings/save -> 403") == 1, log[-2000:]
+        assert "HTTP 127.0.0.1 POST /api/mappings/save -> 400" in log
+        print("refused before the handler (no session, CSRF): logged once a minute per address "
+              "and answer, with the security headers  OK")
     print("\nPASS: audit log (users, injection-safe, viewer, CSV)")
 
 

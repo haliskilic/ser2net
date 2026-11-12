@@ -180,6 +180,16 @@ and session key. README, *Several instances on one machine*, has the whole check
   keeps them in `/data/all.log` only (`docker logs` then shows just what isn't a log line,
   such as a start-up error), and Settings → Audit log → *Web UI requests in all.log* can
   leave out page views or every request line.
+- **Clock.** A container has no clock of its own: it uses the host's. Keep the host's
+  clock synchronised (NTP; README, *Time synchronisation*): ser2net never sets it, and a
+  wrong clock puts wrong times in logs and backups and makes sign-ins and certificate
+  checks fail. The start-up log warns when the clock reads earlier than the newest
+  configuration backup.
+- **Time zone.** The container runs in UTC unless `TZ` is set, so its log, audit and trace
+  times are UTC, while the live hex view shows its times in the browser's zone. Log and audit
+  lines say so with their offset (`2026-11-06 12:00:00+00:00`), trace lines don't. For the
+  local time, set `TZ` (`-e TZ=Europe/Istanbul`, or under `environment:` in compose) or
+  mount the host's zone (`-v /etc/localtime:/etc/localtime:ro`).
 - **Runs as a non-root user.** The process runs as `ser2net` (uid/gid 10001), never
   as root. The entrypoint starts as root only to choose the account: a `/data` owned by
   root — a volume written by an image before v2.8, which ran as root — is handed to
