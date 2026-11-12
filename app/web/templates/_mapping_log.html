@@ -6,7 +6,7 @@
       <button type="button" class="btn sm" data-cancel>{{ _("Close") }}</button>
     </div>
   </div>
-  <p class="muted mb-sm">{{ _("Newest first · auto-refreshes every 5s · persists across restarts.") }}</p>
+  <p class="muted mb-sm">{{ _("Newest first · auto-refreshes every 5s · persists across restarts.") }} {{ _("Times are the server’s local time (now %(zone)s).", zone=server_zone()) }}</p>
   {% if lines %}
   <pre class="logbox">{% for line in lines %}{{ line }}
 {% endfor %}</pre>

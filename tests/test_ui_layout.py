@@ -22,7 +22,10 @@ longer:
     browser's address is shown too, and not otherwise;
   * the mapping form's Device field: "Other device path…" gives the select's name to the
     text box (the typed path is posted as serial_port), ↻ lists the ports again and keeps
-    the typed path; the ports panel's Refresh keeps "show all ports".
+    the typed path; the ports panel's Refresh keeps "show all ports";
+  * Settings notes a browser clock 10 minutes off the server's (Playwright's fake clock in
+    a context of its own; the machine's clock is not touched), inside its panel, and
+    shows no note while the clocks agree.
 
 Opt-in: needs `pip install playwright && python -m playwright install chromium`.
 Skipped when Playwright or its browser is missing, unless SER2NET_UI_TESTS=1 (the
@@ -189,8 +192,13 @@ def main():
                           "advertise_ip": "127.0.0.1"},
               "mappings": demo_mappings("B-", free_port())}
     # a second (long-named) account: the Users table's row buttons + the set-password form
+    # (with two-factor sign-in: its tag and the "Turn off 2FA" button too)
     others = [{"username": "night-shift.operator.building-b.east", "role": "operator",
-               "password_hash": hash_password(PASSWORD), "pwd_version": 1}]
+               "password_hash": hash_password(PASSWORD), "pwd_version": 1,
+               "totp_secret": "A" * 32}]
+    # a long-named, expired REST API token: the token table
+    tokens = [{"id": "0123456789abcdef", "name": "prometheus-scraper.building-b.east-wing",
+               "sha256": "a" * 64, "role": "viewer", "created": 1700000000, "expires": 1700086400}]
     # a long instance name: the top bar, the tab title and the fleet view's row
     # a long sign-in notice (an unbroken word in it) with a link: the sign-in page
     notice = ("Bu sistem Örnek Sanayi A.Ş. bilgi işlem birimine aittir.\n"
@@ -201,6 +209,7 @@ def main():
                            "login_notice": notice,
                            "login_notice_url": "https://intranet.example.internal/kvkk"},
               "users": users + others,
+              "api_tokens": tokens,
               "cluster": {"enabled": True, "key": key, "discovery_port": free_port(),
                           "peers": [f"127.0.0.1:{ui_b}"]},
               "mappings": demo_mappings("", raw_a)}
@@ -285,6 +294,9 @@ def main():
                     page.goto(f"{base}/settings?restore=config-20260101T000000Z.json#backups")
                     page.wait_for_selector("#backups h3")
                     check(f"{lang} restore preview @{w}")
+                    page.goto(f"{base}/settings/totp")   # the key and the otpauth:// link
+                    page.wait_for_selector("section.panel .token-box")
+                    check(f"{lang} two-factor setup @{w}")
 
             # Settings → SSO: the redirect URI for this browser's address, shown only when
             # the one made from the request differs (here: a proxy's X-Forwarded-Host)
@@ -348,6 +360,27 @@ def main():
             if not polls:
                 problems.append("showing the tab again did not refresh the cluster panel")
             print("cluster panel: no refresh while the tab is hidden, one when shown")
+
+            page.goto(f"{base}/settings")
+            page.wait_for_selector("section.panel")
+            if page.locator("[data-clock-skew]").is_visible():
+                problems.append("the clock note shows while the browser's and the server's agree")
+            skewed = browser.new_context()
+            skewed.add_cookies(page.context.cookies())
+            skewed.clock.install(time=time.time() + 600)
+            other = skewed.new_page()
+            other.on("pageerror", lambda e: browser_errors.append(str(e)))
+            for w in (1024, 390):
+                other.set_viewport_size({"width": w, "height": 900})
+                other.goto(f"{base}/settings")
+                other.wait_for_selector("[data-clock-skew]:not([hidden])", timeout=10000)
+                bad = other.evaluate(CHECK_JS)
+                problems.extend(f"clock note @{w}: {b}" for b in bad)
+            note = other.locator("[data-clock-skew]").inner_text()
+            if "10" not in note:
+                problems.append(f"the clock note doesn't say 10 minutes: {note!r}")
+            print(f"settings: a browser clock 10 min ahead is noted: {note[:60]}…")
+            skewed.close()
             browser.close()
 
         assert not problems, "layout problems:\n  " + "\n  ".join(problems)

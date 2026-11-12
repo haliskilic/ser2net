@@ -257,7 +257,7 @@ async def test_last_sender_gets_the_output():
         await udp.send(b"", a)          # an empty datagram is enough to be the peer
         first = _udp_peer(runner)
         udp.device_says(b"one")
-        time.sleep(0.05)                # more than time.time()'s 15.6 ms steps (Windows)
+        time.sleep(0.05)                # more than the clock's 15.6 ms steps (Windows)
         await udp.send(b"q", b)
         udp.device_says(b"two")
         for _ in range(3):              # a and b take turns
@@ -266,6 +266,7 @@ async def test_last_sender_gets_the_output():
     peer = _udp_peer(runner)
     assert udp.transport.sent == [(b"one", a), (b"two", b)], udp.transport.sent
     assert peer.addr == b and peer.connected_at > first.connected_at, "connection time restarts"
+    assert peer.seq > first.seq, "the new peer is the newest client"
     assert [c["peer"] for c in runner.status.clients] == ["10.0.0.6:5001"]
     assert sum("udp peer 10.0.0.5:5000" in m for m in logs) == 1, logs
     changes = [m for m in logs if "udp peer is now" in m]

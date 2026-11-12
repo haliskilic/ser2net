@@ -242,7 +242,8 @@ everything from a **password-protected web UI** — no CLI or hand-edited config
   Problems filter counts; "connecting"), in `/api/v1/status` (`link`: `connecting` / `up`
   / `down`, `link_error`, `link_since`, `connect_failures`) and in the fleet view. A link
   closed and connected again at once (max connection time, idle timeout) is no outage.
-- **Security:** password (set on first access, scrypt), CSRF, signed-cookie sessions,
+- **Security:** password (set on first access, scrypt), optional two-factor sign-in
+  (TOTP codes from an authenticator app) per local account, CSRF, signed-cookie sessions,
   login rate-limiting, strict security headers; sessions end at logout, on a password
   change, per user or for everyone (Settings), and a lost password is reset with
   `ser2net --set-password` (see Security).
@@ -450,13 +451,15 @@ The image has a `HEALTHCHECK` (`ser2net --healthcheck`). Behind a reverse proxy,
   device on network mappings. The hex view shows both directions; viewers see only what
   the device sends.
 - **Trace** (operators): the mapping's trace files, to list and download.
-- **Settings:** change password, **web UI access** (login required / open access with a
-  role), admin TLS (provide paths or generate self-signed), generate/revoke the **REST API
-  token**, mappings **backup/restore** (JSON), status, and the **name of this instance**
-  (Admin interface; or `SER2NET_NODE_NAME`): notifications, the browser tab, the top bar and
-  the LAN cluster's fleet view use it instead of the host name, which instances on one
-  machine share; the generic JSON webhook also gets `hostname` and `instance_id`.
-- **/metrics:** Prometheus-format metrics (authenticated): per mapping whether it runs,
+- **Settings:** change password, **two-factor sign-in**, **web UI access** (login required /
+  open access with a role), admin TLS (provide paths or generate self-signed),
+  generate/revoke **REST API tokens**, mappings **backup/restore** (JSON), status, and the
+  **name of this instance** (Admin interface; or `SER2NET_NODE_NAME`): notifications, the
+  browser tab, the top bar and the LAN cluster's fleet view use it instead of the host name,
+  which instances on one machine share; the generic JSON webhook also gets `hostname` and
+  `instance_id`.
+- **/metrics:** Prometheus-format metrics (a web UI session; with the REST API token:
+  `/api/v1/metrics`, see REST API): per mapping whether it runs,
   its clients, bytes in / out / dropped, reconnects (of those, failed opens of the serial
   port, `ser2net_mapping_open_failures_total`, and losses of the open port,
   `ser2net_mapping_device_lost_total`) and dropped slow clients (a connect-out
@@ -507,16 +510,66 @@ curl -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/jso
   -d '{"name":"PLC-1","kind":"net","serial":{"port":"/dev/ttyUSB0","baudrate":9600},
        "network":{"mode":"server","bind_ip":"0.0.0.0","port":4001}}' \
   http://HOST:8080/api/v1/mappings
+# change some fields only (JSON merge patch): here the TCP port
+curl -X PATCH -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/merge-patch+json" \
+  -d '{"network":{"port":4002}}' http://HOST:8080/api/v1/mappings/<id>
 # start / stop / restart
 curl -X POST -H "Authorization: Bearer $TOKEN" http://HOST:8080/api/v1/mappings/<id>/stop
 ```
-Endpoints: `GET/POST /mappings`, `GET/PUT/DELETE /mappings/{id}`,
-`POST /mappings/{id}/{start|stop|restart}`, `GET /status`, `GET /ports`,
-`GET /health` (unauthenticated), `GET /openapi.json`.
+Endpoints: `GET/POST /mappings`, `GET/PUT/PATCH/DELETE /mappings/{id}`,
+`POST /mappings/{id}/{start|stop|restart}`, `POST /import`, `GET /status`, `GET /ports`,
+`GET /metrics`, `GET /health` (unauthenticated), `GET /openapi.json`.
+
+**`PUT` replaces the whole mapping.** Every field the body leaves out gets its default, as in
+a new mapping: listen on `0.0.0.0` port 4001, no client allow-list, not read-only, enabled
+(a stopped mapping starts), TLS, MQTT and the trace off, no USB identity (`serial.match`),
+and `kind` `net` (a serial↔serial bridge becomes a network listener). So either `GET` the
+mapping, change it and `PUT` all of it back, or use **`PATCH`**: an RFC 7396 JSON merge patch
+that changes only what the body names. An object merges into the stored one
+(`{"network":{"port":4002}}` keeps the bind address and the allow-list), a list or a value
+replaces it, and `null` resets a field to its default (`{"network":{"allowed_client_ips":null}}`).
+The result is checked like any edit; a refused patch changes nothing (HTTP 400). The
+previous configuration of every change stays in `backups/`.
+
+**Many mappings in one change:** `POST /import` takes what **Settings → Mappings export / import**
+writes or `GET /mappings` answers (`{"mappings": [...]}`), a whole `config.json` (only its
+mappings are used) or a classic `ser2net.yaml` / `ser2net.conf`. `?mode=merge` (the default)
+updates a mapping with the same id, else the same name, and adds the others;
+`?mode=replace` makes the body's mappings the only ones. It is one save — one backup, all
+or nothing: a result that isn't valid (two mappings on one port, ...) is refused whole
+(HTTP 400) and nothing changes. `?dry_run=true` answers what it would do (each mapping
+added, updated, unchanged or removed, and why it would be refused) without changing
+anything:
+```bash
+curl -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  --data-binary @ser2net-mappings.json "http://HOST:8080/api/v1/import?mode=merge&dry_run=true"
+```
+**Prometheus with the token:** `GET /api/v1/metrics` answers the same metrics as `/metrics`
+(which needs a web UI session) to any API token:
+```yaml
+scrape_configs:
+  - job_name: ser2net
+    metrics_path: /api/v1/metrics
+    authorization:
+      credentials_file: /etc/prometheus/ser2net-token   # the token, e.g. a viewer one
+    static_configs:
+      - targets: ["HOST:8080"]
+```
 The token has the role chosen when it was generated: a `viewer` token may only read (GET)
 and gets stored secrets (the MQTT password) masked as `********`; a `PUT` that sends that
 mask back keeps the stored password. An `api_token_role` in `config.json` that is not a
 role counts as `viewer`, and the start-up log says so.
+
+**One token per client:** under **Settings → REST API token → More tokens** an admin adds
+named tokens next to that one, each with its own role (`viewer` reads only, `operator` may
+also change) and, if wanted, an expiry in days — say a read-only token for Prometheus or a
+dashboard and a write token for the deployment script, so not every client holds a token
+that can change mappings. The audit log names the token that acted (`api-token:NAME`; the
+first token stays `api-token`), revoking one leaves the others working, an expired one gets
+HTTP 401 `{"error":"unauthorized","detail":"API token expired"}`, and Settings shows when each
+was last used (since ser2net started; never written to disk). The first token works as before
+(`api_token_hash` / `api_token_role` in `config.json`); named tokens are kept in
+`api_tokens`, which 2.8 and older drop (their first token keeps working).
 
 ---
 
@@ -560,6 +613,17 @@ or self-signed web UIs on the same name stop opening in it, and so does this one
 TLS is switched off. **Settings → Admin TLS → HSTS max-age** (`admin_ui.hsts_max_age`, 0 to
 63072000 seconds) changes it at once; 0 sends `max-age=0`, which makes browsers forget it.
 Before switching TLS off, set 0 and let the users open the UI once.
+
+**The admin UI's certificate:** Settings → *Admin TLS (HTTPS)* shows the configured certificate's
+name, its other names and when it is valid (UTC), flagged when it has ended, isn't valid
+yet or ends within 30 days; the start-up log has the same line (a WARNING then), for a
+self-signed certificate and a CA-issued one alike. *Generate a self-signed certificate*
+makes one valid for 825 days in all, from a day before now, so clients whose clock is a
+little behind accept it at once (a source install without the `cryptography` package
+uses the `openssl` command, whose certificate starts now). Its dates come from the
+server's clock: made while that clock is wrong, the certificate looks expired or not yet
+valid to clients whose clock is right, so the page warns when the clock reads earlier than
+it can (see *Time synchronisation*).
 
 **Connection limits:** on a TLS mapping, a host not in `allowed_client_ips` is closed before
 the TLS handshake; a handshake must be over within 15 s, and at most 32 run at once from one
@@ -701,7 +765,18 @@ failed sign-ins in 10 minutes the audit log only counts them and sums them up in
 at the end of those 10 minutes, so a flood of attempts can't push the other records out.
 Opening a mapping's console or hex view is recorded once per account (with open access: per
 address), mapping and kind in 5 minutes, and at most 50 such records in 10 minutes, summed up
-the same way (all.log keeps a line for every one).
+the same way (all.log keeps a line for every one). Closing a console that wrote to the
+device is recorded too (`console_close`, with the number of bytes, never what was typed). A
+failed SSO sign-in (the identity provider refused it, its answer didn't check out, or the
+groups give no role) is recorded as `oidc_login_failed` with a short reason and notified like
+a failed local or LDAP sign-in, within the same limit. A REST API request refused for its token
+(none, a wrong or an expired one) is recorded as `api_auth_failed` once per address a minute
+(the next record says how many there were), at most 20 in 10 minutes. A request refused before
+it reaches the page (no session, a failed CSRF check, a WebSocket without a session or from
+another site) gets an all.log line once per address and answer a minute, the next one saying
+how many more there were. Line breaks and other control characters in names (a mapping name,
+a user name from the directory) are written as spaces in all.log, stdout, the mapping logs,
+the audit log and notification titles, so they can't start a line of their own.
 Names over 256 characters aren't tried. Request bodies are limited too: the sign-in, setup
 and sign-out forms to 64 KB, a configuration import to 16 MB and everything else (forms,
 the REST API) to 2 MB; a larger one gets HTTP 413.
@@ -800,10 +875,29 @@ older**, LDAP sign-in stops if the certificate isn't trusted: set the CA certifi
 (local accounts keep working; without a local admin, create one with
 `ser2net --set-password NAME`).
 
+**Two-factor sign-in (TOTP):** off unless an account turns it on. A local account sets it
+up under **Settings → Two-factor sign-in**: it adds the key shown there to an authenticator
+app (Google or Microsoft Authenticator, Aegis, FreeOTP, KeePassXC, … — typed in, or the
+`otpauth://` link pasted or turned into a QR code with any QR maker; ser2net adds no
+dependency for it) and confirms with a code and its password. From then on, signing in takes
+the password and the app's 6-digit code (turning it on ends the account's other sessions).
+A code is accepted for its 30-second step and one step either side (a clock a little off),
+and only once; wrong codes count against the address together with wrong passwords, and five
+for one account in 5 minutes block it for a while. The codes follow the clock: keep the
+server's time right (NTP). Turning it off takes the password and a code. **Lost authenticator:** an
+admin turns it off for that account under **Settings → Users** (*Turn off 2FA*, which signs
+it out); for the only admin, `ser2net --set-password NAME` on the server sets a new password
+and turns it off (see below). LDAP and OIDC accounts get a second factor from the directory
+or the identity provider: MFA is available today through OIDC with an IdP that enforces it
+(Keycloak, Entra ID, Google, …) or an authenticating reverse proxy in front of the UI. The
+REST API tokens, the cluster key and open access are not affected. The secret is kept in
+`config.json` (`users[].totp_secret`, only while it is on); 2.8 and older drop it, and the
+account then signs in with its password alone.
+
 **Lost password, locked out, no browser (account recovery):**
 `ser2net --set-password NAME` sets a new password for the local account `NAME` (asked
-twice on the terminal; piped, the first line of stdin) and signs that account out
-everywhere. A name that doesn't exist yet is created as an **admin** — the way back in
+twice on the terminal; piped, the first line of stdin), turns its two-factor sign-in off
+(for a lost authenticator) and signs that account out everywhere. A name that doesn't exist yet is created as an **admin** — the way back in
 when the only admin is an LDAP/OIDC account and the directory is unreachable.
 `ser2net --sign-out-all` ends every web UI session. Both work with ser2net stopped or
 running: a running instance applies the change at once, no restart needed. Nothing else
@@ -834,6 +928,12 @@ is no account at all; later starts ignore it.
   agree: a node learns each peer's clock from its signed beacons and replies. Refused
   requests are logged once per address and change (`cluster: refused …`) and recorded in the
   audit log (`cluster_auth_failed`).
+- **Who acted:** a remote start/stop/restart or edit is recorded in the audit log of both
+  nodes: on the node the browser is signed in to under the user's name, and on the node it
+  changed as `cluster-peer:NODE/USER` — the sending node's host name and its user, as that
+  node states it in the signed request (a claim of a node with the cluster key, not an
+  account of the changed node). A request from a node running 2.8.1 or older stays
+  `cluster-peer`.
 - **Older nodes (legacy authentication):** nodes running 2.8.0 or older only know the raw
   key, sent in every request. While *Legacy authentication* is ticked (Settings → LAN
   cluster; on by default, so a rolling upgrade doesn't split the fleet) a node accepts it and
@@ -961,6 +1061,40 @@ profiles.
   published ports (`8081:8080`), and `SER2NET_NODE_NAME` (or `hostname:`) for its name
   ([docs/DOCKER.md](docs/DOCKER.md)).
 
+### Time synchronisation
+
+ser2net takes every date from the system clock and never sets it (the systemd unit
+forbids it: `ProtectClock=true`). A wrong clock puts wrong times in `all.log`, `audit.log`,
+traces and backup names, can make the 15-day log trim and the newest-50 backup pruning
+keep or drop the wrong ones, and makes date checks fail: sign-in sessions, two-factor
+codes, SSO, and TLS certificates (MQTT, SMTP, webhooks, SSO, and a self-signed certificate
+made while the clock was wrong). How long something has been running (uptime, connection
+times, the cluster's peer list) is measured with a clock that no clock step changes.
+
+- **Linux:** keep `systemd-timesyncd` or `chrony` running, pointed at an NTP server the
+  machine can reach; on an offline plant network a local one (a router, a domain
+  controller, a GPS time server): `NTP=10.0.0.1` in `/etc/systemd/timesyncd.conf`, or
+  `server 10.0.0.1 iburst` in `/etc/chrony/chrony.conf`. `timedatectl` shows whether the
+  clock is synchronised.
+- **Raspberry Pi and other boards without an RTC** (Pi 3/4; the Pi 5's RTC needs its
+  battery): until NTP answers, the clock starts in the past. `fake-hwclock` (installed on
+  Raspberry Pi OS) at least brings back the last saved time at boot; an RTC module keeps
+  the real one.
+- **Windows:** the Windows Time service: `w32tm /config /manualpeerlist:10.0.0.1
+  /syncfromflags:manual /update`, then `w32tm /resync`; `w32tm /query /status` shows its
+  source. A domain member takes its time from the domain controllers.
+- **Docker:** a container uses the host's clock: synchronise the host. (Its time zone is
+  separate: `TZ`, see [`docs/DOCKER.md`](docs/DOCKER.md).)
+- **Waiting for the clock at boot:** the systemd unit waits for the network, not for time
+  sync, because on a network without an NTP server ser2net would then never start. To
+  wait anyway, enable `systemd-time-wait-sync.service` and add `After=time-sync.target`
+  and `Wants=time-sync.target` with `systemctl edit ser2net`.
+- **What ser2net checks:** the start-up log has a WARNING when the clock reads earlier
+  than the newest configuration backup, the last change to `config.json` or the making of
+  this version. Settings → *Admin interface* shows the server's time (UTC, and local with
+  its zone), the same warning for admins, and a note when this browser's clock and the
+  server's differ by more than 2 minutes.
+
 ---
 
 ## 🗂️ Configuration & state files
@@ -973,7 +1107,7 @@ inside aren't readable by other users:
 - `backups/` — the previous `config.json` before every change (newest 50). Download or
   restore one under Settings → *Configuration backups*. A restore first shows what changes
   for sign-in and access, then brings back the mappings and settings; the user accounts
-  and passwords, the REST API token and the cluster key stay as they are unless you tick
+  and passwords, the REST API tokens and the cluster key stay as they are unless you tick
   the box to restore them too (that also signs everyone else out). *Only its mappings*
   goes through the import preview. A restore can be undone too; a downloaded backup
   leaves out the session key. The list names each backup's accounts; an admin can delete
@@ -981,9 +1115,12 @@ inside aren't readable by other users:
   hash) in the backups made before — a restore with accounts would bring it back — so
   *Remove it from the backups* takes an account that no longer exists out of every backup
   that has it (the rest of each backup stays as it was). All of it is audited.
-- `all.log` — global activity (size-rotated); `audit.log` — sign-ins, config changes,
-  console / hex view opens and trace downloads: who/from where/what (rotated). Searchable
-  under Settings → *Audit log*, CSV export. Every `all.log` line is also written to stdout,
+- `all.log` — global activity (size-rotated): also every REST API request but the
+  successful polls of `/status`, `/health`, `/ports`, `/metrics` and `/openapi.json`, with the
+  token's name; `audit.log` — sign-ins and failed ones, config changes, console / hex view
+  opens, consoles that wrote to a device, trace downloads, mapping and audit exports and
+  refused REST API tokens: who/from where/what (rotated). Searchable under Settings → *Audit
+  log*, CSV export. Every `all.log` line is also written to stdout,
   which systemd's journal or Docker's container log keep under their own retention;
   `SER2NET_LOG_STDOUT=off` keeps the lines in `all.log` only. `all.log` has a line with the
   client's IP address for every web UI page and change: Settings → *Audit log* → *Web UI
@@ -1022,6 +1159,17 @@ Notifications, LDAP, SSO, MQTT and the cluster send data off the host only when 
 up, and there is no telemetry. **[docs/PRIVACY.md](docs/PRIVACY.md)** lists what is kept
 where and for how long, who can see it, the settings that keep less, and how to answer an
 access request or erase one person or the whole installation.
+
+**Times** in `all.log`, stdout, `logs/<id>.log` and `audit.log` (also its viewer and CSV
+export) are the server's local time with its offset from UTC: `2026-11-06 12:00:00+03:00`,
+so the hour repeated when daylight saving time ends stays apart and a container's UTC lines
+can't pass for local time. Lines written before 2.9 have no offset; the first 19 characters
+are the same, so old and new lines in one file read alike (in older versions too). Lines in
+trace files keep `YYYY-MM-DD HH:MM:SS` in the server's local time (the panels name its
+zone), backups are named in UTC, and the live hex view shows the server's times in the
+browser's time zone and says which. A log shipper that matches the old format with a regular expression needs
+the optional offset (`[+-]HH:MM`) after the seconds. In Docker the zone is UTC unless `TZ`
+is set ([`docs/DOCKER.md`](docs/DOCKER.md)).
 
 Mapping ids (the `<id>` above, also used by the REST API) are 1–64 letters, digits or `_`;
 new mappings get 12 hex digits. An id in any other form (hand-edited or imported) is

@@ -263,9 +263,23 @@ function connectTerm(el, mode) {
   };
   var btn = el.closest("#form-panel") ? el.closest("#form-panel").querySelector("[data-term-mode]") : null;
   if (btn) btn.textContent = mode === "hex" ? tr("text_view", "Text view") : tr("hex_view", "Hex view");
-  if (mode === "hex")
-    term.write("\x1b[90m " + tr("hex_header", "time          direction   offset  bytes" +
+  if (mode === "hex") {
+    // the times below are shown in the browser's zone (logs and traces: the server's)
+    term.write("\x1b[90m " + tr("hex_zone", "times in this browser’s time zone: {0}", browserZone()) +
+               "\r\n " + tr("hex_header", "time          direction   offset  bytes" +
                "                                            text") + "\x1b[0m\r\n");
+  }
+}
+
+// "Europe/Istanbul, UTC+03:00" (the zone name where the browser knows it)
+function browserZone() {
+  var name = "";
+  try { name = Intl.DateTimeFormat().resolvedOptions().timeZone || ""; } catch (e) {}
+  var off = -new Date().getTimezoneOffset();
+  function pad(n) { return (n < 10 ? "0" : "") + n; }
+  var utc = off === 0 ? "UTC" : "UTC" + (off > 0 ? "+" : "-") + pad(Math.floor(Math.abs(off) / 60)) +
+            ":" + pad(Math.abs(off) % 60);
+  return name && name !== "UTC" ? name + ", " + utc : utc;
 }
 
 function hexLines(dir, ts, bytes, bridge) {
@@ -416,3 +430,29 @@ document.addEventListener("visibilitychange", function () {
   if (!document.hidden && document.getElementById("cluster") && window.htmx)
     htmx.trigger(document.body, "refreshCluster");
 });
+
+// 7) Clock check: the server's clock when it rendered this page (<body data-server-time>)
+//    against this browser's. A difference of more than 2 minutes is shown where the page
+//    has a [data-clock-skew] element (Settings -> Admin interface).
+(function () {
+  function check() {
+    var el = document.querySelector("[data-clock-skew]");
+    var server = +(document.body && document.body.getAttribute("data-server-time"));
+    if (!el || !server) return;
+    try {   // a page from the history (back / forward) was rendered earlier
+      var nav = performance.getEntriesByType("navigation")[0];
+      if (nav && nav.type === "back_forward") return;
+    } catch (e) {}
+    var diff = Date.now() / 1000 - server, s = Math.abs(diff);
+    if (s <= 120) return;
+    var amount = s < 7200 ? tr("minutes", "{0} min", Math.round(s / 60))
+               : s < 172800 ? tr("hours", "{0} h", Math.round(s / 3600))
+               : tr("days", "{0} days", Math.round(s / 86400));
+    el.textContent = diff > 0
+      ? tr("clock_ahead", "This browser's clock is {0} ahead of the server's.", amount)
+      : tr("clock_behind", "This browser's clock is {0} behind the server's.", amount);
+    el.hidden = false;
+  }
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", check);
+  else check();
+})();

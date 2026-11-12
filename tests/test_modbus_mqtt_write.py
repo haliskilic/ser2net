@@ -334,6 +334,8 @@ async def test_plain_one_point(slave_port):
         assert await answer_of("line/valve", b"1") == b"ok"
         assert (COILS[1], COILS[2]) == (False, True), COILS
         assert writes() == [bytes([5, 0, 2, 0xFF, 0])], writes()
+        assert "wrote 'line/valve' = True (unit 1, FC5, from MQTT plant/a/line/valve/set)" \
+            in logs, [m for m in logs if "wrote" in m]   # the mapping log says from where
         r._on_set_message("plant/a/valve/set", b"1")      # not a writable point's topic
         r._mqtt.handle_message("plant/a/valve/set", b"1")
         await asyncio.sleep(0.1)

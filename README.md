@@ -251,7 +251,8 @@ düzenlemeye gerek yok.
   filtresi bunu sayar; "bağlanıyor"), `/api/v1/status`'ta (`link`: `connecting` / `up` /
   `down`, `link_error`, `link_since`, `connect_failures`) ve filo görünümünde de. Kapanıp
   hemen yeniden kurulan bir bağlantı (maksimum bağlantı süresi, idle timeout) kesinti sayılmaz.
-- **Güvenlik:** parola (ilk erişimde belirlenir, scrypt), CSRF, imzalı-çerez oturum,
+- **Güvenlik:** parola (ilk erişimde belirlenir, scrypt), yerel hesap başına isteğe bağlı
+  iki adımlı giriş (doğrulama uygulamasından TOTP kodu), CSRF, imzalı-çerez oturum,
   login oran sınırı, sıkı güvenlik başlıkları; oturumlar çıkışta, parola değişince, kullanıcı
   bazında ya da herkes için (Ayarlar) kapanır, unutulan parola `ser2net --set-password` ile
   sıfırlanır (bkz. Güvenlik).
@@ -466,13 +467,14 @@ yapar ([`docs/REVERSE-PROXY.md`](docs/REVERSE-PROXY.md)). Ayrıntılar:
   cihaza yazabilir. Hex görünümü iki yönü gösterir; viewer'lar yalnızca cihazın
   gönderdiklerini görür.
 - **Trace** (operator): eşlemenin trace dosyaları; listelenir ve indirilir.
-- **Ayarlar:** parola değiştir, **web arayüzü erişimi** (giriş zorunlu / parolasız rol),
-  admin TLS (yol ver veya self-signed üret), **REST API token'ı** üret/iptal et, mapping
-  **yedek al/yükle** (JSON), durum ve **bu kurulumun adı** (Yönetim arayüzü; ya da
+- **Ayarlar:** parola değiştir, **iki adımlı giriş**, **web arayüzü erişimi** (giriş zorunlu /
+  parolasız rol), admin TLS (yol ver veya self-signed üret), **REST API token'ları** üret/iptal
+  et, mapping **yedek al/yükle** (JSON), durum ve **bu kurulumun adı** (Yönetim arayüzü; ya da
   `SER2NET_NODE_NAME`): bildirimler, tarayıcı sekmesi, üst bar ve LAN cluster'ın filo
   görünümü, aynı makinedeki kurulumların paylaştığı host adı yerine bunu kullanır; genel
   JSON webhook'u ayrıca `hostname` ve `instance_id` alır.
-- **/metrics:** Prometheus formatında metrikler (kimlik doğrulamalı): eşleme başına
+- **/metrics:** Prometheus formatında metrikler (web arayüzü oturumuyla; REST API
+  token'ıyla: `/api/v1/metrics`, bkz. REST API): eşleme başına
   çalışıp çalışmadığı, istemcileri, gelen / giden / atılan baytlar, yeniden bağlanmalar
   (bunlardan seri portun açılamadığı denemeler, `ser2net_mapping_open_failures_total`, ve
   açık portun kaybedilmesi, `ser2net_mapping_device_lost_total`) ve
@@ -524,16 +526,68 @@ curl -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/jso
   -d '{"name":"PLC-1","kind":"net","serial":{"port":"/dev/ttyUSB0","baudrate":9600},
        "network":{"mode":"server","bind_ip":"0.0.0.0","port":4001}}' \
   http://HOST:8080/api/v1/mappings
+# yalnızca bazı alanları değiştir (JSON merge patch): burada TCP portu
+curl -X PATCH -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/merge-patch+json" \
+  -d '{"network":{"port":4002}}' http://HOST:8080/api/v1/mappings/<id>
 # başlat / durdur / yeniden başlat
 curl -X POST -H "Authorization: Bearer $TOKEN" http://HOST:8080/api/v1/mappings/<id>/stop
 ```
-Uç noktalar: `GET/POST /mappings`, `GET/PUT/DELETE /mappings/{id}`,
-`POST /mappings/{id}/{start|stop|restart}`, `GET /status`, `GET /ports`,
-`GET /health` (kimlik doğrulamasız), `GET /openapi.json`.
+Uç noktalar: `GET/POST /mappings`, `GET/PUT/PATCH/DELETE /mappings/{id}`,
+`POST /mappings/{id}/{start|stop|restart}`, `POST /import`, `GET /status`, `GET /ports`,
+`GET /metrics`, `GET /health` (kimlik doğrulamasız), `GET /openapi.json`.
+
+**`PUT` eşlemenin tamamını değiştirir.** Gövdenin içermediği her alan, yeni bir eşlemedeki
+gibi varsayılanını alır: `0.0.0.0` üzerinde 4001 portunu dinler, istemci izin listesi yoktur,
+salt okunur değildir, etkindir (durdurulmuş bir eşleme başlar), TLS, MQTT ve trace kapalıdır,
+USB kimliği (`serial.match`) düşer ve `kind` `net` olur (seri↔seri köprü bir ağ dinleyicisine
+dönüşür). Bu yüzden ya eşlemeyi `GET` ile alın, değiştirin ve tamamını `PUT` ile geri
+gönderin, ya da **`PATCH`** kullanın: yalnızca gövdenin adını verdiği alanları değiştiren bir
+RFC 7396 JSON merge patch. Bir nesne kayıtlı olanla birleşir (`{"network":{"port":4002}}` bind
+adresini ve izin listesini korur), bir liste ya da değer eskisinin yerine geçer, `null` ise
+alanı varsayılanına döndürür (`{"network":{"allowed_client_ips":null}}`). Sonuç her düzenleme
+gibi denetlenir; reddedilen bir patch hiçbir şeyi değiştirmez (HTTP 400). Her değişiklikten
+önceki yapılandırma `backups/` içinde kalır.
+
+**Tek değişiklikte çok sayıda eşleme:** `POST /import`, **Ayarlar → Eşlemeleri dışa / içe aktar**'ın
+yazdığını ya da `GET /mappings`'in döndürdüğünü (`{"mappings": [...]}`), bütün bir
+`config.json`'u (yalnızca eşlemeleri kullanılır) ya da klasik bir `ser2net.yaml` /
+`ser2net.conf`'u alır. `?mode=merge` (varsayılan) aynı id'li, yoksa aynı adlı eşlemeyi
+günceller, diğerlerini ekler; `?mode=replace` mevcut eşlemelerin hepsini gövdedekilerle
+değiştirir. Tek bir kayıttır — tek yedek, ya hep ya hiç: geçerli olmayan bir sonuç (aynı portta
+iki eşleme gibi) bütünüyle reddedilir (HTTP 400) ve hiçbir şey değişmez. `?dry_run=true` hiçbir
+şeyi değiştirmeden ne olacağını döndürür: her eşleme eklenecek mi, güncellenecek mi, aynı mı
+kalacak, kaldırılacak mı; sonuç reddedilecekse de nedeni:
+```bash
+curl -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  --data-binary @ser2net-mappings.json "http://HOST:8080/api/v1/import?mode=merge&dry_run=true"
+```
+**Token ile Prometheus:** `GET /api/v1/metrics`, `/metrics`'in (web arayüzü oturumu ister)
+metriklerinin aynısını her API token'ına döndürür:
+```yaml
+scrape_configs:
+  - job_name: ser2net
+    metrics_path: /api/v1/metrics
+    authorization:
+      credentials_file: /etc/prometheus/ser2net-token   # token, örneğin bir viewer token'ı
+    static_configs:
+      - targets: ["HOST:8080"]
+```
 Token, üretilirken seçilen rolü taşır: `viewer` token'ı yalnızca okuyabilir (GET) ve kayıtlı
 sırları (MQTT parolası) `********` olarak maskeli görür; bu maskeyi geri gönderen bir `PUT`
 kayıtlı parolayı korur. `config.json`'daki `api_token_role` bir rol değilse `viewer` sayılır
 ve açılış log'u bunu yazar.
+
+**Her istemciye ayrı token:** **Ayarlar → REST API token → Diğer token'lar**'da bir admin, bu
+token'ın yanına adlı token'lar ekler; her birinin kendi rolü (`viewer` yalnızca okur,
+`operator` değiştirebilir de) ve istenirse gün olarak bir bitiş süresi olur — örneğin
+Prometheus ya da bir pano için salt okunur bir token, kurulum script'i için yazabilen bir
+token; böylece her istemci eşlemeleri değiştirebilen bir token taşımaz. Denetim kaydı işlemi
+yapan token'ı adıyla yazar (`api-token:AD`; ilk token `api-token` olarak kalır), birini iptal
+etmek diğerlerini etkilemez, süresi dolan token HTTP 401
+`{"error":"unauthorized","detail":"API token expired"}` alır ve Ayarlar her birinin en son ne
+zaman kullanıldığını gösterir (ser2net açıldığından beri; diske yazılmaz). İlk token eskisi
+gibi çalışır (`config.json`'da `api_token_hash` / `api_token_role`); adlı token'lar
+`api_tokens`'ta tutulur, 2.8 ve öncesi bu anahtarı atar (ilk token'ları çalışmaya devam eder).
 
 ---
 
@@ -578,6 +632,18 @@ self-signed başka web arayüzleri o tarayıcıda açılmaz, TLS kapatılınca b
 **Ayarlar → Admin TLS → HSTS max-age** (`admin_ui.hsts_max_age`, 0 ile 63072000 saniye
 arası) bunu hemen değiştirir; 0, tarayıcıların bunu unutmasını sağlayan `max-age=0`
 gönderir. TLS'yi kapatmadan önce 0 yapın ve kullanıcıların arayüzü bir kez açmasını bekleyin.
+
+**Yönetim arayüzünün sertifikası:** Ayarlar → *Yönetim arayüzü için TLS (HTTPS)* ayarlı
+sertifikanın adını, diğer adlarını ve geçerlilik aralığını (UTC) gösterir; süresi dolmuşsa,
+henüz geçerli değilse ya da 30 gün içinde bitecekse işaretler. Açılış log'u da aynı satırı
+yazar (bu durumlarda WARNING olarak); self-signed ve bir CA'nın verdiği sertifika için aynı
+şekilde. *Self-signed sertifika üret* toplam 825 gün geçerli, şu andan bir gün öncesinden
+başlayan bir sertifika üretir; böylece saati biraz geride olan istemciler onu hemen kabul
+eder (`cryptography` paketi olmayan bir kaynak kurulumu `openssl` komutunu kullanır, onun
+sertifikası şu andan başlar). Tarihleri sunucunun saatinden alınır: saat yanlışken üretilen
+bir sertifika, saati doğru olan istemcilere süresi dolmuş ya da henüz geçerli değil görünür;
+bu yüzden saat olabileceğinden erkeni gösteriyorsa sayfa uyarır (bkz. *Saat
+senkronizasyonu*).
 
 **Bağlantı sınırları:** TLS'li bir eşlemede `allowed_client_ips` listesinde olmayan bir host,
 TLS el sıkışmasından önce kapatılır; el sıkışma 15 sn içinde bitmelidir ve bir adresten aynı
@@ -724,8 +790,19 @@ kaydı da bunları kaydeder; hiçbir hesaba ait olmayan bir kullanıcı adı yaz
 dakikanın sonunda tek bir kayıtta toplar; böylece bir deneme seli diğer kayıtları dışarı
 itemez. Bir eşlemenin konsolunu ya da hex görünümünü açmak, hesap (açık erişimde: adres),
 eşleme ve tür başına 5 dakikada bir kez kaydedilir; 10 dakikada en çok 50 böyle kayıt yazılır,
-fazlası aynı şekilde toplanır (all.log her biri için bir satır tutar). 256 karakterden uzun
-adlar denenmez. İstek gövdeleri de sınırlıdır: giriş, kurulum ve
+fazlası aynı şekilde toplanır (all.log her biri için bir satır tutar). Cihaza yazan bir
+konsolun kapanışı da kaydedilir (`console_close`, bayt sayısıyla; yazılanın kendisi asla).
+Başarısız bir SSO girişi (kimlik sağlayıcı reddetti, yanıtı doğrulanamadı ya da grupları bir rol
+vermiyor) kısa bir nedenle `oidc_login_failed` olarak kaydedilir ve yerel ya da LDAP girişi gibi
+bildirilir; aynı sınır geçerlidir. Token'ı yüzünden reddedilen bir REST API isteği (token yok,
+yanlış ya da süresi dolmuş) adres başına dakikada bir kez `api_auth_failed` olarak kaydedilir
+(sonraki kayıt aradakilerin sayısını söyler), 10 dakikada en çok 20 kez. Sayfaya ulaşmadan
+reddedilen bir istek (oturum yok, CSRF kontrolü başarısız, oturumsuz ya da başka bir siteden
+gelen WebSocket) adres ve yanıt başına dakikada bir all.log satırı alır; sonraki satır aradaki
+sayıyı söyler. Adlardaki satır sonları ve diğer kontrol karakterleri (bir eşleme adı, dizinden
+gelen bir kullanıcı adı) all.log'a, stdout'a, eşleme log'larına, denetim kaydına ve bildirim
+başlıklarına boşluk olarak yazılır; böylece kendi başına bir satır başlatamazlar. 256
+karakterden uzun adlar denenmez. İstek gövdeleri de sınırlıdır: giriş, kurulum ve
 çıkış formları 64 KB, yapılandırma içe aktarma 16 MB, geri kalan her şey (formlar, REST API)
 2 MB; daha büyüğü HTTP 413 alır.
 
@@ -824,10 +901,29 @@ yükseltince**, sertifikaya güvenilmiyorsa LDAP girişi durur: CA sertifika dos
 (yerel hesaplar çalışmaya devam eder; yerel admin yoksa `ser2net --set-password AD` ile bir
 tane oluşturun).
 
+**İki adımlı giriş (TOTP):** bir hesap açmadıkça kapalıdır. Yerel bir hesap onu **Ayarlar →
+İki adımlı giriş**'ten kurar: orada gösterilen anahtarı bir doğrulama uygulamasına (Google ya
+da Microsoft Authenticator, Aegis, FreeOTP, KeePassXC, … — elle yazarak ya da `otpauth://`
+bağlantısını yapıştırarak veya herhangi bir QR oluşturucuyla QR koda çevirerek; ser2net bunun
+için bağımlılık eklemez) ekler ve bir kod ile parolasıyla onaylar. Bundan sonra giriş için
+parola ve uygulamanın 6 haneli kodu gerekir; hesabın diğer oturumları o anda kapanır. Bir kod
+kendi 30 saniyelik adımında ve bir adım öncesi/sonrasında (biraz kaymış bir saat için) ve
+yalnızca bir kez kabul edilir; yanlış kodlar yanlış parolalarla birlikte adres başına sayılır,
+bir hesap için 5 dakikada beş yanlış kod onu bir süre kilitler. Kodlar saate göre değişir:
+sunucunun saatini doğru tutun (NTP). Kapatmak için parola ve bir kod gerekir. **Doğrulama
+uygulaması kayboldu:** bir admin **Ayarlar → Kullanıcılar**'dan o hesap için kapatır (*2FA'yı
+kapat*, hesabın oturumlarını da kapatır); tek admin için sunucuda `ser2net --set-password AD`
+yeni bir parola verir ve onu kapatır (aşağıya bakın). LDAP ve OIDC hesapları ikinci adımı
+dizinden ya da kimlik sağlayıcıdan alır: MFA bugün de onu zorunlu kılan bir IdP (Keycloak,
+Entra ID, Google, …) ile OIDC üzerinden ya da arayüzün önünde kimlik doğrulayan bir reverse
+proxy ile mümkündür. REST API token'ları, cluster anahtarı ve parolasız erişim bundan
+etkilenmez. Gizli anahtar `config.json`'da tutulur (`users[].totp_secret`, yalnızca açıkken);
+2.8 ve öncesi onu atar, hesap o zaman yalnızca parolasıyla giriş yapar.
+
 **Parola unutuldu, giriş yapılamıyor, tarayıcı yok (hesap kurtarma):**
 `ser2net --set-password AD`, yerel `AD` hesabına yeni parola verir (terminalde iki kez
-sorulur; pipe ile verilirse stdin'in ilk satırı okunur) ve o hesabın tüm oturumlarını
-kapatır. Henüz olmayan bir ad **admin** olarak oluşturulur; tek admin bir LDAP/OIDC hesabıysa
+sorulur; pipe ile verilirse stdin'in ilk satırı okunur), iki adımlı girişini kapatır
+(kaybolan doğrulama uygulaması için) ve o hesabın tüm oturumlarını kapatır. Henüz olmayan bir ad **admin** olarak oluşturulur; tek admin bir LDAP/OIDC hesabıysa
 ve dizine ulaşılamıyorsa geri dönüş yolu budur. `ser2net --sign-out-all` web arayüzündeki
 tüm oturumları kapatır. İkisi de ser2net dururken de çalışırken de çalışır: çalışan örnek
 değişikliği hemen uygular, yeniden başlatmak gerekmez. Yapılandırmada başka hiçbir şey
@@ -858,6 +954,12 @@ içeren bir dosyaya (Docker secret) yönlendirin; ad için `SER2NET_ADMIN_USER` 
   onun imzalı beacon'larından ve yanıtlarından öğrenir. Reddedilen istekler adres ve
   değişiklik başına bir kez loga (`cluster: refused …`) ve denetim kaydına
   (`cluster_auth_failed`) yazılır.
+- **İşlemi kim yaptı:** uzaktan başlat/durdur/yeniden başlat ya da düzenleme iki düğümün de
+  denetim kaydına yazılır: tarayıcının giriş yaptığı düğümde kullanıcının adıyla, değişen
+  düğümde `cluster-peer:DÜĞÜM/KULLANICI` olarak — gönderen düğümün host adı ve kullanıcısı,
+  o düğümün imzalı istekte bildirdiği gibi (cluster anahtarına sahip bir düğümün beyanı,
+  değişen düğümün bir hesabı değil). 2.8.1 ya da daha eski bir düğümden gelen istek
+  `cluster-peer` olarak kalır.
 - **Eski düğümler (eski kimlik doğrulama):** 2.8.0 ya da daha eski sürümle çalışan
   düğümler yalnızca ham anahtarı bilir ve onu her istekte gönderir. *Eski kimlik doğrulama*
   işaretliyken (Ayarlar → LAN cluster; kademeli yükseltmede filo bölünmesin diye varsayılan
@@ -991,6 +1093,41 @@ farklı host adlarıyla (IP adresi ve ad) ya da ayrı tarayıcı profilleriyle g
   `container_name`'i ve yayınlanan portları (`8081:8080`), adı için de `SER2NET_NODE_NAME`
   (ya da `hostname:`) ([docs/DOCKER.md](docs/DOCKER.md)).
 
+### Saat senkronizasyonu
+
+ser2net her tarihi sistem saatinden alır ve saati hiçbir zaman ayarlamaz (systemd unit'i
+bunu yasaklar: `ProtectClock=true`). Yanlış bir saat `all.log`, `audit.log`, trace'ler ve
+yedek adlarına yanlış zaman yazar; 15 günlük log kırpmasında ve en yeni 50 yedeğin
+budanmasında yanlış satırların ya da yedeklerin kalmasına veya silinmesine yol açabilir;
+tarih kontrollerini de bozar: oturumlar, iki adımlı giriş kodları, SSO ve TLS sertifikaları
+(MQTT, SMTP, webhook'lar, SSO ve saat yanlışken üretilmiş bir self-signed sertifika). Bir
+şeyin ne kadar süredir çalıştığı (uptime, bağlantı süreleri, cluster'ın eş listesi) hiçbir
+saat atlamasından etkilenmeyen bir saatle ölçülür.
+
+- **Linux:** `systemd-timesyncd` ya da `chrony` çalışsın ve makinenin ulaşabildiği bir NTP
+  sunucusuna baksın; internete kapalı bir tesis ağında yerel bir sunucuya (bir router, bir
+  domain controller, bir GPS zaman sunucusu): `/etc/systemd/timesyncd.conf` içinde
+  `NTP=10.0.0.1` ya da `/etc/chrony/chrony.conf` içinde `server 10.0.0.1 iburst`. Saatin
+  senkron olup olmadığını `timedatectl` gösterir.
+- **Raspberry Pi ve RTC'si olmayan diğer kartlar** (Pi 3/4; Pi 5'in RTC'si pil ister): NTP
+  yanıt verene kadar saat geçmişte bir zamandan başlar. `fake-hwclock` (Raspberry Pi OS'ta
+  kurulu gelir) açılışta en azından son kaydedilen zamanı geri getirir; bir RTC modülü
+  gerçek zamanı korur.
+- **Windows:** Windows Time hizmeti: `w32tm /config /manualpeerlist:10.0.0.1
+  /syncfromflags:manual /update`, ardından `w32tm /resync`; kaynağını `w32tm /query /status`
+  gösterir. Domain üyesi bir makine zamanını domain controller'lardan alır.
+- **Docker:** container host'un saatini kullanır: host'u senkron tutun. (Saat dilimi
+  ayrıdır: `TZ`, bkz. [`docs/DOCKER.md`](docs/DOCKER.md).)
+- **Açılışta saati beklemek:** systemd unit'i ağı bekler, saat senkronunu beklemez; NTP
+  sunucusu olmayan bir ağda ser2net aksi hâlde hiç başlamazdı. Yine de beklemek için
+  `systemd-time-wait-sync.service`'i etkinleştirin ve `systemctl edit ser2net` ile
+  `After=time-sync.target` ve `Wants=time-sync.target` ekleyin.
+- **ser2net neyi kontrol eder:** saat en yeni yapılandırma yedeğinden, `config.json`'un son
+  değişikliğinden ya da bu sürümün yapıldığı tarihten gerideyse açılış log'una bir WARNING
+  yazılır. Ayarlar → *Yönetim arayüzü* sunucunun saatini (UTC ve saat dilimiyle yerel saat),
+  admin'ler için aynı uyarıyı ve bu tarayıcının saati sunucununkinden 2 dakikadan fazla
+  farklıysa bir not gösterir.
+
 ---
 
 ## 🗂️ Yapılandırma & durum dosyaları
@@ -1003,7 +1140,7 @@ içindeki dosyalar başka kullanıcılarca okunamaz:
 - `backups/` — her değişiklikten önce `config.json`'un önceki hâli (son 50). Ayarlar →
   *Yapılandırma yedekleri*'nden indirilir ya da geri yüklenir. Geri yükleme önce giriş ve
   erişim için neyin değişeceğini gösterir, sonra eşlemeleri ve ayarları geri getirir;
-  kullanıcı hesapları ve parolaları, REST API token'ı ve cluster anahtarı, onları da geri
+  kullanıcı hesapları ve parolaları, REST API token'ları ve cluster anahtarı, onları da geri
   yüklemek için kutu işaretlenmedikçe olduğu gibi kalır (işaretlenirse diğer herkesin
   oturumu da kapanır). *Yalnızca eşlemeleri* içe aktarma önizlemesinden geçer. Geri yükleme
   de geri alınabilir; indirilen yedekte oturum anahtarı yer almaz. Liste her yedeğin
@@ -1012,9 +1149,12 @@ içindeki dosyalar başka kullanıcılarca okunamaz:
   birlikte geri yükleme onu geri getirir —, bu yüzden *Yedeklerden çıkar* artık olmayan bir
   hesabı onu içeren her yedekten çıkarır (yedeklerin geri kalanı olduğu gibi kalır). Hepsi
   denetim kaydına yazılır.
-- `all.log` — global etkinlik (boyutla döner); `audit.log` — girişler, config değişiklikleri,
-  konsol / hex görünümü açılışları ve trace indirmeleri: kim/nereden/ne (döner). Ayarlar →
-  *Audit log*'da aranabilir, CSV olarak indirilebilir. `all.log`'un her satırı stdout'a da
+- `all.log` — global etkinlik (boyutla döner): `/status`, `/health`, `/ports`, `/metrics` ve
+  `/openapi.json`'ın başarılı sorguları dışında her REST API isteği de, token'ın adıyla;
+  `audit.log` — girişler ve başarısız girişler, config değişiklikleri, konsol / hex görünümü
+  açılışları, cihaza yazan konsollar, trace indirmeleri, eşleme ve denetim kaydı dışa
+  aktarmaları ve reddedilen REST API token'ları: kim/nereden/ne (döner). Ayarlar → *Audit
+  log*'da aranabilir, CSV olarak indirilebilir. `all.log`'un her satırı stdout'a da
   yazılır; systemd'nin journal'ı ya da Docker'ın container log'u bunları kendi saklama
   süreleriyle tutar. `SER2NET_LOG_STDOUT=off` satırları yalnızca `all.log`'da tutar.
   `all.log` her web arayüzü sayfası ve değişikliği için istemcinin IP adresiyle bir satır
@@ -1055,6 +1195,19 @@ kaydedilir. Bildirimler, LDAP, SSO, MQTT ve cluster yalnızca siz kurduğunuzda 
 veri gönderir; telemetri yoktur. **[docs/PRIVACY.md](docs/PRIVACY.md)** neyin nerede ve ne
 kadar süre tutulduğunu, kimin görebildiğini, daha az tutan ayarları ve bir erişim talebinin
 nasıl yanıtlanacağını, bir kişinin ya da tüm kurulumun nasıl silineceğini anlatır.
+
+`all.log`, stdout, `logs/<id>.log` ve `audit.log`'daki (görüntüleyicisi ve CSV'si dahil)
+**saatler** sunucunun yerel saatidir ve UTC farkını da içerir: `2026-11-06 12:00:00+03:00`.
+Böylece yaz saati bitince tekrarlanan saat birbirine karışmaz, bir container'ın UTC satırları
+da yerel saat sanılmaz. 2.9'dan önce yazılan satırlarda bu fark yoktur; ilk 19 karakter
+aynı kaldığından aynı dosyadaki eski ve yeni satırlar (eski sürümlerde de) aynı şekilde
+okunur. Trace dosyalarındaki satırlar `YYYY-MM-DD HH:MM:SS` biçiminde, sunucunun yerel
+saatiyle kalır (paneller saat dilimini gösterir); yedekler UTC ile adlandırılır, canlı hex
+görünümü ise sunucunun zamanlarını tarayıcının saat diliminde gösterir ve hangi dilim
+olduğunu yazar. Eski biçimi
+düzenli ifadeyle yakalayan bir log toplayıcının saniyeden sonraki isteğe bağlı farkı
+(`[+-]HH:MM`) da kabul etmesi gerekir. Docker'da `TZ` verilmedikçe saat dilimi UTC'dir
+([`docs/DOCKER.md`](docs/DOCKER.md)).
 
 Eşleme ID'leri (yukarıdaki `<id>`; REST API'de de kullanılır) 1–64 harf, rakam ya da `_`
 içerir; yeni eşlemeler 12 hex haneli bir ID alır. Başka biçimdeki bir ID (elle düzenlenmiş

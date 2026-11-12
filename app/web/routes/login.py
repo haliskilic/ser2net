@@ -17,6 +17,7 @@ from ...config import (
 from ...engine import netguard, netinfo
 from ...i18n import _
 from .. import auth, ldap_auth, oidc_auth, proxy
+from . import totp
 from .common import Ctx, csrf_failed
 from .forms import _password_problem, _username_problem
 
@@ -117,6 +118,15 @@ def routes(ctx: Ctx) -> list:
         state.failed_logins.add(ip, user, action, detail)
         state.notifier.emit("login_failed", ip, "", notify.sign_in_detail(
             state.config.notifications, user, ip, source, reason))
+
+    def _oidc_failed(request, reason: str, user: str = "") -> None:
+        """An SSO sign-in that came back from the identity provider and failed: recorded
+        (oidc_login_failed, with a short reason; all.log has the details) and notified
+        like a failed local or LDAP sign-in."""
+        ip = client_ip(request)
+        as_user = f" as {user!r}" if user else ""
+        _record_failure(ip, user, f"OIDC sign-in from {ip}{as_user}: {reason}",
+                        "oidc_login_failed", reason)
 
     def _name_refused(request, source: str, username: str) -> str | None:
         """A sign-in through the directory (LDAP) or the identity provider (OIDC) that
@@ -233,6 +243,9 @@ def routes(ctx: Ctx) -> list:
         state.log(f"OIDC: the identity provider refused the sign-in: {error[:64]!r}"
                   + (f" ({desc[:200]!r})" if desc else "")
                   + ("" if ours else " (not for a sign-in started in this browser)"))
+        code = error if re.fullmatch(r"[a-z0-9_]{1,64}", error) else "?"
+        _oidc_failed(request, f"the identity provider refused it ({code})"
+                     + ("" if ours else ", not for a sign-in started in this browser"))
         if error == "access_denied":
             status, message = 403, _("The identity provider didn’t let you sign in to ser2net. "
                                      "Ask its administrator to give your account access.")
@@ -240,7 +253,6 @@ def routes(ctx: Ctx) -> list:
             status, message = 503, _("The identity provider can’t sign you in right now. Try "
                                      "again in a few minutes.")
         else:
-            code = error if re.fullmatch(r"[a-z0-9_]{1,64}", error) else "?"
             status, message = 400, _("The identity provider refused the sign-in request ({0}). "
                                      "An admin should check the SSO settings; all.log has "
                                      "the details.").format(code)
@@ -259,23 +271,28 @@ def routes(ctx: Ctx) -> list:
         st = request.query_params.get("state", "")
         if (not data or not code or not _same(st, data.get("s"))
                 or not isinstance(data.get("r"), str) or not isinstance(data.get("n"), str)):
+            _oidc_failed(request, "the answer doesn't match a sign-in started in this browser"
+                         + (" (none, or it took over 10 minutes)" if not data else ""))
             return render(request, "login.html", status_code=400, error=None, oidc_enabled=True,
                           oidc_error=_("SSO state mismatch — please try again."))
         # "v": the PKCE verifier (a state cookie from before it was sent has none)
         claims = await asyncio.to_thread(oidc_auth.complete, oidc, data["r"], code, data["n"],
                                          state.log, code_verifier=str(data.get("v") or ""))
         if claims is None:
+            _oidc_failed(request, "the code or the ID token was refused (all.log says why)")
             return render(request, "login.html", status_code=401, error=None, oidc_enabled=True,
                           oidc_error=_("SSO sign-in failed."))
         username = oidc_auth.username_from_claims(claims, oidc)
         if not username:
             state.log(f"OIDC login denied: {oidc_auth.no_username_reason(claims, oidc)}")
+            _oidc_failed(request, "no user name in the ID token (all.log says why)")
         elif refusal := _name_refused(request, "oidc", username):
             return _refusal_page(request, "oidc", refusal)
         role = username and _directory_role("oidc", username,
                                             oidc_auth.groups_from_claims(claims, oidc), oidc)
         if not username or not role:
             if username:
+                _oidc_failed(request, "their groups give no role", username)
                 await _end_refused_sessions("oidc", username)
             return render(request, "login.html", status_code=403, error=None, oidc_enabled=True,
                           oidc_error=_("Your account isn't mapped to a role."))
@@ -406,6 +423,10 @@ def routes(ctx: Ctx) -> list:
                     await _end_refused_sessions("ldap", username)
         else:  # no such local account, no directory: the work of a wrong password
             await work.run(auth.verify_password, password, auth.DUMMY_HASH)
+        if authed is not None and authed.totp_on:  # the password alone is not enough
+            if local and auth.needs_rehash(authed.password_hash):
+                await _renew_hash(authed, password)
+            return totp.challenge(ctx, request, authed)
         if authed is not None:   # under its account's name (LDAP: in any letter case)
             state.rate_limiter.reset(ip)
             state.name_limiter.reset(authed.username)
