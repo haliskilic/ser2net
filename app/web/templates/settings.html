@@ -99,7 +99,7 @@
     <label>{{ _("Delete trace files not written for (days)") }} <span class="muted">({{ _("0 = keep them, the default · up to %(max)s", max=trace_days_max) }})</span>
       <input type="number" name="trace_max_age_days" min="0" max="{{ trace_days_max }}" value="{{ trace_days }}" required>
     </label>
-    <p class="muted">{{ _("Off by default: a trace file stays until an operator deletes it in its mapping’s Trace panel. With a number of days, every trace file not written for that long is deleted at once and then every hour, also the one a mapping is writing (the next traffic begins it again), and the log says how many went.") }}</p>
+    <p class="muted">{{ _("Off by default: a trace file stays until an operator deletes it in its mapping’s Trace panel. With a number of days, every trace file not written for that long is deleted at once and then every hour, also the one a mapping is writing (the next traffic begins it again), and the log says how many went.") }} {{ _("A file a mapping keeps writing into begins anew once it holds traffic from that many days ago, so its traffic goes too, that many days after its last write.") }}</p>
     <label>{{ _("Delete log and audit records and configuration backups older than (days)") }} <span class="muted">({{ _("0 = only the size limits, the default · up to %(max)s", max=log_days_max) }})</span>
       <input type="number" name="log_max_age_days" min="0" max="{{ log_days_max }}" value="{{ log_days }}" required>
     </label>

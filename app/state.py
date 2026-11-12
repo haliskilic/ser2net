@@ -803,12 +803,19 @@ class AppState:
         """With trace_max_age_days set (0, the default, keeps every trace): delete the
         trace files not written for that many days (their modification time, compared with
         storage.now(): a clock stepped ahead meanwhile deletes nothing early), a running
-        trace's through its writer (delete_trace_files), the file it writes included. Logged
-        when it deleted something; returns how many went."""
+        trace's through its writer (delete_trace_files), the file it writes included. A
+        running trace whose file holds traffic from before then begins a new file first
+        (Supervisor.renew_traces), so that a file written into all the time goes too, that
+        many days later. Logged when it did something; returns how many files went."""
         days = self.config.trace_max_age_days
         if not days:
             return 0
-        old = await asyncio.to_thread(self._traces_older_than, storage.now() - days * 86400)
+        cutoff = storage.now() - days * 86400
+        renewed = await self.supervisor.renew_traces(cutoff)
+        if renewed:
+            self.log(f"trace maintenance: {renewed} trace(s) begun in a new file, as theirs "
+                     f"held traffic from more than {days:g} days ago")
+        old = await asyncio.to_thread(self._traces_older_than, cutoff)
         deleted, kept = 0, 0
         for mid, names in old.items():
             if self.config.get_mapping(mid) is not None:

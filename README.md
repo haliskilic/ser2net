@@ -753,7 +753,9 @@ içindeki dosyalar başka kullanıcılarca okunamaz:
   olduğu gibi tutar: artık
   gerekmediklerinde Trace panelinden silin (yazılmakta olan dosya bir sonraki trafikle
   yeniden başlar) ya da Ayarlar → *Saklama süresi* ile belli bir gün sayısı boyunca
-  yazılmayanların silinmesini sağlayın (varsayılan olarak kapalı; her saat kontrol edilir).
+  yazılmayanların silinmesini sağlayın (varsayılan olarak kapalı; her saat kontrol edilir;
+  bir eşlemenin sürekli yazdığı dosya o kadar gün önceki trafiği tuttuğunda yeni bir dosyaya
+  geçer, böylece o da son yazılmasından o kadar gün sonra silinir).
   Bir eşleme silinince trace'leri de silinir; değiştirerek içe aktarma (replace) ya da geri yüklemeyle kaldırılan
   eşlemelerinkiler sonraki açılışa kadar kalır (geri alınan bir geri yükleme onları bulur),
   açılış onları siler ve kaç dosya olduğunu log'a yazar.

@@ -728,7 +728,9 @@ inside aren't readable by other users:
   directions, personal data and passwords typed to a device included:
   delete them in the Trace panel once they are no longer needed (the file being written
   begins again with the next traffic), or have them deleted after a number of days without
-  writes under Settings → *Retention* (off by default; checked every hour). Deleting a
+  writes under Settings → *Retention* (off by default; checked every hour; a file a mapping
+  keeps writing into begins anew once it holds traffic from that many days ago, so it goes
+  too, that many days after its last write). Deleting a
   mapping deletes its traces; those of mappings a replace import or a restore removed stay until
   the next start (an undone restore finds them), which deletes them and logs how many.
 - `tls/` — certificate/key if self-signed is generated.
