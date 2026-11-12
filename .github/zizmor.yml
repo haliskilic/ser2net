@@ -4,9 +4,9 @@ rules:
   unpinned-uses:
     config:
       policies:
-        # GitHub's own actions by version tag; every other action by full commit SHA,
-        # with the version in a comment (Dependabot updates both)
-        "actions/*": ref-pin
+        # every action by full commit SHA, GitHub's own too, with the version in a
+        # comment (Dependabot updates both); the repository's "require full-length SHA
+        # pins" Actions policy would refuse a tag reference at run time anyway
         "*": hash-pin
   # suggests '$/' for this repository's own reusable workflows; './' is the same
   # commit's file either way

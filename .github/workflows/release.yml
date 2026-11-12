@@ -45,10 +45,11 @@ jobs:
       id-token: write        # build provenance / SBOM attestations
       attestations: write
     steps:
-      - uses: actions/checkout@v7   # first, so the clean checkout doesn't wipe the artifacts below
+      # first, so the clean checkout doesn't wipe the artifacts below
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8.0.2
         with:
           path: artifacts
       - name: Name the release assets, SHA256SUMS
@@ -70,24 +71,24 @@ jobs:
       - name: Every platform ships the same supported CPython/OpenSSL
         run: python3 tools/release_guard.py sboms out/*.cdx.json --min-openssl 3.5
       - name: Build provenance attestation (gh attestation verify <file> -R ${{ github.repository }})
-        uses: actions/attest-build-provenance@v4
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8  # v4.2.2
         with:
           subject-path: |
             out/ser2net-linux-x64
             out/ser2net-linux-arm64
             out/ser2net-windows-x64.exe
       - name: SBOM attestation (Linux x64)
-        uses: actions/attest-sbom@v4
+        uses: actions/attest-sbom@c604332985a26aa8cf1bdc465b92731239ec6b9e  # v4.1.0
         with:
           subject-path: out/ser2net-linux-x64
           sbom-path: out/ser2net-linux-x64.cdx.json
       - name: SBOM attestation (Linux arm64)
-        uses: actions/attest-sbom@v4
+        uses: actions/attest-sbom@c604332985a26aa8cf1bdc465b92731239ec6b9e  # v4.1.0
         with:
           subject-path: out/ser2net-linux-arm64
           sbom-path: out/ser2net-linux-arm64.cdx.json
       - name: SBOM attestation (Windows x64)
-        uses: actions/attest-sbom@v4
+        uses: actions/attest-sbom@c604332985a26aa8cf1bdc465b92731239ec6b9e  # v4.1.0
         with:
           subject-path: out/ser2net-windows-x64.exe
           sbom-path: out/ser2net-windows-x64.cdx.json
@@ -108,7 +109,7 @@ jobs:
       id-token: write
       attestations: write
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           persist-credentials: false
       - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1  # v4.4.0
@@ -140,7 +141,7 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           provenance: mode=max
           sbom: true
-      - uses: actions/attest-build-provenance@v4
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8  # v4.2.2
         with:
           subject-name: ghcr.io/${{ github.repository_owner }}/ser2net
           subject-digest: ${{ steps.push.outputs.digest }}
