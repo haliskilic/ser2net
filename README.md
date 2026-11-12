@@ -760,7 +760,7 @@ komutunu kullanın (hazır imaj, `--restart unless-stopped`, `--init`, eşleme p
 `/dev/serial/by-id` cihaz yolu, log sınırı).
 Hazır imaj (her sürümde; amd64, arm64 ve 32-bit Raspberry Pi OS gibi 32-bit ARM için
 arm/v7): `docker pull ghcr.io/haliskilic/ser2net:latest`
-(ya da `:2.8`, `:2.8.1`); `docker-compose.yml` bunu kullanır. Sürümler arasında Debian/Python
+(ya da `:2.9`, `:2.9.0`); `docker-compose.yml` bunu kullanır. Sürümler arasında Debian/Python
 tabanı değişince `:latest` ve `:X.Y` yeni tabanla yeniden derlenir (haftalık kontrol;
 `:X.Y.Z` yayımlandığı gibi kalır) — bkz. [`docs/DOCKER.md`](docs/DOCKER.md).
 Container'da arayüz `0.0.0.0`'a bağlanır (`SER2NET_BIND_IP` / `SER2NET_PORT` env ile
