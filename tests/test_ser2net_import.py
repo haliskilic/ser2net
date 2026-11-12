@@ -389,10 +389,13 @@ def test_connectors():
     a, b = maps["a"]["serial"], maps["b"]["serial"]
     assert (a["baudrate"], a["parity"], a["bytesize"], a["stopbits"], a["flowcontrol"]) == \
         (115200, "E", 7, 1, "rtscts"), a
-    assert a["advanced"] == {"nobreak": True, "hangup_when_done": True}, a
+    assert a["advanced"] == {"nobreak": True, "hangup_when_done": True, "tiocexcl": True,
+                             "respect_uucp_locks": True}, a
+    assert a["exclusive"] is True, "ser2net's flock (with TIOCEXCL) is on by default"
     assert (b["port"], b["stopbits"], b["flowcontrol"]) == ("/dev/ttyUSB1", 2, "xonxoff"), b
     assert (b["dtr_on_open"], b["rts_on_open"]) == ("off", "on"), b
     assert maps["c"]["serial"]["baudrate"] == 19200 and has(warns, "c:", "rs485=10:20")
+    assert maps["c"]["serial"]["advanced"]["respect_uucp_locks"] is False  # uucplock=false
     assert maps["d"]["serial"]["port"] == "COM3"
     assert maps["e"]["serial"]["flowcontrol"] == "rtscts" and has(warns, "e:", "only RTS/CTS")
     assert has(warns, "e:", "local=false") and has(warns, "e:", "not imported", "drain_time=50")
@@ -772,7 +775,8 @@ def test_v3():
     assert off["options"]["banner"] == "line one\\r\\nline two\\r\\n"
     assert (off["options"]["openstr"], off["options"]["closestr"], off["options"]["closeon"]) == \
         ("AT\r", "ATH\r", "\x04")
-    assert off["serial"]["advanced"] == {"hangup_when_done": True, "nobreak": True}
+    assert off["serial"]["advanced"] == {"hangup_when_done": True, "nobreak": True,
+                                         "respect_uucp_locks": True}  # 3.x: UUCP locks only
     assert off["network"]["max_connections"] == 3
     t5 = maps["ser2net-2005"]
     assert t5["network"]["protocol"] == "telnet" and t5["serial"]["parity"] == "O"
@@ -789,6 +793,47 @@ def test_v3():
     assert has(warns, "line 25", "not a ser2net.conf line")
     print("ser2net.conf (3.x): every state, BANNER/TRACEFILE/OPENSTR/CLOSESTR/CLOSEON/DEVICE/"
           "DEFAULT, continuation; CONTROLPORT/LED/SIGNATURE warned  OK")
+
+
+LOCKS = r"""
+connection: &plain
+  accepter: tcp,3101
+  connector: serialdev,/dev/ttyUSB0,9600n81
+connection: &noflock
+  accepter: tcp,3102
+  connector: serialdev,/dev/ttyUSB1,9600n81,flock=false
+connection: &nouucp
+  accepter: tcp,3103
+  connector: serialdev,/dev/ttyUSB2,9600n81,-uucplock
+connection: &both
+  accepter: tcp,3104
+  connector: serialdev,/dev/ttyUSB3,9600n81,flock=off,uucplock=no
+"""
+
+
+def test_locking():
+    maps, warns = parse(LOCKS)
+
+    def locks(name):
+        s = maps[name]["serial"]
+        return (s["exclusive"], s["advanced"]["tiocexcl"], s["advanced"]["respect_uucp_locks"])
+
+    assert locks("plain") == (True, True, True), "ser2net's defaults: flock and uucplock on"
+    assert locks("noflock") == (False, False, True), "flock=false: no flock, no TIOCEXCL"
+    assert locks("nouucp") == (True, True, False)
+    assert locks("both") == (False, False, False)
+    assert not has(warns, "not imported", "flock") and not has(warns, "uucplock"), warns
+    note = [w for w in warns if "makes no UUCP lock files" in w]
+    assert len(note) == 1 and "keeps it open" in note[0], warns  # once, not per device
+    maps, warns = parse("connection: &x\n  accepter: tcp,3201\n  connector: serialdev,"
+                        "/dev/ttyS0,9600n81\ndefault:\n  name: flock\n  value: false\n"
+                        "  class: serialdev\n" + LOCKS.replace("&plain", "&p2")
+                        .replace("3101", "3105"))
+    assert maps["p2"]["serial"]["exclusive"] is False, "default flock=false applies to later"
+    _maps, warns = parse("connection: &x\n  accepter: tcp,3201\n  connector: tcp,host,4000\n")
+    assert not has(warns, "makes no UUCP lock files"), "nothing imported: no note"
+    print("locking: flock -> exclusive + TIOCEXCL, uucplock -> respect UUCP lock files (both "
+          "on by default, off when turned off), one note about the port held open  OK")
 
 
 def test_names_and_clashes():
@@ -905,8 +950,9 @@ def test_limits():
     maps, _w = quick(HEAD + "    banner: '" + "$(" * 30000 + "'\n")
     assert maps["c"]["options"]["banner"] == "$(" * 30000
     maps, warns = quick(HEAD + "".join(f"    max-connections: x{i}\n" for i in range(5000)))
-    assert len(warns) == 1002 and warns[1000] == "… and 4000 more warnings", warns[999:]
+    assert len(warns) == 1003 and warns[1000] == "… and 4000 more warnings", warns[999:]
     assert has(warns[1001:], "TCP wrappers")  # the file-level notes come after the cut
+    assert has(warns[1001:], "keeps it open", "makes no UUCP lock files")
     print("limits: alias / define / escape expansion, size, nesting and connection count "
           "refused quickly; long flows, quoted scalars, many options read in one pass  OK")
 
@@ -922,6 +968,7 @@ def main():
     test_defaults()
     test_yaml_syntax()
     test_v3()
+    test_locking()
     test_names_and_clashes()
     test_errors()
     test_limits()

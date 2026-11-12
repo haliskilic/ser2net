@@ -102,6 +102,7 @@ WINDOWS_SERIAL_ENV = "SER2NET_WINDOWS_SERIAL"
 
 
 if os.name == "posix":
+    import fcntl
     import termios
 
     from serial import serialposix
@@ -109,19 +110,49 @@ if os.name == "posix":
     class PosixSerial(serialposix.Serial):
         """pyserial's POSIX port without select() and without the abort pipes, for a
         non-blocking transport only: a read or write timeout other than 0 is refused
-        (nothing could cancel a read or write that waits)."""
+        (nothing could cancel a read or write that waits).
+
+        Keeping other programs off the port, beyond pyserial's flock (``exclusive``, which
+        only programs that flock the port too respect), as classic ser2net does:
+          - ``tiocexcl``: once open, the port is marked exclusive (TIOCEXCL): opens by other
+            programs fail with EBUSY (not root's), until it is closed (TIOCNXCL);
+          - ``respect_uucp_locks``: a port another program holds a UUCP lock file on
+            (minicom, cu) is not opened (portdiag.uucp_lock: read only, none is made)."""
 
         fd: Any  # pyserial's: the port's descriptor while it is open, else None
         is_open: bool
         _baudrate: Any  # pyserial's: the rate asked for
+        tiocexcl = False
+        respect_uucp_locks = False
+        _excl = False  # TIOCEXCL is set on the open port
 
         def open(self) -> None:
+            if self.respect_uucp_locks:
+                from . import portdiag
+                held = portdiag.uucp_lock(self.portstr)
+                if held is not None:
+                    raise serial.SerialException(
+                        errno.EBUSY, f"could not open port {self.portstr}: {held.describe()}")
             super().open()
+            if self.tiocexcl:
+                try:
+                    fcntl.ioctl(self.fd, termios.TIOCEXCL)
+                except (OSError, AttributeError) as e:  # (AttributeError: no TIOCEXCL here)
+                    self.close()
+                    raise serial.SerialException(
+                        getattr(e, "errno", None),
+                        f"could not keep other programs out of {self.portstr} (TIOCEXCL): "
+                        f"{e}") from e
+                self._excl = True
             self._close_pipes()
 
         def close(self) -> None:
             if self.is_open:
                 if self.fd is not None:
+                    if self._excl:
+                        with contextlib.suppress(OSError):
+                            fcntl.ioctl(self.fd, termios.TIOCNXCL)
+                        self._excl = False
                     os.close(self.fd)
                     self.fd = None
                 self._close_pipes()
@@ -487,18 +518,22 @@ def unverified_note() -> str:
 
 
 def _open_port(device: str, rts: bool | None = None, dtr: bool | None = None,
-               **kwargs: Any) -> Any:
+               keep_out: dict[str, bool] | None = None, **kwargs: Any) -> Any:
     """Open ``device`` the way serial.serial_for_url opens a device path (blocking: runs in
     an executor). ``rts`` / ``dtr``: the line's state from the moment the port opens
     (None: pyserial's default, on). pyserial switches both on inside open() unless told
     otherwise before it: on Windows a line set to off then never pulses; on Linux the tty
-    layer itself raises both at open(2), so the pulse is only shorter there."""
+    layer itself raises both at open(2), so the pulse is only shorter there. ``keep_out``:
+    PosixSerial's tiocexcl / respect_uucp_locks (POSIX only)."""
     port = serial_class()(None, **kwargs)
     port.port = device
     if rts is not None:
         port.rts = rts
     if dtr is not None:
         port.dtr = dtr
+    for name, value in (keep_out or {}).items():
+        if value and os.name == "posix":
+            setattr(port, name, True)
     port.open()
     return port
 
@@ -510,15 +545,15 @@ def _close_opened(fut: asyncio.Future) -> None:
 
 
 async def open_stream(device: str, limit: int, *, rts: bool | None = None,
-                      dtr: bool | None = None,
+                      dtr: bool | None = None, keep_out: dict[str, bool] | None = None,
                       **kwargs: Any) -> tuple[asyncio.StreamReader, asyncio.StreamWriter]:
     """Open ``device`` with ``kwargs`` (pyserial settings) and return its (reader, writer);
     ``writer.transport`` is a ``Transport`` and ``writer.transport.serial`` the port.
-    ``rts`` / ``dtr``: see _open_port. Raises serial.SerialException / OSError when it
-    can't be opened."""
+    ``rts`` / ``dtr`` / ``keep_out``: see _open_port. Raises serial.SerialException /
+    OSError when it can't be opened."""
     loop = asyncio.get_running_loop()
     opening = loop.run_in_executor(None, functools.partial(_open_port, device, rts, dtr,
-                                                           **kwargs))
+                                                           keep_out, **kwargs))
     try:
         ser = await asyncio.shield(opening)
     except asyncio.CancelledError:

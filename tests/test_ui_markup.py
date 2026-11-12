@@ -303,6 +303,36 @@ def test_mapping_form_rfc2217_restore():
     print("mapping form: the RFC 2217 restore option, for RFC 2217 mappings only  OK")
 
 
+def test_mapping_form_port_lock():
+    """The port-lock options are offered for each serial side, each with its hidden presence
+    marker in the same block (so an older peer's form, which has neither, keeps the stored
+    values), ticked when on; the flock box says what it locks."""
+    class Req:
+        class state:
+            csrf_token = "t"
+            user = None
+    tpl = make_templates().env.get_template("_mapping_form.html")
+    for on in (False, True):
+        adv = {"tiocexcl": on, "respect_uucp_locks": on}
+        m = MappingConfig.from_dict({"id": "sb1", "name": "sb", "kind": "serialbridge",
+                                     "serial": {"port": "COM3", "advanced": adv},
+                                     "serial_b": {"port": "COM4", "advanced": adv}})
+        out = tpl.render(request=Req, mapping=m, is_new=False, modbus_points_json="",
+                         ports=[], ips=[], error=None)
+        root = parse(out)
+        for prefix in ("serial_", "serial_b_"):
+            fields = {n.attrs["name"]: n for n in root.walk()
+                      if n.attrs.get("name", "").startswith(prefix)}
+            block = [next(a for a in fields[prefix + name].ancestors() if a.tag == "details")
+                     for name in ("port_lock_shown", "tiocexcl", "respect_uucp_locks")]
+            assert block[0] is block[1] is block[2], prefix
+            for name in ("tiocexcl", "respect_uucp_locks"):
+                assert ("checked" in fields[prefix + name].attrs) is on, (prefix, name)
+            assert ("open" in block[0].attrs) is on
+        assert "Lock the port (flock)" in out and "Exclusive open" not in out
+    print("mapping form: the port-lock options for each serial side, with their markers  OK")
+
+
 def test_mqtt_command_tags():
     """The dashboard tags a Modbus mapping whose writable points take MQTT commands CMD,
     as a warning (CMD ⚠) when its broker connection has no TLS or no username; a read-only
@@ -380,6 +410,7 @@ def main():
     test_mapping_form_modbus_fields()
     test_mapping_form_udp_fields()
     test_mapping_form_rfc2217_restore()
+    test_mapping_form_port_lock()
     test_mapping_form_kick_hint()
     test_mqtt_command_tags()
     print("\nPASS: UI markup contract")

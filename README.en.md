@@ -95,7 +95,7 @@ everything from a **password-protected web UI** — no CLI or hand-edited config
   (pySerial `rfc2217://`, Linux `socat`, Windows com0com+com2tcp / HW VSP3) — see
   [`docs/VIRTUAL-COM.md`](docs/VIRTUAL-COM.md).
 - **Full serial config:** baud (incl. custom), data/stop bits, parity, flow control
-  (none/RTS-CTS/XON-XOFF/DSR-DTR), RTS/DTR on open, exclusive open, and RS-485 hardware
+  (none/RTS-CTS/XON-XOFF/DSR-DTR), RTS/DTR on open, port locking, and RS-485 hardware
   auto-RTS (Linux `TIOCSRS485`: enable + pre/post-TX delays + RTS-during-TX level). RTS or
   DTR set to `on` / `off` is in that state from the moment the port opens (`keep` leaves
   the driver's default, on). On Windows a line set to `off` therefore never pulses; on
@@ -105,6 +105,18 @@ everything from a **password-protected web UI** — no CLI or hand-edited config
   without modem lines) doesn't stop the port from opening: the dashboard shows it under the
   mapping's state and the mapping's log says it once, and a refused RS-485 mode is switched
   off again so later changes of the port's settings (an RFC 2217 client's baud rate) work.
+- **Port locking (Linux, macOS):** **Lock the port (flock)**, on by default, keeps out other
+  ser2net mappings and programs that lock a port the same way (picocom, tio, miniterm), but
+  not minicom, programs that use no lock (`cat`, `stty`, scripts), a login prompt or
+  ModemManager. Two options, off by default, keep out more, as classic ser2net did:
+  **Keep other programs out while the port is open** (`TIOCEXCL`: another program's open
+  fails as busy, except for root's), and **Don't open a port another program has locked
+  with a UUCP lock file** (minicom, cu: `LCK..` files in `/run/lock` or `/var/lock`, only
+  read; ser2net makes none and never removes one; the dashboard names the program). On
+  Windows a port is always open in one program only, and these do nothing. In Docker a port
+  passed with `--device` is a device node of the container's own, and a flock locks the
+  node, so it isn't expected to keep out programs on the host (with `-v /dev:/dev` it is the
+  host's node); `TIOCEXCL` holds for the port itself.
 - **Live port list:** privilege-free polling + optional event hotplug (Linux pyudev /
   Windows WM_DEVICECHANGE), falling back to polling. On Linux the kernel's placeholder
   `ttyS` ports without hardware are hidden and the stable `/dev/serial/by-id` names are
@@ -211,7 +223,10 @@ everything from a **password-protected web UI** — no CLI or hand-edited config
   import through Settings with a preview; options without an equivalent are listed as
   warnings, and a connection that would be more open here (a gtlssh login or TLS client
   certificates, TLS whose certificate is not on this host, a write-only device) comes in
-  disabled.
+  disabled. ser2net's port locking carries over: 4.x `flock` (on by default) becomes **Lock
+  the port** plus **Keep other programs out**, `uucplock` (on by default; 3.x always)
+  **Don't open a port another program has locked**; one warning says what still differs
+  (a mapping holds its port open from its start, and makes no lock files).
 - **Turkish / English UI:** pick **TR / EN** in the top bar (remembered per browser);
   otherwise the browser's language or the admin's default (Settings → Web UI access), which
   notifications use as well. Logs, the audit log and the REST API stay English.

@@ -100,7 +100,7 @@ düzenlemeye gerek yok.
   reçeteler (pyserial `rfc2217://`, Linux `socat`, Windows com0com+com2tcp / HW VSP3) —
   bkz. [`docs/VIRTUAL-COM.md`](docs/VIRTUAL-COM.md).
 - **Tam seri yapılandırma:** baud (custom dahil), data bit, parity, stop bit, akış
-  kontrolü (none/RTS-CTS/XON-XOFF/DSR-DTR), açılışta RTS/DTR, exclusive open ve RS-485
+  kontrolü (none/RTS-CTS/XON-XOFF/DSR-DTR), açılışta RTS/DTR, port kilitleme ve RS-485
   donanım auto-RTS (Linux `TIOCSRS485`: aç + TX öncesi/sonrası gecikme + TX'te RTS seviyesi).
   `on` / `off` seçilen RTS ya da DTR, port açıldığı andan itibaren o durumdadır (`keep`
   sürücünün varsayılanını, yani açığı bırakır). Bu yüzden Windows'ta `off` seçilen hat hiç
@@ -111,6 +111,20 @@ düzenlemeye gerek yok.
   durumunun altında gösterir, eşlemenin log'u bir kez yazar; kabul edilmeyen RS-485 modu
   yeniden kapatılır, böylece portun ayarlarındaki sonraki değişiklikler (bir RFC 2217
   istemcisinin baud hızı) çalışır.
+- **Port kilitleme (Linux, macOS):** varsayılan olarak açık **Portu kilitle (flock)**, diğer
+  ser2net eşlemelerini ve portu aynı şekilde kilitleyen programları (picocom, tio,
+  miniterm) dışarıda tutar; ama minicom'u, hiç kilit kullanmayan programları (`cat`, `stty`,
+  script'ler), oturum açma istemini ya da ModemManager'ı tutmaz. Varsayılan olarak kapalı
+  iki seçenek, klasik ser2net'in yaptığı gibi daha fazlasını dışarıda tutar: **Port açıkken
+  diğer programları dışarıda tut** (`TIOCEXCL`: başka bir programın açma denemesi root'unki
+  dışında "meşgul" hatasıyla başarısız olur) ve **Başka bir programın UUCP kilit dosyasıyla
+  kilitlediği portu açma** (minicom, cu: `/run/lock` ya da `/var/lock` içindeki `LCK..`
+  dosyaları yalnızca okunur; ser2net kilit dosyası oluşturmaz ve hiçbirini silmez; pano
+  kilitleyen programın adını söyler). Windows'ta bir port her zaman yalnızca tek bir
+  programda açıktır ve bunların etkisi yoktur. Docker'da `--device` ile verilen port
+  container'ın kendi cihaz düğümüdür ve flock düğümü kilitler; bu yüzden host'taki
+  programları dışarıda tutması beklenmez (`-v /dev:/dev` ile düğüm host'unkidir);
+  `TIOCEXCL` ise portun kendisi için geçerlidir.
 - **Canlı port listesi:** ayrıcalık gerektirmeyen polling + isteğe bağlı olay-tabanlı
   hotplug (Linux pyudev / Windows WM_DEVICECHANGE), yoksa polling'e düşer. Linux'ta
   arkasında donanım olmayan `ttyS` portları gizlenir, `/dev/serial/by-id` kalıcı adları
@@ -219,7 +233,11 @@ düzenlemeye gerek yok.
   Ayarlar → içe aktarma ile önizlemeli olarak alınır; karşılığı olmayan seçenekler uyarı
   olarak gösterilir, burada daha açık hale gelecek bir bağlantı (gtlssh girişi ya da TLS
   istemci sertifikası, sertifikası bu makinede olmayan TLS, yalnızca yazılan cihaz) kapalı
-  olarak gelir.
+  olarak gelir. ser2net'in port kilitleri de aktarılır: 4.x `flock` (varsayılan açık)
+  **Portu kilitle** ile **Port açıkken diğer programları dışarıda tut** olur, `uucplock`
+  (varsayılan açık; 3.x'te her zaman) **Başka bir programın kilitlediği portu açma** olur;
+  bir uyarı da hâlâ farklı olanı söyler (eşleme portunu başladığı andan itibaren açık tutar
+  ve kilit dosyası oluşturmaz).
 - **Türkçe / İngilizce arayüz:** üst menüdeki **TR / EN** ile seçilir (tarayıcıda hatırlanır);
   seçilmemişse tarayıcının dili ya da admin'in **Ayarlar → Web arayüzü erişimi**'nde seçtiği
   varsayılan dil.

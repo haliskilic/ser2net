@@ -13,8 +13,9 @@ match on it):
     process is not in it (usermod / SupplementaryGroups / --group-add), its user was added
     after ser2net started (restart it), or the group may not open it (its mode);
   - in use (EBUSY, EAGAIN from flock; Windows "Access is denied"): which of this process's
-    mappings has the port open (``opened`` / ``holder``, by device number), else what kind
-    of lock another program holds.
+    mappings has the port open (``opened`` / ``holder``, by device number), else the
+    program that holds a UUCP lock file on it (``uucp_lock``), else what kind of lock
+    another program holds.
 It reads the device's owner and group and the account and group databases, which may ask
 a directory service: run it in a thread.
 
@@ -35,7 +36,7 @@ import stat
 import sys
 import weakref
 from dataclasses import dataclass
-from typing import Any, Callable, Optional
+from typing import Any, Callable, NamedTuple, Optional
 
 # an open that failed because there is no such device (unplugged, not enumerated yet)
 _MISSING_ERRNOS = frozenset({errno.ENOENT, errno.ENXIO, errno.ENODEV})
@@ -130,8 +131,91 @@ def explain(e: BaseException, device: str) -> Optional[Note]:
         who = holder(device)
         if who:
             return Note("in_use_by", (who,))
+        lock = uucp_lock(device)
+        if lock is not None:
+            return Note("uucp", (lock.program or "?", lock.pid, lock.path))
         return Note("exclusive" if code == errno.EBUSY else "flock")
     return None
+
+
+# where programs that use UUCP lock files (minicom, cu, lockdev) put them
+LOCK_DIRS = ("/run/lock", "/var/lock", "/run/lock/lockdev", "/var/lock/lockdev")
+
+
+class UucpLock(NamedTuple):
+    path: str
+    pid: int
+    program: str  # its name (/proc/<pid>/comm), "" when this process can't see it
+
+    def describe(self) -> str:
+        who = f"{self.program} (PID {self.pid})" if self.program else f"PID {self.pid}"
+        return f"{who} has locked it with a UUCP lock file ({self.path})"
+
+
+def uucp_lock(device: str) -> Optional[UucpLock]:
+    """The UUCP lock file a running program holds on ``device``, if any: LCK..<name> (of
+    the name given and of the tty it leads to) or lockdev's LCK.<major>.<minor>, in
+    LOCK_DIRS. Only read: a lock whose process is gone is skipped, never removed (other
+    programs' lock directories and process numbers, in a container another PID namespace's,
+    are not this process's to clean up). Blocking: a few small reads."""
+    real = os.path.realpath(device)
+    names = [f"LCK..{os.path.basename(device)}", f"LCK..{os.path.basename(real)}"]
+    try:
+        rdev = os.stat(real).st_rdev
+        if rdev:
+            names.append(f"LCK.{os.major(rdev):03d}.{os.minor(rdev):03d}")
+    except OSError:
+        pass
+    seen = set()
+    for folder in LOCK_DIRS:
+        for name in dict.fromkeys(names):
+            path = os.path.join(folder, name)
+            key = os.path.realpath(path)
+            if key in seen:
+                continue  # (/var/lock is usually /run/lock)
+            seen.add(key)
+            pid = _lock_pid(path)
+            if pid is not None and _alive(pid):
+                return UucpLock(path, pid, _program(pid))
+    return None
+
+
+def _lock_pid(path: str) -> Optional[int]:
+    """The process number in a lock file: HDB style (ASCII, as minicom and lockdev write
+    it) or the old binary one (a 4-byte int)."""
+    try:
+        with open(path, "rb") as fh:
+            data = fh.read(64)
+    except OSError:
+        return None
+    text = data.strip()
+    if text.isdigit():
+        pid = int(text)
+    elif len(data) == 4:
+        pid = int.from_bytes(data, sys.byteorder)
+    else:
+        return None
+    return pid if pid > 0 and pid != os.getpid() else None
+
+
+def _alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True  # another user's process
+    except OSError:
+        return False
+    return True
+
+
+def _program(pid: int) -> str:
+    try:
+        with open(f"/proc/{pid}/comm", encoding="utf-8", errors="replace") as fh:
+            return fh.read().strip()
+    except OSError:  # not Linux, or hidden (systemd's ProtectProc=invisible)
+        return ""
 
 
 def _no_access(device: str) -> Optional[Note]:
@@ -279,6 +363,9 @@ _TEXTS: dict[str, Callable[..., str]] = {
     "exclusive": lambda _: _(
         "another program keeps other programs out of this port (TIOCEXCL), for example "
         "ModemManager or a classic ser2net"),
+    "uucp": lambda _, program, pid, path: _(
+        "{0} (PID {1}) is using this port: it holds a UUCP lock file on it ({2})"
+    ).format(program, pid, path),
     # what else may use an open port (port_notes), and what that did (SerialLink)
     "console": lambda _, name: _(
         "{0} is also the kernel console: the kernel writes its messages to it (remove "

@@ -43,6 +43,9 @@ ReadWritePaths=/opt/ser2net/data /opt/ser2net/lib
 ProtectSystem=strict
 ProtectHome=true
 PrivateTmp=true
+# These hide other users' processes and /proc's other files: a port another program has
+# locked (a UUCP lock file) is then named by its PID only, and ser2net can't tell which
+# program holds a port's flock. Kept for the hardening; ser2net needs neither.
 ProtectProc=invisible
 ProcSubset=pid
 ProtectControlGroups=true

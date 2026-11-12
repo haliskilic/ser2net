@@ -152,7 +152,6 @@
   "error": "hata",
   "Even": "Çift",
   "Events": "Olaylar",
-  "Exclusive open": "Özel (tekil) açma",
   "expected ',' or '{0}'": "',' ya da '{0}' bekleniyordu",
   "expected 'key: value' here": "burada 'anahtar: değer' bekleniyordu",
   "Expected a ser2net export: a JSON object with a \"mappings\" list.": "Bir ser2net dışa aktarımı bekleniyordu: \"mappings\" listesi içeren bir JSON nesnesi.",
@@ -875,5 +874,15 @@
   "ModemManager": "ModemManager",
   "ModemManager may probe this port with AT commands. A udev rule that sets ID_MM_DEVICE_IGNORE=1 for it keeps it away.": "ModemManager bu portu AT komutlarıyla yoklayabilir. Bu port için ID_MM_DEVICE_IGNORE=1 ayarlayan bir udev kuralı onu uzak tutar.",
   "ser2net may not open this port: the account it runs as is not in the group the device belongs to (see Requirements in the README).": "ser2net bu portu açamaz: çalıştığı hesap, cihazın ait olduğu grupta değil (README'deki Gereklilikler bölümüne bak).",
-  "no access": "erişim yok"
+  "no access": "erişim yok",
+  "{0} (PID {1}) is using this port: it holds a UUCP lock file on it ({2})": "{0} (PID {1}) bu portu kullanıyor: üzerinde bir UUCP kilit dosyası tutuyor ({2})",
+  "Keeps out other ser2net mappings and programs that lock a port the same way (picocom, tio, miniterm); not minicom, a login prompt or ModemManager. Windows: a port is always open in one program only.": "Diğer ser2net eşlemelerini ve portu aynı şekilde kilitleyen programları (picocom, tio, miniterm) dışarıda tutar; minicom'u, oturum açma istemini ya da ModemManager'ı tutmaz. Windows: bir port her zaman yalnızca tek bir programda açıktır.",
+  "Lock the port (flock)": "Portu kilitle (flock)",
+  "Keeping other programs off the port (Linux, macOS)": "Diğer programları porttan uzak tutma (Linux, macOS)",
+  "“Lock the port” (flock) keeps out other ser2net mappings and programs that lock a port the same way (picocom, tio, miniterm), but not minicom, programs that use no lock, a login prompt or ModemManager. On Windows a port is always open in one program only, and these options do nothing.": "“Portu kilitle” (flock) diğer ser2net eşlemelerini ve portu aynı şekilde kilitleyen programları (picocom, tio, miniterm) dışarıda tutar; ama minicom'u, hiç kilit kullanmayan programları, oturum açma istemini ya da ModemManager'ı tutmaz. Windows'ta bir port her zaman yalnızca tek bir programda açıktır ve bu seçeneklerin etkisi yoktur.",
+  "Keep other programs out while the port is open": "Port açıkken diğer programları dışarıda tut",
+  "<span class=\"mono\">TIOCEXCL</span>: their open fails as busy; services running as root are not kept out": "<span class=\"mono\">TIOCEXCL</span>: onların açma denemesi “meşgul” hatasıyla başarısız olur; root olarak çalışan servisler dışarıda tutulmaz",
+  "Don't open a port another program has locked with a UUCP lock file": "Başka bir programın UUCP kilit dosyasıyla kilitlediği portu açma",
+  "minicom, cu: <span class=\"mono\">LCK..</span> files in /run/lock or /var/lock; ser2net makes none": "minicom, cu: /run/lock ya da /var/lock içindeki <span class=\"mono\">LCK..</span> dosyaları; ser2net kendisi oluşturmaz",
+  "A mapping here opens its serial port when it starts and keeps it open (ser2net opened it only while a client was connected), and makes no UUCP lock files: programs that look for them, such as minicom, don't see the port as in use": "Buradaki bir eşleme seri portunu başlarken açar ve açık tutar (ser2net onu yalnızca bir istemci bağlıyken açıyordu) ve UUCP kilit dosyası oluşturmaz: bu dosyalara bakan programlar, örneğin minicom, portu kullanımda görmez"
 }
