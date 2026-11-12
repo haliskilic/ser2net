@@ -17,6 +17,7 @@ from ... import clock
 from ...config import ConfigError, MappingConfig, console_charset, console_encoding, mapping_revision
 from ...engine import netinfo, portlist
 from ...i18n import _, ngettext
+from ...notify import no_data_for
 from . import ops
 from .common import (
     TRIGGER, Ctx, LiveTable, action_done, bytesize, console_interactive, notice, reason,
@@ -65,6 +66,13 @@ def _steady(st):
         return None
     return (tuple(st.get(k) for k in _SHOWN),
             [(c.get("peer"), c.get("priority"), c.get("connected_at")) for c in st.get("clients") or ()])
+
+
+def _row_shape(m, st):
+    """What a mapping's row shows, for LiveTable: its settings, its status (_steady) and how
+    long its device has been silent past its no-data alarm (notify.no_data_for: 0 while not;
+    the seconds change at every look while it is)."""
+    return repr(m), _steady(st), no_data_for(m, st)
 
 
 def _in_out(st) -> str:
@@ -170,7 +178,7 @@ def routes(ctx: Ctx) -> list:
         traced = await asyncio.to_thread(state.traced_mapping_ids) if edit else set()
 
         def snapshot():
-            return ((edit, sorted(traced), [(repr(m), _steady(statuses.get(m.id))) for m in mappings]),
+            return ((edit, sorted(traced), [_row_shape(m, statuses.get(m.id)) for m in mappings]),
                     {f"m-{m.id}-bytes": _in_out(statuses.get(m.id)) for m in mappings})
         # the server's clock: the browser counts the clients' connection times on from it
         return await table.answer(request, snapshot, headers={"X-Server-Time": f"{time.time():.3f}"},
