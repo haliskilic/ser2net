@@ -18,6 +18,7 @@ from __future__ import annotations
 
 from starlette.routing import Route
 
+from ... import notify
 from ...config import ConfigError
 from ...i18n import _
 from .. import auth, proxy, totp
@@ -116,8 +117,8 @@ def routes(ctx: Ctx) -> list:
             code_limiter.record_failure(user.username)
             state.log(f"failed two-factor code for {user.username!r} from {ip}")
             state.failed_logins.add(ip, user.username, "login_failed", "two-factor code")
-            state.notifier.emit("login_failed", ip, "",
-                                f"user {user.username!r} from {ip}: wrong two-factor code")
+            state.notifier.emit("login_failed", ip, "", notify.sign_in_detail(
+                state.config.notifications, user.username, ip, "", "wrong two-factor code"))
             return _code_page(request, user, 401, _(
                 "That code is not right. Enter the code your app shows now; if it never "
                 "works, the clock of this server or of your device is off."))
