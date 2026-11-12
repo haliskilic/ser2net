@@ -1,6 +1,11 @@
-"""Trace files over a mapping's life: removed mappings, start-up pruning.
+"""Trace files over a mapping's life: deleting them, removed mappings, start-up pruning.
 
 Checks:
+  * operators delete one trace file or all of a mapping's from the trace panel (viewers
+    403, CSRF header required, only names of the mapping's own list, audited as
+    trace_delete); the file being written is closed by the trace writer, not left open
+    deleted, and tracing goes on; a mapping without tracing whose files are all gone no
+    longer offers Trace;
   * a replace import and a backup restore that remove a mapping close what the server
     kept open for it at once (its runner with the trace writer, its log file; before,
     the log file stayed open until a restart) and keep its files, so restoring a backup
@@ -72,7 +77,75 @@ def restore(b, srv, count):
 
 
 USERS = [{"username": "admin", "password_hash": hash_password(PW), "role": "admin",
+          "pwd_version": 1},
+         {"username": "op", "password_hash": hash_password(PW), "role": "operator",
+          "pwd_version": 1},
+         {"username": "view", "password_hash": hash_password(PW), "role": "viewer",
           "pwd_version": 1}]
+
+
+def delete_traces():
+    srv = Server({"users": USERS, "mappings": [mapping(A, "A", "a.log"), mapping(B, "B", "")]})
+    traces = os.path.join(srv.data, "traces")
+    os.makedirs(traces)
+    for name in (f"{A}-a.log.1", f"{A}-old.log", f"{B}-b.log", f"{B}-b.log.1"):
+        with open(os.path.join(traces, name), "w", encoding="utf-8") as fh:
+            fh.write(f"{name}\n")
+    active = os.path.join(traces, f"{A}-a.log")
+    with srv:
+        wait(lambda: os.path.isfile(active), "A's trace opened")
+        view, op, admin = Browser(srv.base), Browser(srv.base), Browser(srv.base)
+        view.login("view", PW)
+        op.login("op", PW)
+        admin.login("admin", PW)
+        st, _, body = view.post(f"/api/mappings/{A}/traces/{A}-old.log", method="DELETE", htmx=True)
+        assert st == 403 and "requires the operator role" in body, (st, body[:120])
+        st, _, body = view.post(f"/api/mappings/{B}/traces", method="DELETE", htmx=True)
+        assert st == 403 and len(os.listdir(traces)) == 5, os.listdir(traces)
+
+        st, _, page = op.post(f"/api/mappings/{A}/traces/{A}-old.log", method="DELETE", htmx=True)
+        assert st == 200 and "Deleted 1 trace file(s)." in page, page[:600]
+        assert f"{A}-old.log" not in page and f"{A}-a.log.1" in page
+        assert not os.path.exists(os.path.join(traces, f"{A}-old.log"))
+        for bad in (f"{B}-b.log", "..%2Fconfig.json", "%2E%2E%2F%2E%2E%2Fall.log", "no-such"):
+            st, _, page = op.post(f"/api/mappings/{A}/traces/{bad}", method="DELETE", htmx=True)
+            assert st in (400, 404) and "Deleted" not in page, (bad, st, page[:300])
+        assert os.path.isfile(os.path.join(traces, f"{B}-b.log")) and os.path.isfile(srv.config_path)
+        assert os.path.isfile(os.path.join(srv.data, "all.log"))
+        print("delete one: an operator deletes a file of the mapping's own list; other "
+              "mappings' files and path tricks are refused, viewers 403  OK")
+
+        st, _, page = op.post(f"/api/mappings/{A}/traces/{A}-a.log", method="DELETE", htmx=True)
+        assert st == 200 and "Tracing is still on" in page, page[:600]
+        assert not os.path.exists(active)
+        fds = open_files(srv)
+        if fds is not None:
+            assert f"{active} (deleted)" not in fds, "the deleted trace is still open"
+        st, _, page = op.get(f"/api/mappings/{A}/traces")
+        assert "Recording to" in page and f"{A}-a.log.1" in page
+        print("delete the file being written: closed by the trace writer, tracing goes on  OK")
+
+        st, _, body = op.get("/api/status")
+        assert f'hx-get="/api/mappings/{B}/traces"' in body, "B has files: Trace offered"
+        st, _, page = op.post(f"/api/mappings/{B}/traces", method="DELETE", htmx=True)
+        assert st == 200 and "Deleted 2 trace file(s)." in page and "No trace files yet." in page
+        assert not [n for n in os.listdir(traces) if n.startswith(f"{B}-")], os.listdir(traces)
+        st, _, body = op.get("/api/status")
+        assert f'hx-get="/api/mappings/{B}/traces"' not in body, "no files, no tracing: no Trace"
+        st, _, page = op.post(f"/api/mappings/{B}/traces", method="DELETE", htmx=True)
+        assert st == 200 and "No trace files to delete." in page
+        assert op.post("/api/mappings/nosuchmapping/traces", method="DELETE", htmx=True)[0] == 404
+        st, _, page = admin.get("/settings/audit?action=trace_delete")
+        assert "3 record(s)" in page, page[page.find("record(s)") - 40:][:200]
+        with open(os.path.join(srv.data, "audit.log"), encoding="utf-8") as fh:
+            records = [ln.split("\t") for ln in fh.read().splitlines() if "\ttrace_delete\t" in ln]
+        details = [r[3] for r in records]
+        assert details[:2] == [f"A/{A}-old.log", f"A/{A}-a.log"], records
+        assert details[2].startswith("B: ") and \
+            sorted(details[2][3:].split(", ")) == [f"{B}-b.log", f"{B}-b.log.1"], records
+        assert {r[4] for r in records} == {"op"}, records
+        print("delete all: every file of the mapping, audited; then no Trace button for a "
+              "mapping that doesn't trace  OK")
 
 
 def removed_mappings():
@@ -120,8 +193,10 @@ def removed_mappings():
 
 
 def main():
+    delete_traces()
     removed_mappings()
-    print("\nPASS: trace files of removed mappings closed at once, pruned at the next start")
+    print("\nPASS: trace files deleted from the panel; those of removed mappings closed at "
+          "once and pruned at the next start")
 
 
 if __name__ == "__main__":

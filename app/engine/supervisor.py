@@ -20,7 +20,7 @@ from typing import Any, Callable, Optional, Protocol
 
 from ..config import AppConfig, MappingConfig
 from . import serial_io
-from .bridge import MappingRunner, RunnerStatus
+from .bridge import MappingRunner, RunnerStatus, remove_files
 
 # a runner in these states runs: the serial side retries a missing device on its own
 ALIVE_STATES = ("running", "reconnecting", "device-missing")
@@ -252,6 +252,19 @@ class Supervisor:
                 self._order.remove(mapping_id)
             if runner is not None:
                 await self._stop_runner(runner)
+
+    async def remove_trace_files(self, mapping_id: str, paths) -> dict:
+        """Delete some of a mapping's trace files in its turn (so no start or stop swaps
+        its trace writer meanwhile). While the mapping traces, its writer deletes them
+        (bridge.Tracer.remove_files): never in the middle of a rotation, and the file it
+        writes is closed first and begun again with the next traffic. Returns path ->
+        None (gone) or the OSError that kept it."""
+        async with self._turn(mapping_id):
+            tracer = getattr(self._runners.get(mapping_id), "tracer", None)
+            done = tracer.remove_files(paths) if tracer is not None else None
+            if done is not None:
+                return await asyncio.wrap_future(done)
+            return await asyncio.to_thread(remove_files, paths)
 
     # ---------------- status ----------------
     def get_runner(self, mapping_id: str) -> Optional[Runner]:

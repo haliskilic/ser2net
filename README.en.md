@@ -316,8 +316,9 @@ The image has a `HEALTHCHECK` (`ser2net --healthcheck`). Details:
 - **Monitor:** live serial terminal in the browser (xterm.js); operators type to the
   device on network mappings. The hex view shows both directions; viewers see only what
   the device sends.
-- **Trace** (operators): the mapping's trace files, to list and download — while
-  tracing is on, and after it was switched off as long as files are left.
+- **Trace** (operators): the mapping's trace files, to list, download and delete (one
+  file or all, audited) — while tracing is on, and after it was switched off as long as
+  files are left.
 - **Settings:** change password, **web UI access** (login required / open access with a
   role), admin TLS (provide paths or generate self-signed), generate/revoke the **REST API
   token**, mappings **backup/restore** (JSON), status.
@@ -698,8 +699,10 @@ inside aren't readable by other users:
   are reduced to the file name, which is logged at start-up. A trace that can't be written
   (folder removed, disk full, no file handle left) pauses instead of stopping: the
   dashboard row and the Trace panel say why, ser2net tries again every few seconds (making
-  the folder again) and the trace then notes how many bytes are missing. Deleting a mapping
-  deletes its traces; those of mappings a replace import or a restore removed stay until
+  the folder again) and the trace then notes how many bytes are missing. Traces hold the
+  raw traffic in both directions, personal data and passwords typed to a device included:
+  delete them in the Trace panel once they are no longer needed (the file being written
+  begins again with the next traffic). Deleting a mapping deletes its traces; those of mappings a replace import or a restore removed stay until
   the next start (an undone restore finds them), which deletes them and logs how many.
 - `tls/` — certificate/key if self-signed is generated.
 - `setup-code.txt` — the one-time code for first-run setup through a host name; it exists

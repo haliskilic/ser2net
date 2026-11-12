@@ -30,6 +30,7 @@ was not written (the port was not open, or the UDP queue was full).
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
 import contextlib
 import errno
 import io
@@ -153,6 +154,35 @@ def open_tracer(mapping: MappingConfig, trace_dir: Optional[str], log,
     return tracer
 
 
+def remove_files(paths) -> dict[str, Optional[OSError]]:
+    """Delete these files: path -> None once it is gone (also when it was gone already),
+    else the OSError (e.g. Windows: the file is open for a download)."""
+    out: dict[str, Optional[OSError]] = {}
+    for path in paths:
+        try:
+            os.remove(path)
+            out[path] = None
+        except FileNotFoundError:
+            out[path] = None
+        except OSError as e:
+            out[path] = e
+    return out
+
+
+class _Job:
+    """Something a Tracer's writer thread does in turn with the lines queued before it."""
+
+    def __init__(self, fn) -> None:
+        self.fn = fn
+        self.future: concurrent.futures.Future = concurrent.futures.Future()
+
+    def run(self) -> None:
+        try:
+            self.future.set_result(self.fn())
+        except BaseException as e:  # for the waiter
+            self.future.set_exception(e)
+
+
 class Tracer:
     """Append a mapping's traffic to its trace file (optional hex dump + timestamp)
     without blocking the event loop.
@@ -193,6 +223,7 @@ class Tracer:
         self._dropped = 0     # bytes dropped since the last line written
         self._drop_reason = ""
         self._closing = False  # aclose() was called: nothing more is queued
+        self._done = False     # the writer has ended (remove_files then returns None)
         self._resumed = False  # opened again after an error: logged once it writes
         self.error = ""        # why the trace is not written now ("" while it is)
         self._fh: Optional[io.BufferedWriter] = None
@@ -222,6 +253,26 @@ class Tracer:
                 return
             self._queued += len(data)
         self._q.put((time.time(), direction, bytes(data)))
+
+    def remove_files(self, paths) -> Optional[concurrent.futures.Future]:
+        """Delete some of this trace's files in the writer thread, in turn with the lines
+        queued before (so never in the middle of a rotation). The file it writes is
+        closed first and begun again with the next traffic: a deleted trace is never
+        written on (on POSIX an open file that was deleted keeps its disk space, on
+        Windows it can't be deleted). The future's result: as remove_files(). None once
+        the writer has ended: they are files like any other then."""
+        job = _Job(lambda: self._remove(paths))
+        with self._lock:
+            if self._done:
+                return None
+            self._q.put(job)
+        return job.future
+
+    def _remove(self, paths) -> dict[str, Optional[OSError]]:
+        mine = os.path.normcase(os.path.abspath(self.path))
+        if any(os.path.normcase(os.path.abspath(p)) == mine for p in paths):
+            self._close_file()
+        return remove_files(paths)
 
     def _format(self, ts: float, direction: str, data: bytes) -> bytes:
         prefix = time.strftime("%Y-%m-%d %H:%M:%S ", time.localtime(ts)) if self._ts else ""
@@ -265,13 +316,26 @@ class Tracer:
                 for item in batch:
                     if item is None:
                         stop = True
+                    elif isinstance(item, _Job):
+                        self._append(out)
+                        out = []
+                        item.run()
                     else:
                         out.extend(self._lines(*item))
                 self._append(out)
             except Exception as e:  # never end the writer: the trace would stop unnoticed
                 self._failed(e)
+        with self._lock:
+            self._done = True
         self._close_file()
         self._set_error("")
+        while True:  # a job queued as the writer ended: the file is closed now
+            try:
+                item = self._q.get_nowait()
+            except queue.Empty:
+                break
+            if isinstance(item, _Job):
+                item.run()
 
     def _append(self, lines: list) -> None:
         """Write a batch of lines; rotate as soon as the file reaches its size. When that

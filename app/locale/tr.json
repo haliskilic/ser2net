@@ -888,5 +888,13 @@
   "This mapping was changed after this form was opened (by someone else, in another tab, or by a start or stop). The form shows your values: save again to replace the changes, or Cancel to keep them.": "Bu eşleme, bu form açıldıktan sonra değişti (başka biri, başka bir sekme ya da bir başlatma veya durdurma tarafından). Form senin değerlerini gösteriyor: o değişikliklerin yerine bunları yazmak için yeniden kaydet, korumak için İptal'e bas.",
   "Saved on {0} (version {1}), but it did not keep: {2}.": "{0} düğümüne (sürüm {1}) kaydedildi, ama şunları saklamadı: {2}.",
   "Not recording now: %(error)s. ser2net tries again every few seconds; the trace then says how many bytes are missing.": "Şu an kaydedilmiyor: %(error)s. ser2net birkaç saniyede bir yeniden deniyor; trace sonra kaç baytın eksik olduğunu yazar.",
-  "trace not written": "trace yazılmıyor"
+  "trace not written": "trace yazılmıyor",
+  "Deleted {0} trace file(s).": "{0} trace dosyası silindi.",
+  "Tracing is still on: new traffic begins a new file.": "Tracing hâlâ açık: yeni trafik yeni bir dosya başlatır.",
+  "Could not delete {0}: {1}": "{0} silinemedi: {1}",
+  "No trace files to delete.": "Silinecek trace dosyası yok.",
+  "Delete all %(n)s trace file(s) of “%(name)s”?": "“%(name)s” eşlemesinin %(n)s trace dosyasının hepsi silinsin mi?",
+  "Delete all": "Tümünü sil",
+  "Traces hold the raw traffic in both directions, personal data and passwords typed to the device included: delete them once they are no longer needed.": "Trace'ler iki yöndeki ham trafiği, kişisel veriler ve cihaza yazılan parolalar dahil, olduğu gibi tutar: artık gerekmediklerinde sil.",
+  "Delete the trace file “%(name)s”?": "“%(name)s” trace dosyası silinsin mi?"
 }

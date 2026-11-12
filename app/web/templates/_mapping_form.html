@@ -220,6 +220,7 @@
       </label>
       <label class="chk chk-pad"><input type="checkbox" name="opt_trace_hexdump" {% if mapping.options.trace_hexdump %}checked{% endif %}> {{ _("Trace as hex dump") }}</label>
     </div>
+    <p class="muted mb-sm">{{ _("Traces hold the raw traffic in both directions, personal data and passwords typed to the device included: delete them once they are no longer needed.") }}</p>
     {% if 'trace_rotation' not in hide %}
     <div class="grid2">
       <label>{{ _("Trace file size (MB)") }} <span class="muted">({{ _("then it is rotated") }})</span>

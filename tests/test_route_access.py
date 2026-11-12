@@ -123,6 +123,8 @@ ROUTES = {
     ("GET", "/api/mappings/{mid}/console-view"): (VIEWER, NONE),
     ("GET", "/api/mappings/{mid}/traces"): (OPERATOR, NONE),  # traces hold what is sent to the device
     ("GET", "/api/mappings/{mid}/traces/{name}"): (OPERATOR, NONE),
+    ("DELETE", "/api/mappings/{mid}/traces"): (OPERATOR, HEADER),
+    ("DELETE", "/api/mappings/{mid}/traces/{name}"): (OPERATOR, HEADER),
     ("POST", "/api/mappings/save"): (OPERATOR, HEADER),
     ("DELETE", "/api/mappings/{mid}"): (OPERATOR, HEADER),
     ("POST", "/api/mappings/{mid}/{action}"): (OPERATOR, HEADER),

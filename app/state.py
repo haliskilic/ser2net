@@ -20,6 +20,7 @@ import logging
 import os
 import re
 import secrets
+import stat
 import sys
 import time
 from contextlib import suppress as _suppress
@@ -520,9 +521,30 @@ class AppState:
             names = [n for n in os.listdir(self.traces_dir) if n.startswith(prefix)]
         except OSError:
             return []
-        paths = [os.path.join(self.traces_dir, n) for n in names]
-        return sorted((p for p in paths if os.path.isfile(p)),
-                      key=lambda p: os.path.getmtime(p), reverse=True)
+        found = []
+        for n in names:  # one may be rotated or deleted meanwhile
+            path = os.path.join(self.traces_dir, n)
+            with _suppress(OSError):
+                st = os.stat(path)
+                if stat.S_ISREG(st.st_mode):
+                    found.append((st.st_mtime, path))
+        return [path for _mtime, path in sorted(found, reverse=True)]
+
+    async def delete_trace_files(self, mapping_id: str, names=None,
+                                 ) -> tuple[list[str], list[tuple[str, str]]]:
+        """Delete those `names` of a mapping's trace files, all of them when None. Only
+        names of its own list (trace_files) are touched; the supervisor has the files a
+        running trace writes deleted by that writer. Returns (the names deleted, [(name,
+        why not)])."""
+        paths = {os.path.basename(p): p
+                 for p in await asyncio.to_thread(self.trace_files, mapping_id)}
+        wanted = list(paths) if names is None else list(dict.fromkeys(names))
+        failed = [(n, _("Trace file not found")) for n in wanted if n not in paths]
+        found = [paths[n] for n in wanted if n in paths]
+        result = (await self.supervisor.remove_trace_files(mapping_id, found)) if found else {}
+        failed += [(os.path.basename(p), e.strerror or str(e))
+                   for p, e in result.items() if e is not None]
+        return [os.path.basename(p) for p, e in result.items() if e is None], failed
 
     def traced_mapping_ids(self) -> set[str]:
         """The ids that have at least one file in data/traces: what comes before the first
