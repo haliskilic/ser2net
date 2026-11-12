@@ -128,8 +128,12 @@ everything from a **password-protected web UI** — no CLI or hand-edited config
   serial number of their own (CH340, most PL2303, clones that all carry one number) share
   one, which udev gives to one of them, and which one can change at a reboot or a
   re-plug: the Ports page marks such adapters (`same USB identity`, `by-id not unique`) and
-  the form says so; bind those by USB socket. **IP picker** from the machine's own
-  addresses (localhost / LAN / 0.0.0.0) or custom.
+  the form says so; bind those by USB socket. In the mapping form, ↻ next to Device lists
+  the ports again without closing the form, and **Other device path…** takes a path that
+  is not listed (a board's UART such as `/dev/ttymxc1`, an adapter not plugged in yet, a
+  `\\.\` name on Windows); a configured link such as `/dev/serial0` is shown with the
+  device it leads to (`/dev/serial0 → /dev/ttyS0`) and counts as that port in use. **IP
+  picker** from the machine's own addresses (localhost / LAN / 0.0.0.0) or custom.
 - **Find a device by its USB identity:** tick the box in the mapping form and the adapter
   is bound by VID:PID (+ serial number), so re-plugging it as `ttyUSB1` or under another
   COM number still opens the right device. Identical adapters without a serial number of

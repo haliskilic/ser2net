@@ -108,7 +108,7 @@ def routes(ctx: Ctx) -> list:
         return render(request, "_mapping_form.html",
                       mapping=m, is_new=True, modbus_points_json=_modbus_points_json(m),
                       ports=portlist.visible(await state.ports.current()),
-                      ips=netinfo.list_ip_candidates(),
+                      ips=netinfo.list_ip_candidates(), links={},
                       error=None)
 
     async def mapping_form_edit(request):
@@ -117,10 +117,11 @@ def routes(ctx: Ctx) -> list:
         m = state.config.get_mapping(request.path_params["mid"])
         if not m:
             return PlainTextResponse(_("Mapping not found"), status_code=404)
+        ports = portlist.visible(await state.ports.current())
         return render(request, "_mapping_form.html",
                       mapping=m, is_new=False, modbus_points_json=_modbus_points_json(m),
-                      ports=portlist.visible(await state.ports.current()),
-                      ips=netinfo.list_ip_candidates(),
+                      ports=ports, ips=netinfo.list_ip_candidates(),
+                      links=portlist.links(ports, (m.serial.port, m.serial_b.port)),
                       error=None)
 
     async def mapping_log(request):

@@ -185,10 +185,24 @@ def choice(ports: list[dict[str, Any]], selected: str,
     return {"port": port, "as": how}
 
 
+def links(ports: list[dict[str, Any]], configured: Any) -> dict[str, str]:
+    """{name: the listed device it leads to} for each of the ``configured`` ports that is a
+    link to a listed port but not one of its own names (/dev/serial0 -> /dev/ttyS0, a udev
+    SYMLINK): for choice(). Reads this machine's files, so only for its own port list."""
+    out: dict[str, str] = {}
+    for name in configured:
+        if isinstance(name, str) and name.startswith("/") and find(ports, name) is None:
+            port = find(ports, name, resolve=True)
+            if port is not None:
+                out[name] = port["device"]
+    return out
+
+
 def used(ports: list[dict[str, Any]], devices: Any) -> set[str]:
-    """The device paths of the listed ``ports`` that one of ``devices`` (the ports running
-    mappings have open, under the names they were set as) names (find)."""
-    return {p["device"] for d in devices if (p := find(ports, d)) is not None}
+    """The device paths of the listed ``ports`` (this machine's) that one of ``devices`` (the
+    ports running mappings have open, under the names they were set as) names, also through
+    a link such as /dev/serial0 (find with resolve)."""
+    return {p["device"] for d in devices if (p := find(ports, d, resolve=True)) is not None}
 
 
 def same_port(a: str, b: str) -> bool:

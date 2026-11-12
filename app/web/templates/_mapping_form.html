@@ -1,6 +1,6 @@
 {% from "_serial_port_select.html" import device_field %}
 {% macro serial_fields(s, prefix, ports) %}
-  {{ device_field(s.port, prefix, ports, not remote) }}
+  {{ device_field(s.port, prefix, ports, not remote, links) }}
   <input type="hidden" name="{{ prefix }}usb_match_shown" value="1">
   <label class="chk"><input type="checkbox" name="{{ prefix }}usb_match" {% if s.identity %}checked{% endif %}> {{ _("Find this device by its USB identity if its name changes") }} <span class="muted">({{ _("COMx / ttyUSBx renumbering after re-plugging · VID:PID + serial number") }}{% if s.identity %} · {{ _("bound to") }} <span class="mono">{{ identity_text(s.match) }}</span>{% endif %})</span></label>
   <div class="grid3">

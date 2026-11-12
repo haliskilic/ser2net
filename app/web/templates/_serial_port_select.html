@@ -2,7 +2,10 @@
     mapping form's, and what GET /api/ports/select answers for its ↻ button (the port list
     again, while the rest of the form stays as it is). `local`: this node's own form (a
     cluster peer's form lists the peer's ports and has no ↻). `links`: {name: device} for a
-    configured link that is not one of a port's own names (portlist.choice). -#}
+    configured link that is not one of a port's own names (portlist.choice).
+    "Other device path…" lets a path be typed (a port that is not listed, not plugged in
+    yet): app.js then gives the select's name to the text box, so the path is posted as
+    {prefix}port itself and an older cluster peer saves it as it is. -#}
 {% macro device_field(selected, prefix, ports, local=true, links=none) %}
 {%- set pick = port_choice(ports, selected, links) %}
 {%- set p = pick.port %}
@@ -11,7 +14,7 @@
 <div class="port-pick" id="{{ prefix }}port-pick">
   <div class="port-row">
     <label>{{ _("Device") }}
-      <select name="{{ prefix }}port"{% if prefix == 'serial_' %} required{% endif %}>
+      <select name="{{ prefix }}port" data-port-field="{{ prefix }}port"{% if prefix == 'serial_' %} required data-required{% endif %}>
         {% if selected and p is none %}<option value="{{ selected }}" selected>{{ _("%(port)s (not connected)", port=selected) }}</option>
         {%- elif pick.as == 'alias' %}<option value="{{ selected }}" selected>{{ selected }} → {{ p.device }}</option>{% endif %}
         {% for q in ports %}<option value="{{ q.device }}" {% if q is sameas p and pick.as == 'device' %}selected{% endif %}>{{ q.device }}{% if q.description %} — {{ q.description }}{% endif %}{% if q.serial_number %} [{{ q.serial_number }}]{% endif %}</option>{% endfor %}
@@ -22,7 +25,11 @@
           {% for q in by_path %}<option value="{{ q.by_path }}" {% if q is sameas p and pick.as == 'by_path' %}selected{% endif %}>{{ q.by_path | replace('/dev/serial/by-path/', '') }} ({{ q.device | replace('/dev/', '') }})</option>{% endfor %}
         </optgroup>{% endif %}
         {% if not ports and not selected %}<option value="">{{ _("(no serial ports detected)") }}</option>{% endif %}
+        <option value="" data-port-other>{{ _("Other device path…") }}</option>
       </select>
+      <input type="text" class="custom-input mono" data-port-typed hidden disabled
+             autocomplete="off" spellcheck="false" aria-label="{{ _('Device path') }}"
+             placeholder="{{ _('e.g. %(example)s', example='/dev/ttymxc1, /dev/serial0, COM5') }}">
     </label>
     {%- if local %}
     <button type="button" class="btn port-rescan" data-port-rescan="{{ prefix }}"

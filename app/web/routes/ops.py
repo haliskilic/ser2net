@@ -26,7 +26,7 @@ def apply_usb_match(mapping: MappingConfig, form, ports: list, existing=None) ->
         if not _checkbox(form, prefix + "usb_match"):
             settings.match = {}
             continue
-        port = portlist.find(ports, settings.port)
+        port = portlist.find(ports, settings.port, resolve=True)  # (this node's ports)
         if port is not None and port.get("vid") and port.get("pid"):
             # a binding to a USB socket too (location, set through the REST API or by hand)
             # stays one, to the socket the adapter is in now

@@ -390,6 +390,26 @@ def url_port(port: Any) -> bool:
     return isinstance(port, str) and "://" in port
 
 
+_CONTROL_CHARS = re.compile(r"[\x00-\x1f\x7f]")
+
+
+def port_problem(port: Any) -> str:
+    """Why ``port`` can't be set as a mapping's serial port ("" when it can). One permissive
+    rule for every edit (a path typed in the form, the REST API, an import, a cluster peer):
+    a URL is refused (url_port: ser2net opens serial devices only), and so is a name with a
+    control character in it (a pasted line break); device paths (/dev/..., a link to one,
+    any absolute path), Windows names (COM3, \\\\.\\CNCA0) and a placeholder for a port
+    found by its USB identity ("auto") pass. Never checked by validate(): a stored port must
+    keep loading (a URL one is refused when it is opened, see engine/serial_io.refuse_url)."""
+    if url_port(port):
+        return _("Serial port {0} is a URL, not a device: ser2net opens serial devices only "
+                 "(URLs such as socket:// or spy:// are not supported).").format(port)
+    if isinstance(port, str) and _CONTROL_CHARS.search(port):
+        return _("Serial port {0} has a control character in it (a line break?): type the "
+                 "device's path again.").format(repr(port))
+    return ""
+
+
 # ---------------------------------------------------------------------------
 # Network side
 # ---------------------------------------------------------------------------
@@ -804,10 +824,8 @@ class MappingConfig:
         every start), so a stored value they forbid is refused where it is used instead
         (a URL serial port: when the mapping starts, see engine/serial_io.refuse_url)."""
         for side in self.serial_sides():
-            if url_port(side.port):
-                raise ConfigError(_("Serial port {0} is a URL, not a device: ser2net opens serial "
-                                    "devices only (URLs such as socket:// or spy:// are not "
-                                    "supported).").format(side.port))
+            if problem := port_problem(side.port):
+                raise ConfigError(problem)
         if (self.kind == "serialbridge" and self.serial.port
                 and canonical_device(self.serial.port) == canonical_device(self.serial_b.port)):
             raise ConfigError(_("Serial-to-serial bridge needs two different ports."))
