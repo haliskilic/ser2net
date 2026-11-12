@@ -357,7 +357,7 @@ def plain_http_warning(admin, published: str = "") -> str:
         return ""
     if published.startswith("https://"):
         return (f"WARNING: the admin UI is published as {published} through a TLS reverse "
-                f"proxy, but it also answers plain HTTP on {admin.bind_ip}:{admin.port} — "
+                f"proxy, but it also answers plain HTTP on {host_port(admin.bind_ip, admin.port)} — "
                 "passwords and session cookies sent there travel unencrypted. Let only the "
                 "proxy reach that port (Docker: publish it as 127.0.0.1:8080:8080, or not "
                 "at all).")

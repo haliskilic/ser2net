@@ -108,6 +108,10 @@ def test_warning_and_notifications() -> None:
     assert via.startswith("WARNING: the admin UI is published as https://s2n.example.com "
                           "through a TLS reverse proxy, but it also answers plain HTTP on "
                           "0.0.0.0:8080"), via
+    both = runtime.plain_http_warning(AdminUI(bind_ip=""), "https://s2n.example.com")
+    assert "plain HTTP on *:8080 —" in both, both   # every interface, IPv4 and IPv6
+    v6 = runtime.plain_http_warning(AdminUI(bind_ip="2001:db8::5"), "https://s2n.example.com")
+    assert "plain HTTP on [2001:db8::5]:8080 —" in v6, v6
     assert runtime.plain_http_warning(lan, "http://s2n.example.com").startswith(
         "WARNING: admin UI is bound to a network address over plain HTTP")
     assert runtime.plain_http_warning(AdminUI()) == ""
