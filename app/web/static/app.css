@@ -277,4 +277,5 @@ legend { color: var(--muted); font-size: 11px; text-transform: uppercase; letter
 .lang-switch a.on { background: var(--panel2); color: var(--text); font-weight: 600; }
 .auth-wrap .lang-switch { position: absolute; top: 12px; right: 16px; }
 .or-line { text-align: center; margin: .8rem 0; }
-.token-box { word-break: break-all; margin-top: .4rem; }
+/* a one-time token or key: one click selects all of it (a double click stops at a "-") */
+.token-box { word-break: break-all; margin-top: .4rem; -webkit-user-select: all; user-select: all; }

@@ -5,7 +5,8 @@ operator/admin tokens may also create/modify. Spawns the real server. Also:
   * api_token_role in config.json: no key -> admin (tokens from before roles), a role
     in other case / with spaces -> that role, anything else -> viewer (never more
     access) with a start-up log note; the config stays valid;
-  * Settings refuses a role that isn't one instead of making the token admin.
+  * Settings refuses a role that isn't one instead of making the token admin;
+  * the new token is shown once, in a box one click selects, with a Copy button.
 Run:
     python3 tests/test_api_token_role.py
 """
@@ -136,6 +137,9 @@ def test_unknown_role_in_config():
         assert call("GET", "/api/v1/status", secret)[0] == 200, "a refused form must keep the token"
         st, _, page = admin.post("/settings/api-token", {"api_token_role": "Operator"})
         new = re.search(r"s2n_[A-Za-z0-9_\-]+", page).group(0)
+        # shown once: in a box a click selects whole (.token-box), with a Copy button for it
+        assert f'<div class="mono token-box" id="new-api-token">{new}</div>' in page
+        assert 'data-copy="new-api-token"' in page
         assert srv.saved_config()["api_token_role"] == "operator" and new != secret
         assert call("GET", "/api/v1/status", secret)[0] == 401, "the old token must stop working"
         assert call("GET", "/api/v1/mappings", new)[1]["mappings"][0]["mqtt"]["password"] == "broker-secret"

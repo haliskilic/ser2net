@@ -31,6 +31,21 @@ def unchanged_or(request, resp):
     return resp
 
 
+def bytesize(value) -> str:
+    """A byte count for people: 512 B, 1.5 KB, 12.3 MB, 4.0 GB (units of 1024, one
+    decimal) — the dashboard's In / Out and the trace file sizes. Not Jinja's
+    filesizeformat, which writes an untranslated "Bytes"; the exact counts stay in the
+    REST API and /metrics."""
+    try:
+        n = int(value)
+    except (TypeError, ValueError):   # a peer's payload in the fleet view: shown as it is
+        return str(value)
+    for unit, size in (("TB", 1 << 40), ("GB", 1 << 30), ("MB", 1 << 20), ("KB", 1 << 10)):
+        if n >= size:
+            return f"{n / size:.1f} {unit}"
+    return f"{n} B"
+
+
 def notice(text: str, kind: str = "ok", focus: str = "") -> dict:
     """The response header that has the dashboard (app.js, its feedback area) tell the
     user what an action did: "ok" as a status message, "warn" as an alert; `focus`: the

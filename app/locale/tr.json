@@ -870,5 +870,10 @@
   "Shift+Tab leaves the console": "Shift+Tab konsoldan çıkar",
   "Role of %(user)s": "%(user)s kullanıcısının rolü",
   "Discard the unsaved changes in the open form?": "Açık formdaki kaydedilmemiş değişiklikler atılsın mı?",
-  "Sign in in a new tab (keeps the open form)": "Yeni sekmede giriş yap (açık form korunur)"
+  "Sign in in a new tab (keeps the open form)": "Yeni sekmede giriş yap (açık form korunur)",
+  "No mappings yet.": "Henüz eşleme yok.",
+  "No mapping matches the search or the state filter.": "Aramaya ya da durum filtresine uyan eşleme yok.",
+  "Show all": "Tümünü göster",
+  "Copied to the clipboard.": "Panoya kopyalandı.",
+  "Selected: press Ctrl+C (⌘C on a Mac) to copy it.": "Seçildi: kopyalamak için Ctrl+C'ye (Mac'te ⌘C) bas."
 }

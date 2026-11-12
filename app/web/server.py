@@ -25,6 +25,7 @@ from .. import i18n
 from ..config import ROLE_RANK
 from . import auth
 from .routes import build_routes
+from .routes.common import bytesize
 
 TEMPLATES_DIR = os.path.join(os.path.dirname(__file__), "templates")
 STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
@@ -220,6 +221,7 @@ def make_templates() -> Jinja2Templates:
     )
     templates.env.filters["softbreak"] = softbreak
     templates.env.filters["domid"] = domid
+    templates.env.filters["bytesize"] = bytesize
     # _("...") in every template, translated for the request's language (app/i18n.py);
     # newstyle: _("Hello %(name)s", name=x) formats and escapes x
     templates.env.add_extension("jinja2.ext.i18n")
