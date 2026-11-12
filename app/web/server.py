@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import os
 import re
+import time
 
 from markupsafe import Markup, escape
 from starlette.applications import Starlette
@@ -142,19 +143,30 @@ class GuardMiddleware(BaseHTTPMiddleware):
         return response
 
     async def _dispatch_api(self, request, call_next, cfg):
-        """Gate for the JSON REST API: bearer-token auth, no cookies/CSRF, JSON errors."""
+        """Gate for the JSON REST API: bearer-token auth, no cookies/CSRF, JSON errors.
+        The token found (config.ApiToken) is request.state.api_token: its role and its
+        name for the audit log."""
         path = request.url.path
         if path not in ("/api/v1/health", "/api/v1/openapi.json"):
             if not cfg.password_set:
                 return JSONResponse({"error": "setup_incomplete"}, status_code=503)
-            if not cfg.api_token_hash:
+            if not cfg.api_token_hash and not cfg.api_tokens:
                 return JSONResponse({"error": "api_token_not_configured"}, status_code=401)
-            if not auth.verify_token(auth.bearer_token(request), cfg.api_token_hash):
+            token = auth.find_api_token(cfg, auth.bearer_token(request))
+            if token is None:
                 return JSONResponse({"error": "unauthorized"}, status_code=401,
                                     headers={"WWW-Authenticate": "Bearer"})
+            if token.expired():
+                return JSONResponse({"error": "unauthorized", "detail": "API token expired"},
+                                    status_code=401,
+                                    headers={"WWW-Authenticate": 'Bearer error="invalid_token"'})
+            request.state.api_token = token
+            used = getattr(request.app.state.appstate, "api_token_used", None)
+            if used is not None:  # in memory only (AppState.api_token_used)
+                used[token.id] = time.time()
             # a 'viewer' token is read-only: block state-changing methods
             if request.method in ("POST", "PUT", "DELETE", "PATCH") and \
-                    ROLE_RANK.get(cfg.api_token_role, 0) < ROLE_RANK["operator"]:
+                    ROLE_RANK.get(token.role, 0) < ROLE_RANK["operator"]:
                 return JSONResponse(
                     {"error": "forbidden", "detail": "API token role 'viewer' is read-only"},
                     status_code=403)

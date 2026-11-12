@@ -410,7 +410,7 @@
   </div>
   {% endif %}
   <p>{{ _("Status:") }}
-    {% if api_token_set %}<span class="tag">{{ _("enabled") }}</span> <span class="muted">{{ _('role: <span class="mono">%(role)s</span>', role=api_token_role) }}</span>{% else %}<span class="tag">{{ _("disabled") }}</span>{% endif %}
+    {% if api_token_set %}<span class="tag">{{ _("enabled") }}</span> <span class="muted">{{ _('role: <span class="mono">%(role)s</span>', role=api_token_role) }} · {{ _("last used: %(time)s", time=api_token_last_used) }}</span>{% else %}<span class="tag">{{ _("disabled") }}</span>{% endif %}
   </p>
   <form method="post" action="/settings/api-token" class="inline">
     <input type="hidden" name="_csrf" value="{{ request.state.csrf_token }}">
@@ -426,6 +426,48 @@
   <form method="post" action="/settings/api-token/revoke" class="inline mt-sm">
     <input type="hidden" name="_csrf" value="{{ request.state.csrf_token }}">
     <button class="btn" type="submit">{{ _("Revoke") }}</button>
+  </form>
+  {% endif %}
+  <h3 class="mt-sm">{{ _("More tokens") }}</h3>
+  <p class="muted mb-sm">{{ _('Give each client its own token: a read-only one for monitoring, one that may change mappings for automation. Each has a name — the audit log shows it as <span class="mono">api-token:NAME</span> — a role and, if you like, an expiry; revoking one leaves the others working. The token above works as before. When a token was last used is known since ser2net started.') }}</p>
+  {% if api_token_rows %}
+  <div class="table-scroll">
+  <table class="grid th-wrap">
+    <thead><tr><th>{{ _("Name") }}</th><th>{{ _("Role") }}</th><th>{{ _("Created") }}</th><th>{{ _("Expires") }}</th><th>{{ _("Last used") }}</th><th></th></tr></thead>
+    <tbody>
+    {% for t in api_token_rows %}
+      <tr>
+        <td class="mono">{{ t.name }}</td>
+        <td class="mono">{{ t.role }}</td>
+        <td>{{ t.created }}</td>
+        <td>{% if t.expired %}<span class="tag">{{ _("expired") }}</span> {% endif %}{{ t.expires or _("never") }}</td>
+        <td>{{ t.last_used }}</td>
+        <td>
+          <form method="post" action="/settings/api-tokens/revoke" class="inline">
+            <input type="hidden" name="_csrf" value="{{ request.state.csrf_token }}">
+            <input type="hidden" name="id" value="{{ t.id }}">
+            <button class="btn sm danger" type="submit">{{ _("Revoke") }}</button>
+          </form>
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  {% endif %}
+  {% if api_token_rows|length < api_token_max %}
+  <form method="post" action="/settings/api-tokens" class="authform">
+    <input type="hidden" name="_csrf" value="{{ request.state.csrf_token }}">
+    <div class="grid2">
+      <label>{{ _("Name") }} <input type="text" name="name" placeholder="{{ _('e.g. %(example)s', example='prometheus') }}" autocapitalize="none" autocorrect="off" spellcheck="false" maxlength="64" pattern="[A-Za-z0-9._\-]{1,64}" title="{{ _("A token name is 1-64 characters: English letters, digits, '.', '_' or '-'.") }}" required></label>
+      <label>{{ _("Role") }} <span class="muted">({{ _("viewer = read-only") }})</span>
+        <select name="role"><option value="viewer" selected>viewer</option><option value="operator">operator</option></select>
+      </label>
+    </div>
+    <label>{{ _("Expires after (days)") }} <span class="muted">({{ _("empty or 0 = never · at most %(max)s", max=api_token_days_max) }})</span>
+      <input type="number" name="expires_days" min="0" max="{{ api_token_days_max }}">
+    </label>
+    <button class="btn" type="submit">{{ _("Add token") }}</button>
   </form>
   {% endif %}
 </section>

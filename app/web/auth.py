@@ -359,6 +359,26 @@ def verify_token(token: str, stored_hash: str) -> bool:
     return hmac.compare_digest(hash_token(token), stored_hash)
 
 
+def find_api_token(cfg, token: str):
+    """The API token (config.ApiToken) a request's bearer token is: the one of
+    cfg.api_token_hash — as an ApiToken without an id, named 'api-token' in the audit log
+    like before there were others — or one of cfg.api_tokens. None when it is none of them.
+    Whether it has expired is the caller's to check. Every stored hash is compared, in
+    constant time, so how long this takes doesn't tell which one matched."""
+    from ..config import ApiToken
+
+    if not token:
+        return None
+    digest = hash_token(token).encode("ascii")
+    found = None
+    stored = [ApiToken(sha256=cfg.api_token_hash, role=cfg.api_token_role)] if cfg.api_token_hash else []
+    for candidate in stored + list(cfg.api_tokens):
+        # bytes: a hand-edited non-ASCII hash is a mismatch, not an error
+        if hmac.compare_digest(digest, str(candidate.sha256).encode("utf-8")) and found is None:
+            found = candidate
+    return found
+
+
 def bearer_token(request) -> str:
     """Extract the token from an `Authorization: Bearer <token>` header."""
     header = request.headers.get("authorization", "")

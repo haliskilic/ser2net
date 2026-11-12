@@ -396,6 +396,18 @@ Token, üretilirken seçilen rolü taşır: `viewer` token'ı yalnızca okuyabil
 sırları (MQTT parolası) maskeli görür. `config.json`'daki `api_token_role` bir rol değilse
 `viewer` sayılır ve açılış log'u bunu yazar.
 
+**Her istemciye ayrı token:** **Ayarlar → REST API token → Diğer token'lar**'da bir admin, bu
+token'ın yanına adlı token'lar ekler; her birinin kendi rolü (`viewer` yalnızca okur,
+`operator` değiştirebilir de) ve istenirse gün olarak bir bitiş süresi olur — örneğin
+Prometheus ya da bir pano için salt okunur bir token, kurulum script'i için yazabilen bir
+token; böylece her istemci eşlemeleri değiştirebilen bir token taşımaz. Denetim kaydı işlemi
+yapan token'ı adıyla yazar (`api-token:AD`; ilk token `api-token` olarak kalır), birini iptal
+etmek diğerlerini etkilemez, süresi dolan token HTTP 401
+`{"error":"unauthorized","detail":"API token expired"}` alır ve Ayarlar her birinin en son ne
+zaman kullanıldığını gösterir (ser2net açıldığından beri; diske yazılmaz). İlk token eskisi
+gibi çalışır (`config.json`'da `api_token_hash` / `api_token_role`); adlı token'lar
+`api_tokens`'ta tutulur, 2.8 ve öncesi bu anahtarı atar (ilk token'ları çalışmaya devam eder).
+
 ---
 
 ## 🔒 Güvenlik
@@ -682,7 +694,7 @@ içindeki dosyalar başka kullanıcılarca okunamaz:
 - `backups/` — her değişiklikten önce `config.json`'un önceki hâli (son 50). Ayarlar →
   *Yapılandırma yedekleri*'nden indirilir ya da geri yüklenir. Geri yükleme önce giriş ve
   erişim için neyin değişeceğini gösterir, sonra eşlemeleri ve ayarları geri getirir;
-  kullanıcı hesapları ve parolaları, REST API token'ı ve cluster anahtarı, onları da geri
+  kullanıcı hesapları ve parolaları, REST API token'ları ve cluster anahtarı, onları da geri
   yüklemek için kutu işaretlenmedikçe olduğu gibi kalır (işaretlenirse diğer herkesin
   oturumu da kapanır). *Yalnızca eşlemeleri* içe aktarma önizlemesinden geçer. Geri yükleme
   de geri alınabilir; indirilen yedekte oturum anahtarı yer almaz.

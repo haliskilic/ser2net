@@ -386,6 +386,17 @@ The token has the role chosen when it was generated: a `viewer` token may only r
 and gets stored secrets (the MQTT password) masked. An `api_token_role` in `config.json`
 that is not a role counts as `viewer`, and the start-up log says so.
 
+**One token per client:** under **Settings → REST API token → More tokens** an admin adds
+named tokens next to that one, each with its own role (`viewer` reads only, `operator` may
+also change) and, if wanted, an expiry in days — say a read-only token for Prometheus or a
+dashboard and a write token for the deployment script, so not every client holds a token
+that can change mappings. The audit log names the token that acted (`api-token:NAME`; the
+first token stays `api-token`), revoking one leaves the others working, an expired one gets
+HTTP 401 `{"error":"unauthorized","detail":"API token expired"}`, and Settings shows when each
+was last used (since ser2net started; never written to disk). The first token works as before
+(`api_token_hash` / `api_token_role` in `config.json`); named tokens are kept in
+`api_tokens`, which 2.8 and older drop (their first token keeps working).
+
 ---
 
 ## 🔒 Security
@@ -663,7 +674,7 @@ inside aren't readable by other users:
 - `backups/` — the previous `config.json` before every change (newest 50). Download or
   restore one under Settings → *Configuration backups*. A restore first shows what changes
   for sign-in and access, then brings back the mappings and settings; the user accounts
-  and passwords, the REST API token and the cluster key stay as they are unless you tick
+  and passwords, the REST API tokens and the cluster key stay as they are unless you tick
   the box to restore them too (that also signs everyone else out). *Only its mappings*
   goes through the import preview. A restore can be undone too; a downloaded backup
   leaves out the session key.

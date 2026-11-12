@@ -267,6 +267,9 @@ class AppState:
         self.failed_logins = FailedLoginRecords(self.audit)  # their audit records
         self.view_records = ViewRecords(self.audit)          # console / hex view opens
         self.revoked_sessions = RevokedSessions()  # sessions ended by a logout
+        # when each REST API token was last used: token id ('' for api_token_hash's) ->
+        # epoch seconds; in memory only (a save on every request would push out backups)
+        self.api_token_used: dict[str, float] = {}
         # when each account last signed in (from audit.log, then every session issued)
         self.signins = SignIns()
         # sessions issued per account (Ctx.set_session), and that count with the account's

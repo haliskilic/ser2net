@@ -29,13 +29,23 @@ _BOOLEANS = {"true": True, "1": True, "yes": True, "false": False, "0": False, "
 REDACTED = "********"
 
 
-def _mapping_view(mapping, state) -> dict:
+def _caller(request) -> str:
+    """Who calls, for the audit log: the token's name (api-token:<name>), 'api-token' for
+    the token of api_token_hash."""
+    token = getattr(request.state, "api_token", None)
+    return token.audit_label if token is not None else "api-token"
+
+
+def _mapping_view(mapping, state, request=None) -> dict:
     """A mapping's full config plus its live runtime status. A read-only (viewer)
     token doesn't get stored secrets (the MQTT password) — the same rule as the web
     UI, where viewers can't open the edit form or the export. Operator/admin tokens
-    see the real value, so a GET -> PUT round trip keeps working for them."""
+    see the real value, so a GET -> PUT round trip keeps working for them. The role is
+    the calling token's (GuardMiddleware puts it on the request)."""
     view = mapping.to_dict()
-    if (ROLE_RANK.get(state.config.api_token_role, 0) < ROLE_RANK["operator"]
+    token = getattr(request.state, "api_token", None) if request is not None else None
+    role = token.role if token is not None else state.config.api_token_role
+    if (ROLE_RANK.get(role, 0) < ROLE_RANK["operator"]
             and view["mqtt"].get("password")):
         view["mqtt"]["password"] = REDACTED
     view["status"] = state.supervisor.status(mapping.id)
@@ -59,13 +69,13 @@ def merge_patch(target, patch):
 
 def build_api_routes(state):
     async def list_mappings(request):
-        return JSONResponse({"mappings": [_mapping_view(m, state) for m in state.config.mappings]})
+        return JSONResponse({"mappings": [_mapping_view(m, state, request) for m in state.config.mappings]})
 
     async def get_mapping(request):
         m = state.config.get_mapping(request.path_params["mid"])
         if not m:
             return JSONResponse({"error": "not_found"}, status_code=404)
-        return JSONResponse(_mapping_view(m, state))
+        return JSONResponse(_mapping_view(m, state, request))
 
     async def create_mapping(request):
         try:
@@ -93,8 +103,8 @@ def build_api_routes(state):
                 return JSONResponse({"error": "validation", "detail": str(e)}, status_code=400)
         await state.supervisor.apply_mapping(mapping)
         state.log(f"api: mapping created: {mapping.name}")
-        state.audit(_client_ip(request), "api_mapping_create", mapping.name, user="api-token")
-        return JSONResponse(_mapping_view(mapping, state), status_code=201,
+        state.audit(_client_ip(request), "api_mapping_create", mapping.name, user=_caller(request))
+        return JSONResponse(_mapping_view(mapping, state, request), status_code=201,
                             headers={"Location": f"{API_PREFIX}/mappings/{mapping.id}"})
 
     async def update_mapping(request):
@@ -130,8 +140,8 @@ def build_api_routes(state):
                 return JSONResponse({"error": "validation", "detail": str(e)}, status_code=400)
         await state.supervisor.apply_mapping(mapping)
         state.log(f"api: mapping updated: {mapping.name}")
-        state.audit(_client_ip(request), "api_mapping_update", mapping.name, user="api-token")
-        return JSONResponse(_mapping_view(mapping, state))
+        state.audit(_client_ip(request), "api_mapping_update", mapping.name, user=_caller(request))
+        return JSONResponse(_mapping_view(mapping, state, request))
 
     async def patch_mapping(request):
         """PATCH: an RFC 7396 JSON merge patch on the stored mapping. Only what the body
@@ -173,8 +183,8 @@ def build_api_routes(state):
                 return JSONResponse({"error": "validation", "detail": str(e)}, status_code=400)
         await state.supervisor.apply_mapping(mapping)
         state.log(f"api: mapping patched: {mapping.name}")
-        state.audit(_client_ip(request), "api_mapping_patch", mapping.name, user="api-token")
-        return JSONResponse(_mapping_view(mapping, state))
+        state.audit(_client_ip(request), "api_mapping_patch", mapping.name, user=_caller(request))
+        return JSONResponse(_mapping_view(mapping, state, request))
 
     async def delete_mapping(request):
         mid = request.path_params["mid"]
@@ -182,7 +192,7 @@ def build_api_routes(state):
         if removed is None:
             return JSONResponse({"error": "not_found"}, status_code=404)
         state.log(f"api: mapping deleted: {removed.name}")
-        state.audit(_client_ip(request), "api_mapping_delete", removed.name, user="api-token")
+        state.audit(_client_ip(request), "api_mapping_delete", removed.name, user=_caller(request))
         return JSONResponse({"deleted": mid})
 
     async def mapping_action(request):
@@ -194,7 +204,7 @@ def build_api_routes(state):
         if not ok:
             return JSONResponse({"error": "not_found"}, status_code=404)
         state.log(f"api: mapping {action}: {name}")
-        state.audit(_client_ip(request), f"api_mapping_{action}", name, user="api-token")
+        state.audit(_client_ip(request), f"api_mapping_{action}", name, user=_caller(request))
         return JSONResponse({"id": mid, "action": action, "status": state.supervisor.status(mid)})
 
     async def import_mappings(request):
@@ -234,7 +244,7 @@ def build_api_routes(state):
         state.log(f"api: mappings imported ({mode}): {count['add']} added, {count['update']} "
                   f"updated, {count['same']} unchanged, {count['remove']} removed")
         state.audit(_client_ip(request), f"api_config_import_{mode}",
-                    f"{len(plan.mappings)} mappings ({plan.source})", user="api-token")
+                    f"{len(plan.mappings)} mappings ({plan.source})", user=_caller(request))
         return JSONResponse({**answer, "rows": rows, "summary": count, "valid": True,
                              "problem": None, "applied": True})
 
@@ -440,8 +450,8 @@ def openapi_spec(admin) -> dict:
                                      "that is not valid (validation), an unknown action "
                                      "(unknown_action) or query value (invalid_parameter), a "
                                      "body that is nothing importable (invalid_import)."),
-        "Unauthorized": _json("Error", "No token, a wrong one (unauthorized), or no API token "
-                                       "configured (api_token_not_configured)."),
+        "Unauthorized": _json("Error", "No token, a wrong or expired one (unauthorized), or no API "
+                                       "token configured (api_token_not_configured)."),
         "Forbidden": _json("Error", "The token's role may only read (forbidden)."),
         "NotFound": _json("Error", "No mapping has this id (not_found)."),
         "TooLarge": {"description": "The request body is larger than the server accepts.",
