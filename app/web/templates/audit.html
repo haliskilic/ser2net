@@ -5,12 +5,12 @@
   <div class="panel-head">
     <h2>{{ _("Audit log") }}</h2>
     <div class="actions">
-      <a class="btn sm" href="/settings/audit.csv{% if qs %}?{{ qs }}{% endif %}">⤓ CSV</a>
-      <a class="btn sm" href="/settings">{{ _("← Settings") }}</a>
+      <a class="btn sm" href="{{ base }}/settings/audit.csv{% if qs %}?{{ qs }}{% endif %}">⤓ CSV</a>
+      <a class="btn sm" href="{{ base }}/settings">{{ _("← Settings") }}</a>
     </div>
   </div>
   <p class="muted mb-sm">{{ _('Sign-ins and every change to the configuration, newest first: who (user), from where (IP), what (action) and on what (detail). Times are the server’s local time. Kept in the data folder’s <span class="mono">audit.log</span> (rotated at 5 MB, one older file kept).') }}</p>
-  <form method="get" action="/settings/audit" class="filters">
+  <form method="get" action="{{ base }}/settings/audit" class="filters">
     <input type="search" name="q" value="{{ filters.q }}" placeholder="{{ _('Search (name, IP, detail…)') }}">
     <select name="action">
       <option value="">{{ _("All actions") }}</option>
@@ -21,7 +21,7 @@
       {% for u in users %}<option value="{{ u }}" {% if u == filters.user %}selected{% endif %}>{{ u }}</option>{% endfor %}
     </select>
     <button class="btn" type="submit">{{ _("Filter") }}</button>
-    {% if qs %}<a class="btn" href="/settings/audit">{{ _("Reset") }}</a>{% endif %}
+    {% if qs %}<a class="btn" href="{{ base }}/settings/audit">{{ _("Reset") }}</a>{% endif %}
   </form>
   <p class="muted">{{ _("%(n)s record(s)", n=total) }}{% if pages > 1 %} · {{ _("page %(page)s of %(pages)s", page=page, pages=pages) }}{% endif %}</p>
   {% if rows %}
@@ -43,8 +43,8 @@
   </div>
   {% if pages > 1 %}
   <div class="pager">
-    {% if page > 1 %}<a class="btn sm" href="/settings/audit?{{ qs }}{% if qs %}&amp;{% endif %}page={{ page - 1 }}">{{ _("← Newer") }}</a>{% endif %}
-    {% if page < pages %}<a class="btn sm" href="/settings/audit?{{ qs }}{% if qs %}&amp;{% endif %}page={{ page + 1 }}">{{ _("Older →") }}</a>{% endif %}
+    {% if page > 1 %}<a class="btn sm" href="{{ base }}/settings/audit?{{ qs }}{% if qs %}&amp;{% endif %}page={{ page - 1 }}">{{ _("← Newer") }}</a>{% endif %}
+    {% if page < pages %}<a class="btn sm" href="{{ base }}/settings/audit?{{ qs }}{% if qs %}&amp;{% endif %}page={{ page + 1 }}">{{ _("Older →") }}</a>{% endif %}
   </div>
   {% endif %}
   {% else %}

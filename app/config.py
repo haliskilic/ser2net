@@ -25,6 +25,7 @@ import secrets
 import tempfile
 import time
 import unicodedata
+import urllib.parse
 import uuid
 from dataclasses import dataclass, field, asdict
 from typing import Any, Optional
@@ -783,15 +784,90 @@ class AdminUI:
     # 0 sends max-age=0, which turns that off and makes browsers forget it. Settings ->
     # Admin TLS.
     hsts_max_age: int = HSTS_MAX_AGE_DEFAULT
-    # Behind a reverse proxy (Settings -> Reverse proxy; app/web/proxy.py). trusted_proxies:
-    # the addresses / networks whose X-Forwarded-For and X-Forwarded-Proto are believed;
-    # none by default. proxy_hsts: HSTS (hsts_max_age) also on HTTPS requests through a proxy.
+    # Behind a reverse proxy (Settings -> Reverse proxy; app/web/proxy.py). public_url: the
+    # address users open, such as https://ser2net.example.com, or with a path the UI is then
+    # also served under (https://gw.example.com/ser2net); '' = none. trusted_proxies: the
+    # addresses / networks whose X-Forwarded-For and X-Forwarded-Proto are believed; none by
+    # default. proxy_hsts: HSTS (hsts_max_age) also on HTTPS requests through a proxy.
+    public_url: str = ""
     trusted_proxies: list[str] = field(default_factory=list)
     proxy_hsts: bool = False
 
     @property
     def tls_enabled(self) -> bool:
         return bool(self.tls_cert and self.tls_key)
+
+
+# The first path segments of the UI's own pages: a public URL's path can't start with one,
+# or a page asked for without the path would be taken for one under it (app/web/proxy.py).
+RESERVED_PATHS = frozenset({"api", "auth", "favicon.ico", "healthz", "lang", "login", "logout",
+                            "metrics", "settings", "setup", "static"})
+_URL_PATH_SEGMENT = re.compile(r"[A-Za-z0-9._~-]+")
+_HOST_NAME = re.compile(r"(?!-)[a-z0-9_-]{1,63}(?<!-)(\.(?!-)[a-z0-9_-]{1,63}(?<!-))*\.?")
+
+
+def _public_url_parts(value: str):
+    """(scheme, host as written in a URL, port or None, path without the trailing '/') of
+    a public URL, or the problem (a str) with it."""
+    text = value.strip()
+    bad = _("The public URL must be an http:// or https:// address with a host name, such "
+            "as https://ser2net.example.com.")
+    if any(c.isspace() or ord(c) < 32 or c == "\\" for c in text) or not text.isascii():
+        return bad
+    if "?" in text or "#" in text:
+        return _("The public URL can’t have a query (?…) or a fragment (#…).")
+    try:
+        parts = urllib.parse.urlsplit(text)
+        port = parts.port
+    except ValueError:
+        return _("The public URL’s port must be a number from 1 to 65535.")
+    scheme, host = parts.scheme.lower(), parts.hostname or ""
+    if scheme not in ("http", "https") or not host or "@" in parts.netloc:
+        return bad
+    if port == 0:
+        return _("The public URL’s port must be a number from 1 to 65535.")
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        if not _HOST_NAME.fullmatch(host):
+            return bad
+        written = host
+    else:
+        written = f"[{ip.compressed}]" if ip.version == 6 else ip.compressed
+    path = parts.path.rstrip("/")
+    segments = path.split("/")[1:] if path else []
+    if any(not _URL_PATH_SEGMENT.fullmatch(s) or s in (".", "..") for s in segments):
+        return _("The public URL’s path may only have letters, digits and . _ ~ - between "
+                 "its slashes, such as /ser2net.")
+    if segments and segments[0].lower() in RESERVED_PATHS:
+        return _("The public URL’s path can’t start with /{0}: that is a page of this UI.") \
+            .format(segments[0])
+    return scheme, written, port, path
+
+
+def public_url_problem(value: Any) -> str | None:
+    """Why `value` can't be admin_ui.public_url, or None when it can (also when blank): an
+    http:// or https:// address with a host name, optionally a port and a path of plain
+    segments that doesn't start like one of the UI's own pages (RESERVED_PATHS); no user
+    name, query or fragment."""
+    if not isinstance(value, str):
+        return _("The public URL must be an http:// or https:// address with a host name, "
+                 "such as https://ser2net.example.com.")
+    if not value.strip():
+        return None
+    parts = _public_url_parts(value)
+    return parts if isinstance(parts, str) else None
+
+
+def normalize_public_url(value: str) -> str:
+    """A usable public URL as it is kept: scheme and host in lower case, the scheme's own
+    port and a trailing '/' left out ('' for a blank or unusable one)."""
+    parts = _public_url_parts(value) if isinstance(value, str) and value.strip() else ""
+    if isinstance(parts, str):
+        return ""
+    scheme, host, port, path = parts
+    shown = "" if port is None or port == {"http": 80, "https": 443}[scheme] else f":{port}"
+    return f"{scheme}://{host}{shown}{path}"
 
 
 def proxy_entry_problem(entry: Any) -> str | None:
@@ -814,8 +890,9 @@ def split_proxy_entries(text: str) -> list[str]:
 
 
 def _normalize_proxy_settings(admin: "AdminUI", notes: list[str]) -> None:
-    """A hand-edited trusted_proxies or proxy_hsts that can't be used is left out, with a
-    load note, rather than refused: config.json must not keep the UI from starting."""
+    """A hand-edited public_url, trusted_proxies or proxy_hsts that can't be used is left
+    out, with a load note, rather than refused: config.json must not keep the UI from
+    starting."""
     value = admin.trusted_proxies
     entries = split_proxy_entries(value) if isinstance(value, str) else value
     if not isinstance(entries, list):
@@ -828,6 +905,13 @@ def _normalize_proxy_settings(admin: "AdminUI", notes: list[str]) -> None:
         notes.append(f"admin_ui.trusted_proxies: {dropped!r} left out (not IP addresses or "
                      "networks)")
     admin.trusted_proxies = kept
+    url = admin.public_url
+    if public_url_problem(url) is not None:
+        notes.append(f"admin_ui.public_url {url!r} is not usable ({public_url_problem(url)}); "
+                     "none is used")
+        admin.public_url = ""
+    else:
+        admin.public_url = normalize_public_url(url)
     if not isinstance(admin.proxy_hsts, bool):
         notes.append(f"admin_ui.proxy_hsts {admin.proxy_hsts!r} is not true or false; using false")
         admin.proxy_hsts = False

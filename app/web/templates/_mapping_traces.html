@@ -1,7 +1,7 @@
 <div class="form-head">
   <h3>{{ _("Traces — %(name)s", name=mapping_name|softbreak) }}</h3>
   <div class="actions">
-    <button class="btn sm" hx-get="/api/mappings/{{ mid }}/traces" hx-target="#form-panel" hx-swap="innerHTML">{{ _("↻ Refresh") }}</button>
+    <button class="btn sm" hx-get="{{ base }}/api/mappings/{{ mid }}/traces" hx-target="#form-panel" hx-swap="innerHTML">{{ _("↻ Refresh") }}</button>
     <button type="button" class="btn sm" data-cancel>{{ _("Close") }}</button>
   </div>
 </div>
@@ -20,7 +20,7 @@
       <td class="mono">{{ f.name|softbreak }}</td>
       <td class="mono nowrap">{{ f.size_text }}</td>
       <td class="mono nowrap">{{ f.time }}</td>
-      <td class="col-actions"><a class="btn sm" href="/api/mappings/{{ mid }}/traces/{{ f.name|urlencode }}">{{ _("⤓ Download") }}</a></td>
+      <td class="col-actions"><a class="btn sm" href="{{ base }}/api/mappings/{{ mid }}/traces/{{ f.name|urlencode }}">{{ _("⤓ Download") }}</a></td>
     </tr>
   {% endfor %}
   </tbody>

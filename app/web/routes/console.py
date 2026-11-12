@@ -12,7 +12,7 @@ from starlette.routing import WebSocketRoute
 
 from ...engine import netguard
 from ...engine.bridge import TO_DEVICE
-from .. import auth
+from .. import auth, proxy
 from .common import Ctx, client_ip, console_interactive, sees_to_device
 
 CONSOLE_ACCESS_RECHECK_S = 2.0  # how often an open console re-checks its access
@@ -30,9 +30,11 @@ def routes(ctx: Ctx) -> list:
         does NOT run for the WebSocket scope, so authenticate here; a WebSocket that a
         page of another site opens is rejected (CSWSH guard), by the same rule as the
         UI's forms (auth.cross_site): a reverse proxy that passes the browser's address
-        as Host, X-Forwarded-Host or Forwarded host= works for both."""
-        token = websocket.cookies.get(auth.SESSION_COOKIE)
-        if why := auth.cross_site(websocket.headers):
+        as Host, X-Forwarded-Host or Forwarded host= works for both, and so does a page of
+        the public URL (Settings -> Reverse proxy)."""
+        token = auth.cookie(websocket, auth.SESSION_COOKIE)
+        if why := auth.cross_site(websocket.headers,
+                                  also=proxy.published_origins(state.config.admin_ui)):
             cross_site_note(f"refused WebSocket {websocket.url.path} from "
                             f"{client_ip(websocket)}: opened by a page of another site "
                             f"({why}); {auth.PROXY_HINT}")

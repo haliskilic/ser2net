@@ -64,18 +64,21 @@ def _loopback(host: str) -> bool:
 CALLBACK_PATH = "/auth/oidc/callback"
 
 
-def redirect_uri(settings, request) -> str:
+def redirect_uri(settings, request, public_url: str = "") -> str:
     """The redirect URI a sign-in sends to the identity provider, which must have it
-    registered: oidc.redirect_uri when set, else made from the request as it has been
-    since v2.3 - X-Forwarded-Proto or the request's scheme, X-Forwarded-Host or Host,
-    and CALLBACK_PATH. Forwarded and X-Forwarded-Port are not read: a working install
-    with a blank redirect_uri has this value registered, and reading them would change it.
-    Of a list that proxies in a row made (a, b), the first value counts: the one the
-    browser used (the whole list made no usable address). Settings shows the value for its
-    own request (redirect_uri_is_plain_http)."""
+    registered: oidc.redirect_uri when set; else, with a public URL (Settings -> Reverse
+    proxy), that URL and CALLBACK_PATH; else made from the request as it has been since
+    v2.3 - X-Forwarded-Proto or the request's scheme, X-Forwarded-Host or Host, and
+    CALLBACK_PATH. Forwarded and X-Forwarded-Port are not read: a working install with a
+    blank redirect_uri has this value registered, and reading them would change it. Of a
+    list that proxies in a row made (a, b), the first value counts: the one the browser
+    used (the whole list made no usable address). Settings shows the value for its own
+    request (redirect_uri_is_plain_http)."""
     configured = settings.redirect_uri.strip()
     if configured:
         return configured
+    if public_url:
+        return public_url + CALLBACK_PATH
     scheme = _first(request.headers.get("x-forwarded-proto")) or request.url.scheme
     host = (_first(request.headers.get("x-forwarded-host")) or request.headers.get("host")
             or request.url.netloc)

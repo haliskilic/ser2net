@@ -1,8 +1,8 @@
-<div hx-get="/api/mappings/{{ mid }}/log" hx-trigger="every 5s" hx-target="#form-panel" hx-swap="innerHTML">
+<div hx-get="{{ base }}/api/mappings/{{ mid }}/log" hx-trigger="every 5s" hx-target="#form-panel" hx-swap="innerHTML">
   <div class="form-head">
     <h3>{{ _("Log — %(name)s", name=mapping_name|softbreak) }}</h3>
     <div class="actions">
-      <button class="btn sm" hx-get="/api/mappings/{{ mid }}/log" hx-target="#form-panel" hx-swap="innerHTML">{{ _("↻ Refresh") }}</button>
+      <button class="btn sm" hx-get="{{ base }}/api/mappings/{{ mid }}/log" hx-target="#form-panel" hx-swap="innerHTML">{{ _("↻ Refresh") }}</button>
       <button type="button" class="btn sm" data-cancel>{{ _("Close") }}</button>
     </div>
   </div>

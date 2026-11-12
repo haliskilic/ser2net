@@ -26,6 +26,7 @@ from typing import Optional
 
 from . import __version__, i18n
 from .i18n import _
+from .web import proxy
 
 POLL_S = 2.0
 MAX_PER_MINUTE = 20
@@ -85,15 +86,16 @@ def snapshot(statuses: dict) -> dict:
             for mid, st in statuses.items()}
 
 
-def message(event: str, mapping: str, detail: str) -> tuple[str, str]:
-    """(title, text) of a notification."""
+def message(event: str, mapping: str, detail: str, url: str = "") -> tuple[str, str]:
+    """(title, text) of a notification; `url`: the web UI's public URL (a last line)."""
     host = socket.gethostname()
     head = f"ser2net {host}: {mapping + ' — ' if mapping else ''}{title(event)}"
-    return head, head + (f"\n{detail}" if detail else "")
+    return head, head + (f"\n{detail}" if detail else "") + (f"\n{url}" if url else "")
 
 
-def webhook_body(fmt: str, event: str, mapping: str, detail: str, chat_id: str = "") -> dict:
-    head, text = message(event, mapping, detail)
+def webhook_body(fmt: str, event: str, mapping: str, detail: str, chat_id: str = "",
+                 url: str = "") -> dict:
+    head, text = message(event, mapping, detail, url)
     if fmt == "slack":
         return {"text": text}
     if fmt == "discord":
@@ -106,15 +108,19 @@ def webhook_body(fmt: str, event: str, mapping: str, detail: str, chat_id: str =
             "content": {"type": "AdaptiveCard", "version": "1.4",
                         "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
                         "body": [{"type": "TextBlock", "text": head, "weight": "Bolder", "wrap": True},
-                                 {"type": "TextBlock", "text": detail or " ", "wrap": True}]}}]}
-    return {"event": event, "mapping": mapping, "detail": detail, "text": text,
+                                 {"type": "TextBlock", "text": detail or " ", "wrap": True}]
+                        + ([{"type": "TextBlock", "text": url, "wrap": True}] if url else [])}}]}
+    body = {"event": event, "mapping": mapping, "detail": detail, "text": text,
             "node": socket.gethostname(), "time": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
             "version": __version__}
+    if url:  # only with a public URL (Settings -> Reverse proxy)
+        body["url"] = url
+    return body
 
 
-def send_webhook(settings, event: str, mapping: str, detail: str) -> None:
+def send_webhook(settings, event: str, mapping: str, detail: str, url: str = "") -> None:
     body = json.dumps(webhook_body(settings.webhook_format, event, mapping, detail,
-                                   str(settings.telegram_chat_id))).encode()
+                                   str(settings.telegram_chat_id), url)).encode()
     req = urllib.request.Request(settings.webhook_url.strip(), data=body, method="POST",
                                  headers={"Content-Type": "application/json",
                                           "User-Agent": f"ser2net/{__version__}"})
@@ -123,8 +129,8 @@ def send_webhook(settings, event: str, mapping: str, detail: str) -> None:
             raise OSError(f"webhook answered HTTP {r.status}")
 
 
-def send_email(settings, event: str, mapping: str, detail: str) -> None:
-    head, text = message(event, mapping, detail)
+def send_email(settings, event: str, mapping: str, detail: str, url: str = "") -> None:
+    head, text = message(event, mapping, detail, url)
     msg = EmailMessage()
     msg["Subject"] = head
     msg["From"] = settings.email_from.strip() or f"ser2net@{socket.gethostname()}"
@@ -234,7 +240,8 @@ class Notifier:
                       settings=None) -> list[str]:
         """Send to every configured channel now; returns the errors (empty = all sent).
         Messages are in the UI's default language (Settings -> Web UI access), or
-        English when that is "the browser's"."""
+        English when that is "the browser's", and end with the UI's public URL when one is
+        set (Settings -> Reverse proxy)."""
         s = settings or self.settings
         token = i18n.set_language(self.state.config.admin_ui.language)
         try:
@@ -244,14 +251,15 @@ class Notifier:
 
     async def _deliver(self, s, event: str, mapping: str, detail: str) -> list[str]:
         errors = []
+        url = proxy.public_url(self.state.config.admin_ui)
         if s.webhook_url.strip():
             try:
-                await asyncio.to_thread(send_webhook, s, event, mapping, detail)
+                await asyncio.to_thread(send_webhook, s, event, mapping, detail, url)
             except Exception as e:
                 errors.append(f"webhook ({s.webhook_format}) failed: {_reason(e)}")
         if s.recipients:
             try:
-                await asyncio.to_thread(send_email, s, event, mapping, detail)
+                await asyncio.to_thread(send_email, s, event, mapping, detail, url)
             except Exception as e:
                 errors.append(f"e-mail via {s.smtp_host}:{s.smtp_port} failed: {_reason(e)}")
         return errors

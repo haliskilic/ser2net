@@ -17,7 +17,7 @@ from starlette.applications import Starlette
 from starlette.middleware import Middleware
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.middleware.body_limit import RequestBodyLimitMiddleware
-from starlette.responses import JSONResponse, PlainTextResponse, RedirectResponse
+from starlette.responses import JSONResponse, PlainTextResponse
 from starlette.templating import Jinja2Templates
 
 from .. import i18n
@@ -58,7 +58,7 @@ QUIET_PATHS = {"/api/status", "/api/cluster/status", "/api/cluster/local",
 
 
 def _wants_json(request) -> bool:
-    return request.url.path.startswith("/api")
+    return proxy.route_path(request).startswith("/api")
 
 
 class GuardMiddleware(BaseHTTPMiddleware):
@@ -76,16 +76,18 @@ class GuardMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request, call_next):
         state = request.app.state.appstate
         cfg = state.config
-        path = request.url.path
+        # the path the UI's routes see: without the public URL's path when the request came
+        # under it (proxy.ProxyMiddleware), so every check below holds there too
+        path = proxy.route_path(request)
 
         # JSON REST API (/api/v1): bearer-token auth, no cookie session, no CSRF — and
         # English, like the logs (only the web UI is translated).
         if path.startswith("/api/v1"):
-            response = await self._dispatch_api(request, call_next, cfg)
+            response = await self._dispatch_api(request, call_next, cfg, path)
             self._security_headers(response, cfg, path, request)
             return response
 
-        lang = i18n.negotiate(request.cookies.get(i18n.COOKIE),
+        lang = i18n.negotiate(auth.cookie(request, i18n.COOKIE),
                               request.headers.get("accept-language"), cfg.admin_ui.language)
         request.state.lang = lang
         token = i18n.set_language(lang)
@@ -106,7 +108,7 @@ class GuardMiddleware(BaseHTTPMiddleware):
         # alone doesn't prove the request came from this UI. Cluster peers call from their
         # server, not a browser, and are checked by the key.
         if request.method not in auth.SAFE_METHODS and path not in _CLUSTER_PEER_PATHS:
-            if why := auth.cross_site(request.headers):
+            if why := auth.cross_site(request.headers, also=proxy.published_origins(cfg.admin_ui)):
                 ip = request.client.host if request.client else "?"
                 self._cross_site_note(state)(f"refused {request.method} {path} from {ip}: "
                                              f"sent by a page of another site ({why}); "
@@ -119,7 +121,7 @@ class GuardMiddleware(BaseHTTPMiddleware):
         # the CSRF token of this browser: its cookie's, or a new one. A handler may issue a
         # new one (Ctx.new_csrf_token: a sign-in, a sign-out) or renew the cookie's lifetime
         # with a session's (Ctx.set_session); the cookie is set below.
-        csrf_cookie = request.cookies.get(auth.CSRF_COOKIE)
+        csrf_cookie = auth.cookie(request, auth.CSRF_COOKIE)
         request.state.csrf_token = csrf_cookie or auth.new_csrf_token()
 
         # CSRF: API/HTMX endpoints must carry a matching X-CSRF-Token header.
@@ -137,18 +139,18 @@ class GuardMiddleware(BaseHTTPMiddleware):
         # container isn't reported unhealthy while it waits for its admin password)
         if not cfg.password_set:
             if path not in ("/setup", "/healthz") and not path.startswith(("/static", "/lang/")):
-                return RedirectResponse("/setup", status_code=303)
+                return proxy.redirect(request, "/setup")
         else:
             # password is set: /setup is no longer available
             if path == "/setup":
-                return RedirectResponse("/", status_code=303)
+                return proxy.redirect(request, "/")
             if not is_public:
-                token = request.cookies.get(auth.SESSION_COOKIE)
+                token = auth.cookie(request, auth.SESSION_COOKIE)
                 user = auth.request_user(cfg, token, request.headers, state.revoked_sessions)
                 if user is None:
                     if _wants_json(request):
                         return JSONResponse({"error": "unauthorized"}, status_code=401)
-                    return RedirectResponse("/login", status_code=303)
+                    return proxy.redirect(request, "/login")
                 request.state.user = user  # available to handlers for role checks
 
         response = await call_next(request)
@@ -170,9 +172,8 @@ class GuardMiddleware(BaseHTTPMiddleware):
                             max_age=cfg.session_timeout_s)
         return response
 
-    async def _dispatch_api(self, request, call_next, cfg):
+    async def _dispatch_api(self, request, call_next, cfg, path):
         """Gate for the JSON REST API: bearer-token auth, no cookies/CSRF, JSON errors."""
-        path = request.url.path
         if path not in ("/api/v1/health", "/api/v1/openapi.json"):
             if not cfg.password_set:
                 return JSONResponse({"error": "setup_incomplete"}, status_code=503)
@@ -222,7 +223,10 @@ class GuardMiddleware(BaseHTTPMiddleware):
 
 def make_templates() -> Jinja2Templates:
     """The Jinja environment every page is rendered with (globals + filters)."""
-    templates = Jinja2Templates(directory=TEMPLATES_DIR)
+    # base: the path prefix of the request, which its links go under (app/web/proxy.py);
+    # base_path(request) / route_path(request) for macros imported without the context
+    templates = Jinja2Templates(directory=TEMPLATES_DIR, context_processors=[
+        lambda request: {"base": proxy.base(request)}])
 
     # template globals used across pages
     from ..config import (
@@ -244,6 +248,7 @@ def make_templates() -> Jinja2Templates:
     templates.env.add_extension("jinja2.ext.i18n")
     templates.env.install_gettext_callables(i18n.gettext, i18n.ngettext, newstyle=True)  # type: ignore[attr-defined]
     templates.env.globals["languages"] = i18n.LANGUAGES
+    templates.env.globals.update(base_path=proxy.base, route_path=proxy.route_path)
     return templates
 
 
@@ -253,8 +258,8 @@ def build_app(state) -> Starlette:
     # The body limit holds for every route, and sits inside GuardMiddleware: in front of
     # it (Starlette(max_body_size=...)), a body over the limit would reach the handler as
     # an exception group from BaseHTTPMiddleware's receive, a 500 instead of the 413.
-    # ProxyMiddleware goes first: the client address and the scheme of a request through a
-    # reverse proxy are what every check after it sees
+    # ProxyMiddleware goes first: the client address, the scheme and the path prefix of a
+    # request through a reverse proxy are what every check after it sees
     middleware = [Middleware(proxy.ProxyMiddleware, state=state),
                   Middleware(GuardMiddleware),
                   Middleware(RequestBodyLimitMiddleware, max_body_size=MAX_BODY_BYTES)]
