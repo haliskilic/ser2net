@@ -33,6 +33,10 @@ updates:
     ignore:
       - dependency-name: "*"
         update-types: ["version-update:semver-major"]
+      # the xterm.js addons are 0.x: a minor release goes with an xterm.js major (fit
+      # 0.11 is for xterm.js 6, which reads options it doesn't have), so it comes with it
+      - dependency-name: "@xterm/addon-*"
+        update-types: ["version-update:semver-minor"]
     commit-message:
       prefix: "deps"
   - package-ecosystem: github-actions
