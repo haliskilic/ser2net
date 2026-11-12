@@ -16,6 +16,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
+from _server import server_log, show_log_on_failure
 from _socat import pty_pair_sync
 
 ROOT = os.path.join(os.path.dirname(__file__), "..")
@@ -75,11 +76,13 @@ def main():
     with open(cfg_path, "w") as fh:
         json.dump({"admin_ui": {"bind_ip": "127.0.0.1", "port": UI_PORT}}, fh)
 
+    out = server_log(tmp)  # the server's output: a file, never an unread pipe
     server = subprocess.Popen(
         [sys.executable, "ser2net.py", "--no-bootstrap", "--config", cfg_path],
         cwd=ROOT, stdin=subprocess.DEVNULL,
-        stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+        stdout=out, stderr=subprocess.STDOUT,
     )
+    out.close()  # (the server has its own copy)
     socat = None
     try:
         assert wait_port("127.0.0.1", UI_PORT), "server did not start"
@@ -167,6 +170,7 @@ def main():
             server.wait(timeout=5)
         except subprocess.TimeoutExpired:
             server.kill()
+        show_log_on_failure(tmp)
         shutil.rmtree(tmp, ignore_errors=True)
 
 
