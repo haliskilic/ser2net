@@ -205,7 +205,15 @@ everything from a **password-protected web UI** — no CLI or hand-edited config
   60 s idle · 10 s interval · 3 probes) it is dropped within ~90 s and its slot freed —
   also while the device keeps sending (Linux `TCP_USER_TIMEOUT`). Plus a **connect
   timeout** for connect-out (default 10 s), an **idle timeout** and a **max connection
-  time** (e.g. 24 h); every disconnect is logged with its reason.
+  time** (e.g. 24 h); every disconnect is logged with its reason. By default TCP clients
+  stay connected while the serial device is unavailable (unplugged, reconnecting) and new
+  ones are taken; what they send meanwhile is dropped and counted (`bytes_dropped`). With
+  **Disconnect clients while the serial device is unavailable**
+  (`network.disconnect_without_device`, raw / telnet / rfc2217, off by default) they are
+  disconnected when the port goes away and new ones are turned away (after the short wait
+  an RFC 2217 client gets, `options.rfc2217_net_timeout_s`) until it is back, so a poller,
+  a SCADA master or a virtual-COM redirector sees the outage; a connect-out mapping then
+  connects only while its port is open.
 - **Observability:** per-mapping traffic trace (hex/timestamp, rotated files, downloadable
   from the UI), Prometheus `/metrics`, an audit log page, live log viewer, an in-browser
   **serial console** (xterm.js over WebSocket — watch traffic or type to the device) and a

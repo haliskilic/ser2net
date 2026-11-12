@@ -162,6 +162,8 @@ _OPTIONAL_FORM_FIELDS = {
     "opt_rfc2217_restore_on_disconnect_shown": ("options", ("rfc2217_restore_on_disconnect",)),
     # shown for RFC 2217 mappings only
     "opt_rfc2217_signature": ("options", ("rfc2217_signature",)),
+    # a checkbox (absent when unticked) shown for TCP raw / telnet / RFC 2217 mappings only
+    "network_disconnect_without_device_shown": ("network", ("disconnect_without_device",)),
     # UDP only: where the device's output goes
     "network_udp_peer_timeout_s": ("network", ("udp_peer_host", "udp_peer_port",
                                                "udp_peer_timeout_s")),
@@ -214,6 +216,8 @@ def _build_mapping_dict(form, strict: bool) -> dict:
         )
     if "network_dual_stack_shown" in form:
         network["dual_stack"] = both
+    if "network_disconnect_without_device_shown" in form:
+        network["disconnect_without_device"] = _checkbox(form, "network_disconnect_without_device")
     for key in ("tls_ca", "tls_fingerprint", "tls_client_ca"):
         if f"network_{key}" in form:
             network[key] = form.get(f"network_{key}", "").strip()

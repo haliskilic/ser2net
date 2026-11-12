@@ -490,9 +490,11 @@ class _ClientConn:
         m = self.runner.mapping
         # Create the protocol session. RFC2217 needs the live serial instance.
         ser = self.runner.serial_instance
-        if m.network.protocol == "rfc2217" and ser is None:
-            # it drives the port, so it starts only while the port is open (a connect-out
-            # link can come up just after the port went away)
+        if ((m.network.protocol == "rfc2217" and ser is None)
+                or (self.runner.drops_clients and not self.runner._link.is_open)):
+            # an RFC 2217 session drives the port, so it starts only while the port is open,
+            # as does any session with disconnect_without_device (a connect-out link can
+            # come up just after the port went away)
             self._closing = True
             self.close_reason = "the serial port is not open"
             await _close_client(self.writer)
@@ -684,6 +686,7 @@ class MappingRunner:
         self._drop_log = _LogEvery(self._log)  # data for the device that was not written
         self._break_lock = asyncio.Lock()      # one serial BREAK at a time
         self._break_log = _LogEvery(self._log)
+        self._refused_log = _LogEvery(self._log, 10.0)  # clients turned away: no port
         co = mapping.options.closeon
         self._closeon = co.encode("utf-8", "replace") if co else b""
         self._closeon_tail = b""  # rolling carry-over so matches across reads aren't missed
@@ -692,6 +695,18 @@ class MappingRunner:
     def serial_instance(self):
         """The open pyserial object (None while the port is closed)."""
         return self._link.serial
+
+    @property
+    def needs_port(self) -> bool:
+        """A client session runs only while the serial port is open: RFC 2217 (it drives
+        the port), and any TCP mapping with disconnect_without_device."""
+        return self.mapping.network.protocol == "rfc2217" or self.drops_clients
+
+    @property
+    def drops_clients(self) -> bool:
+        """disconnect_without_device, on a TCP mapping (true itself, not text)."""
+        net = self.mapping.network
+        return net.disconnect_without_device is True and net.mode in ("server", "client")
 
     def wake_serial(self) -> None:
         """A serial device was plugged in (PortWatcher): a port waiting to be opened again
@@ -897,10 +912,17 @@ class MappingRunner:
         return True
 
     def _serial_changed(self, serial) -> None:
-        """SerialLink: the port was reopened (``serial``) or closed (None). An RFC 2217
-        session drives the port itself, so the connected client's session follows it: the
-        client stays connected through a reconnect and keeps its settings."""
-        if self.mapping.network.protocol == "rfc2217":
+        """SerialLink: the port was reopened (``serial``) or closed (None). With
+        disconnect_without_device a closed port disconnects every client. Otherwise an RFC
+        2217 session drives the port itself, so the connected client's session follows it:
+        the client stays connected through a reconnect and keeps its settings."""
+        if serial is None and self.drops_clients and not self._stop.is_set():
+            if self._clients:
+                self._log(f"serial port closed: disconnecting {len(self._clients)} "
+                          "client(s) (disconnect_without_device)")
+            for c in list(self._clients):
+                c.kick("the serial port is not open")
+        elif self.mapping.network.protocol == "rfc2217":
             for c in list(self._clients):
                 c.serial_changed(serial)
 
@@ -992,18 +1014,22 @@ class MappingRunner:
     async def _on_client(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         peer_ip, peer_port = netguard.peer_address(writer)
         peer_label = netguard.client_label(peer_ip, peer_port)
-        net = self.mapping.network
 
-        # An RFC2217 session needs the open serial port: wait briefly for it (an allowed
-        # client) BEFORE admission, so a client waiting here holds no slot and nobody is
-        # kicked for a newcomer that is then turned away.
+        # An RFC2217 session (and any, with disconnect_without_device) needs the open serial
+        # port: wait briefly for it (an allowed client) BEFORE admission, so a client
+        # waiting here holds no slot and nobody is kicked for a newcomer that is then
+        # turned away.
         ready = self._link.ready
-        if net.protocol == "rfc2217" and not ready.is_set() and self._access.allowed(peer_ip):
+        if self.needs_port and not ready.is_set() and self._access.allowed(peer_ip):
             with contextlib.suppress(asyncio.TimeoutError):
                 await asyncio.wait_for(ready.wait(),
                                        timeout=self.mapping.options.rfc2217_net_timeout_s)
             if not ready.is_set():
-                self._log(f"rejected {peer_label}: serial not ready for RFC2217")
+                if self.drops_clients:  # (a poller retrying all the time: rate-limited)
+                    self._refused_log(f"rejected {peer_label}: the serial port is not open "
+                                      "(disconnect_without_device)")
+                else:
+                    self._log(f"rejected {peer_label}: serial not ready for RFC2217")
                 writer.close()
                 return
 
@@ -1101,8 +1127,9 @@ class MappingRunner:
         backoff = Backoff()
         failures = FailureLog(self._log, "connect-out failed")
         while not self._stop.is_set():
-            # an RFC 2217 session drives the serial port: connect out only while it is open
-            if net.protocol == "rfc2217" and not await self._serial_open():
+            # an RFC 2217 session drives the serial port (disconnect_without_device: no
+            # session without it): connect out only while it is open
+            if self.needs_port and not await self._serial_open():
                 break
             st = self.status
             try:

@@ -192,6 +192,10 @@
     </div>
 
     <div data-show-when="network_mode=server,client">
+      <div data-show-when="network_protocol=raw,telnet,rfc2217">
+        <input type="hidden" name="network_disconnect_without_device_shown" value="1">
+        <label class="chk"><input type="checkbox" name="network_disconnect_without_device" {% if mapping.network.disconnect_without_device %}checked{% endif %}> {{ _("Disconnect clients while the serial device is unavailable") }} <span class="muted">({{ _("and refuse new ones until it is back; connect-out connects only while the port is open. Off: clients stay connected and what they send meanwhile is dropped") }})</span></label>
+      </div>
       <label class="chk"><input type="checkbox" name="network_tcp_keepalive" {% if mapping.network.tcp_keepalive %}checked{% endif %}> TCP keepalive <span class="muted">({{ _("detect a peer that vanished without closing — power loss, cable pull, VPN/NAT drop — and free its slot after ≈ idle + interval × count") }})</span></label>
       <div class="grid3">
         <label>{{ _("Keepalive idle (s)") }} <input type="number" name="network_keepalive_idle_s" min="1" max="32767" value="{{ mapping.network.keepalive_idle_s }}"></label>

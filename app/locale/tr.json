@@ -942,5 +942,7 @@
   "{0} is kept in the mapping but has no effect here: the serial port stays open between connections": "{0} eşlemede saklanıyor ama burada etkisi yok: seri port bağlantılar arasında açık kalıyor",
   "A serial BREAK can't be sent on this mapping.": "Bu eşlemede seri BREAK gönderilemez.",
   "The mapping is read-only: no serial BREAK is sent.": "Eşleme salt okunur: seri BREAK gönderilmez.",
-  "No serial BREAK was sent: the serial port is not open, or it can't send one (see the mapping's log).": "Seri BREAK gönderilmedi: seri port açık değil ya da BREAK gönderemiyor (eşlemenin log'una bakın)."
+  "No serial BREAK was sent: the serial port is not open, or it can't send one (see the mapping's log).": "Seri BREAK gönderilmedi: seri port açık değil ya da BREAK gönderemiyor (eşlemenin log'una bakın).",
+  "Disconnect clients while the serial device is unavailable": "Seri cihaz yokken istemcilerin bağlantısını kes",
+  "and refuse new ones until it is back; connect-out connects only while the port is open. Off: clients stay connected and what they send meanwhile is dropped": "cihaz geri gelene kadar yenilerini de reddet; dışarı bağlanan eşleme yalnızca port açıkken bağlanır. Kapalıyken istemciler bağlı kalır, bu arada gönderdikleri atılır"
 }

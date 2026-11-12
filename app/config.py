@@ -551,6 +551,14 @@ class NetworkSettings:
     udp_peer_timeout_s: int = 0
     max_connections: int = 1
     kick_old_user: bool = False
+    # TCP (raw / telnet / rfc2217, server and connect-out): while the serial port is not
+    # open (unplugged, reconnecting) clients are disconnected and new ones refused, after
+    # the short wait for the port that an RFC 2217 client gets (options.
+    # rfc2217_net_timeout_s); a connect-out mapping connects only while the port is open.
+    # Off (default): clients stay connected and are taken, and what they send for the
+    # device meanwhile is dropped (counted in bytes_dropped); RFC 2217 sessions follow a
+    # reopened port.
+    disconnect_without_device: bool = False
     allowed_client_ips: list[str] = field(default_factory=list)
     # High-priority clients: when the port is at capacity, a connection from one of
     # these IPs/CIDRs is admitted by kicking an existing client (oldest non-priority
