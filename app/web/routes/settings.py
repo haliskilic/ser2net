@@ -9,6 +9,7 @@ import io
 import json
 import os
 import secrets
+import shutil
 import time
 import types
 import unicodedata
@@ -217,6 +218,9 @@ def routes(ctx: Ctx) -> list:
         os.makedirs(tdir, exist_ok=True)
         cert, key = os.path.join(tdir, "cert.pem"), os.path.join(tdir, "key.pem")
         try:
+            # the ones generated before (the configured certificate, it may be) stay as
+            # *.bak: backups of config.json don't cover data/tls
+            kept = await asyncio.to_thread(_keep_previous, (cert, key))
             await asyncio.to_thread(selfsigned.generate, cert, key)
         except (selfsigned.CertError, OSError) as e:
             return await settings_get(request, error=_("Could not generate a certificate: {0}").format(e))
@@ -225,8 +229,11 @@ def routes(ctx: Ctx) -> list:
             state.config.admin_ui.tls_key = key
             await state.asave()
         ctx.audit(request, "admin_tls_generate", "")
-        return await settings_get(request, ok=_("Self-signed certificate generated. Restart to "
-                                                "apply TLS."))
+        ok = _("Self-signed certificate generated. Restart to apply TLS.")
+        if kept:
+            ok += " " + _("The previous certificate and key are kept as {0}.").format(
+                ", ".join(os.path.basename(p) for p in kept))
+        return await settings_get(request, ok=ok)
 
     # ---------------- web-UI access (login requirement) ----------------
     async def settings_access_post(request):
@@ -1169,6 +1176,17 @@ def routes(ctx: Ctx) -> list:
         Route("/settings/backups/restore-mappings", backup_restore_mappings, methods=["POST"]),
         Route("/settings/backups/{name}", backup_download),
     ]
+
+
+def _keep_previous(paths) -> list[str]:
+    """Copy each of `paths` that exists to <path>.bak (permissions kept: a private key
+    stays private); the copies made."""
+    kept = []
+    for path in paths:
+        if os.path.isfile(path):
+            shutil.copy2(path, path + ".bak")
+            kept.append(path + ".bak")
+    return kept
 
 
 def _key_hint(key: str) -> str:

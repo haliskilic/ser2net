@@ -1,5 +1,7 @@
 """`ser2net --healthcheck` (the Docker HEALTHCHECK): 0 while the UI answers, 1 when not —
-also with proxy variables set (for webhooks / SSO): the probe of this host goes direct.
+also with proxy variables set (for webhooks / SSO): the probe of this host goes direct;
+and while a TLS certificate set in Settings waits for the next start (the instance still
+answers plain http).
 
 Run: python3 tests/test_healthcheck.py
 """
@@ -53,6 +55,16 @@ def main():
                                          "HTTPS_PROXY": dead, "ALL_PROXY": dead})
         assert code == 0, f"the probe must ignore proxy variables: {out}"
         print("running instance with HTTP(S)_PROXY/ALL_PROXY set: exit 0 (direct)  OK")
+        # Settings -> Generate a self-signed certificate (or Save TLS) writes the paths to
+        # config.json at once, but the instance runs plain http until its next start
+        with open(os.path.join(srv.data, "config.json"), encoding="utf-8") as fh:
+            saved = json.load(fh)
+        saved["admin_ui"].update(tls_cert="/data/tls/cert.pem", tls_key="/data/tls/key.pem")
+        with open(os.path.join(srv.data, "config.json"), "w", encoding="utf-8") as fh:
+            json.dump(saved, fh)
+        code, out = run_check(srv.data, {"SER2NET_PORT": str(srv.port)})
+        assert code == 0 and out.startswith("ok: http://127.0.0.1:") and "next start" in out, (code, out)
+        print(f"TLS configured but not in effect before the restart: exit 0 ({out})  OK")
         data_dir = srv.data
         port = srv.port
         srv.stop()
