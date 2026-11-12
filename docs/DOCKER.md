@@ -98,7 +98,14 @@ docker run -d --name ser2net --restart unless-stopped \
   works. Two things change: `SER2NET_BIND_IP` is then an address of the host itself
   (`0.0.0.0` = all its interfaces; set the LAN address to keep the UI off the others),
   and the unprivileged process can't open ports below 1024 there (Modbus TCP's 502): use
-  1024 or above, or the default network with `-p 502:502`, where Docker allows them.
+  1024 or above, the default network with `-p 502:502`, where Docker allows them, or
+  `-e SER2NET_LOW_PORTS=1` (compose: under `environment:`). That keeps the
+  `CAP_NET_BIND_SERVICE` capability for the server, and only it, so whoever may edit
+  mappings can then open any free port below 1024 of the host. It needs the capability in
+  the container (Docker's default set has it); with `--cap-drop ALL` or
+  `--cap-drop NET_BIND_SERVICE` the start says it can't keep it. Without either, a mapping
+  on such a port fails with a hint on the dashboard, and an admin UI port below 1024 is
+  named in a start-up warning.
 - **LAN cluster.** Discovery (UDP broadcast, port 41750) doesn't cross Docker's default
   network. Use the host network, or set Settings → LAN cluster → Advertise IP to the
   host's LAN address and list the other nodes under Manual peers (on every node);
@@ -146,7 +153,9 @@ docker run -d --name ser2net --restart unless-stopped \
 - **Runs as a non-root user.** The process runs as `ser2net` (uid/gid 10001), never
   as root. The entrypoint starts as root only to choose the account: a `/data` owned by
   root — a volume written by an image before v2.8, which ran as root — is handed to
-  `ser2net` once (logged), so **upgrading needs no manual step**. A bind-mounted folder
+  `ser2net` once (logged), so **upgrading needs no manual step** — except on the host
+  network with a port below 1024, which root could open: add `SER2NET_LOW_PORTS=1`
+  ([Ports and networking](#ports-and-networking)). A bind-mounted folder
   owned by another user is used as that user, so the folder keeps its owner; files in it
   that an image wrote (owned by root, as with the images before v2.8, or by uid 10001)
   are handed to the folder's owner first (logged). A volume or host folder mounted
