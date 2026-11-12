@@ -58,7 +58,7 @@ def test_file_limits():
 def preview_rows(page: str) -> dict:
     """The import preview's rows: name -> {after: its 'After import' cell, notes: the
     <li> of its warnings row}."""
-    body = page[page.index('class="grid import-preview"'):]
+    body = page[page.index('class="grid import-preview'):]
     body = body[body.index("<tbody>"):body.index("</tbody>")]
     rows: dict = {}
     last = ""
@@ -135,6 +135,8 @@ def main():
                      f"  accepter: tcp,{free_port()}\n"
                      "  connector: serialdev,/dev/ser2net-test-bench\n"
                      "  enable: off\n"
+                     "  options:\n"
+                     "    kickolduser: \"yes\\nFORGED log line\"\n"
                      "rotator: &r\n"
                      "  accepter: tcp,4999\n"
                      "  connections: [ lab ]\n").encode()
@@ -157,10 +159,11 @@ def main():
         assert ("import warning: lab: remaddr 10.1.0.0/16,5000: only the client address is "
                 "checked here, not its port") in log
         assert "import warning: bench: imported disabled: the file turns it off" in log
+        assert "\nFORGED" not in log and "'yes\\nFORGED log line' is not true/false" in log
         with open(os.path.join(srv.data, "audit.log"), encoding="utf-8") as fh:
             audit = [ln.split("\t") for ln in fh.read().split("\n") if ln]
         detail = next(r[3] for r in reversed(audit) if r[2] == "config_import_merge")
-        assert detail.startswith("2 mappings (ser2net.yaml (ser2net 4.x)); 3 warnings: "), detail
+        assert detail.startswith("2 mappings (ser2net.yaml (ser2net 4.x)); 4 warnings: "), detail
         assert "rotator r: not imported" in detail and len(detail) <= 500
         print("preview: each mapping as it will be, its warnings in its row (protection first); "
               "applied from a Turkish page: warnings in all.log and the audit log in English  OK")
