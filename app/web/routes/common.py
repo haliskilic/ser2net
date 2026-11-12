@@ -72,12 +72,9 @@ class Ctx:
         self.state.signins.note(user.username, user.source)   # its last sign-in
         issued = self.state.sessions_issued
         issued[user.username] = issued.get(user.username, 0) + 1
-        response.set_cookie(
-            auth.SESSION_COOKIE,
-            auth.issue_session(cfg.secret_key, ttl, user.username, user.pwd_version),
-            max_age=ttl, httponly=True, samesite="lax",
-            secure=cfg.admin_ui.tls_enabled, path="/",
-        )
+        auth.set_cookie(response, request, cfg, auth.SESSION_COOKIE,
+                        auth.issue_session(cfg.secret_key, ttl, user.username, user.pwd_version),
+                        max_age=ttl)
         request.state.csrf_renew = True  # the CSRF cookie lasts as long (GuardMiddleware)
 
     @staticmethod

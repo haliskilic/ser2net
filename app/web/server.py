@@ -82,7 +82,7 @@ class GuardMiddleware(BaseHTTPMiddleware):
         # English, like the logs (only the web UI is translated).
         if path.startswith("/api/v1"):
             response = await self._dispatch_api(request, call_next, cfg)
-            self._security_headers(response, cfg, path)
+            self._security_headers(response, cfg, path, request)
             return response
 
         lang = i18n.negotiate(request.cookies.get(i18n.COOKIE),
@@ -93,7 +93,7 @@ class GuardMiddleware(BaseHTTPMiddleware):
             response = await self._dispatch_ui(request, call_next, state, cfg, path)
         finally:
             i18n.reset(token)
-        self._security_headers(response, cfg, path)  # also on a refusal or a redirect
+        self._security_headers(response, cfg, path, request)  # also on a refusal or a redirect
         return response
 
     async def _dispatch_ui(self, request, call_next, state, cfg, path):
@@ -166,10 +166,8 @@ class GuardMiddleware(BaseHTTPMiddleware):
         # another site could put its own token into the browser.
         if (request.state.csrf_token != csrf_cookie
                 or getattr(request.state, "csrf_renew", False)):
-            response.set_cookie(
-                auth.CSRF_COOKIE, request.state.csrf_token, max_age=cfg.session_timeout_s,
-                samesite="lax", httponly=True, secure=cfg.admin_ui.tls_enabled, path="/",
-            )
+            auth.set_cookie(response, request, cfg, auth.CSRF_COOKIE, request.state.csrf_token,
+                            max_age=cfg.session_timeout_s)
         return response
 
     async def _dispatch_api(self, request, call_next, cfg):
@@ -192,7 +190,7 @@ class GuardMiddleware(BaseHTTPMiddleware):
         return await call_next(request)
 
     @staticmethod
-    def _security_headers(response, cfg, path: str) -> None:
+    def _security_headers(response, cfg, path: str, request=None) -> None:
         # Nothing but the static files may be stored by the browser: pages show a new API
         # token or cluster key once, the mapping form an MQTT password, a download a
         # backup or the export, and a copy in the disk cache or the back/forward cache
@@ -214,8 +212,10 @@ class GuardMiddleware(BaseHTTPMiddleware):
             "base-uri 'none'; form-action 'self'; object-src 'none'",
         )
         # HSTS covers the host name on every port (Settings -> Admin TLS sets how long; 0
-        # sends max-age=0, which makes browsers forget it)
-        if cfg.admin_ui.tls_enabled:
+        # sends max-age=0, which makes browsers forget it). Behind a TLS proxy only when
+        # asked for (Settings -> Reverse proxy): a direct http://name:port would stop working.
+        if cfg.admin_ui.tls_enabled or (cfg.admin_ui.proxy_hsts and request is not None
+                                        and auth.is_https(request, cfg)):
             response.headers.setdefault("Strict-Transport-Security",
                                         f"max-age={cfg.admin_ui.hsts_max_age}")
 

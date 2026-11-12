@@ -785,8 +785,9 @@ class AdminUI:
     hsts_max_age: int = HSTS_MAX_AGE_DEFAULT
     # Behind a reverse proxy (Settings -> Reverse proxy; app/web/proxy.py). trusted_proxies:
     # the addresses / networks whose X-Forwarded-For and X-Forwarded-Proto are believed;
-    # none by default.
+    # none by default. proxy_hsts: HSTS (hsts_max_age) also on HTTPS requests through a proxy.
     trusted_proxies: list[str] = field(default_factory=list)
+    proxy_hsts: bool = False
 
     @property
     def tls_enabled(self) -> bool:
@@ -813,8 +814,8 @@ def split_proxy_entries(text: str) -> list[str]:
 
 
 def _normalize_proxy_settings(admin: "AdminUI", notes: list[str]) -> None:
-    """A hand-edited trusted_proxies that can't be used is left out, with a load note,
-    rather than refused: config.json must not keep the UI from starting."""
+    """A hand-edited trusted_proxies or proxy_hsts that can't be used is left out, with a
+    load note, rather than refused: config.json must not keep the UI from starting."""
     value = admin.trusted_proxies
     entries = split_proxy_entries(value) if isinstance(value, str) else value
     if not isinstance(entries, list):
@@ -827,6 +828,9 @@ def _normalize_proxy_settings(admin: "AdminUI", notes: list[str]) -> None:
         notes.append(f"admin_ui.trusted_proxies: {dropped!r} left out (not IP addresses or "
                      "networks)")
     admin.trusted_proxies = kept
+    if not isinstance(admin.proxy_hsts, bool):
+        notes.append(f"admin_ui.proxy_hsts {admin.proxy_hsts!r} is not true or false; using false")
+        admin.proxy_hsts = False
 
 
 # admin_ui connection limits: (default, lowest value other than 0, highest)

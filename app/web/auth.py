@@ -508,6 +508,41 @@ def bearer_token(request) -> str:
 
 
 # --------------------------------------------------------------------------
+# cookies
+# --------------------------------------------------------------------------
+_FORWARDED_PROTO = re.compile(r'(?:^|[;\s])proto="?([a-z]+)', re.IGNORECASE)
+
+
+def is_https(request, cfg) -> bool:
+    """Did the browser use HTTPS for this request? With admin TLS; when the request's
+    scheme is https (uvicorn's TLS, or X-Forwarded-Proto from a trusted proxy:
+    app/web/proxy.py); or when the first X-Forwarded-Proto or Forwarded proto= says so,
+    whoever sent it: it only makes cookies stricter (Secure) and adds HSTS, which browsers
+    take only over HTTPS, and a page can't add those headers to the browser's requests -
+    so a TLS proxy needs no trusted-proxy setting for the cookies to be Secure."""
+    if cfg.admin_ui.tls_enabled or request.url.scheme in ("https", "wss"):
+        return True
+    if (request.headers.get("x-forwarded-proto") or "").split(",", 1)[0].strip().lower() \
+            == "https":
+        return True
+    m = _FORWARDED_PROTO.search((request.headers.get("forwarded") or "").split(",", 1)[0])
+    return bool(m and m.group(1).lower() == "https")
+
+
+def set_cookie(response, request, cfg, name: str, value: str, max_age: int,
+               path: str = "/") -> None:
+    """One of the UI's cookies: HttpOnly, SameSite=Lax, Secure whenever the browser used
+    HTTPS (is_https)."""
+    response.set_cookie(name, value, max_age=max_age, path=path, httponly=True,
+                        samesite="lax", secure=is_https(request, cfg))
+
+
+def delete_cookie(response, request, cfg, name: str, path: str = "/") -> None:
+    response.delete_cookie(name, path=path, httponly=True, samesite="lax",
+                           secure=is_https(request, cfg))
+
+
+# --------------------------------------------------------------------------
 # CSRF (double-submit cookie)
 # --------------------------------------------------------------------------
 def new_csrf_token() -> str:

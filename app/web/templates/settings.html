@@ -419,6 +419,8 @@
     {% if trusted[1] == 'SER2NET_TRUSTED_PROXIES' %}<p class="muted">{{ _('Set by <span class="mono">%(name)s</span> for this run; the field takes effect again once that is removed.', name='SER2NET_TRUSTED_PROXIES') }}</p>
     {% elif trusted[1] == 'FORWARDED_ALLOW_IPS' %}<p class="muted">{{ _('<span class="mono">FORWARDED_ALLOW_IPS</span> gives <span class="mono">%(list)s</span> while this is blank.', list=trusted[0]|join(' ')) }}</p>{% endif %}
     <p class="muted">{{ _("Only a connection from one of them may say who the client is (X-Forwarded-For: for the sign-in limits, the audit log and all.log) and that the browser used HTTPS (X-Forwarded-Proto). Without them every client behind a proxy has the proxy’s address.") }}</p>
+    <label class="chk"><input type="checkbox" name="proxy_hsts" {% if admin.proxy_hsts %}checked{% endif %}> {{ _("Send HSTS on HTTPS through the proxy") }}</label>
+    <p class="muted">{{ _("With the max-age set under Admin TLS: browsers then use only https:// for that host name, on every port, a direct http:// address of the same name included. The proxy can send it instead.") }}</p>
     <button class="btn primary" type="submit">{{ _("Save reverse proxy settings") }}</button>
   </form>
 </section>
