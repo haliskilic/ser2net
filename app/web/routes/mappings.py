@@ -104,10 +104,13 @@ def routes(ctx: Ctx) -> list:
         return Response("", headers=TRIGGER)
 
     async def api_status(request):
+        edit = can_edit(request)
+        # Trace is offered while tracing is on, and after that as long as files are left
+        traced = await asyncio.to_thread(state.traced_mapping_ids) if edit else set()
         resp = render(request, "_mappings_body.html",
                       mappings=state.config.mappings,
                       statuses=state.supervisor.all_status(),
-                      can_edit=can_edit(request))
+                      can_edit=edit, traced=traced)
         # Polled every 2 s: when nothing changed since the browser's copy, answer 204
         # (htmx then keeps the table as it is — no flicker, selections and scroll stay).
         digest = hashlib.sha256(resp.body).hexdigest()[:16]
