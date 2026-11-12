@@ -341,8 +341,13 @@ olarak yazdığı dosyalar klasörün sahibine verilir; yükseltmede elle bir ş
   dosya ya da tümü, denetim kaydına yazılır). Tracing açıkken ve kapatıldıktan sonra da
   dosya kaldığı sürece görünür.
 - **Ayarlar:** parola değiştir, **web arayüzü erişimi** (giriş zorunlu / parolasız rol),
-  admin TLS (yol ver veya self-signed üret), **REST API token'ı** üret/iptal et, mapping
-  **yedek al/yükle** (JSON), durum.
+  admin TLS (yol ver veya self-signed üret; yeni bağlantılar hemen kullanır, yeniden
+  başlatma gerekmez — parolalı anahtar bir sonraki açılışta, konsol parolayı sorunca devreye
+  girer), **REST API token'ı** üret/iptal et, mapping **yedek al/yükle** (JSON), durum.
+  Yönetim arayüzü panelinde arayüzün sunduğu adres ve protokol, `config.json`'da değişip
+  bir sonraki açılışı bekleyen adres ve bu kurulumda adresin nasıl değiştiği görünür
+  (Docker: `SER2NET_BIND_IP` / `SER2NET_PORT`; Windows servisi: `--reconfigure` ile yeniden
+  kurulum; diğerleri: `--reconfigure` ile başlatma).
 - **/metrics:** Prometheus formatında metrikler (kimlik doğrulamalı): eşleme başına
   etkin olup olmadığı (`ser2net_mapping_enabled`: bilerek durdurulan eşleme 0'dır, hata
   veren eşlemeyle karışmaz), çalışıp çalışmadığı, durumu (`ser2net_mapping_state`, her

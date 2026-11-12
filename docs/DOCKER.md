@@ -116,8 +116,10 @@ docker run -d --name ser2net --restart unless-stopped \
 
 ## Notes
 
-- **Health.** The image has a `HEALTHCHECK` (`ser2net --healthcheck` asks `/healthz`):
-  `docker ps` shows `healthy` once the UI answers — also before the first-run setup. The
+- **Health.** The image has a `HEALTHCHECK` (`ser2net --healthcheck` asks `/healthz`,
+  over HTTPS when `config.json` sets admin TLS, and over the other scheme when that one
+  gets no answer): `docker ps` shows `healthy` once the UI answers — also before the
+  first-run setup. The
   probe connects directly, so `HTTP_PROXY` / `HTTPS_PROXY` given to the container (for
   webhooks or SSO) don't affect it. Docker doesn't restart a container because it is
   unhealthy; only the restart policy brings back one that exited. So that a stuck event

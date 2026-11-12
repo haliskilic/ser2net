@@ -171,12 +171,12 @@ class GuardMiddleware(BaseHTTPMiddleware):
             ip = request.client.host if request.client else "?"
             state.log(f"HTTP {ip} {request.method} {path} -> {response.status_code}")
 
-        self._security_headers(response, cfg)
+        self._security_headers(response, state)
 
         if set_csrf:
             response.set_cookie(
                 auth.CSRF_COOKIE, csrf_cookie, samesite="lax",
-                httponly=True, secure=cfg.admin_ui.tls_enabled, path="/",
+                httponly=True, secure=state.serving_tls, path="/",
             )
         return response
 
@@ -198,11 +198,11 @@ class GuardMiddleware(BaseHTTPMiddleware):
                     {"error": "forbidden", "detail": "API token role 'viewer' is read-only"},
                     status_code=403)
         response = await _answer(request, call_next, request.app.state.appstate)
-        self._security_headers(response, cfg)
+        self._security_headers(response, request.app.state.appstate)
         return response
 
     @staticmethod
-    def _security_headers(response, cfg) -> None:
+    def _security_headers(response, state) -> None:
         # script-src stays 'self' (no inline JS — the important XSS guard). style-src
         # allows 'unsafe-inline' because xterm.js injects a <style> element at runtime.
         response.headers.setdefault("X-Content-Type-Options", "nosniff")
@@ -213,7 +213,7 @@ class GuardMiddleware(BaseHTTPMiddleware):
             "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; "
             "script-src 'self'; connect-src 'self'; frame-ancestors 'none'",
         )
-        if cfg.admin_ui.tls_enabled:
+        if state.serving_tls:  # (what this listener serves, not what waits for a restart)
             response.headers.setdefault("Strict-Transport-Security", "max-age=31536000")
 
 

@@ -331,8 +331,13 @@ The image has a `HEALTHCHECK` (`ser2net --healthcheck`). Details:
   file or all, audited) — while tracing is on, and after it was switched off as long as
   files are left.
 - **Settings:** change password, **web UI access** (login required / open access with a
-  role), admin TLS (provide paths or generate self-signed), generate/revoke the **REST API
-  token**, mappings **backup/restore** (JSON), status.
+  role), admin TLS (provide paths or generate self-signed; new connections get it at once,
+  no restart — a key with a passphrase waits for the next start, where the console asks for
+  it), generate/revoke the **REST API token**, mappings **backup/restore** (JSON), status.
+  The Admin interface panel shows the address and protocol the UI serves, a changed
+  address in `config.json` that waits for the next start, and how this installation
+  changes it (Docker: `SER2NET_BIND_IP` / `SER2NET_PORT`; Windows service: reinstall with
+  `--reconfigure`; else a start with `--reconfigure`).
 - **/metrics:** Prometheus-format metrics (authenticated): per mapping whether it is
   enabled (`ser2net_mapping_enabled`: 0 for a mapping stopped on purpose, so it is not
   mistaken for one that failed), whether it runs, its state (`ser2net_mapping_state`, one

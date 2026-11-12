@@ -44,9 +44,17 @@
 
 <section class="panel panel-narrow">
   <div class="panel-head"><h2>{{ _("Admin interface") }}</h2></div>
-  <p>{{ _('Listening on <span class="mono">%(address)s</span>', address=admin.bind_ip ~ ':' ~ admin.port) }}
-     {% if admin.tls_enabled %}<span class="tag">TLS</span>{% else %}<span class="tag">HTTP</span>{% endif %}</p>
-  <p class="muted">{{ _('To change the admin bind address, restart with <span class="mono">python3 ser2net.py --reconfigure</span>.') }}</p>
+  <p>{{ _('Listening on <span class="mono">%(address)s</span>', address=serving_address) }}
+     {% if serving_tls %}<span class="tag">TLS</span>{% else %}<span class="tag">HTTP</span>{% endif %}</p>
+  {% if pending_address %}<div class="banner warn">{{ _('config.json sets <span class="mono">%(address)s</span>: the admin UI moves there when ser2net starts again.', address=pending_address) }}</div>{% endif %}
+  {% if pending_tls %}<div class="banner warn">{{ _('The admin TLS settings saved are used from the next start.') }}</div>{% endif %}
+  {% if address_hint == 'env' %}
+  <p class="muted">{{ _('The address comes from <span class="mono">SER2NET_BIND_IP</span> / <span class="mono">SER2NET_PORT</span> (for a container: its environment), which win over config.json at every start: change them there and start ser2net (the container) again.') }}</p>
+  {% elif address_hint == 'service' %}
+  <p class="muted">{{ _('To change the address, run <span class="mono">%(command)s</span> from an elevated prompt: it stops the service, asks for the address and starts the service again.', command=address_command) }}</p>
+  {% else %}
+  <p class="muted">{{ _('To change the address, stop ser2net and start it as the account it runs as with <span class="mono">%(command)s</span>, which asks for the address; or change <span class="mono">admin_ui.bind_ip</span> / <span class="mono">port</span> in config.json and restart ser2net.', command=address_command) }}</p>
+  {% endif %}
 </section>
 
 {% if is_admin %}
@@ -414,7 +422,7 @@
 
 <section class="panel panel-narrow">
   <div class="panel-head"><h2>{{ _("Admin TLS (HTTPS)") }}</h2></div>
-  <p class="muted mb-sm">{{ _("Encrypts this management UI. Changes take effect after a restart.") }}</p>
+  <p class="muted mb-sm">{{ _("Encrypts this management UI. A change applies to new connections at once (the files are read when you save); connections already open keep theirs.") }}</p>
   <form method="post" action="/settings/tls" class="authform">
     <input type="hidden" name="_csrf" value="{{ request.state.csrf_token }}">
     <label>{{ _("Certificate path") }} <input type="text" name="tls_cert" value="{{ admin.tls_cert }}" placeholder="/path/cert.pem"></label>

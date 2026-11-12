@@ -4,7 +4,9 @@ Used by the Docker image's HEALTHCHECK, also handy for systemd or monitoring scr
 Reads the admin UI address from config.json (SER2NET_BIND_IP / SER2NET_PORT win, as at
 start-up), asks /healthz and exits 0 when it answers "ok", else 1. A wildcard bind
 (0.0.0.0 / ::) is probed on loopback; TLS is accepted without a certificate check (the
-probe only asks whether the server is up, and a self-signed certificate is normal). The
+probe only asks whether the server is up, and a self-signed certificate is normal). When
+the scheme config.json implies gets no answer, the other one is tried: config.json may
+have been changed by hand (or TLS switched in a way the running UI doesn't serve yet). The
 probe always connects directly: HTTP(S)_PROXY / ALL_PROXY, set so that webhooks or SSO
 can reach the Internet, don't apply to it. Standard library only.
 """
@@ -37,6 +39,17 @@ def target(config_path: str) -> str:
 
 def check(config_path: str, timeout: float = 5.0) -> tuple[bool, str]:
     url = target(config_path)
+    ok, msg = _probe(url, timeout)
+    if ok or msg.startswith(f"unhealthy: {url} answered"):
+        return ok, msg
+    scheme, rest = url.split(":", 1)
+    other = ("http" if scheme == "https" else "https") + ":" + rest
+    if _probe(other, timeout)[0]:
+        return True, f"ok: {other}"
+    return ok, msg
+
+
+def _probe(url: str, timeout: float) -> tuple[bool, str]:
     handlers: list[urllib.request.BaseHandler] = [urllib.request.ProxyHandler({})]  # direct
     if url.startswith("https:"):
         ctx = ssl.create_default_context()

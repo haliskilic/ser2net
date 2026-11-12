@@ -118,6 +118,7 @@ PORTABLE = [
     "test_error_logs.py",      # library warnings, 500s, reset at the banner, all.log rotation blocked
     "test_liveness.py",        # event loop watchdog, hang.log, sd_notify, readiness hooks
     "test_health_events.py",   # no-data alarm, offline cluster nodes, start-up summary
+    "test_tls_live.py",        # admin UI TLS applied to new connections, served-state cookies
 ]
 
 # Data-path tests that need socat-backed PTYs (Linux). Best-effort: skipped if the

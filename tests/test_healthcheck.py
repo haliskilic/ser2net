@@ -53,6 +53,18 @@ def main():
                                          "HTTPS_PROXY": dead, "ALL_PROXY": dead})
         assert code == 0, f"the probe must ignore proxy variables: {out}"
         print("running instance with HTTP(S)_PROXY/ALL_PROXY set: exit 0 (direct)  OK")
+        # config.json names TLS files (edited by hand, or a change that waits for the next
+        # start) while the UI serves plain HTTP: the other scheme answers
+        claims_tls = os.path.join(d, "claims-tls.json")
+        with open(claims_tls, "w") as fh:
+            json.dump({"admin_ui": {"bind_ip": "127.0.0.1", "tls_cert": "c", "tls_key": "k"}}, fh)
+        os.environ["SER2NET_PORT"] = str(srv.port)
+        try:
+            ok, msg = healthcheck.check(claims_tls)
+        finally:
+            del os.environ["SER2NET_PORT"]
+        assert ok and msg == f"ok: http://127.0.0.1:{srv.port}/healthz", msg
+        print("config.json says TLS, the UI serves HTTP: the other scheme answers  OK")
         data_dir = srv.data
         port = srv.port
         srv.stop()

@@ -76,7 +76,7 @@ class Ctx:
             auth.SESSION_COOKIE,
             auth.issue_session(cfg.secret_key, ttl, user.username, user.pwd_version),
             max_age=ttl, httponly=True, samesite="lax",
-            secure=cfg.admin_ui.tls_enabled, path="/",
+            secure=self.state.serving_tls, path="/",
         )
 
     @staticmethod

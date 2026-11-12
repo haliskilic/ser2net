@@ -31,7 +31,9 @@ if sys.version_info >= (3, 11):
 else:  # pragma: no cover - exercised only on Python 3.10
     from taskgroup import Runner
 
-from . import accounts, console, datalock, i18n, logsetup, sdnotify, standalone, watchdog
+from . import (
+    accounts, console, datalock, i18n, logsetup, sdnotify, standalone, tlsreload, watchdog,
+)
 from .config import ConfigError, ConfigStore
 from .engine import netguard
 from .state import AppState, write_audit_record
@@ -264,6 +266,18 @@ def require_admin_tls(admin) -> None:
                              f"{_os_error(e)}{fix}") from None
 
 
+def admin_tls_builder(uconfig) -> Callable:
+    """How the admin UI's TLS context is made from its settings (AdminUI) while ser2net
+    runs (Settings -> Admin TLS, a reload): as at start-up, except that a key with a
+    passphrase waits for the next start, where the console asks for it."""
+    def build(admin):
+        if not admin.tls_enabled:
+            return None
+        tlsreload.refuse_passphrase(admin.tls_key)
+        return httpguard.ssl_context(admin.tls_cert, admin.tls_key, uconfig)
+    return build
+
+
 def hold_data_dir(config_path: str) -> str | None:
     """Take the data directory's single-instance lock (app.datalock) before anything is
     written there: a second ser2net on the same directory stops here with one line; a
@@ -343,6 +357,7 @@ def _log_thread_errors(log) -> None:
 
 
 _as_service = False  # set by service_main so _serve can log the service-only warnings
+_service_name = ""   # (and the service's name, for the Settings page's hints)
 
 
 def service_main(config_path: str, name: str = "ser2net") -> int:
@@ -350,8 +365,8 @@ def service_main(config_path: str, name: str = "ser2net") -> int:
     that stops it (the one-line SystemExit) also goes to all.log next to config.json,
     where the admin looks for it; that and any other error that ends it is also written
     to the Application event log (service_stopped_event)."""
-    global _as_service
-    _as_service = True
+    global _as_service, _service_name
+    _as_service, _service_name = True, name
     try:
         return main(config_path=config_path)
     except SystemExit as e:
@@ -447,6 +462,10 @@ async def _serve(store: ConfigStore, config, loop_note: str = "") -> int:
             state.log(f"admin UI: the TLS certificate could not be loaded: {e}")
             await state.stop_engine()
             raise
+    state.admin_tls = admin_tls_builder(uconfig)
+    state.admin_served = (admin.bind_ip, admin.port)
+    if _as_service:
+        state.service_name = _service_name
     server = guard.server = uvicorn.Server(uconfig)
     # uvicorn (>= 0.29) also traps SIGINT/SIGTERM while it serves, from the main
     # thread only; both its handler and ours below just ask the server to exit.

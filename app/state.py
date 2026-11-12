@@ -29,7 +29,7 @@ from contextlib import suppress as _suppress
 from logging.handlers import RotatingFileHandler
 from typing import Any
 
-from . import accounts, logsetup, storage
+from . import accounts, logsetup, storage, tlsreload
 from .config import (
     AppConfig, ConfigStore, ConfigWriteError, User, lock_down_dir, mapping_file, valid_mapping_id,
 )
@@ -595,6 +595,7 @@ class AppState:
                                      lookup=lambda mid: self.config.get_mapping(mid))
         self.ports = PortWatcher(interval=2.0)
         self.cluster = ClusterDiscovery(self.config, self.log)
+        self.cluster.serving = self.admin_serving  # (beacons name what the UI serves)
         self.rate_limiter = LoginRateLimiter()
         self.failed_logins = FailedLoginRecords(self.audit)  # their audit records
         self.view_records = ViewRecords(self.audit)          # console / hex view opens
@@ -620,8 +621,17 @@ class AppState:
         self.notifier = Notifier(self)
         self.config_lock = asyncio.Lock()
         self.started_at = time.time()
-        # the admin UI listener's connection guard (runtime.py; None in tests without one)
+        # the admin UI listener's connection guard (runtime.py; None in tests without one),
+        # the address it listens on, and how its TLS context is made from the settings
+        # while ser2net runs (Settings -> Admin TLS); without them a TLS change waits for
+        # the next start
         self.admin_guard: Any = None
+        self.admin_served: tuple[str, int] | None = None
+        self.admin_tls: Any = None
+        # why the admin TLS settings saved last are not served yet ("": they are)
+        self.admin_tls_waiting = ""
+        # the Windows service's name when ser2net runs as one (runtime.service_main)
+        self.service_name = ""
         # the event loop watchdog (runtime.py, app/watchdog.py; None in tests without one),
         # and the start-up line about a previous run it ended ("" when there was none)
         self.loop_watchdog: Any = None
@@ -637,6 +647,50 @@ class AppState:
             with _suppress(OSError):
                 os.makedirs(d, exist_ok=True)
             lock_down_dir(d)
+
+    # ---------------- the admin UI as it is served ----------------
+    @property
+    def serving_tls(self) -> bool:
+        """Whether the admin UI's new connections get TLS: what the cookies' Secure flag,
+        HSTS and the cluster's beacons go by. A TLS change in Settings applies at once; one
+        that can't (a key with a passphrase) waits for the next start meanwhile."""
+        guard = self.admin_guard
+        return self.config.admin_ui.tls_enabled if guard is None else guard.ssl is not None
+
+    def admin_serving(self) -> tuple[str, int, bool]:
+        """(bind IP, port, TLS) of the admin UI as it serves now. The address in config.json
+        may differ: it is used from the next start."""
+        admin = self.config.admin_ui
+        ip, port = self.admin_served or (admin.bind_ip, admin.port)
+        return ip, port, self.serving_tls
+
+    async def prepare_admin_tls(self, admin) -> tlsreload.Prepared:
+        """The admin UI's TLS context for the settings `admin` (AdminUI), made from its files
+        as they are now (no TLS: a None context), to hand to use_admin_tls."""
+        build = self.admin_tls
+        if build is None or self.admin_guard is None:
+            return tlsreload.Prepared(later="this process has no admin UI listener")
+        return await tlsreload.prepare(lambda: build(admin))
+
+    def use_admin_tls(self, prepared: tlsreload.Prepared) -> bool:
+        """New connections to the admin UI get the prepared TLS context (None: plain HTTP);
+        those open keep theirs. False when it isn't usable (the one in use stays)."""
+        guard = self.admin_guard
+        if guard is None or not prepared.usable:
+            if not prepared.error:  # (files that can't be used: the change was refused)
+                self.admin_tls_waiting = prepared.later or "no admin UI listener"
+            return False
+        self.admin_tls_waiting = ""
+        was, guard.ssl = guard.ssl is not None, prepared.context
+        if guard.ssl is not None:
+            self.log("admin UI: TLS certificate loaded, new connections use it"
+                     + ("" if was else " (TLS is on now)"))
+        elif was:
+            self.log("admin UI: TLS is off now, new connections use plain HTTP")
+            if self.admin_serving()[0] not in ("127.0.0.1", "::1", "localhost"):
+                self.log("WARNING: admin UI is bound to a network address over plain HTTP — "
+                         "the password and session cookies travel unencrypted.")
+        return True
 
     @staticmethod
     def _setup_logging(log_path: str) -> logging.Logger:
