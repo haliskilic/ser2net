@@ -44,13 +44,14 @@ untrusted networks prefer TCP with TLS, or a firewall.
 ### Stored secrets
 `config.json` keeps in plain text what ser2net has to use itself: the LDAP bind password,
 the OIDC client secret, the SMTP password, the webhook URL, each mapping's MQTT broker
-password, the cluster key and the session key (`secret_key`) that signs sign-ins. Local
-passwords are scrypt hashes; the REST API token is stored only as a hash. `backups/` holds
-earlier copies of the file (a downloaded backup leaves out the session key), and the
-mappings export (operator role) holds the MQTT passwords. On the host the data folder is
-owner-only (POSIX `0700`, files `0600`; Windows: owner, SYSTEM and Administrators), so what
-needs care are the copies: a copied data folder or Docker volume, a disk or VM image, a
-downloaded backup, an export. Keep them like a password vault. If one leaked:
+password, the TLS key passwords (a mapping's, the admin UI's), the cluster key and the
+session key (`secret_key`) that signs sign-ins. Local passwords are scrypt hashes; the REST
+API token is stored only as a hash. `backups/` holds earlier copies of the file (a
+downloaded backup leaves out the session key), and the mappings export (operator role)
+holds the MQTT and TLS key passwords. On the host the data folder is owner-only (POSIX
+`0700`, files `0600`; Windows: owner, SYSTEM and Administrators), so what needs care are
+the copies: a copied data folder or Docker volume, a disk or VM image, a downloaded backup,
+an export. Keep them like a password vault. If one leaked:
 - change the third-party credentials where they are issued — the LDAP service account's
   password, the OIDC client secret, the SMTP password, the webhook URL (a new one from the
   chat service), the MQTT broker accounts — and enter the new ones in ser2net;
@@ -59,7 +60,9 @@ downloaded backup, an export. Keep them like a password vault. If one leaked:
 - Settings → Web UI access → *Sign out everyone*: a new session key, so a sign-in made
   with the old one stops working;
 - change the passwords of local accounts that could be guessed (their hashes are in the
-  copy).
+  copy);
+- replace a TLS certificate whose key file was in the copy too (`tls/`, a key next to the
+  data): its key password, if any, is in `config.json`.
 
 ### Browser protections
 The web UI sends a Content-Security-Policy that allows scripts only from its own files
@@ -126,14 +129,15 @@ güvenlik duvarını tercih edin.
 ### Saklanan gizli değerler
 `config.json`, ser2net'in kendisinin kullanması gereken gizli değerleri açık metin tutar:
 LDAP bind parolası, OIDC client secret, SMTP parolası, webhook URL'si, her eşlemenin MQTT
-broker parolası, cluster anahtarı ve oturumları imzalayan oturum anahtarı (`secret_key`).
-Yerel parolalar scrypt hash'i olarak, REST API token'ı yalnızca hash'i olarak saklanır.
-`backups/` dosyanın önceki kopyalarını tutar (indirilen bir yedekte oturum anahtarı yoktur),
-eşleme dışa aktarımı (operator rolü) da MQTT parolalarını içerir. Makinede veri klasörü
-yalnızca sahibine açıktır (POSIX `0700`, dosyalar `0600`; Windows: sahip, SYSTEM ve
-Administrators), bu yüzden dikkat isteyen kopyalardır: kopyalanan bir veri klasörü ya da
-Docker volume'u, bir disk ya da VM imajı, indirilen bir yedek, bir dışa aktarım. Bunları
-bir parola kasası gibi koruyun. Biri sızarsa:
+broker parolası, TLS anahtar parolaları (bir eşlemenin, yönetim arayüzünün), cluster
+anahtarı ve oturumları imzalayan oturum anahtarı (`secret_key`). Yerel parolalar scrypt
+hash'i olarak, REST API token'ı yalnızca hash'i olarak saklanır. `backups/` dosyanın önceki
+kopyalarını tutar (indirilen bir yedekte oturum anahtarı yoktur), eşleme dışa aktarımı
+(operator rolü) da MQTT ve TLS anahtar parolalarını içerir. Makinede veri klasörü yalnızca
+sahibine açıktır (POSIX `0700`, dosyalar `0600`; Windows: sahip, SYSTEM ve Administrators),
+bu yüzden dikkat isteyen kopyalardır: kopyalanan bir veri klasörü ya da Docker volume'u,
+bir disk ya da VM imajı, indirilen bir yedek, bir dışa aktarım. Bunları bir parola kasası
+gibi koruyun. Biri sızarsa:
 - üçüncü taraf kimlik bilgilerini verildikleri yerde değiştirin — LDAP servis hesabının
   parolası, OIDC client secret, SMTP parolası, webhook URL'si (sohbet servisinden yenisi),
   MQTT broker hesapları — ve yenilerini ser2net'e girin;
@@ -141,7 +145,9 @@ bir parola kasası gibi koruyun. Biri sızarsa:
   üret ve kaydet*; "mevcut anahtarı 7 gün daha kabul et" kutusu işaretsiz);
 - Ayarlar → Web arayüzü erişimi → *Herkesin oturumunu kapat*: yeni bir oturum anahtarı
   üretir, eskisiyle açılmış oturumlar çalışmaz olur;
-- tahmin edilebilecek yerel hesap parolalarını değiştirin (hash'leri kopyada).
+- tahmin edilebilecek yerel hesap parolalarını değiştirin (hash'leri kopyada);
+- anahtar dosyası da kopyada olan bir TLS sertifikasını yenileyin (`tls/`, verinin yanındaki
+  bir anahtar): varsa anahtar parolası `config.json`'dadır.
 
 ### Tarayıcı tarafı korumalar
 Web arayüzü, betiklere yalnızca kendi dosyalarından izin veren bir Content-Security-Policy

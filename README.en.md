@@ -1004,12 +1004,13 @@ inside aren't readable by other users:
 
 **Secrets:** `config.json` holds, in plain text, the LDAP bind password, the OIDC client
 secret, the SMTP password, the webhook URL (which often carries a token), each mapping's
-MQTT broker password, the cluster key (enough to read and change the mappings of every
-node) and the session key `secret_key` (with the accounts in the same file, enough to make
-a valid sign-in). Local passwords are kept as scrypt hashes and the REST API token only as a
-hash. `backups/` holds earlier copies of the same file (a downloaded backup leaves out the
-session key), and the mappings export holds the MQTT passwords. On this machine only the
-account ser2net runs as can read them; treat every copy — a copied data folder or Docker
+MQTT broker password, the TLS key passwords (a mapping's and the admin UI's), the cluster
+key (enough to read and change the mappings of every node) and the session key `secret_key`
+(with the accounts in the same file, enough to make a valid sign-in). Local passwords are
+kept as scrypt hashes and the REST API token only as a hash. `backups/` holds earlier copies
+of the same file (a downloaded backup leaves out the session key), and the mappings export
+holds the MQTT and TLS key passwords. On this machine only the account ser2net runs as can
+read them; treat every copy — a copied data folder or Docker
 volume, a disk or VM image, a downloaded backup, an export — like a password vault.
 [SECURITY.md](SECURITY.md) (*Stored secrets*) lists what to change after such a copy leaked.
 
