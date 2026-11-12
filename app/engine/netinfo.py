@@ -19,12 +19,22 @@ except Exception:  # pragma: no cover - optional
     psutil = None
 
 
+def _interface_stats() -> dict[str, Any]:
+    """psutil.net_if_stats(), or {} where it can't be read: on Linux it reads /proc/net/dev,
+    which a sandbox may hide (the systemd unit's ProcSubset=pid). Every interface then
+    counts as up; the addresses come from psutil.net_if_addrs() all the same."""
+    try:
+        return psutil.net_if_stats() if psutil is not None else {}
+    except Exception:
+        return {}
+
+
 def _nic_addresses() -> list[tuple[str, str]]:
     """Return [(interface_name, ipv4_address)] for up, non-loopback interfaces."""
     results: list[tuple[str, str]] = []
     if psutil is not None:
         try:
-            stats = psutil.net_if_stats()
+            stats = _interface_stats()
             for ifname, addrs in psutil.net_if_addrs().items():
                 st = stats.get(ifname)
                 if st is not None and not st.isup:
