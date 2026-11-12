@@ -72,12 +72,17 @@ class Ctx:
         self.state.signins.note(user.username, user.source)   # its last sign-in
         issued = self.state.sessions_issued
         issued[user.username] = issued.get(user.username, 0) + 1
-        response.set_cookie(
-            auth.SESSION_COOKIE,
-            auth.issue_session(cfg.secret_key, ttl, user.username, user.pwd_version),
-            max_age=ttl, httponly=True, samesite="lax",
-            secure=cfg.admin_ui.tls_enabled, path="/",
-        )
+        auth.set_cookie(response, request, cfg, auth.SESSION_COOKIE,
+                        auth.issue_session(cfg.secret_key, ttl, user.username, user.pwd_version),
+                        max_age=ttl)
+        request.state.csrf_renew = True  # the CSRF cookie lasts as long (GuardMiddleware)
+
+    @staticmethod
+    def new_csrf_token(request) -> None:
+        """Give this browser a new CSRF token with this response (GuardMiddleware sets the
+        cookie), at a sign-in or a sign-out: a token that got into the browser before is
+        not accepted after it. Only for a response that renders no form (a redirect)."""
+        request.state.csrf_token = auth.new_csrf_token()
 
     @staticmethod
     def require_role(request, role):

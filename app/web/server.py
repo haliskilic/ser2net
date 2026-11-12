@@ -17,12 +17,13 @@ from starlette.applications import Starlette
 from starlette.middleware import Middleware
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.middleware.body_limit import RequestBodyLimitMiddleware
-from starlette.responses import JSONResponse, PlainTextResponse, RedirectResponse
+from starlette.responses import JSONResponse, PlainTextResponse
 from starlette.templating import Jinja2Templates
 
 from .. import i18n
-from ..config import ROLE_RANK
-from . import auth
+from ..config import ROLE_RANK, node_name
+from ..engine import netguard
+from . import auth, proxy
 from .routes import build_routes
 
 TEMPLATES_DIR = os.path.join(os.path.dirname(__file__), "templates")
@@ -56,42 +57,90 @@ QUIET_PATHS = {"/api/status", "/api/cluster/status", "/api/cluster/local",
                "/api/ports/table", "/api/ports.json", "/healthz", "/favicon.ico"}
 
 
+def logs_request(mode: str, method: str, path: str, status: int) -> bool:
+    """Whether a web UI request gets its "HTTP ..." line in all.log (admin_ui.request_log):
+    "all" every request but the static files and the automatic refreshes (QUIET_PATHS);
+    "changes" only those that change something (not GET / HEAD / OPTIONS) and the refused
+    or failed ones (400 and up); "off" none."""
+    if path.startswith("/static") or mode == "off":
+        return False
+    if mode == "changes":
+        return method not in auth.SAFE_METHODS or status >= 400
+    return not (method == "GET" and path in QUIET_PATHS)
+
+
 def _wants_json(request) -> bool:
-    return request.url.path.startswith("/api")
+    return proxy.route_path(request).startswith("/api")
 
 
 class GuardMiddleware(BaseHTTPMiddleware):
-    """Single gate: CSRF + setup-redirect + session auth + security headers + csrf cookie."""
+    """Single gate: cross-site refusal + CSRF + setup-redirect + session auth + security
+    headers + csrf cookie."""
+
+    _cross_site_log: netguard.LogEvery | None = None
+
+    def _cross_site_note(self, state):
+        """Refused cross-site requests are logged at most once a minute."""
+        if self._cross_site_log is None:
+            self._cross_site_log = netguard.LogEvery(lambda msg: state.log(msg))
+        return self._cross_site_log
 
     async def dispatch(self, request, call_next):
         state = request.app.state.appstate
         cfg = state.config
-        path = request.url.path
+        # the path the UI's routes see: without the public URL's path when the request came
+        # under it (proxy.ProxyMiddleware), so every check below holds there too
+        path = proxy.route_path(request)
 
         # JSON REST API (/api/v1): bearer-token auth, no cookie session, no CSRF — and
         # English, like the logs (only the web UI is translated).
         if path.startswith("/api/v1"):
-            return await self._dispatch_api(request, call_next, cfg)
+            response = await self._dispatch_api(request, call_next, cfg, path)
+            self._security_headers(response, cfg, path, request)
+            return response
 
-        lang = i18n.negotiate(request.cookies.get(i18n.COOKIE),
+        lang = i18n.negotiate(auth.cookie(request, i18n.COOKIE),
                               request.headers.get("accept-language"), cfg.admin_ui.language)
         request.state.lang = lang
         token = i18n.set_language(lang)
         try:
-            return await self._dispatch_ui(request, call_next, state, cfg, path)
+            response = await self._dispatch_ui(request, call_next, state, cfg, path)
         finally:
             i18n.reset(token)
+        self._security_headers(response, cfg, path, request)  # also on a refusal or a redirect
+        return response
 
     async def _dispatch_ui(self, request, call_next, state, cfg, path):
 
         is_public = path in PUBLIC_PATHS or any(path.startswith(p) for p in PUBLIC_PREFIXES)
 
-        # ensure a CSRF token exists for this request/response
-        csrf_cookie = request.cookies.get(auth.CSRF_COOKIE)
-        set_csrf = csrf_cookie is None
-        if set_csrf:
-            csrf_cookie = auth.new_csrf_token()
-        request.state.csrf_token = csrf_cookie
+        # A state-changing request that a page of another site made the browser send is
+        # refused before anything else (auth.cross_site): another port of this host or a
+        # sibling subdomain can put a CSRF cookie of its own into the browser, so the token
+        # alone doesn't prove the request came from this UI. Cluster peers call from their
+        # server, not a browser, and are checked by the key.
+        if request.method not in auth.SAFE_METHODS and path not in _CLUSTER_PEER_PATHS:
+            if why := auth.cross_site(request.headers, also=proxy.published_origins(cfg.admin_ui)):
+                ip = request.client.host if request.client else "?"
+                self._cross_site_note(state)(f"refused {request.method} {path} from {ip}: "
+                                             f"sent by a page of another site ({why}); "
+                                             f"{auth.PROXY_HINT}")
+                return PlainTextResponse(i18n.gettext(
+                    "Refused: this request was sent by a page of another web site. If you used "
+                    "ser2net’s own page, its address must reach ser2net unchanged (behind a "
+                    "reverse proxy: as Host or X-Forwarded-Host)."), status_code=403)
+
+        # the CSRF token of this browser: its cookie's (one under the name of 2.8 and older
+        # is taken over, and set under its name now), or a new one. A handler may issue a
+        # new one (Ctx.new_csrf_token: a sign-in, a sign-out) or renew the cookie's lifetime
+        # with a session's (Ctx.set_session); the cookie is set below.
+        csrf_cookie = auth.cookie(request, auth.CSRF_COOKIE, legacy=False)
+        request.state.csrf_token = (csrf_cookie or auth.cookie(request, auth.CSRF_COOKIE)
+                                    or auth.new_csrf_token())
+        # a sign-in from before the upgrade, under the session cookie's old name: moved to
+        # its name now with this response (not a static file's, which may be cached)
+        legacy = (None if path.startswith("/static")
+                  else auth.legacy_session(request, cfg, state.revoked_sessions))
 
         # CSRF: API/HTMX endpoints must carry a matching X-CSRF-Token header.
         # Plain HTML form posts (login/setup/settings/logout) carry _csrf in the
@@ -108,42 +157,41 @@ class GuardMiddleware(BaseHTTPMiddleware):
         # container isn't reported unhealthy while it waits for its admin password)
         if not cfg.password_set:
             if path not in ("/setup", "/healthz") and not path.startswith(("/static", "/lang/")):
-                return RedirectResponse("/setup", status_code=303)
+                return proxy.redirect(request, "/setup")
         else:
             # password is set: /setup is no longer available
             if path == "/setup":
-                return RedirectResponse("/", status_code=303)
+                return proxy.redirect(request, "/")
             if not is_public:
-                token = request.cookies.get(auth.SESSION_COOKIE)
+                token = auth.cookie(request, auth.SESSION_COOKIE)
                 user = auth.request_user(cfg, token, request.headers, state.revoked_sessions)
                 if user is None:
                     if _wants_json(request):
                         return JSONResponse({"error": "unauthorized"}, status_code=401)
-                    return RedirectResponse("/login", status_code=303)
+                    return proxy.redirect(request, "/login")
                 request.state.user = user  # available to handlers for role checks
 
         response = await call_next(request)
 
-        # audit log: every state-changing request, plus meaningful page loads
-        # (skip the static assets and the periodic poll endpoints)
-        if not path.startswith("/static") and not (
-            request.method == "GET" and path in QUIET_PATHS
-        ):
+        # all.log: every state-changing request, plus meaningful page loads (skip the
+        # static assets and the periodic poll endpoints), or less (admin_ui.request_log)
+        if logs_request(cfg.admin_ui.request_log, request.method, path, response.status_code):
             ip = request.client.host if request.client else "?"
             state.log(f"HTTP {ip} {request.method} {path} -> {response.status_code}")
 
-        self._security_headers(response, cfg)
-
-        if set_csrf:
-            response.set_cookie(
-                auth.CSRF_COOKIE, csrf_cookie, samesite="lax",
-                httponly=True, secure=cfg.admin_ui.tls_enabled, path="/",
-            )
+        # The CSRF cookie lasts as long as a session: a browser restart that keeps the
+        # session cookie keeps it too, so there is no time without one in which a page of
+        # another site could put its own token into the browser.
+        if (request.state.csrf_token != csrf_cookie
+                or getattr(request.state, "csrf_renew", False)):
+            auth.set_cookie(response, request, cfg, auth.CSRF_COOKIE, request.state.csrf_token,
+                            max_age=cfg.session_timeout_s)
+        if legacy is not None:
+            auth.move_session(response, request, cfg, legacy)
         return response
 
-    async def _dispatch_api(self, request, call_next, cfg):
+    async def _dispatch_api(self, request, call_next, cfg, path):
         """Gate for the JSON REST API: bearer-token auth, no cookies/CSRF, JSON errors."""
-        path = request.url.path
         if path not in ("/api/v1/health", "/api/v1/openapi.json"):
             if not cfg.password_set:
                 return JSONResponse({"error": "setup_incomplete"}, status_code=503)
@@ -158,29 +206,59 @@ class GuardMiddleware(BaseHTTPMiddleware):
                 return JSONResponse(
                     {"error": "forbidden", "detail": "API token role 'viewer' is read-only"},
                     status_code=403)
-        response = await call_next(request)
-        self._security_headers(response, cfg)
-        return response
+        return await call_next(request)
 
     @staticmethod
-    def _security_headers(response, cfg) -> None:
+    def _security_headers(response, cfg, path: str, request=None) -> None:
+        # Nothing but the static files may be stored by the browser: pages show a new API
+        # token or cluster key once, the mapping form an MQTT password, a download a
+        # backup or the export, and a copy in the disk cache or the back/forward cache
+        # outlives the session (Back after a logout on a shared PC). The static files
+        # carry ?v=<version> and stay cacheable.
+        if not path.startswith("/static"):
+            response.headers.setdefault("Cache-Control", "no-store")
         # script-src stays 'self' (no inline JS — the important XSS guard). style-src
-        # allows 'unsafe-inline' because xterm.js injects a <style> element at runtime.
+        # allows 'unsafe-inline' because the console's xterm.js DOM renderer adds <style>
+        # elements and style attributes at runtime, without a nonce (xtermjs/xterm.js#4445).
+        # No <base>, no plugins, and forms only post to this UI.
         response.headers.setdefault("X-Content-Type-Options", "nosniff")
         response.headers.setdefault("X-Frame-Options", "DENY")
         response.headers.setdefault("Referrer-Policy", "same-origin")
         response.headers.setdefault(
             "Content-Security-Policy",
             "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; "
-            "script-src 'self'; connect-src 'self'; frame-ancestors 'none'",
+            "script-src 'self'; connect-src 'self'; frame-ancestors 'none'; "
+            "base-uri 'none'; form-action 'self'; object-src 'none'",
         )
-        if cfg.admin_ui.tls_enabled:
-            response.headers.setdefault("Strict-Transport-Security", "max-age=31536000")
+        # HSTS covers the host name on every port (Settings -> Admin TLS sets how long; 0
+        # sends max-age=0, which makes browsers forget it). Behind a TLS proxy only when
+        # asked for (Settings -> Reverse proxy): a direct http://name:port would stop working.
+        if cfg.admin_ui.tls_enabled or (cfg.admin_ui.proxy_hsts and request is not None
+                                        and auth.is_https(request, cfg)):
+            response.headers.setdefault("Strict-Transport-Security",
+                                        f"max-age={cfg.admin_ui.hsts_max_age}")
+
+
+def _page_context(request) -> dict:
+    """What every template gets: base, the path prefix of the request, which its links go
+    under (app/web/proxy.py); node_name, this instance's name ('' = none: Settings -> Admin
+    interface), which the signed-in pages (_shell.html) show in the title and the top bar;
+    login_notice / login_notice_url, the notice the sign-in and setup pages show (every one
+    of their renders, also a refusal's) and open-access visitors get a link to (Settings ->
+    Web UI access)."""
+    state = getattr(request.app.state, "appstate", None)
+    ui = state.config.admin_ui if state is not None else None
+    return {"base": proxy.base(request),
+            "node_name": node_name(ui) if ui is not None else "",
+            "login_notice": ui.login_notice if ui is not None else "",
+            "login_notice_url": ui.login_notice_url if ui is not None else ""}
 
 
 def make_templates() -> Jinja2Templates:
     """The Jinja environment every page is rendered with (globals + filters)."""
-    templates = Jinja2Templates(directory=TEMPLATES_DIR)
+    # _page_context for every page; base_path(request) / route_path(request) for macros
+    # imported without the context
+    templates = Jinja2Templates(directory=TEMPLATES_DIR, context_processors=[_page_context])
 
     # template globals used across pages
     from ..config import (
@@ -205,6 +283,7 @@ def make_templates() -> Jinja2Templates:
     templates.env.add_extension("jinja2.ext.i18n")
     templates.env.install_gettext_callables(i18n.gettext, i18n.ngettext, newstyle=True)  # type: ignore[attr-defined]
     templates.env.globals["languages"] = i18n.LANGUAGES
+    templates.env.globals.update(base_path=proxy.base, route_path=proxy.route_path)
     return templates
 
 
@@ -214,7 +293,10 @@ def build_app(state) -> Starlette:
     # The body limit holds for every route, and sits inside GuardMiddleware: in front of
     # it (Starlette(max_body_size=...)), a body over the limit would reach the handler as
     # an exception group from BaseHTTPMiddleware's receive, a 500 instead of the 413.
-    middleware = [Middleware(GuardMiddleware),
+    # ProxyMiddleware goes first: the client address, the scheme and the path prefix of a
+    # request through a reverse proxy are what every check after it sees
+    middleware = [Middleware(proxy.ProxyMiddleware, state=state),
+                  Middleware(GuardMiddleware),
                   Middleware(RequestBodyLimitMiddleware, max_body_size=MAX_BODY_BYTES)]
     app = Starlette(routes=routes, middleware=middleware)
     app.state.appstate = state

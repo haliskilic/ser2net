@@ -11,7 +11,7 @@ import base64
 import json
 import time
 
-from _server import Browser, Server
+from _server import Browser, Server, ui_cookie
 
 from app.config import (SESSION_TIMEOUT_DEFAULT_S, SESSION_TIMEOUT_MAX_S, SESSION_TIMEOUT_MIN_S,
                         AppConfig, ConfigError)
@@ -45,8 +45,9 @@ def session_expiry(browser):
     return data["exp"] - time.time()
 
 
-def max_age(headers):
-    cookie = next(c for c in headers.get_all("Set-Cookie") if c.startswith("ser2net_session="))
+def max_age(headers, port):
+    name = ui_cookie("ser2net_session", port)
+    cookie = next(c for c in headers.get_all("Set-Cookie") if c.startswith(name + "="))
     part = next(p for p in cookie.split(";") if p.strip().lower().startswith("max-age="))
     return int(part.split("=", 1)[1])
 
@@ -59,7 +60,7 @@ def main():
     with Server(config) as srv:
         b = Browser(srv.base)
         st, h, _ = b.post("/login", {"username": "admin", "password": PASSWORD})
-        assert st == 303 and max_age(h) == 600, h.get("Set-Cookie")
+        assert st == 303 and max_age(h, srv.port) == 600, h.get("Set-Cookie")
         assert 590 <= session_expiry(b) <= 600, session_expiry(b)
         print("sign-in: cookie Max-Age and token expiry = configured 600 s  OK")
 
@@ -77,7 +78,7 @@ def main():
 
         b2 = Browser(srv.base)
         st, h, _ = b2.post("/login", {"username": "admin", "password": PASSWORD})
-        assert st == 303 and max_age(h) == 2700, h.get("Set-Cookie")
+        assert st == 303 and max_age(h, srv.port) == 2700, h.get("Set-Cookie")
         print("next sign-in lasts 45 min  OK")
     print("\nPASS: session lifetime setting")
 

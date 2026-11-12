@@ -104,6 +104,38 @@ docker run -d --name ser2net --restart unless-stopped --init --stop-timeout 30 \
   published port are the real perimeter — don't publish `8080` to an untrusted network
   without TLS. These env vars win on every start, so compose stays the source of truth.
 
+## Behind a reverse proxy
+
+For TLS on a LAN or the Internet, a reverse proxy in front of the container is the usual
+choice (or set `admin_ui.tls_*`). [REVERSE-PROXY.md](REVERSE-PROXY.md) has the settings and
+examples for nginx, Apache, Caddy, Traefik and IIS, and a compose file with Caddy in front.
+In short:
+
+- the proxy passes the browser's address on as `Host` (or `X-Forwarded-Host`), passes
+  WebSocket upgrades through and sends `X-Forwarded-For` / `X-Forwarded-Proto`;
+- `SER2NET_TRUSTED_PROXIES` lists the proxy's address as the container sees it (a proxy
+  container in the same network: that network's subnet; a proxy on the host: Docker's
+  gateway, such as `172.17.0.1`), or Settings → Reverse proxy does; all.log names the
+  address it ignored (`X-Forwarded-For from … is ignored`);
+- `SER2NET_PUBLIC_URL` is the address users open (`https://ser2net.example.com`, or with a
+  path the UI is served under: `https://gw.example.com/ser2net`);
+- the UI port stays off the network: publish it to the host only (`127.0.0.1:8080:8080`),
+  or not at all when the proxy runs in the same Docker network.
+
+## Several instances
+
+One container per instance, each with its own volume, `container_name` and published UI
+port (inside, every one listens on 8080: `-p 8081:8080`; for the LAN cluster use the same
+port inside and out, `SER2NET_PORT=8081` and `-p 8081:8081`, since that is the port a node
+advertises). Give each a name with `SER2NET_NODE_NAME` (or Settings → Admin interface):
+notifications, the browser tab, the top bar and the fleet view then tell them apart.
+Without one they show the container's host name, which is its id unless `hostname:` /
+`--hostname` sets one, and a new id comes with every re-creation (an image upgrade).
+The browser keeps their sign-ins apart (on another port than 8080 the cookies' names carry
+a tag of the port). Don't copy a volume to make another instance: start it empty and import
+the mappings (Settings → Mappings export / import); a copy has the same cluster identity
+and session key. README, *Several instances on one machine*, has the whole checklist.
+
 ## Serial devices
 
 - **Access.** Pass each port with `--device` (compose `devices:`). A device keeps its
@@ -143,7 +175,11 @@ docker run -d --name ser2net --restart unless-stopped --init --stop-timeout 30 \
 - **Logs.** Every log line goes to `/data/all.log` (rotated, 10 MB × 5) and to the
   container's output, which Docker keeps without a limit by default: cap it with
   `--log-opt max-size=10m --log-opt max-file=3` (compose: `logging:`), or for every
-  container in `/etc/docker/daemon.json`.
+  container in `/etc/docker/daemon.json`. The lines name clients and the web UI's users by
+  IP address and user name (see [PRIVACY.md](PRIVACY.md)); `-e SER2NET_LOG_STDOUT=off`
+  keeps them in `/data/all.log` only (`docker logs` then shows just what isn't a log line,
+  such as a start-up error), and Settings → Audit log → *Web UI requests in all.log* can
+  leave out page views or every request line.
 - **Runs as a non-root user.** The process runs as `ser2net` (uid/gid 10001), never
   as root. The entrypoint starts as root only to choose the account: a `/data` owned by
   root — a volume written by an image before v2.8, which ran as root — is handed to
@@ -165,10 +201,21 @@ docker run -d --name ser2net --restart unless-stopped --init --stop-timeout 30 \
   with crun, to keep your serial device group); ser2net then runs as you.
 - **Persistence.** `config.json`, its automatic backups (`backups/`), logs, traces
   (`traces/`) and any generated TLS material live in the `/data` volume; back that up to
-  preserve mappings and the admin password. `/data` must be writable: mount the whole
+  preserve mappings and the admin password. `config.json` and `backups/` hold secrets in
+  plain text (the LDAP, OIDC, SMTP and MQTT passwords, the webhook URL, the cluster key and
+  the session key; see the README's *Configuration & state files*), so keep a copy of
+  `/data` like a password vault. `/data` must be writable: mount the whole
   directory, not `config.json` on its own (it is replaced atomically, which a single-file
   mount doesn't allow). A start rewrites `config.json` only when something changed (the
   `SER2NET_*` address, an upgrade).
+- **Starting over.** `docker compose down -v` removes the container, its log and the
+  `ser2net-data` volume — `config.json`, `backups/`, `all.log*`, `audit.log*`, `logs/`,
+  `traces/` and `tls/` (plain `docker run`: `docker rm -f ser2net` and `docker volume rm`
+  the volume; a bind-mounted folder: stop the container, then empty the folder). Deleting
+  only `/data/config.json` resets the accounts, settings and mappings but keeps the rest,
+  and whoever completes the first-run setup next sees the earlier audit log and backups in
+  Settings. A lost password needs neither: see
+  [First admin and account recovery](#first-admin-and-account-recovery).
 - **A setting the image rejects doesn't stop it.** If `config.json` holds a value this
   version refuses (a mapping's TLS file that isn't mounted, a hand edit), the container
   still starts: the log names each one (`WARNING: config.json: mapping '…': …`), the
@@ -180,7 +227,8 @@ docker run -d --name ser2net --restart unless-stopped --init --stop-timeout 30 \
   certificate generated in its `tls/` folder is found in `/data/tls/` (the log says so and
   `config.json` is updated); TLS paths written relative (`tls/cert.pem`) are files in
   `/data`.
-- **TLS.** Put a reverse proxy (or set `admin_ui.tls_*`) in front for LAN/Internet
-  exposure; raw data bridges are plaintext unless per-mapping TLS is enabled.
+- **TLS.** Put a reverse proxy ([Behind a reverse proxy](#behind-a-reverse-proxy)) or set
+  `admin_ui.tls_*` for LAN/Internet exposure; raw data bridges are plaintext unless
+  per-mapping TLS is enabled.
 - **Dependencies** are installed from PyPI into the image, so the container runs with
   `--no-bootstrap` (the bundled `vendor/wheels` offline path is for air-gapped hosts).

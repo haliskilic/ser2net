@@ -14,14 +14,13 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import re
-import socket
 import time
 
 from starlette.responses import JSONResponse, PlainTextResponse, Response
 from starlette.routing import Route
 
 from ... import __version__
-from ...config import ConfigError, MappingConfig, host_port, peer_host, trace_file_name
+from ...config import ConfigError, MappingConfig, host_port, node_label, peer_host, trace_file_name
 from ...engine import netinfo, portlist
 from ...engine.cluster import AUTH_HEADER, REFUSALS, peer_addr, peer_port, peer_url
 from ...i18n import _
@@ -29,7 +28,8 @@ from .. import auth
 from . import ops
 from .common import Ctx, csrf_failed
 from .forms import (
-    _build_mapping_dict, _modbus_points_json, _preserve_unmanaged_fields, tls_password_view,
+    MQTT_PASSWORD_CLEAR, MQTT_PASSWORD_WRITE_ONLY, _build_mapping_dict, _modbus_points_json,
+    _preserve_unmanaged_fields, mqtt_password_from_form, mqtt_password_view, tls_password_view,
 )
 
 # The mapping form's own field names (bare ones + these prefixes). cluster_peer_save
@@ -37,6 +37,8 @@ from .forms import (
 # relayed with the shared key.
 _PEER_FORM_FIELDS = {"id", "name", "kind", "enabled"}
 _PEER_FORM_PREFIXES = ("serial_", "network_", "opt_", "mqtt_", "modbus_")
+# Not forwarded as posted: the MQTT password goes as the value to store (_peer_save_fields)
+_PEER_PASSWORD_FIELDS = {"mqtt_password", MQTT_PASSWORD_WRITE_ONLY, MQTT_PASSWORD_CLEAR}
 # A peer request's body (at most a mapping form) is far smaller; a larger one is refused
 # (413) before it is read.
 PEER_MAX_BODY = 1024 * 1024
@@ -57,7 +59,9 @@ def _peer_save_fields(form, peer_mapping, peer_version):
     error to show instead. Only the known mapping-form fields are forwarded (never a raw
     value the browser added), the submission is validated locally (so a URL serial port
     never reaches the peer), and the trace file is reduced to a sanitised name — kept as
-    the peer stored it when unchanged, and refused as a new name for a pre-2.8 peer.
+    the peer stored it when unchanged, and refused as a new name for a pre-2.8 peer. The
+    form never had the peer's MQTT password in it: the password to store is sent, the one
+    the peer has when the field was left blank (a peer of any version stores what it gets).
     Returns (fields, None) or (None, error)."""
     if not peer_mapping:
         return None, _("This mapping no longer exists on the peer; reload the fleet view.")
@@ -75,10 +79,13 @@ def _peer_save_fields(form, peer_mapping, peer_version):
             return None, _("This cluster node is older than 2.8 and would store a trace file "
                            "name as a path. Upgrade it to 2.8 or newer before setting a trace "
                            "file for it here.")
+    mqtt = peer_mapping.get("mqtt")
+    stored_password = str(mqtt.get("password") or "") if isinstance(mqtt, dict) else ""
     fields = [(k, v) for k, v in form.multi_items()
-              if k != "opt_trace_both"
+              if k != "opt_trace_both" and k not in _PEER_PASSWORD_FIELDS
               and (k in _PEER_FORM_FIELDS or k.startswith(_PEER_FORM_PREFIXES))]
     fields.append(("opt_trace_both", out_trace))
+    fields.append(("mqtt_password", mqtt_password_from_form(form, stored_password)))
     return fields, None
 
 
@@ -159,7 +166,7 @@ def routes(ctx: Ctx) -> list:
                 "client_count": st.get("client_count", 0),
                 "bytes_in": st.get("bytes_in", 0), "bytes_out": st.get("bytes_out", 0),
             })
-        return {"id": cfg.instance_id, "name": socket.gethostname(),
+        return {"id": cfg.instance_id, "name": node_label(cfg.admin_ui),
                 "ip": ip, "port": port, "scheme": scheme,
                 "version": __version__, "uptime_s": int(time.time() - state.started_at),
                 "mapping_count": len(maps), "running_count": running, "mappings": maps}
@@ -373,7 +380,8 @@ def routes(ctx: Ctx) -> list:
                       modbus_points_json=_modbus_points_json(mapping),
                       ports=portlist.visible(data.get("ports", [])), ips=data.get("ips", []),
                       links=_peer_links(data),
-                      remote=_remote(target, data["mapping"].get("id"), mapping), error=None)
+                      remote=_remote(target, data["mapping"].get("id"), mapping), error=None,
+                      **mqtt_password_view(mapping.mqtt.password))
 
     async def cluster_peer_save(request):
         """Browser-facing proxy: forward an edited mapping to the peer's key-guarded save.
@@ -395,12 +403,13 @@ def routes(ctx: Ctx) -> list:
             state.cluster.get_peer(target, "/api/cluster/local"))
 
         def _reload(msg):
-            stored = ""
+            stored_mqtt = stored_tls = ""
             try:
                 mapping = MappingConfig.from_dict(_build_mapping_dict(form, strict=False))
                 if data and data.get("mapping"):
                     peer_mapping = MappingConfig.from_dict(data["mapping"])
-                    stored = peer_mapping.network.tls_key_password
+                    stored_mqtt = peer_mapping.mqtt.password
+                    stored_tls = peer_mapping.network.tls_key_password
                     _preserve_unmanaged_fields(mapping, peer_mapping, form)
             except Exception:
                 mapping = MappingConfig(name=form.get("name", ""))
@@ -410,7 +419,8 @@ def routes(ctx: Ctx) -> list:
                           links=_peer_links(data),
                           ips=(data or {}).get("ips", []),
                           remote=_remote(target, form.get("id", ""), mapping), error=msg,
-                          **tls_password_view(stored, form))
+                          **mqtt_password_view(stored_mqtt, form),
+                          **tls_password_view(stored_tls, form))
 
         if not data:
             return _reload(_("The peer rejected the change or was unreachable."))

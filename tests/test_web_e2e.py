@@ -21,6 +21,8 @@ ROOT = os.path.join(os.path.dirname(__file__), "..")
 sys.path.insert(0, os.path.join(ROOT, "lib"))
 
 UI_PORT = 8099
+
+from _server import ui_cookie  # noqa: E402
 MAP_PORT = 45111
 
 
@@ -43,7 +45,7 @@ class Client:
 
     def csrf(self):
         for c in self.jar:
-            if c.name == "ser2net_csrf":
+            if c.name == ui_cookie("ser2net_csrf", UI_PORT):
                 return c.value
         return ""
 

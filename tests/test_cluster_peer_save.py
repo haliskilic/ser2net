@@ -6,7 +6,9 @@ it and opens it in append mode, and a pyserial URL serial port would reach any p
 _peer_save_fields forwards only the mapping form's own fields, validates the submission
 locally, reduces the trace field to a sanitised file name (kept as the peer stored it
 when unchanged, refused as a new name for a pre-2.8 peer), and requires the mapping to
-exist on the peer. Pure unit test (no sockets); the two-node proxy path is in
+exist on the peer. The form never holds the peer's MQTT password: the peer is sent the
+password to store (its own when the field was left blank), so a 2.8 peer, which stores
+what it gets, keeps it. Pure unit test (no sockets); the two-node proxy path is in
 tests/test_cluster.py.
 
 Run: python3 tests/test_cluster_peer_save.py
@@ -96,6 +98,25 @@ def test_unchanged_trace_kept_as_stored():
     print("an unchanged trace field keeps the peer's stored value verbatim  OK")
 
 
+def test_mqtt_password_sent_to_store():
+    peer = {"options": {"trace_both": ""}, "mqtt": {"password": "peer-pw"}}
+    for extra, want in (({"mqtt_password_write_only": "1", "mqtt_password": ""}, "peer-pw"),
+                        ({"mqtt_password_write_only": "1", "mqtt_password": "********"}, "peer-pw"),
+                        ({"mqtt_password_write_only": "1", "mqtt_password": "new"}, "new"),
+                        ({"mqtt_password_write_only": "1", "mqtt_password_clear": "on"}, ""),
+                        ({"mqtt_password": ""}, ""),          # an older node's form: as posted
+                        ({"mqtt_password": "old-form"}, "old-form")):
+        fields, err = _peer_save_fields(form(**extra), peer, "2.8.0")
+        assert err is None, err
+        keys = [k for k, _v in fields]
+        assert keys.count("mqtt_password") == 1 and dict(fields)["mqtt_password"] == want, \
+            (extra, fields)
+        assert "mqtt_password_write_only" not in keys and "mqtt_password_clear" not in keys
+    fields, _ = _peer_save_fields(form(mqtt_password_write_only="1"), {"mqtt": ["odd"]}, "2.8.0")
+    assert dict(fields)["mqtt_password"] == "", fields
+    print("MQTT password: the peer is sent the one to store, never the write-only marker  OK")
+
+
 def main():
     test_version_gate()
     test_requires_existing_mapping()
@@ -104,6 +125,7 @@ def main():
     test_trace_sanitised()
     test_trace_new_name_refused_pre_2_8()
     test_unchanged_trace_kept_as_stored()
+    test_mqtt_password_sent_to_store()
     print("\nPASS: fleet-view edit proxy forwards only known, validated fields")
 
 

@@ -24,9 +24,12 @@ sys.path.insert(0, ROOT)
 UI = 8087
 BASE = f"http://127.0.0.1:{UI}"
 
-from _server import Server  # noqa: E402
+from _server import Server, ui_cookie  # noqa: E402
 
 from app.web import auth  # noqa: E402
+
+# the UI's cookie names at that port
+SESSION, CSRF = ui_cookie("ser2net_session", UI), ui_cookie("ser2net_csrf", UI)
 
 
 def raw(port, method, path, headers, body=None):
@@ -71,10 +74,10 @@ def main():
         op = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
 
         def csrf():
-            return next((c.value for c in jar if c.name == "ser2net_csrf"), "")
+            return next((c.value for c in jar if c.name == CSRF), "")
 
         def session():
-            return next((c.value for c in jar if c.name == "ser2net_session"), "")
+            return next((c.value for c in jar if c.name == SESSION), "")
 
         def post(path, data, header=True):
             req = urllib.request.Request(BASE + path,
@@ -102,19 +105,20 @@ def main():
         # non-ASCII bytes in a session cookie, a CSRF cookie/header or a form's _csrf
         # field are a mismatch (no session / 403), never a server error
         bad = "ü".encode()  # the UTF-8 bytes of a letter
-        for cookie in (b"ser2net_session=" + bad + b".x", b'ser2net_session="\\303\\274.x"'):
+        for cookie in (f"{SESSION}=".encode() + bad + b".x",
+                       f'{SESSION}="\\303\\274.x"'.encode()):
             assert raw(UI, "GET", "/", {"Cookie": cookie}) == 303, cookie
             assert raw(UI, "GET", "/api/status", {"Cookie": cookie}) == 401, cookie
         form = urllib.parse.urlencode({"name": "x"}).encode()
         ct = {"Content-Type": "application/x-www-form-urlencoded"}
-        sess = f"ser2net_session={session()}".encode()
+        sess = f"{SESSION}={session()}".encode()
         assert raw(UI, "POST", "/api/mappings/save", {
-            **ct, "Cookie": f"ser2net_csrf={csrf()}; ".encode() + sess, "X-CSRF-Token": bad}, form) == 403
+            **ct, "Cookie": f"{CSRF}={csrf()}; ".encode() + sess, "X-CSRF-Token": bad}, form) == 403
         assert raw(UI, "POST", "/api/mappings/save", {
-            **ct, "Cookie": b"ser2net_csrf=" + bad + b"; " + sess,
+            **ct, "Cookie": f"{CSRF}=".encode() + bad + b"; " + sess,
             "X-CSRF-Token": csrf().encode()}, form) == 403
         login = urllib.parse.urlencode({"password": "x", "_csrf": "ü"}).encode()
-        assert raw(UI, "POST", "/login", {**ct, "Cookie": f"ser2net_csrf={csrf()}".encode()},
+        assert raw(UI, "POST", "/login", {**ct, "Cookie": f"{CSRF}={csrf()}".encode()},
                    login) == 403
         print("non-ASCII session cookie / CSRF cookie, header or field -> 303/401/403  OK")
 
@@ -127,7 +131,7 @@ def main():
         assert new_session and new_session != old_session, "session should be refreshed"
         # request with ONLY the old cookie -> redirected to /login
         req = urllib.request.Request(BASE + "/")
-        req.add_header("Cookie", f"ser2net_session={old_session}")
+        req.add_header("Cookie", f"{SESSION}={old_session}")
         resp = urllib.request.urlopen(req, timeout=10)
         assert resp.geturl().endswith("/login"), f"old session still valid: {resp.geturl()}"
         print("session revocation: old session invalid after password change  OK")
@@ -136,7 +140,7 @@ def main():
         jar2 = http.cookiejar.CookieJar()
         op2 = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar2))
         op2.open(BASE + "/login")  # get a csrf cookie
-        tok = next((c.value for c in jar2 if c.name == "ser2net_csrf"), "")
+        tok = next((c.value for c in jar2 if c.name == CSRF), "")
         codes = []
         for _ in range(11):
             req = urllib.request.Request(BASE + "/login",
@@ -174,7 +178,7 @@ def test_oidc_state_odd_values():
         signed = auth.sign_payload(secret, {"s": "abc", "n": "n", "r": "https://h/cb"}).encode()
         for state, cookie in (("%C3%BC", signed), ("abc", "ü".encode() + b"." + signed)):
             st = raw(srv.port, "GET", f"/auth/oidc/callback?code=x&state={state}",
-                     {"Cookie": b"ser2net_oidc=" + cookie})
+                     {"Cookie": ui_cookie("ser2net_oidc", srv.port).encode() + b"=" + cookie})
             assert st == 400, (state, st)
     print("SSO callback: non-ASCII state or state cookie -> 400  OK")
 
@@ -206,10 +210,11 @@ def test_token_kinds():
                  "oidc": {"enabled": True, "issuer": "https://idp.example.com",
                           "client_id": "ser2net", "client_secret": "sek"}}) as srv:
         for path in ("/", "/settings", "/api/mappings"):
-            st = raw(srv.port, "GET", path, {"Cookie": "ser2net_session=" + state_cookie})
+            st = raw(srv.port, "GET", path,
+                     {"Cookie": ui_cookie("ser2net_session", srv.port) + "=" + state_cookie})
             assert st in (303, 401), (path, st)
         st = raw(srv.port, "GET", "/auth/oidc/callback?code=x&state=",
-                 {"Cookie": "ser2net_oidc=" + session})
+                 {"Cookie": ui_cookie("ser2net_oidc", srv.port) + "=" + session})
         assert st == 400, st
         assert "Traceback" not in srv.output()
     print("SSO state cookie as the session cookie, and the reverse: refused, no server "

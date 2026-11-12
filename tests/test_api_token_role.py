@@ -24,7 +24,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-from _server import Browser, Server
+from _server import Browser, Server, ui_cookie
 
 from app.config import AppConfig
 from app.web.auth import hash_password, hash_token
@@ -161,7 +161,7 @@ def main():
         op = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
 
         def csrf():
-            return next((c.value for c in jar if c.name == "ser2net_csrf"), "")
+            return next((c.value for c in jar if c.name == ui_cookie("ser2net_csrf", UI)), "")
 
         def post_form(path, data):
             req = urllib.request.Request(BASE + path,

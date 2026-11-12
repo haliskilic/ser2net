@@ -8,14 +8,14 @@ import asyncio
 import contextlib
 import struct
 import time
-from urllib.parse import urlparse
 
 from starlette.responses import PlainTextResponse, Response
 from starlette.routing import Route, WebSocketRoute
 
+from ...engine import netguard
 from ...engine.bridge import TO_DEVICE
 from ...i18n import _
-from .. import auth
+from .. import auth, proxy
 from .common import Ctx, client_ip, console_interactive, current_user, sees_to_device
 
 # the protocols whose runner sends a serial BREAK (not a Modbus gateway: an RTU bus)
@@ -27,15 +27,28 @@ CONSOLE_ACCESS_RECHECK_S = 2.0  # how often an open console re-checks its access
 def routes(ctx: Ctx) -> list:
     state = ctx.state
 
+    # refused WebSockets of another site's page: logged at most once a minute (a client
+    # other than a browser can send any Origin)
+    cross_site_note = netguard.LogEvery(lambda msg: state.log(msg))
+
     async def _authorize(websocket):
         """The user a WebSocket acts as, or None (after closing it). BaseHTTPMiddleware
-        does NOT run for the WebSocket scope, so authenticate here; a cross-origin
-        WebSocket is rejected (CSWSH guard)."""
-        token = websocket.cookies.get(auth.SESSION_COOKIE)
+        does NOT run for the WebSocket scope, so authenticate here; a WebSocket that a
+        page of another site opens is rejected (CSWSH guard), by the same rule as the
+        UI's forms (auth.cross_site): a reverse proxy that passes the browser's address
+        as Host, X-Forwarded-Host or Forwarded host= works for both, and so does a page of
+        the public URL (Settings -> Reverse proxy)."""
+        token = auth.cookie(websocket, auth.SESSION_COOKIE)
+        if why := auth.cross_site(websocket.headers,
+                                  also=proxy.published_origins(state.config.admin_ui)):
+            cross_site_note(f"refused WebSocket {websocket.url.path} from "
+                            f"{client_ip(websocket)}: opened by a page of another site "
+                            f"({why}); {auth.PROXY_HINT}")
+            await websocket.close(code=1008)
+            return None, token
         ws_user = auth.request_user(state.config, token, websocket.headers,
                                     state.revoked_sessions)
-        origin = websocket.headers.get("origin")
-        if ws_user is None or (origin and urlparse(origin).netloc != websocket.headers.get("host")):
+        if ws_user is None:
             await websocket.close(code=1008)
             return None, token
         websocket.state.user = ws_user  # like request.state.user (ctx.audit)
