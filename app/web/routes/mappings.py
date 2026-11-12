@@ -11,12 +11,12 @@ import time
 from starlette.responses import FileResponse, PlainTextResponse, Response
 from starlette.routing import Route
 
-from ...config import ConfigError, MappingConfig
+from ...config import ConfigError, MappingConfig, ModbusPoll
 from ...engine import netinfo, portlist
 from ...i18n import _
 from . import ops
 from .common import TRIGGER, Ctx, console_interactive, sees_to_device
-from .forms import _form_error, _modbus_points_json
+from .forms import _form_error, _modbus_points_json, _parse_modbus_points
 
 
 def routes(ctx: Ctx) -> list:
@@ -109,6 +109,37 @@ def routes(ctx: Ctx) -> list:
                       mapping=m, is_new=False, modbus_points_json=_modbus_points_json(m),
                       ports=portlist.visible(state.ports.get()), ips=netinfo.list_ip_candidates(),
                       error=None)
+
+    async def mapping_modbus_read(request):
+        """The mapping form's test read: the points in the posted points JSON, as typed (not
+        saved), read once now through the mapping's running gateway (its turn on the bus
+        with the poll and the masters); nothing is published. A fragment for the form."""
+        if deny := require_role(request, "operator"):
+            return deny
+        m = state.config.get_mapping(request.path_params["mid"])
+        if not m:
+            return PlainTextResponse(_("Mapping not found"), status_code=404)
+        form = await request.form()
+        try:
+            poll = ModbusPoll.from_dict(
+                {"points": _parse_modbus_points(form.get("modbus_points", ""), strict=True)})
+            poll.validate()
+            poll.validate_input()
+        except (ValueError, ConfigError) as e:
+            return render(request, "_modbus_read.html", rows=[], error=str(e))
+        runner = state.supervisor.get_runner(m.id)
+        read_now = getattr(runner, "read_now", None)  # (a Modbus gateway's runner)
+        if read_now is None or runner.status.state in ("stopped", "error"):
+            return render(request, "_modbus_read.html", rows=[], error=_(
+                "Start this Modbus gateway to read the points: it reads them over its serial "
+                "port."))
+        if not poll.points:
+            return render(request, "_modbus_read.html", rows=[], error=_("There are no points "
+                                                                          "to read."))
+        rows = await read_now(poll.points)
+        return render(request, "_modbus_read.html", error=None, more=len(poll.points) > len(rows),
+                      rows=[{"name": p.name, "unit": p.unit, "value": v, "error": e}
+                            for p, v, e in rows])
 
     async def mapping_log(request):
         mid = request.path_params["mid"]
@@ -212,6 +243,7 @@ def routes(ctx: Ctx) -> list:
         Route("/api/mappings/bulk", mapping_bulk, methods=["POST"]),
         Route("/api/mappings/form", mapping_form_new),
         Route("/api/mappings/{mid}/form", mapping_form_edit),
+        Route("/api/mappings/{mid}/modbus-read", mapping_modbus_read, methods=["POST"]),
         Route("/api/mappings/{mid}/log", mapping_log),
         Route("/api/mappings/{mid}/console-view", console_view),
         Route("/api/mappings/{mid}/traces", mapping_traces),

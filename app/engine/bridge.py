@@ -303,6 +303,10 @@ class RunnerStatus:
     # offline), "cause" (offline: "no reply" | "port down"), "since" (unix time of the last
     # change, None before one), "errors" (failed point reads)}
     units: list[dict] = field(default_factory=list)
+    # ... and each polled point's last read: {"name", "unit", "value" (the last value read,
+    # None before one), "ts" (when, ms since the epoch), "error" (why the last read failed;
+    # "" when it gave the value)}
+    points: list[dict] = field(default_factory=list)
     # the MQTT publisher's connection to its broker while the mapping runs (empty: MQTT
     # off): MqttPublisher.state — "state" (connecting | connected | down | off), "broker",
     # "since", "error", "dropped"
@@ -337,6 +341,7 @@ class RunnerStatus:
             "queue_overflows": self.queue_overflows,
             "last_error": self.last_error,
             "units": [dict(u) for u in self.units],
+            "points": [dict(p) for p in self.points],
             "mqtt": dict(self.mqtt),
         }
 

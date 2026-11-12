@@ -19,7 +19,10 @@
   * the unit map (off by default): a Modbus/TCP master's request for a mapped unit id goes
     to the RTU unit it names and is answered with the id the master sent; other ids, and
     every id without a map, go as sent (unit 0 stays a broadcast); a stored entry the
-    edits refuse is ignored, with a warning.
+    edits refuse is ignored, with a warning;
+  * the status lists each polled point's last read (value, when, why it failed), also after
+    a write's read-back; the mapping form's test read (read_now) reads points as typed,
+    through the running gateway, publishing nothing.
 Cross-platform (binds 127.0.0.1 only).
 
 Run: python3 tests/test_modbus_point_reads.py
@@ -361,6 +364,12 @@ async def gateway_types():
         assert [struct.unpack(">H", pdu[3:5])[0] for _u, pdu in slave.seen] == [
             2, 4, 3, 1, 2, 2], "each point reads its own registers"
         print("poll: CDAB float, DCBA uint64, BADC string, a register's bit, ABCD uint32  OK")
+        r._report_units()
+        last = {p["name"]: p for p in r.status.as_dict()["points"]}
+        assert last["volts"]["value"] == 230.5 and last["tag"]["value"] == "MOFE", last
+        assert last["alarm"]["value"] is True and last["volts"]["error"] == "", last
+        assert all(isinstance(p["ts"], int) and p["unit"] == 1 for p in last.values()), last
+        print("status: each point's last value and when it was read  OK")
 
         slave.seen.clear()
         assert await r.write_point(r.mapping.modbus_poll.points[5], -2) == -2
@@ -371,16 +380,32 @@ async def gateway_types():
         assert req[0] == 16 and req[5] == 8 and req[6:14] == bytes.fromhex("feff" + "ff" * 6), \
             req.hex(" ")
         print("MQTT write: registers sent in the point's word order (FC16), read back  OK")
+        assert {p["name"]: p["value"] for p in r.status.points}["sp"] == -2, r.status.points
+
+        # the form's test read: points as typed, read now, nothing published
+        published.clear()
+        typed = MappingConfig.from_dict({"modbus_poll": {"points": [
+            {"name": "volts?", "fn": 3, "address": 0, "dtype": "float32"},      # ABCD: wrong
+            {"name": "volts", "fn": 3, "address": 0, "dtype": "float32", "word_order": "CDAB"},
+            {"name": "all", "unit": 0, "fn": 3, "address": 0},
+            {"name": "cmd", "fn": 3, "address": 60, "writable": True, "poll": False}]}}
+        ).modbus_poll.points
+        rows = [(p.name, v, e) for p, v, e in await r.read_now(typed)]
+        assert rows[1] == ("volts", 230.5, "") and rows[0][1] != 230.5, rows
+        assert rows[2][2].startswith("not read") and rows[3][2].startswith("not read"), rows
+        assert not published, "a test read published something"
+        print("test read: points as typed read now, not published  OK")
 
         tag, alarm = r.mapping.modbus_poll.points[2:4]
         tag.writable = alarm.writable = True  # (as a hand-edited config.json could have it)
+        slave.seen.clear()
         for p in (tag, alarm):
             try:
                 await r.write_point(p, 1)
                 raise AssertionError(f"wrote {p.name}")
             except ValueError as e:
                 assert "MQTT can't write it" in str(e), e
-        assert len(slave.seen) == 4, "nothing was sent for a string or a register's bit"
+        assert not slave.seen, "something was sent for a string or a register's bit"
         print("a string or a bit of a register is never written  OK")
     finally:
         await close(server, sw)

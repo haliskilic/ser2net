@@ -360,9 +360,13 @@ def boot_config(port):
                 enabled=False).to_dict()
     m["name"] = "Hat-1 ölçüm"
     m["modbus_poll"]["points"][0]["name"] = "Sıcaklık"
+    running = gateway([{"name": "kept", "fn": 3}], id="aaaaaaaaaaa2", name="Running",
+                      mqtt={"enabled": False}).to_dict()
+    running["serial"]["port"] = "/dev/ser2net-test-missing"
+    running["network"]["port"] = free_port()
     m["network"]["port"] = port
     return {"users": users, "api_token_hash": hash_token(TOKEN), "api_token_role": "admin",
-            "mappings": [m]}
+            "mappings": [m, running]}
 
 
 def test_server():
@@ -388,6 +392,26 @@ def test_server():
         st, _, page = b.get("/api/mappings/aaaaaaaaaaa1/form")
         assert st == 200 and '&#34;name&#34;: &#34;Sıcaklık&#34;' in page, page[-1500:]
         assert "u0131" not in page
+        assert 'hx-post="/api/mappings/aaaaaaaaaaa1/modbus-read"' in page
+        st, _, page = b.get("/api/mappings/form")
+        assert st == 200 and "modbus-read" not in page, "no test read for a new mapping"
+        typed = '[{"name": "x", "fn": 3}, {"name": "w", "fn": 3, "writable": true, "poll": false}]'
+        st, _, frag = b.post("/api/mappings/aaaaaaaaaaa1/modbus-read", {"modbus_points": typed},
+                             htmx=True)
+        assert st == 200 and "Start this Modbus gateway" in frag, (st, frag[:400])
+        st, _, frag = b.post("/api/mappings/aaaaaaaaaaa2/modbus-read",
+                             {"modbus_points": '[{"name": "x",'}, htmx=True)
+        assert st == 200 and "line 1, column 15" in frag, (st, frag[:400])
+        st, _, frag = b.post("/api/mappings/aaaaaaaaaaa2/modbus-read", {"modbus_points": typed},
+                             htmx=True)
+        assert st == 200 and "data-modbus-read" in frag, (st, frag[:600])
+        assert ("the serial port is down" in frag or "no reply from unit 1" in frag), frag[:800]
+        assert "not read: unit 0 (broadcast) or write-only" in frag, frag[:800]
+        st, _, frag = b.post("/api/mappings/nosuchmap/modbus-read", {"modbus_points": typed},
+                             htmx=True)
+        assert st == 404
+        print("test read: a stopped gateway says so, a JSON error is shown, a running one "
+              "answers per point  OK")
         st, headers, raw = b.get("/settings/config/export", raw=True)
         assert st == 200 and headers.get("Content-Type") == "application/json; charset=utf-8"
         assert "Sıcaklık".encode() in raw and "Hat-1 ölçüm".encode() in raw and b"\\u" not in raw
@@ -414,7 +438,7 @@ def test_server():
             assert '<textarea name="modbus_points"' in body
             shown = body.split('<textarea name="modbus_points"', 1)[1].split(">", 1)[1]
             assert shown.startswith(text.replace('"', "&#34;")), (text, shown[:80])
-            assert points() == kept and len(srv.saved_config()["mappings"]) == 1
+            assert points() == kept and len(srv.saved_config()["mappings"]) == 2
         st, _, body = b.post("/api/mappings/save", dict(
             edit, modbus_points='[{"name": "b", "unit": "2", "scale": "0.5", "fn": 3, '
                                 '"writable": "false"}]'))

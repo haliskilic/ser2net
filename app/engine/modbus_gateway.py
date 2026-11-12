@@ -93,6 +93,9 @@ SET_MAX_BYTES = 64 * 1024
 # stop(): the write on the bus gets this long at most (and no longer than its reply can
 # take) to finish before it is cancelled; the ones still waiting are answered at once.
 WRITE_STOP_WAIT_S = 2.0
+# The mapping form's test read (read_now): at most this many points, for at most this long.
+READ_NOW_MAX = 32
+READ_NOW_S = 10.0
 
 
 def _next_timer(idle_s: float, deadline: Optional[float]) -> Optional[float]:
@@ -237,6 +240,10 @@ class ModbusGatewayRunner:
             for u in self._units.values():
                 u.blocks = plan_blocks(u.points, self._block_gap)
         self._failing: dict[str, bool] = {}
+        # each polled point's last read, for the status (RunnerStatus.points)
+        self._last: dict[str, dict] = {
+            p.name: {"name": p.name, "unit": u.unit, "value": None, "ts": None, "error": ""}
+            for u in self._units.values() for p in u.points}
         self._bad: set[str] = set()  # plain JSON values: points last published as "bad"
         self._cycle: Optional[_Reads] = None  # the reads of the unit being polled (see _Reads.drop)
 
@@ -355,6 +362,7 @@ class ModbusGatewayRunner:
         self.status.client_count = 0
         self.status.clients = []
         self.status.units = []
+        self.status.points = []
         self._log("modbus gateway stopped")
 
     # ---------------- one RTU transaction on the shared bus ----------------
@@ -507,6 +515,7 @@ class ModbusGatewayRunner:
         finally:
             self._cycle = None
         u.errors += len(reads.failed)
+        self._remember(reads.values, reads.stamps, reads.failed)
         self._forget([p.name for p, _e in reads.failed])
         if not reads.answered:
             return self._unit_missed(u, "port down" if self._link.down else "no reply")
@@ -600,8 +609,38 @@ class ModbusGatewayRunner:
                 reads.failed.append((p, e))
                 reads.answered = True
 
+    def _remember(self, values: dict, stamps: dict, failed=()) -> None:
+        """The points' last reads, for the status: the values read (and when), and why the
+        failed ones failed (their last value stays)."""
+        for name, v in values.items():
+            if (last := self._last.get(name)) is not None:
+                last.update(value=_json_value(v), ts=stamps.get(name), error="")
+        for p, e in failed:
+            if (last := self._last.get(p.name)) is not None:
+                last["error"] = str(e) or type(e).__name__
+
     def _report_units(self) -> None:
         self.status.units = [u.as_dict() for u in self._units.values()]
+        self.status.points = list(self._last.values())
+
+    async def read_now(self, points) -> list[tuple[Any, Any, str]]:
+        """The mapping form's test read: ``points`` (as typed in the form, maybe not saved)
+        read once now, each with a request of its own that takes its turn on the bus with
+        the poll, the writes and the masters; nothing is published. At most READ_NOW_MAX
+        points, for at most READ_NOW_S. Returns (point, value, error) for each."""
+        out: list[tuple[Any, Any, str]] = []
+        end = time.monotonic() + READ_NOW_S
+        for p in points[:READ_NOW_MAX]:
+            if p.unit == modbus.BROADCAST or not _polled(p):
+                out.append((p, None, "not read: unit 0 (broadcast) or write-only"))
+            elif time.monotonic() > end:
+                out.append((p, None, f"not read: the test read stops after {READ_NOW_S:g} s"))
+            else:
+                try:
+                    out.append((p, await self._read_point(p), ""))
+                except Exception as e:  # (shown next to the point)
+                    out.append((p, None, str(e) or type(e).__name__))
+        return out
 
     def _unit_state_changed(self, u: _Unit) -> None:
         if self._sparkplug is None and self.mapping.mqtt.unit_status:
@@ -713,7 +752,9 @@ class ModbusGatewayRunner:
             value = await self._read_point(point)
         except Exception:
             return None
-        self._publish_values({point.name: value}, {point.name: _now_ms()}, force=True)
+        stamps = {point.name: _now_ms()}
+        self._remember({point.name: value}, stamps)
+        self._publish_values({point.name: value}, stamps, force=True)
         return value
 
     def _write_soon(self, point, value, done=None, refused: Optional[str] = None) -> None:

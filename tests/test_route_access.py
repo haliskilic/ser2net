@@ -118,6 +118,7 @@ ROUTES = {
     ("POST", "/api/mappings/bulk"): (OPERATOR, HEADER),
     ("GET", "/api/mappings/form"): (OPERATOR, NONE),  # the form renders stored secrets
     ("GET", "/api/mappings/{mid}/form"): (OPERATOR, NONE),
+    ("POST", "/api/mappings/{mid}/modbus-read"): (OPERATOR, HEADER),  # a test read on the bus
     ("GET", "/api/mappings/{mid}/log"): (VIEWER, NONE),
     ("GET", "/api/mappings/{mid}/console-view"): (VIEWER, NONE),
     ("GET", "/api/mappings/{mid}/traces"): (OPERATOR, NONE),  # traces hold what is sent to the device

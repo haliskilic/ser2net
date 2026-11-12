@@ -926,5 +926,13 @@
   "The unit map sends unit ids 0-255 to RTU units 1-255, each id once, such as 255=1.": "Birim yönlendirme 0-255 arasındaki birim id'lerini 1-255 arasındaki RTU birimlerine gönderir, her id bir kez; örneğin 255=1.",
   "The unit map is a list of pairs such as 255=1 (the unit id a master sends = the RTU unit it goes to); {0} is not one.": "Birim yönlendirme 255=1 gibi çiftlerden oluşan bir listedir (master'ın gönderdiği birim id'si = isteğin gittiği RTU birimi); {0} böyle bir çift değil.",
   "Unit map": "Birim yönlendirme",
-  "optional: the unit id a master sends = the RTU unit it goes to, such as 255=1, 0=1; blank = as sent": "isteğe bağlı: master'ın gönderdiği birim id'si = isteğin gittiği RTU birimi, örneğin 255=1, 0=1; boş = gönderildiği gibi"
+  "optional: the unit id a master sends = the RTU unit it goes to, such as 255=1, 0=1; blank = as sent": "isteğe bağlı: master'ın gönderdiği birim id'si = isteğin gittiği RTU birimi, örneğin 255=1, 0=1; boş = gönderildiği gibi",
+  "Start this Modbus gateway to read the points: it reads them over its serial port.": "Noktaları okumak için bu Modbus ağ geçidini başlat: noktalar onun seri portu üzerinden okunur.",
+  "There are no points to read.": "Okunacak nokta yok.",
+  "Point": "Nokta",
+  "Unit": "Birim",
+  "Value read now": "Şimdi okunan değer",
+  "Only the first %(n)s points were read.": "Yalnızca ilk %(n)s nokta okundu.",
+  "Read these points now": "Bu noktaları şimdi oku",
+  "through the running gateway, as typed above; nothing is saved or published": "çalışan ağ geçidi üzerinden, yukarıda yazıldığı gibi; hiçbir şey kaydedilmez ya da yayımlanmaz"
 }
