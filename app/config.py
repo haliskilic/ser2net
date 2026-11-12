@@ -994,10 +994,11 @@ class MappingConfig:
     def check_tls_files(self) -> None:
         """An edit's check (mapping form, so also a cluster peer's save on the node it is
         for; REST API; an import, as a warning), not part of validate()/validate_input(),
-        which can't load files: a TLS mapping's certificate and key must load as the mapping
-        will load them (engine/tls.py), its key decrypted with tls_key_password, so a key
-        that needs a password, a wrong password or a key that is not the certificate's is
-        refused here rather than found out when the mapping starts. Raises ConfigError."""
+        which can't load files: a TLS mapping's certificate, key and CA file must load as
+        the mapping will load them (engine/tls.py), its key decrypted with tls_key_password,
+        so a key that needs a password, a wrong password, a key that is not the
+        certificate's or a CA file without a certificate is refused here rather than found
+        out when the mapping starts. Raises ConfigError."""
         net = self.network
         if not (self.kind == "net" and net.tls and net.mode != "udp"):
             return
