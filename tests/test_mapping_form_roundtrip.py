@@ -140,10 +140,16 @@ def sinks() -> list[MappingConfig]:
 
 # ---- the form, as the routes render and parse it -------------------------------------
 
-def render(mapping, *, error=None, remote=None, ports=None, hide=frozenset(), rev="r3v") -> str:
+def render(mapping, *, error=None, remote=None, ports=None, hide=frozenset(), rev="r3v",
+           stored=None, form=None) -> str:
+    """The form as the routes draw it: the stored passwords are not shown, only that
+    there are some; shown again after an error (`stored`: the stored mapping, `form`: what
+    was posted), what was typed."""
     return TEMPLATE.render(request=REQUEST, **forms.form_context(
         mapping, cases.PORTS if ports is None else ports, cases.IPS, is_new=False,
-        error=error, remote=remote, hide=hide, rev=rev))
+        error=error, remote=remote, hide=hide, rev=rev,
+        mqtt_stored=(mapping if stored is None else stored).mqtt.password,
+        tls_stored=None if stored is None else stored.network.tls_key_password, form=form))
 
 
 class Recorder(FormData):
@@ -224,16 +230,17 @@ def test_unchanged_save(all_sinks):
     for m in all_sinks:
         assert_kept(m, local_save(m, render(m)), "local edit")
         # a form shown again after an error (validation, a port clash found at save time)
-        again = forms.mapping_for_rerender(FormData(browser_post(render(m))), m, cases.PORTS)
-        assert_kept(m, local_save(m, render(again, error="Something was wrong.")),
-                    "local edit after an error")
+        sent = FormData(browser_post(render(m)))
+        again = forms.mapping_for_rerender(sent, m, cases.PORTS)
+        assert_kept(m, local_save(m, render(again, error="Something was wrong.", stored=m,
+                                            form=sent)), "local edit after an error")
         # the fleet view: this node renders the peer's mapping and forwards the save
         assert_kept(m, remote_save(m, remote_form(m)), "fleet-view edit")
         # ...and shows it again after the peer refused it (cluster_peer_save._reload)
-        again = forms.mapping_for_rerender(FormData(browser_post(remote_form(m))), m,
-                                           cases.PORTS)
+        sent = FormData(browser_post(remote_form(m)))
+        again = forms.mapping_for_rerender(sent, m, cases.PORTS)
         page = render(again, error="The peer refused it.",
-                      remote=_remote(PEER, m.id, again))
+                      remote=_remote(PEER, m.id, again), stored=m, form=sent)
         assert_kept(m, remote_save(m, page), "fleet-view edit after an error")
     print("unchanged save keeps every setting: local and fleet-view edit, and both after "
           "an error  OK")
