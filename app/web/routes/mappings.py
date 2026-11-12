@@ -17,8 +17,8 @@ from ...engine import netinfo, portlist
 from ...i18n import _
 from . import ops
 from .common import (
-    TRIGGER, Ctx, action_done, console_interactive, notice, sees_to_device, start_failed,
-    unchanged_or,
+    TRIGGER, Ctx, action_done, bytesize, console_interactive, notice, sees_to_device,
+    start_failed, unchanged_or,
 )
 from .forms import _form_error, _modbus_points_json
 
@@ -149,10 +149,8 @@ def routes(ctx: Ctx) -> list:
                 st = os.stat(path)
             except OSError:
                 continue
-            size = st.st_size
-            text = (f"{size / 1048576:.1f} MB" if size >= 1048576 else
-                    f"{size / 1024:.1f} KB" if size >= 1024 else f"{size} B")
-            out.append({"name": os.path.basename(path), "path": path, "size_text": text,
+            out.append({"name": os.path.basename(path), "path": path,
+                        "size_text": bytesize(st.st_size),
                         "time": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(st.st_mtime))})
         return out
 

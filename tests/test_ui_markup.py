@@ -198,6 +198,32 @@ def test_cluster_table():
     print("cluster table: wrapper, card labels, buttons in their cell, escaping  OK")
 
 
+def test_counters_and_empty_state():
+    """In / Out in B / KB / MB / GB in both tables (the exact counts stay in the REST API
+    and /metrics); a dashboard without mappings tells viewers nothing about an "Add
+    mapping" button they don't have."""
+    from app.web.routes.common import bytesize
+    assert [bytesize(n) for n in (0, 1023, 1024, 1536, 10 * 1048576 + 1, 5 << 30, 3 << 40)] == \
+        ["0 B", "1023 B", "1.0 KB", "1.5 KB", "10.0 MB", "5.0 GB", "3.0 TB"]
+    assert bytesize("junk") == "junk" and bytesize(None) == "None", "a peer's odd value as is"
+    env = make_templates().env
+    rows = env.get_template("_mappings_body.html").render(
+        mappings=mappings(), can_edit=True,
+        statuses={"m1": {"state": "running", "bytes_in": 2048, "bytes_out": 5 * 1048576}})
+    assert '<span id="m-m1-bytes">2.0 KB / 5.0 MB</span>' in rows, rows
+    nodes = [{"name": "n", "self": True, "source": "self", "ip": "10.0.0.1", "port": 8080,
+              "addr": "10.0.0.1:8080", "online": True,
+              "mappings": [{"id": "x1", "name": "a", "enabled": True, "bytes_in": 512,
+                            "bytes_out": 3 << 30, "state": "running"}]}]
+    cluster = env.get_template("_cluster_body.html").render(can_edit=True, nodes=nodes)
+    assert '<span id="c-10_0_0_1_8080-x1-bytes">512 B / 3.0 GB</span>' in cluster, cluster
+    tpl = env.get_template("_mappings_body.html")
+    assert "Click “Add mapping”" in tpl.render(mappings=[], statuses={}, can_edit=True)
+    viewer = tpl.render(mappings=[], statuses={}, can_edit=False)
+    assert "No mappings yet." in viewer and "Add mapping" not in viewer, viewer
+    print("counters in B/KB/MB/GB (both tables); viewers' empty table without the Add hint  OK")
+
+
 def test_ports_table_and_assets():
     env = make_templates().env
     ports = [{"device": BY_ID, "description": "FT232R USB UART", "vid": "0403", "pid": "6001",
@@ -586,6 +612,7 @@ def main():
     test_softbreak()
     test_mappings_table()
     test_cluster_table()
+    test_counters_and_empty_state()
     test_ports_table_and_assets()
     test_mapping_form_modbus_fields()
     test_mapping_form_udp_fields()

@@ -370,6 +370,7 @@ document.addEventListener("htmx:beforeSwap", function (e) {
       if (had && had !== document.activeElement && body.contains(had)) had.focus({ preventScroll: true });
     }
     rows = sorted;
+    noMatch(body, rows.length > 0 && shown === 0);
     var count = t.querySelector("[data-filter-count]");
     var said = (text || st) ? tr("shown", "{0} of {1} shown", shown, rows.length) : "";
     // a live region: set only when it changes (not at every refresh), so it is read once
@@ -378,6 +379,30 @@ document.addEventListener("htmx:beforeSwap", function (e) {
     var ids = new Set(rows.map(function (r) { return r.getAttribute("data-mid"); }));
     selected.forEach(function (id) { if (!ids.has(id)) selected.delete(id); });
     updateBulk();
+  }
+
+  // A filter that matches no mapping says so in the table (a filter is kept across visits:
+  // a table left empty by it looked like a dashboard without mappings), with a button
+  // that shows all of them again.
+  function noMatch(body, on) {
+    var row = body.querySelector("tr.no-match");
+    if (!on) { if (row) body.removeChild(row); return; }
+    if (row) return;
+    row = document.createElement("tr");
+    row.className = "no-match";
+    var td = document.createElement("td");
+    td.className = "muted";
+    td.colSpan = body.parentNode.querySelectorAll("thead th").length || 1;
+    td.appendChild(document.createTextNode(
+      tr("no_match", "No mapping matches the search or the state filter.") + " "));
+    var b = document.createElement("button");
+    b.type = "button";
+    b.className = "link";
+    b.setAttribute("data-filter-clear", "");
+    b.textContent = tr("show_all", "Show all");
+    td.appendChild(b);
+    row.appendChild(td);
+    body.appendChild(row);
   }
 
   function updateBulk() {
@@ -400,6 +425,15 @@ document.addEventListener("htmx:beforeSwap", function (e) {
     }
   });
   document.addEventListener("click", function (e) {
+    if (e.target.closest && e.target.closest("[data-filter-clear]")) {
+      var t = tools();
+      if (!t) return;
+      t.querySelector("[data-filter-text]").value = "";
+      t.querySelector("[data-filter-state]").value = "";
+      apply();
+      t.querySelector("[data-filter-text]").focus();
+      return;
+    }
     var b = e.target.closest ? e.target.closest("[data-bulk-action], [data-bulk-clear]") : null;
     if (!b) return;
     if (b.hasAttribute("data-bulk-clear")) { selected.clear(); apply(); return; }
@@ -570,6 +604,26 @@ var feedback = (function () {
     feedback.show("offline", "error", tr("offline", "The server can’t be reached: this page is not up to date. It updates again as soon as the server answers."));
   });
 })();
+
+// 7b) Copy a one-time token or key ([data-copy] names the element that holds it). The
+//     clipboard API works only on a secure page (https, localhost): on plain http the
+//     text is selected for Ctrl+C.
+document.addEventListener("click", function (e) {
+  var b = e.target.closest ? e.target.closest("[data-copy]") : null;
+  var box = b ? document.getElementById(b.getAttribute("data-copy")) : null;
+  if (!box) return;
+  function byHand() {
+    var range = document.createRange(), sel = window.getSelection();
+    range.selectNodeContents(box);
+    sel.removeAllRanges();
+    sel.addRange(range);
+    feedback.show("copy", "ok", tr("copy_by_hand", "Selected: press Ctrl+C (⌘C on a Mac) to copy it."));
+  }
+  if (!window.isSecureContext || !navigator.clipboard) { byHand(); return; }
+  navigator.clipboard.writeText(box.textContent.trim()).then(function () {
+    feedback.show("copy", "ok", tr("copied", "Copied to the clipboard."));
+  }, byHand);
+});
 
 // 8) The form panel (#form-panel: a mapping's form, log, console or traces) sits above
 //    the table. The buttons that open it scroll it into view (hx-swap "show:top"), then
