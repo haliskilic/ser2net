@@ -1,4 +1,5 @@
-"""Per-mapping log retention: age (>15d) + size (>100MB) auto-trim.
+"""Per-mapping log retention: age (>15d) + size (>100MB) auto-trim; the age trim never
+cuts into the last lines the Log panel shows, so a clock step can't empty it.
 
 The trim streams: a file within its limits is left alone after its first line, what is
 kept is copied in chunks byte for byte, in about constant memory, and lines the mapping
@@ -104,7 +105,7 @@ def test_within_limits_untouched():
             fh.readline = lambda *ra: reads.append(1) or real_readline(*ra)
             return fh
         with mock.patch("builtins.open", counting_open):
-            assert not _trim_log_file(p, _cutoff(), 1024 * 1024)
+            assert not _trim_log_file(p, _cutoff(), 1024 * 1024, keep_lines=1000)
         after = os.stat(p)
         assert (after.st_ino, after.st_mtime_ns, after.st_size) == \
             (before.st_ino, before.st_mtime_ns, before.st_size)
@@ -264,6 +265,50 @@ def test_swap_failures():
         shutil.rmtree(d)
 
 
+def _lines_file(path, stamps, tag="line"):
+    with open(path, "w", encoding="utf-8") as fh:
+        for i, t in enumerate(stamps):
+            fh.write(time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(t)) + f" {tag} {i}\n")
+
+
+def test_clock_steps():
+    """A clock one year ahead, or lines stamped 2009 by a clock that was behind and is
+    then corrected: the last 1000 lines stay (they were all dropped before); the size cap
+    still applies."""
+    d = tempfile.mkdtemp()
+    try:
+        p = os.path.join(d, "c.log")
+        now = time.time()
+        stamps = [now - 6 * 86400 + i * 300 for i in range(1500)]  # 1-6 days old
+        ahead = now + 365 * 86400 - LOG_MAX_AGE_DAYS * 86400       # cutoff a year ahead
+        _lines_file(p, stamps)
+        assert _trim_log_file(p, ahead, 100 * 1024 * 1024, keep_lines=0)
+        assert _bytes(p) == b"", "without the floor a step ahead empties the log"
+        _lines_file(p, stamps)
+        assert _trim_log_file(p, ahead, 100 * 1024 * 1024, keep_lines=1000)
+        kept = _bytes(p).decode().splitlines()
+        assert len(kept) == 1000 and kept[0].endswith(" line 500") and \
+            kept[-1].endswith(" line 1499"), (len(kept), kept[:1], kept[-1:])
+        assert not _trim_log_file(p, ahead, 100 * 1024 * 1024, keep_lines=1000)
+        # stamped 2009 (no RTC, before time sync), date corrected since
+        old_clock = time.mktime((2009, 1, 1, 0, 0, 0, 0, 0, -1))
+        _lines_file(p, [old_clock + i for i in range(1200)])
+        assert _trim_log_file(p, _cutoff(), 100 * 1024 * 1024, keep_lines=1000)
+        kept = _bytes(p).decode().splitlines()
+        assert len(kept) == 1000 and kept[0].startswith("2009-") and kept[0].endswith(" line 200")
+        # ... and a recent line before them protects them all, as before
+        _lines_file(p, [time.time() - 3600] + [old_clock + i for i in range(1200)])
+        assert not _trim_log_file(p, _cutoff(), 100 * 1024 * 1024, keep_lines=1000)
+        # the size cap goes on cutting into those lines
+        _lines_file(p, stamps[:1000])
+        assert _trim_log_file(p, ahead, 4096, keep_lines=1000)
+        assert os.path.getsize(p) <= 4096
+        print("clock a year ahead / 2009 stamps corrected: last 1000 lines kept; size cap "
+              "still cuts  OK")
+    finally:
+        shutil.rmtree(d)
+
+
 async def _integration():
     d = tempfile.mkdtemp()
     try:
@@ -280,7 +325,10 @@ async def _integration():
 
         log = state.make_mapping_logger(m)   # opens the file handler (append)
         handler = state._mapping_loggers[m.id].handlers[0]
-        await state.run_log_maintenance()    # should drop ANCIENT, keep fresh
+        await state.run_log_maintenance()    # the last 1000 lines stay
+        assert open(path).read().startswith(f"{ts(-20*86400)} ANCIENT")
+        with mock.patch.object(state_mod, "LOG_VIEW_LINES", 0):
+            await state.run_log_maintenance()    # should drop ANCIENT, keep fresh
         assert state._mapping_loggers[m.id].handlers == [handler], "the handler stays"
 
         after = open(path).read()
@@ -292,6 +340,13 @@ async def _integration():
         after2 = open(path).read()
         assert "fresh event 2" in after2, after2
         print("integration (old dropped + handler reattached, logging continues) OK")
+
+        # 1500 lines, all 20 days old: the Log panel's 1000 stay
+        _lines_file(path, [time.time() - 20 * 86400 + i for i in range(1500)])
+        await state.run_log_maintenance()
+        shown = state.read_mapping_log(m.id)
+        assert len(shown) == 1000 and shown[0].endswith(" line 1499"), (len(shown), shown[:1])
+        print("integration: a mapping idle for over 15 days keeps its last 1000 lines  OK")
     finally:
         _close_loggers()
         shutil.rmtree(d, ignore_errors=True)
@@ -305,5 +360,6 @@ if __name__ == "__main__":
     test_line_feed_only_and_undated()
     test_lines_logged_meanwhile_kept()
     test_swap_failures()
+    test_clock_steps()
     asyncio.run(_integration())
     print("\nPASS: per-mapping log retention (age + size)")

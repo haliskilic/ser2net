@@ -693,7 +693,9 @@ inside aren't readable by other users:
 - `all.log` — global activity (size-rotated); `audit.log` — sign-ins, config changes,
   console / hex view opens and trace downloads: who/from where/what (rotated). Searchable
   under Settings → *Audit log*, CSV export.
-- `logs/<id>.log` — per-mapping history (hourly maintenance: trimmed >15 days / >100 MB).
+- `logs/<id>.log` — per-mapping history (hourly maintenance: lines older than 15 days are
+  dropped, but never the last 1000 the Log panel shows, so a clock that jumps ahead or a
+  corrected date doesn't empty it; a log over 100 MB is cut to 90 MB).
 - `traces/<id>-<name>` — a mapping's traffic trace. Traces are kept **only here** and
   rotate at their size limit (default 10 MB × 3 old files). Full paths from v2.7 configs
   are reduced to the file name, which is logged at start-up. A trace that can't be written
