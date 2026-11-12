@@ -36,9 +36,13 @@ jobs:
         with:
           persist-credentials: false
       - if: matrix.platform
+        # (not under DOCKER_DEFAULT_PLATFORM: the image that installs QEMU must be the
+        # runner's own, an arm/v7 one can't run before QEMU is there)
         uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1  # v4.4.0
         with:
           platforms: arm
+        env:
+          DOCKER_DEFAULT_PLATFORM: ""
       - name: docker build ${{ matrix.platform && format('--platform {0}', matrix.platform) || '' }}
         run: docker build ${DOCKER_DEFAULT_PLATFORM:+--platform "$DOCKER_DEFAULT_PLATFORM"} -t ser2net:test .
       - run: tests/docker_smoke.sh ser2net:test
