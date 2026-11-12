@@ -69,6 +69,7 @@ PORTABLE = [
     "test_standalone.py",     # binary part needs a build; CI 'standalone' workflow runs it
     "test_vendor_wheels.py",
     "test_lib_refresh.py",    # ./lib follows the pins after an upgrade (real pip, vendor/wheels)
+    "test_bootstrap_offline.py",  # offline first run without psutil's wheel, pip/Python checks
     "test_build_lock.py",     # requirements-lock/-build.txt (hashes) match the pins
     "test_vendor_assets.py",  # htmx / xterm.js recorded (vendor/npm), cached by content hash
     "test_third_party.py",    # SBOM / --licenses: SPDX ids, native libs + CPEs, npm packages

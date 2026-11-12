@@ -192,8 +192,12 @@ düzenlemeye gerek yok.
 
 ## 🧰 Gereklilikler
 
-- **Python 3.10+** (sistemde kurulu). Başka hiçbir şey gerekmez — bağımlılıklar
-  `vendor/wheels/` içinde gelir ve ilk çalıştırmada `./lib`'e kurulur (offline).
+- **Python 3.10+** (sistemde kurulu) ve pip (Debian / Ubuntu / Raspberry Pi OS'ta ayrı
+  paket: `sudo apt install python3-pip`). Başka hiçbir şey gerekmez — bağımlılıklar
+  `vendor/wheels/` içinde gelir ve ilk çalıştırmada `./lib`'e kurulur (offline), her işletim
+  sisteminde ve işlemcide. Daha eski bir `python3` (RHEL / AlmaLinux / Rocky 8 ve 9) bir
+  mesajla reddedilir: daha yenisini kurun (`sudo dnf install python3.11`; `./start.sh` onu
+  bulur) ya da standalone binary'yi kullanın.
 - Linux'ta seri portu **açmak** için kullanıcının `dialout` grubunda olması gerekir
   (port **listelemek** için ayrıcalık gerekmez):
   ```bash
@@ -208,7 +212,7 @@ düzenlemeye gerek yok.
 ## 🚀 Kurulum & Çalıştırma
 
 ```bash
-# Linux / macOS
+# Linux / macOS / Raspberry Pi (her işlemci)
 python3 ser2net.py            # veya: ./start.sh
 
 # Windows
@@ -226,6 +230,10 @@ MQTT / LDAP / OIDC desteği. Python, `openssl` ya da başka bir paket gerekmez. 
 | `ser2net-windows-x64.exe` | Windows 10/11, Windows Server 2016 ve sonrası (x64) |
 | `ser2net-linux-x64` | glibc ≥ 2.28 olan x86_64 Linux: RHEL / AlmaLinux / Rocky 8+, Debian 11+, Ubuntu 20.04+, Fedora, openSUSE Leap 15 (musl/Alpine değil — orada Docker kullanın) |
 | `ser2net-linux-arm64` | glibc ≥ 2.28 olan 64-bit ARM Linux: Raspberry Pi 3/4/5 (64-bit Raspberry Pi OS 11+ veya Ubuntu), ARM endüstriyel gateway'ler, AWS Graviton, aynı dağıtımlar |
+
+Diğer platformlar — 32-bit ARM (32-bit Raspberry Pi OS, armv7 gateway'ler), macOS, ARM
+üzerinde Windows: kaynaktan çalıştırın (`python3 ser2net.py`); orada da offline çalışır (bkz.
+*Offline kurulum*). ARM üzerindeki Windows 11 x64 exe'yi de (emülasyonla) çalıştırır.
 
 Her sürümde ayrıca `SHA256SUMS`, her binary için CycloneDX SBOM (`*.cdx.json`), lisans
 metinleri ve Linux binary'leri için systemd unit'i `ser2net-standalone.service` (bkz. *Servis
@@ -284,9 +292,17 @@ python3 ser2net.py --reconfigure
 
 ### Offline kurulum (internetsiz makine)
 Bağımlılıklar `vendor/wheels/` içinde bulunur; `ser2net.py` ilk açılışta bunları
-`./lib`'e kurar (`pip install --no-index`). İnternet gerektirmez. Set, Linux x86_64 ve
-Windows x64'te Python 3.10–3.14'ü kapsar; `requirements.txt` değişince
-`python3 tools/refresh_wheels.py` ile yenilenir (`tests/test_vendor_wheels.py` denetler).
+`./lib`'e kurar (`pip install --no-index`). İnternet gerektirmez. Set, her işletim
+sisteminde ve işlemcide Python 3.10–3.14'ü kapsar: psutil dışında her şey saf Python'dur,
+psutil (ağ arayüzü listesi) ise Linux x86_64 ve Windows x64 için pakette vardır. Başka
+yerlerde — ARM Linux (32 ve 64-bit Raspberry Pi OS), macOS, Alpine/musl, ARM üzerinde Windows
+ya da 32-bit bir Windows Python'u — ilk açılış seti psutil olmadan kurar ve bunu söyler; arayüz
+listeleri o zaman Python'un standart kütüphanesinden gelir ve bir arayüzü atlayabilir
+(`--about` `psutil not installed` gösterir; `python3 bootstrap.py --online`, makine için
+PyPI'da wheel'i varsa ya da bir C derleyicisi kuruluysa onu ekler). CI bu offline ilk açılışı
+Linux x86_64 ve arm64, Windows, macOS ve 32-bit ARM'da (armv7, emülasyonla) çalıştırır.
+`requirements.txt` değişince set `python3 tools/refresh_wheels.py` ile yenilenir
+(`tests/test_vendor_wheels.py` denetler).
 Her wheel'in sha256'sı `vendor/wheels/SHA256SUMS`'ta kayıtlıdır; listedeki bir wheel farklıysa
 ilk açılış o setten kurulum yapmaz (CI her wheel'i PyPI'ın yayımladığı dosyayla karşılaştırır).
 Kendi eklediğiniz wheel'ler listede olmadığı için olduğu gibi kurulur.
@@ -304,8 +320,7 @@ göre kurulduğunu (sabitlemeler, Python sürümü, platform) kaydeder; böylece
 aynı şekilde ele alınır. 2.8.x ya da daha eski bir sürümden yükseltirken bu ilk açılış, o
 sürümlerin `lib/`'de bıraktıklarını (belki de güvenlik duyurusu yayımlanmış 2.7 starlette ve
 anyio'yu) değiştirir.
-Bu yapılamazsa — bu makine için paketlenmiş wheel yoksa (macOS, ARM Linux: `python3
-bootstrap.py --online` çalıştırın), `lib/` ser2net'in çalıştığı hesap için yazılabilir
+Bu yapılamazsa — o Python'da pip yoksa, `lib/` ser2net'in çalıştığı hesap için yazılabilir
 değilse ya da aynı klasörden çalışan başka bir ser2net hâlâ açıksa — ser2net eski `lib/` ile
 açılır ve nedenini log'una yazar (`WARNING: … ./lib …`); bu sürüm eski paketlerle hiç
 çalışamıyorsa (2.8.1 ve sonrası 2.7'ninkilerle) açılış bunu söyleyen tek bir satırla durur.

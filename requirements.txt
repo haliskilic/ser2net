@@ -33,7 +33,9 @@ colorama==0.4.6 ; platform_system == "Windows"
 # markupsafe also ships a pure-Python py3-none-any wheel here so it installs
 # offline on ANY Python (e.g. 3.10/3.13/3.14): without a matching _speedups
 # .pyd it falls back to its native Python escaper. psutil's cp3x-abi3 wheel
-# already covers Python 3.7+.
+# already covers Python 3.7+. psutil (network interface lists) is the one package
+# without a pure-Python wheel: on other platforms (ARM Linux, macOS, ...) bootstrap.py
+# installs the set without it and ser2net uses the standard library instead.
 markupsafe==3.0.4
 psutil==7.2.2
 
