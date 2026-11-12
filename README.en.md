@@ -480,7 +480,18 @@ failed sign-ins in 10 minutes the audit log only counts them and sums them up in
 at the end of those 10 minutes, so a flood of attempts can't push the other records out.
 Opening a mapping's console or hex view is recorded once per account (with open access: per
 address), mapping and kind in 5 minutes, and at most 50 such records in 10 minutes, summed up
-the same way (all.log keeps a line for every one).
+the same way (all.log keeps a line for every one). Closing a console that wrote to the
+device is recorded too (`console_close`, with the number of bytes, never what was typed). A
+failed SSO sign-in (the identity provider refused it, its answer didn't check out, or the
+groups give no role) is recorded as `oidc_login_failed` with a short reason and notified like
+a failed local or LDAP sign-in, within the same limit. A REST API request refused for its token
+(none, a wrong or an expired one) is recorded as `api_auth_failed` once per address a minute
+(the next record says how many there were), at most 20 in 10 minutes. A request refused before
+it reaches the page (no session, a failed CSRF check, a WebSocket without a session or from
+another site) gets an all.log line once per address and answer a minute, the next one saying
+how many more there were. Line breaks and other control characters in names (a mapping name,
+a user name from the directory) are written as spaces in all.log, stdout, the mapping logs,
+the audit log and notification titles, so they can't start a line of their own.
 Names over 256 characters aren't tried. Request bodies are limited too: the sign-in, setup
 and sign-out forms to 64 KB, a configuration import to 16 MB and everything else (forms,
 the REST API) to 2 MB; a larger one gets HTTP 413.
@@ -698,9 +709,12 @@ inside aren't readable by other users:
   the box to restore them too (that also signs everyone else out). *Only its mappings*
   goes through the import preview. A restore can be undone too; a downloaded backup
   leaves out the session key.
-- `all.log` — global activity (size-rotated); `audit.log` — sign-ins, config changes,
-  console / hex view opens and trace downloads: who/from where/what (rotated). Searchable
-  under Settings → *Audit log*, CSV export.
+- `all.log` — global activity (size-rotated): also every REST API request but the
+  successful polls of `/status`, `/health`, `/ports`, `/metrics` and `/openapi.json`, with the
+  token's name; `audit.log` — sign-ins and failed ones, config changes, console / hex view
+  opens, consoles that wrote to a device, trace downloads, mapping and audit exports and
+  refused REST API tokens: who/from where/what (rotated). Searchable under Settings → *Audit
+  log*, CSV export.
 - `logs/<id>.log` — per-mapping history (hourly maintenance: trimmed >15 days / >100 MB).
 - `traces/<id>-<name>` — a mapping's traffic trace. Traces are kept **only here** and
   rotate at their size limit (default 10 MB × 3 old files). Full paths from v2.7 configs

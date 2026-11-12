@@ -777,7 +777,11 @@ def routes(ctx: Ctx) -> list:
         # offers it to operators; a viewer, possibly an anonymous one, must not read them).
         if deny := require_role(request, "operator"):
             return deny
-        data = {"version": 1, "mappings": [m.to_dict() for m in state.config.mappings]}
+        mappings = state.config.mappings
+        data = {"version": 1, "mappings": [m.to_dict() for m in mappings]}
+        secrets_in = sum(1 for m in mappings if m.mqtt.password)
+        ctx.audit(request, "config_export", f"{len(mappings)} mappings"
+                  + (f", {secrets_in} with an MQTT password" if secrets_in else ""))
         return Response(
             json.dumps(data, indent=2), media_type="application/json",
             headers={"Content-Disposition": "attachment; filename=ser2net-mappings.json"})
@@ -966,7 +970,10 @@ def routes(ctx: Ctx) -> list:
     async def audit_csv(request):
         if deny := require_role(request, "admin"):
             return deny
-        records, *_ = await _audit_records(request)
+        records, filters, *_ = await _audit_records(request)
+        shown = ", ".join(f"{k}={v}" for k, v in filters.items() if v)
+        ctx.audit(request, "audit_export", f"{len(records)} records"
+                  + (f" ({shown})" if shown else ""))
         buf = io.StringIO()
         out = csv.writer(buf)
         out.writerow(["time", "ip", "user", "action", "detail"])

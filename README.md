@@ -494,8 +494,19 @@ olabilir). 10 dakikada 20'yi aşan başarısız girişleri denetim kaydı yalnı
 dakikanın sonunda tek bir kayıtta toplar; böylece bir deneme seli diğer kayıtları dışarı
 itemez. Bir eşlemenin konsolunu ya da hex görünümünü açmak, hesap (açık erişimde: adres),
 eşleme ve tür başına 5 dakikada bir kez kaydedilir; 10 dakikada en çok 50 böyle kayıt yazılır,
-fazlası aynı şekilde toplanır (all.log her biri için bir satır tutar). 256 karakterden uzun
-adlar denenmez. İstek gövdeleri de sınırlıdır: giriş, kurulum ve
+fazlası aynı şekilde toplanır (all.log her biri için bir satır tutar). Cihaza yazan bir
+konsolun kapanışı da kaydedilir (`console_close`, bayt sayısıyla; yazılanın kendisi asla).
+Başarısız bir SSO girişi (kimlik sağlayıcı reddetti, yanıtı doğrulanamadı ya da grupları bir rol
+vermiyor) kısa bir nedenle `oidc_login_failed` olarak kaydedilir ve yerel ya da LDAP girişi gibi
+bildirilir; aynı sınır geçerlidir. Token'ı yüzünden reddedilen bir REST API isteği (token yok,
+yanlış ya da süresi dolmuş) adres başına dakikada bir kez `api_auth_failed` olarak kaydedilir
+(sonraki kayıt aradakilerin sayısını söyler), 10 dakikada en çok 20 kez. Sayfaya ulaşmadan
+reddedilen bir istek (oturum yok, CSRF kontrolü başarısız, oturumsuz ya da başka bir siteden
+gelen WebSocket) adres ve yanıt başına dakikada bir all.log satırı alır; sonraki satır aradaki
+sayıyı söyler. Adlardaki satır sonları ve diğer kontrol karakterleri (bir eşleme adı, dizinden
+gelen bir kullanıcı adı) all.log'a, stdout'a, eşleme log'larına, denetim kaydına ve bildirim
+başlıklarına boşluk olarak yazılır; böylece kendi başına bir satır başlatamazlar. 256
+karakterden uzun adlar denenmez. İstek gövdeleri de sınırlıdır: giriş, kurulum ve
 çıkış formları 64 KB, yapılandırma içe aktarma 16 MB, geri kalan her şey (formlar, REST API)
 2 MB; daha büyüğü HTTP 413 alır.
 
@@ -718,9 +729,12 @@ içindeki dosyalar başka kullanıcılarca okunamaz:
   yüklemek için kutu işaretlenmedikçe olduğu gibi kalır (işaretlenirse diğer herkesin
   oturumu da kapanır). *Yalnızca eşlemeleri* içe aktarma önizlemesinden geçer. Geri yükleme
   de geri alınabilir; indirilen yedekte oturum anahtarı yer almaz.
-- `all.log` — global etkinlik (boyutla döner); `audit.log` — girişler, config değişiklikleri,
-  konsol / hex görünümü açılışları ve trace indirmeleri: kim/nereden/ne (döner). Ayarlar →
-  *Audit log*'da aranabilir, CSV olarak indirilebilir.
+- `all.log` — global etkinlik (boyutla döner): `/status`, `/health`, `/ports`, `/metrics` ve
+  `/openapi.json`'ın başarılı sorguları dışında her REST API isteği de, token'ın adıyla;
+  `audit.log` — girişler ve başarısız girişler, config değişiklikleri, konsol / hex görünümü
+  açılışları, cihaza yazan konsollar, trace indirmeleri, eşleme ve denetim kaydı dışa
+  aktarmaları ve reddedilen REST API token'ları: kim/nereden/ne (döner). Ayarlar → *Audit
+  log*'da aranabilir, CSV olarak indirilebilir.
 - `logs/<id>.log` — eşleme başına geçmiş (saatlik bakım: >15 gün veya >100MB kırpılır).
 - `traces/<id>-<ad>` — eşlemenin trafik kaydı (trace). Trace dosyaları **yalnızca burada**
   tutulur; boyut sınırına gelince döner (varsayılan 10 MB × 3 eski dosya). v2.7'deki tam

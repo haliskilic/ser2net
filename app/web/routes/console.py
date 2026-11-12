@@ -29,8 +29,13 @@ def routes(ctx: Ctx) -> list:
         ws_user = auth.request_user(state.config, token, websocket.headers,
                                     state.revoked_sessions)
         origin = websocket.headers.get("origin")
-        if ws_user is None or (origin and urlparse(origin).netloc != websocket.headers.get("host")):
+        foreign = bool(origin) and urlparse(origin).netloc != websocket.headers.get("host")
+        if ws_user is None or foreign:
             await websocket.close(code=1008)
+            ip = client_ip(websocket)
+            why = f"from another site ({origin[:100]!r})" if foreign else "no valid session"
+            state.log_refused((ip, "websocket", foreign),
+                              f"WebSocket {websocket.url.path} from {ip} refused: {why}")
             return None, token
         websocket.state.user = ws_user  # like request.state.user (ctx.audit)
         return ws_user, token
@@ -65,6 +70,7 @@ def routes(ctx: Ctx) -> list:
         state.log(f"[{mapping.name}] console opened by {ws_user.username} ({peer})")
         _record_open(websocket, "console_open", mapping,
                      "interactive" if interactive else "read-only")
+        written = [0]  # bytes typed to the device (what, is never recorded)
 
         async def sender():
             while True:
@@ -85,6 +91,7 @@ def routes(ctx: Ctx) -> list:
                     data = msg["text"].encode("utf-8", "replace")
                 if data and interactive:
                     await runner.serial_write(data)
+                    written[0] += len(data)
 
         async def access_watch():
             # A console outlives the check at connect: end it once its access is gone
@@ -112,7 +119,13 @@ def routes(ctx: Ctx) -> list:
             runner.discard_monitor(mon)
             with contextlib.suppress(Exception):
                 await websocket.close()
-            state.log(f"[{mapping.name}] console closed ({peer})")
+            if written[0]:  # who wrote to the device, and how much (bounded: console_writes)
+                state.log(f"[{mapping.name}] console closed ({peer}; {written[0]} bytes written)")
+                state.console_writes.add(client_ip(websocket), ctx.actor(websocket),
+                                         "console_close",
+                                         f"{mapping.name} ({written[0]} bytes written)")
+            else:
+                state.log(f"[{mapping.name}] console closed ({peer})")
 
     # ---------------- traffic feed for the hex view (read-only) ----------------
     async def traffic_ws(websocket):
