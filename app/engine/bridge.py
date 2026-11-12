@@ -189,7 +189,8 @@ class Tracer:
 
     ``write()`` only queues the chunk (with its arrival time); a writer thread formats,
     writes and flushes in batches and rotates the file once it passes ``max_bytes``
-    (<file>.1 ... <file>.<keep>; keep=0 begins a new file). If the disk can't keep
+    (<file>.1 ... <file>.<keep>; keep=0 begins a new file; rotated files past keep, left
+    when it was lowered, are deleted when the trace starts). If the disk can't keep
     up, at most QUEUE_MAX_BYTES wait in memory: newer chunks are dropped and the
     trace says how many bytes are missing.
 
@@ -268,6 +269,24 @@ class Tracer:
             self._q.put(job)
         return job.future
 
+    def _prune_rotated(self) -> None:
+        """Delete this trace's rotated files past the number kept (<file>.N, N > keep):
+        left when keep was lowered, no rotation would ever reach them. Logged."""
+        folder, base = os.path.split(os.path.abspath(self.path))
+        try:
+            names = os.listdir(folder)
+        except OSError:
+            return
+        extra = []
+        for name in names:
+            number = name[len(base) + 1:] if name.startswith(base + ".") else ""
+            if number.isascii() and number.isdigit() and int(number) > self._keep:
+                extra.append(os.path.join(folder, name))
+        gone = [p for p, e in remove_files(extra).items() if e is None]
+        if gone:
+            self._log(f"trace: deleted {len(gone)} rotated file(s) of {self.path} past the "
+                      f"{self._keep} kept")
+
     def _remove(self, paths) -> dict[str, Optional[OSError]]:
         mine = os.path.normcase(os.path.abspath(self.path))
         if any(os.path.normcase(os.path.abspath(p)) == mine for p in paths):
@@ -295,6 +314,7 @@ class Tracer:
         return lines
 
     def _run(self) -> None:
+        self._prune_rotated()
         stop = False
         while not stop:
             try:  # paused: wake up to try the file again
