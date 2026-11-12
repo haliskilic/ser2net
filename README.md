@@ -756,7 +756,8 @@ da yerel saat sanılmaz. 2.9'dan önce yazılan satırlarda bu fark yoktur; ilk 
 aynı kaldığından aynı dosyadaki eski ve yeni satırlar (eski sürümlerde de) aynı şekilde
 okunur. Trace dosyalarındaki satırlar `YYYY-MM-DD HH:MM:SS` biçiminde, sunucunun yerel
 saatiyle kalır (paneller saat dilimini gösterir); yedekler UTC ile adlandırılır, canlı hex
-görünümü ise tarayıcının saatini gösterir ve hangi dilim olduğunu yazar. Eski biçimi
+görünümü ise sunucunun zamanlarını tarayıcının saat diliminde gösterir ve hangi dilim
+olduğunu yazar. Eski biçimi
 düzenli ifadeyle yakalayan bir log toplayıcının saniyeden sonraki isteğe bağlı farkı
 (`[+-]HH:MM`) da kabul etmesi gerekir. Docker'da `TZ` verilmedikçe saat dilimi UTC'dir
 ([`docs/DOCKER.md`](docs/DOCKER.md)).

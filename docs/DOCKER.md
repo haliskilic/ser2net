@@ -126,7 +126,7 @@ docker run -d --name ser2net --restart unless-stopped \
   `--log-opt max-size=10m --log-opt max-file=3` (compose: `logging:`), or for every
   container in `/etc/docker/daemon.json`.
 - **Time zone.** The container runs in UTC unless `TZ` is set, so its log, audit and trace
-  times are UTC, while the live hex view shows the browser's local time. Log and audit
+  times are UTC, while the live hex view shows its times in the browser's zone. Log and audit
   lines say so with their offset (`2026-11-06 12:00:00+00:00`), trace lines don't. For the
   local time, set `TZ` (`-e TZ=Europe/Istanbul`, or under `environment:` in compose) or
   mount the host's zone (`-v /etc/localtime:/etc/localtime:ro`).
