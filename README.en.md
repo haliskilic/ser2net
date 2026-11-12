@@ -270,7 +270,10 @@ python3 ser2net.py --reconfigure
 Dependencies live in `vendor/wheels/`; `ser2net.py` installs them to `./lib` on first
 launch (`pip install --no-index`). No internet needed. The set covers Python 3.10–3.14 on
 Linux x86_64 and Windows x64; after a `requirements.txt` change, refresh it with
-`python3 tools/refresh_wheels.py` (`tests/test_vendor_wheels.py` checks it).
+`python3 tools/refresh_wheels.py` (`tests/test_vendor_wheels.py` checks it). Each wheel's
+sha256 is in `vendor/wheels/SHA256SUMS`, and the first launch refuses to install from a set
+where a listed wheel differs (CI compares every wheel with the file PyPI publishes); wheels
+you add yourself aren't listed and install as they are.
 To enable the optional features (MQTT/LDAP/OIDC) on an offline source install, download
 their wheels too: `pip download -r requirements-optional.txt -d vendor/wheels`, then
 `pip install --no-index --find-links vendor/wheels -r requirements-optional.txt`. (The

@@ -101,6 +101,10 @@ jobs:
         with:
           python-version: "3.12"
       - run: python tests/test_vendor_wheels.py
+      # every wheel is the file PyPI publishes (its sha256 from PyPI's JSON API), or the
+      # byte-for-byte rebuild of the pure-Python repack from one
+      - name: The wheels are PyPI's files
+        run: python tools/refresh_wheels.py --verify
 
   ui:
     name: ui layout (Chromium)

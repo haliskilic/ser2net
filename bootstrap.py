@@ -7,12 +7,18 @@ no virtualenv, no system-wide installs required.
 
 It is idempotent: if every dependency already imports, it does nothing.
 
+Before installing, it checks every bundled wheel listed in ``vendor/wheels/SHA256SUMS``
+against its recorded sha256 and refuses to install from a set where one differs (a
+damaged or replaced file). Wheels that are not listed — e.g. ones you add for the optional
+features — are installed as they are.
+
 Usage (normally invoked automatically by ser2net.py / start.bat):
     python3 bootstrap.py            # offline install from vendor/wheels -> ./lib
     python3 bootstrap.py --online   # allow falling back to PyPI if a wheel is missing
 """
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 import os
 import subprocess
@@ -59,8 +65,42 @@ def missing_modules() -> list[tuple[str, str]]:
     return missing
 
 
+def altered_wheels(wheels_dir: str = WHEELS_DIR) -> list[str]:
+    """The wheels SHA256SUMS (tools/refresh_wheels.py writes it) lists whose content
+    is not what it records."""
+    sums = os.path.join(wheels_dir, "SHA256SUMS")
+    if not os.path.isfile(sums):
+        return []
+    bad = []
+    with open(sums, encoding="utf-8") as fh:
+        for line in fh:
+            if not line.strip():
+                continue
+            digest, name = line.split(maxsplit=1)
+            path = os.path.join(wheels_dir, os.path.basename(name.strip().lstrip("*")))
+            if not os.path.isfile(path):
+                continue  # pip reports a wheel that is needed and missing
+            h = hashlib.sha256()
+            with open(path, "rb") as wf:
+                for chunk in iter(lambda: wf.read(1 << 16), b""):
+                    h.update(chunk)
+            if h.hexdigest() != digest.lower():
+                bad.append(os.path.basename(path))
+    return bad
+
+
 def install(online: bool = False) -> None:
     """Install bundled wheels into ./lib. Falls back to PyPI only if online=True."""
+    altered = altered_wheels() if os.path.isdir(WHEELS_DIR) else []
+    if altered:
+        print(
+            "[bootstrap] ERROR: these bundled wheels don't match vendor/wheels/SHA256SUMS\n"
+            "            (damaged or replaced files): " + ", ".join(altered) + "\n"
+            "            Restore them from the release / git checkout, or remove their\n"
+            "            lines from SHA256SUMS if you replaced them on purpose.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
     os.makedirs(LIB_DIR, exist_ok=True)
     req_file = os.path.join(ROOT, "requirements.txt")
 
