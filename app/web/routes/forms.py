@@ -6,10 +6,12 @@ to defaults (new mapping) or the stored values (edit, see _preserve_unmanaged_fi
 """
 from __future__ import annotations
 
+import copy
+import dataclasses
 import json
 import re
 
-from ...config import LdapSettings, MappingConfig, OidcSettings
+from ...config import LdapSettings, MappingConfig, OidcSettings, SerialSettings
 from ...engine import netinfo, portlist
 from ...i18n import _
 
@@ -129,6 +131,8 @@ def _serial_dict(form, prefix: str, strict: bool) -> dict:
     }
 
 
+_SERIAL = tuple(f.name for f in dataclasses.fields(SerialSettings))
+
 # Form fields that are not always posted: data-show-when hides AND disables a block,
 # so the keepalive block isn't sent for UDP and the connect timeout only in client
 # mode — and an older cluster peer's form (remote edit) doesn't know them at all. An
@@ -136,7 +140,24 @@ def _serial_dict(form, prefix: str, strict: bool) -> dict:
 # _preserve_unmanaged_fields keeps the stored values on edit, so switching mode back
 # and forth or a mixed-version remote edit never silently resets them.
 #   presence-marker form field -> (config section, attributes it governs)
+# A marker must be in every form that has any of its attributes (an older one too):
+# a form with the marker sets them all.
 _OPTIONAL_FORM_FIELDS = {
+    # serial↔serial only: the whole B side (a Serial ↔ Network mapping doesn't use it)
+    "serial_b_port": ("serial_b", _SERIAL),
+    # the USB-identity binding (see apply_usb_match); forms before 2.8.0 don't have it
+    "serial_usb_match_shown": ("serial", ("match",)),
+    "serial_b_usb_match_shown": ("serial_b", ("match",)),
+    # TCP server and UDP: where it listens
+    "network_port": ("network", ("bind_ip", "port")),
+    # TCP client: where it connects to
+    "network_remote_host": ("network", ("remote_host", "remote_port")),
+    # TCP server: who may connect
+    "network_max_connections": ("network", ("max_connections", "kick_old_user",
+                                            "priority_client_ips")),
+    "network_allowed_client_ips": ("network", ("allowed_client_ips",)),   # + UDP
+    # TCP (server and client)
+    "network_tls_cert": ("network", ("tls", "tls_cert", "tls_key")),
     "network_keepalive_idle_s": ("network", ("tcp_keepalive", "keepalive_idle_s",
                                              "keepalive_interval_s", "keepalive_count")),
     "network_connect_timeout_s": ("network", ("connect_timeout_s",)),
@@ -157,6 +178,26 @@ _OPTIONAL_FORM_FIELDS = {
     # UDP only: where the device's output goes
     "network_udp_peer_timeout_s": ("network", ("udp_peer_host", "udp_peer_port",
                                                "udp_peer_timeout_s")),
+    # Modbus gateways only
+    "modbus_poll_interval_s": ("modbus_poll", ("interval_s",)),
+}
+
+# Settings the mapping form doesn't have: an edit always keeps the stored values.
+#   config section -> attributes
+_UNMANAGED_FIELDS = {
+    "serial.advanced": ("hangup_when_done", "nobreak"),
+    "serial_b.advanced": ("hangup_when_done", "nobreak"),
+    "options": ("openstr", "closestr", "trace_timestamp", "rfc2217_poll_modem_interval_s",
+                "rfc2217_net_timeout_s", "modbus_response_timeout_s"),
+}
+
+# One-line text inputs that can hold a stored value they can't show: a browser drops
+# its line breaks (CR, LF) and turns a NUL into U+FFFD, so posted back unchanged it
+# differs (close-on strings imported from a ser2net configuration have them).
+#   form field -> (config section, attribute)
+_TEXT_INPUTS = {
+    "opt_banner": ("options", "banner"),
+    "opt_closeon": ("options", "closeon"),
 }
 
 
@@ -337,38 +378,38 @@ def form_context(mapping: MappingConfig, ports: list, ips: list, *, is_new: bool
             "ports": portlist.visible(ports), "ips": ips, "error": error, "remote": remote}
 
 
+def _part(mapping, path: str):
+    """mapping.serial.advanced for "serial.advanced"."""
+    for name in path.split("."):
+        mapping = getattr(mapping, name)
+    return mapping
+
+
+def _as_text_input(value: str) -> str:
+    """What a browser posts back for *value* rendered into a one-line text input."""
+    return value.replace("\r", "").replace("\n", "").replace("\x00", "\ufffd")
+
+
 def _preserve_unmanaged_fields(new_map, existing, form=None) -> None:
-    """Carry over config fields the mapping form does not expose, so editing an
-    existing mapping never silently discards them: the stable-id `match` (when the
-    form has no USB-identity field), the two
-    advanced serial flags the form omits (`hangup_when_done`, `nobreak`), open/close
-    strings, the trace-timestamp flag and the RFC2217 interop knobs. The RS-485 fields
-    ARE in the form now, so they're taken from the submission. Given the submitted
-    `form`, the not-always-posted fields (_OPTIONAL_FORM_FIELDS) are kept too when
-    absent. No-op when creating."""
+    """Carry over what an edit's form did not set, so editing an existing mapping never
+    silently discards it: the settings the form doesn't have (_UNMANAGED_FIELDS), the
+    not-always-posted fields the submitted `form` lacks (_OPTIONAL_FORM_FIELDS; no form
+    = none posted), a one-line text field posted back unchanged although it can't show
+    the stored value (_TEXT_INPUTS). No-op when creating."""
     if existing is None:
         return
-    if form is not None:
-        for marker, (section, attrs) in _OPTIONAL_FORM_FIELDS.items():
-            if marker not in form:
-                for attr in attrs:
-                    setattr(getattr(new_map, section), attr,
-                            getattr(getattr(existing, section), attr))
-    for prefix, cur, old in (("serial_", new_map.serial, existing.serial),
-                             ("serial_b_", new_map.serial_b, existing.serial_b)):
-        # the USB-identity binding is in the form now (apply_usb_match); a form
-        # without it (an older cluster peer's) keeps the stored one
-        if form is None or f"{prefix}usb_match_shown" not in form:
-            cur.match = old.match
-        cur.advanced.hangup_when_done = old.advanced.hangup_when_done
-        cur.advanced.nobreak = old.advanced.nobreak
-    o, prev = new_map.options, existing.options
-    o.openstr = prev.openstr
-    o.closestr = prev.closestr
-    o.trace_timestamp = prev.trace_timestamp
-    o.rfc2217_poll_modem_interval_s = prev.rfc2217_poll_modem_interval_s
-    o.rfc2217_net_timeout_s = prev.rfc2217_net_timeout_s
-    o.modbus_response_timeout_s = prev.modbus_response_timeout_s
+    form = {} if form is None else form
+    keep = [(section, attrs) for section, attrs in _UNMANAGED_FIELDS.items()]
+    keep += [(section, attrs) for marker, (section, attrs) in _OPTIONAL_FORM_FIELDS.items()
+             if marker not in form]
+    for section, attrs in keep:
+        cur, old = _part(new_map, section), _part(existing, section)
+        for attr in attrs:
+            setattr(cur, attr, copy.deepcopy(getattr(old, attr)))
+    for field, (section, attr) in _TEXT_INPUTS.items():
+        cur, old = _part(new_map, section), _part(existing, section)
+        if field in form and getattr(cur, attr) == _as_text_input(getattr(old, attr)):
+            setattr(cur, attr, getattr(old, attr))
 
 
 def _form_error(render, request, state, form, message: str):

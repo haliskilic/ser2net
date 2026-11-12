@@ -138,7 +138,6 @@
       <div class="grid3">
         <label>{{ _("Max connections") }} <input type="number" name="network_max_connections" min="1" value="{{ mapping.network.max_connections }}"></label>
         <label class="chk chk-pad"><input type="checkbox" name="network_kick_old_user" {% if mapping.network.kick_old_user %}checked{% endif %}> {{ _("Kick old client") }}</label>
-        <label data-show-when="network_protocol=raw,telnet,rfc2217">{{ _("Client buffer (chunks)") }} <input type="number" name="network_client_queue_max" min="16" value="{{ mapping.network.client_queue_max }}"></label>
       </div>
       <label>{{ _("High-priority client IPs / CIDRs") }} <span class="muted">({{ _("kick an existing client when full") }})</span>
         <input type="text" name="network_priority_client_ips" value="{{ mapping.network.priority_client_ips | join(' ') }}" placeholder="{{ _('e.g. %(example)s', example='192.168.1.10') }}">
@@ -146,6 +145,10 @@
       {% if mapping.network.kick_old_user and not mapping.network.allowed_client_ips %}
       <p class="sub mb-sm" data-kick-hint>{{ _("“Kick old client” is on and no allowed client IPs are set: any host that can reach this port can take the connection over from the client using it.") }}</p>
       {% endif %}
+    </div>
+
+    <div class="grid3" data-show-when="network_mode=server,client">
+      <label data-show-when="network_protocol=raw,telnet,rfc2217">{{ _("Client buffer (chunks)") }} <input type="number" name="network_client_queue_max" min="16" value="{{ mapping.network.client_queue_max }}"></label>
     </div>
 
     <div data-show-when="network_mode=server,udp">
