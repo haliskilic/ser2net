@@ -514,13 +514,12 @@
   {% if backups %}
   <div class="table-scroll">
   <table class="grid th-wrap">
-    <thead><tr><th>{{ _("Saved (UTC)") }}</th><th>{{ _("Contents") }}</th><th>{{ _("Written by") }}</th><th class="col-actions"></th></tr></thead>
+    <thead><tr><th>{{ _("Saved (UTC)") }}</th><th>{{ _("Contents") }}</th><th class="col-actions"></th></tr></thead>
     <tbody>
     {% for bk in backups %}
       <tr>
-        <td class="mono">{{ bk.time }}{% if bk.current %} <span class="tag">{{ _("in use") }}</span>{% endif %}</td>
-        <td>{{ _("%(mappings)s mappings, %(users)s users", mappings=bk.mappings if bk.mappings is not none else '?', users=bk.users if bk.users is not none else '?') }}</td>
-        <td>{{ ("ser2net " ~ bk.written_by) if bk.written_by else _("2.8.1 or older") }}</td>
+        <td class="mono">{{ bk.time }}</td>
+        <td>{{ _("%(mappings)s mappings, %(users)s users", mappings=bk.mappings if bk.mappings is not none else '?', users=bk.users if bk.users is not none else '?') }}<br><span class="muted">{{ _("written by ser2net %(version)s", version=bk.written_by) if bk.written_by else _("written by 2.8.1 or older") }}</span>{% if bk.current %} <span class="tag">{{ _("in use") }}</span>{% endif %}</td>
         <td class="col-actions">
           <div class="row-actions">
             <a class="btn sm" href="/settings/backups/{{ bk.name }}">{{ _("Download") }}</a>

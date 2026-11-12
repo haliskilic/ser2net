@@ -128,14 +128,15 @@ def test_settings_page():
         table = page[page.find('id="backups"'):]
         rows = re.findall(r"<tr>(.*?)</tr>", table, re.S)
         assert len(rows) == 3, rows  # header, the file as 99.0.0 left it, the one written now
-        assert '<span class="tag">in use</span>' in rows[1] and f"ser2net {__version__}" in rows[1]
-        assert "ser2net 99.0.0" in rows[2] and "in use" not in rows[2], rows[2]
+        assert '<span class="tag">in use</span>' in rows[1], rows[1]
+        assert f"written by ser2net {__version__}" in rows[1], rows[1]
+        assert "written by ser2net 99.0.0" in rows[2] and "in use" not in rows[2], rows[2]
         assert srv.saved_config()["written_by"] == __version__
         tr = Browser(srv.base)
         tr.get("/lang/tr?next=/login")
         tr.login("admin", PW)
         st, _h, page = tr.get("/settings")
-        assert "Yazan sürüm" in page and "kullanımda" in page and "ser2net 99.0.0" in page
+        assert "yazan: ser2net 99.0.0" in page and "kullanımda" in page, page[-3000:]
     print("Settings: the newer writer and unknown keys pointed out; each backup's writer, "
           "the one in use marked  OK")
 
