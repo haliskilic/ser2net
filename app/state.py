@@ -260,7 +260,7 @@ class AppState:
         self._logger = self._setup_logging(self.log_path)
         self._mapping_loggers: dict[str, logging.Logger] = {}
         self.supervisor = Supervisor(logger=self.log, logger_factory=self.make_mapping_logger,
-                                     trace_dir=self.traces_dir)
+                                     trace_dir=self.traces_dir, state_dir=self.data_dir)
         self.ports = PortWatcher(interval=2.0)
         self.cluster = ClusterDiscovery(self.config, self.log)
         self.rate_limiter = LoginRateLimiter()

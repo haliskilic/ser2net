@@ -670,6 +670,9 @@ içindeki dosyalar başka kullanıcılarca okunamaz:
 - `tls/` — self-signed üretilirse sertifika/anahtar.
 - `setup-code.txt` — ilk kurulumun bir host adıyla yapılması için tek kullanımlık kod; yalnızca
   ilk admin hesabı oluşana kadar durur.
+- `sparkplug-bdseq.json` — her Sparkplug B edge node'unun (grup/düğüm) son oturumunun
+  `bdSeq`'i; yeniden başlatmadan sonra numara buradan devam eder. Silinirse sonraki
+  açılış 0'dan başlar.
 
 Eşleme ID'leri (yukarıdaki `<id>`; REST API'de de kullanılır) 1–64 harf, rakam ya da `_`
 içerir; yeni eşlemeler 12 hex haneli bir ID alır. Başka biçimdeki bir ID (elle düzenlenmiş

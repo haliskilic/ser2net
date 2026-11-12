@@ -655,6 +655,9 @@ inside aren't readable by other users:
 - `tls/` — certificate/key if self-signed is generated.
 - `setup-code.txt` — the one-time code for first-run setup through a host name; it exists
   only until the first admin account does.
+- `sparkplug-bdseq.json` — the `bdSeq` of each Sparkplug B edge node's (group/node) last
+  session; after a restart the numbering goes on from there. Deleted, the next start begins
+  at 0.
 
 Mapping ids (the `<id>` above, also used by the REST API) are 1–64 letters, digits or `_`;
 new mappings get 12 hex digits. An id in any other form (hand-edited or imported) is

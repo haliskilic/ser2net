@@ -21,19 +21,71 @@ metrics are that unit's poll points:
   * stopping the mapping publishes NDEATH before disconnecting (a host then takes the
     node's devices offline too).
 After a lost connection the next session gets bdSeq + 1 (the Will is renewed in
-MqttPublisher's disconnect hook), as the specification asks.
+MqttPublisher's disconnect hook), as the specification asks. With a data folder
+(``state_dir``), the bdSeq of every session is stored there per edge node (BDSEQ_FILE), and
+the node's next run goes on from it: after a power loss the broker may publish the old
+session's Will only after the new session's NBIRTH, and a host tells the two apart by
+their bdSeq. Without a stored one the first run starts at 0; if the file can't be read or
+written, at a random bdSeq (logged).
 """
 from __future__ import annotations
 
+import json
 import math
+import os
+import random
+import threading
 import time
-from typing import Callable
+from typing import Callable, Optional
 
 from . import sparkplug
 from .mqtt_pub import MqttPublisher, shown
 
 INT64 = sparkplug.DataType.Int64  # the bdSeq metric's datatype (Sparkplug 3.0)
 BOOLEAN = sparkplug.DataType.Boolean
+
+
+# {"<group>/<node>": the bdSeq of that edge node's last session}, in the data folder
+BDSEQ_FILE = "sparkplug-bdseq.json"
+_bdseq_lock = threading.Lock()  # nodes renew their Will on paho's threads
+
+
+def load_bdseq(path: str, key: str) -> Optional[int]:
+    """The bdSeq stored for edge node ``key`` ("<group>/<node>"), or None if there is none
+    (no file yet). Raises OSError / ValueError if the file can't be read or makes no sense."""
+    with _bdseq_lock:
+        try:
+            with open(path, encoding="utf-8") as fh:
+                data = json.load(fh)
+        except FileNotFoundError:
+            return None
+    if not isinstance(data, dict):
+        raise ValueError("not a JSON object")
+    value = data.get(key)
+    if value is not None and (isinstance(value, bool) or not isinstance(value, int)
+                              or not 0 <= value <= 255):
+        raise ValueError(f"the bdSeq of {key} is {value!r}, not 0-255")
+    return value
+
+
+def save_bdseq(path: str, key: str, value: int) -> None:
+    """Store edge node ``key``'s bdSeq: the file is rewritten whole (a temporary file,
+    flushed to the disk, renamed over it), so a power loss leaves the old one or the new
+    one. A file that can't be read is started afresh. Raises OSError."""
+    with _bdseq_lock:
+        try:
+            with open(path, encoding="utf-8") as fh:
+                data = json.load(fh)
+        except (OSError, ValueError):
+            data = None
+        data = dict(data) if isinstance(data, dict) else {}
+        data[key] = value
+        tmp = path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as fh:
+            fh.write(json.dumps(data, sort_keys=True) + "\n")
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp, path)
 
 
 def _now_ms() -> int:
@@ -58,7 +110,8 @@ def device_id(unit: int) -> str:
 
 
 class SparkplugNode:
-    def __init__(self, mapping, log: Callable[[str], None], write: Callable) -> None:
+    def __init__(self, mapping, log: Callable[[str], None], write: Callable,
+                 state_dir: Optional[str] = None) -> None:
         mq = mapping.mqtt
         self.mapping = mapping
         self.group = mq.sparkplug_group_id.strip() or "ser2net"
@@ -69,13 +122,15 @@ class SparkplugNode:
             self.devices.setdefault(device_id(p.unit), []).append(p.name)
         self.values: dict = {}       # last value sent per metric
         self.stamps: dict = {}       # when each of those was read (ms since the epoch)
-        self.bdseq = 0
-        self.seq = 0
-        self._sessions = 0           # connects seen (the first one keeps bdSeq 0)
-        self._born = False           # this MQTT session's NBIRTH and DBIRTHs are out
         self._log = log
         self._write = write          # gateway._write_soon(point, value)
         self._pub: MqttPublisher | None = None
+        self._bdseq_file = os.path.join(state_dir, BDSEQ_FILE) if state_dir else None
+        self._bdseq_saved = True     # False once storing it failed (logged once)
+        self.bdseq = self._first_bdseq()
+        self.seq = 0
+        self._sessions = 0           # connects seen (the first one keeps the first bdSeq)
+        self._born = False           # this MQTT session's NBIRTH and DBIRTHs are out
 
     def topic(self, kind: str, device: str | None = None) -> str:
         return sparkplug.topic(self.group, kind, self.node, device)
@@ -85,14 +140,53 @@ class SparkplugNode:
             sparkplug.Metric(name=sparkplug.BDSEQ, datatype=INT64, value=self.bdseq)])
         return (self.topic("NDEATH"), sparkplug.encode_payload(payload), 1, False)
 
+    @property
+    def _bdseq_key(self) -> str:
+        return f"{self.group}/{self.node}"
+
+    def _first_bdseq(self) -> int:
+        """The bdSeq of this run's first session: the one after the stored one (0 if none
+        is stored), stored at once; random if the file can't be read or written."""
+        if self._bdseq_file is None:
+            return 0  # no data folder: every run starts at 0
+        problem = ""
+        try:
+            last = load_bdseq(self._bdseq_file, self._bdseq_key)
+        except (OSError, ValueError) as e:
+            last, problem = None, f"can't be read ({e})"
+        first = random.randrange(256) if problem else 0 if last is None else (last + 1) % 256
+        try:
+            save_bdseq(self._bdseq_file, self._bdseq_key, first)
+        except OSError as e:
+            if not problem:
+                first = random.randrange(256)
+            problem = problem or f"can't be stored ({e})"
+            self._bdseq_saved = False
+        if problem:
+            self._log(f"Sparkplug: the bdSeq of {self._bdseq_key} {problem}, in "
+                      f"{self._bdseq_file}; this run starts at a random bdSeq, {first}")
+        return first
+
+    def _save_bdseq(self) -> None:
+        if self._bdseq_file is None or not self._bdseq_saved:
+            return
+        try:
+            save_bdseq(self._bdseq_file, self._bdseq_key, self.bdseq)
+        except OSError as e:
+            self._bdseq_saved = False
+            self._log(f"Sparkplug: bdSeq {self.bdseq} can't be stored in {self._bdseq_file} "
+                      f"({e}); the next start may use it again")
+
     def _will(self) -> tuple:
         """Called before the first connect and after every disconnect (paho's thread):
-        a new session gets the next bdSeq, and the Will carries it. Nothing is published
-        as data until that session's births are out (paho sends a publish as soon as it
-        has a socket, before the broker has accepted the connection)."""
+        a new session gets the next bdSeq, stored for the next run, and the Will carries
+        it. Nothing is published as data until that session's births are out (paho sends
+        a publish as soon as it has a socket, before the broker has accepted the
+        connection)."""
         self._born = False
         if self._sessions:
             self.bdseq = (self.bdseq + 1) % 256
+            self._save_bdseq()
         self._sessions += 1
         return self._ndeath()
 
