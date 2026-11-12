@@ -106,6 +106,7 @@ PORTABLE = [
     "test_mqtt_password_form.py",  # the mapping form never holds the stored MQTT password
     "test_reverse_proxy.py",   # WebSockets and the SSO redirect URI behind a reverse proxy
     "test_hsts.py",            # Strict-Transport-Security max-age (admin_ui.hsts_max_age)
+    "test_trusted_proxies.py",  # X-Forwarded-For / -Proto from trusted proxies only
 ]
 
 # Data-path tests that need socat-backed PTYs (Linux). Best-effort: skipped if the

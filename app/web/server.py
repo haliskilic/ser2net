@@ -23,7 +23,7 @@ from starlette.templating import Jinja2Templates
 from .. import i18n
 from ..config import ROLE_RANK
 from ..engine import netguard
-from . import auth
+from . import auth, proxy
 from .routes import build_routes
 
 TEMPLATES_DIR = os.path.join(os.path.dirname(__file__), "templates")
@@ -253,7 +253,10 @@ def build_app(state) -> Starlette:
     # The body limit holds for every route, and sits inside GuardMiddleware: in front of
     # it (Starlette(max_body_size=...)), a body over the limit would reach the handler as
     # an exception group from BaseHTTPMiddleware's receive, a 500 instead of the 413.
-    middleware = [Middleware(GuardMiddleware),
+    # ProxyMiddleware goes first: the client address and the scheme of a request through a
+    # reverse proxy are what every check after it sees
+    middleware = [Middleware(proxy.ProxyMiddleware, state=state),
+                  Middleware(GuardMiddleware),
                   Middleware(RequestBodyLimitMiddleware, max_body_size=MAX_BODY_BYTES)]
     app = Starlette(routes=routes, middleware=middleware)
     app.state.appstate = state

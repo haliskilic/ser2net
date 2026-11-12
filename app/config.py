@@ -783,10 +783,50 @@ class AdminUI:
     # 0 sends max-age=0, which turns that off and makes browsers forget it. Settings ->
     # Admin TLS.
     hsts_max_age: int = HSTS_MAX_AGE_DEFAULT
+    # Behind a reverse proxy (Settings -> Reverse proxy; app/web/proxy.py). trusted_proxies:
+    # the addresses / networks whose X-Forwarded-For and X-Forwarded-Proto are believed;
+    # none by default.
+    trusted_proxies: list[str] = field(default_factory=list)
 
     @property
     def tls_enabled(self) -> bool:
         return bool(self.tls_cert and self.tls_key)
+
+
+def proxy_entry_problem(entry: Any) -> str | None:
+    """Why `entry` can't be one of admin_ui.trusted_proxies (an IP address or a network
+    such as 172.18.0.0/16), or None when it can."""
+    text = entry.strip() if isinstance(entry, str) else ""
+    try:
+        if not text or not text.isascii():
+            raise ValueError
+        ipaddress.ip_network(text, strict=False)
+    except ValueError:
+        return _("“{0}” is not an IP address or network (such as 172.18.0.0/16).").format(
+            str(entry)[:100])
+    return None
+
+
+def split_proxy_entries(text: str) -> list[str]:
+    """The entries of a list of trusted proxies written on one line (spaces or commas)."""
+    return [e for e in re.split(r"[\s,]+", text or "") if e]
+
+
+def _normalize_proxy_settings(admin: "AdminUI", notes: list[str]) -> None:
+    """A hand-edited trusted_proxies that can't be used is left out, with a load note,
+    rather than refused: config.json must not keep the UI from starting."""
+    value = admin.trusted_proxies
+    entries = split_proxy_entries(value) if isinstance(value, str) else value
+    if not isinstance(entries, list):
+        notes.append(f"admin_ui.trusted_proxies {value!r} is not a list of IP addresses or "
+                     "networks; no proxy is trusted")
+        entries = []
+    kept = [e.strip() for e in entries if proxy_entry_problem(e) is None]
+    if len(kept) != len(entries):
+        dropped = [e for e in entries if proxy_entry_problem(e) is not None]
+        notes.append(f"admin_ui.trusted_proxies: {dropped!r} left out (not IP addresses or "
+                     "networks)")
+    admin.trusted_proxies = kept
 
 
 # admin_ui connection limits: (default, lowest value other than 0, highest)
@@ -1257,6 +1297,7 @@ class AppConfig:
             mappings=[MappingConfig.from_dict(m) for m in d.get("mappings", [])],
         )
         _normalize_admin_limits(cfg.admin_ui, cfg.load_notes)
+        _normalize_proxy_settings(cfg.admin_ui, cfg.load_notes)
         cfg.ids_created = not (d.get("secret_key") and d.get("instance_id"))
         raw_days = d.get("external_users_expire_days")
         if raw_days is not None and raw_days != cfg.external_users_expire_days:

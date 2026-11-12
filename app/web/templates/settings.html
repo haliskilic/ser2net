@@ -408,6 +408,21 @@
   </form>
 </section>
 
+<section class="panel panel-narrow" id="reverse-proxy">
+  <div class="panel-head"><h2>{{ _("Reverse proxy") }}</h2></div>
+  <p class="muted mb-sm">{{ _('Only for a reverse proxy (nginx, Apache, Caddy, Traefik, IIS) in front of this UI; <span class="mono">docs/REVERSE-PROXY.md</span> has examples. Changes apply at once.') }}</p>
+  <form method="post" action="/settings/proxy" class="authform">
+    <input type="hidden" name="_csrf" value="{{ request.state.csrf_token }}">
+    <label>{{ _("Trusted proxies") }} <span class="muted">({{ _("IP addresses or networks of the proxies, such as 127.0.0.1 or 172.18.0.0/16 · blank: none") }})</span>
+      {% if trusted[1] == 'SER2NET_TRUSTED_PROXIES' %}<input type="text" value="{{ trusted[0]|join(' ') }}" disabled>
+      {% else %}<input type="text" name="trusted_proxies" value="{{ admin.trusted_proxies|join(' ') }}" autocomplete="off" spellcheck="false" data-1p-ignore data-lpignore="true" data-bwignore>{% endif %}</label>
+    {% if trusted[1] == 'SER2NET_TRUSTED_PROXIES' %}<p class="muted">{{ _('Set by <span class="mono">%(name)s</span> for this run; the field takes effect again once that is removed.', name='SER2NET_TRUSTED_PROXIES') }}</p>
+    {% elif trusted[1] == 'FORWARDED_ALLOW_IPS' %}<p class="muted">{{ _('<span class="mono">FORWARDED_ALLOW_IPS</span> gives <span class="mono">%(list)s</span> while this is blank.', list=trusted[0]|join(' ')) }}</p>{% endif %}
+    <p class="muted">{{ _("Only a connection from one of them may say who the client is (X-Forwarded-For: for the sign-in limits, the audit log and all.log) and that the browser used HTTPS (X-Forwarded-Proto). Without them every client behind a proxy has the proxy’s address.") }}</p>
+    <button class="btn primary" type="submit">{{ _("Save reverse proxy settings") }}</button>
+  </form>
+</section>
+
 <section class="panel panel-narrow">
   <div class="panel-head"><h2>{{ _("REST API token") }}</h2></div>
   <p class="muted mb-sm">{{ _('A bearer token for the JSON API at <span class="mono">/api/v1</span> (automation, Ansible, fleet tools). Send it as <span class="mono">Authorization: Bearer &lt;token&gt;</span>. Spec: <a href="/api/v1/openapi.json">openapi.json</a>.') }}</p>

@@ -70,14 +70,20 @@ def redirect_uri(settings, request) -> str:
     since v2.3 - X-Forwarded-Proto or the request's scheme, X-Forwarded-Host or Host,
     and CALLBACK_PATH. Forwarded and X-Forwarded-Port are not read: a working install
     with a blank redirect_uri has this value registered, and reading them would change it.
-    Settings shows the value for its own request (redirect_uri_is_plain_http)."""
+    Of a list that proxies in a row made (a, b), the first value counts: the one the
+    browser used (the whole list made no usable address). Settings shows the value for its
+    own request (redirect_uri_is_plain_http)."""
     configured = settings.redirect_uri.strip()
     if configured:
         return configured
-    scheme = request.headers.get("x-forwarded-proto") or request.url.scheme
-    host = (request.headers.get("x-forwarded-host") or request.headers.get("host")
+    scheme = _first(request.headers.get("x-forwarded-proto")) or request.url.scheme
+    host = (_first(request.headers.get("x-forwarded-host")) or request.headers.get("host")
             or request.url.netloc)
     return f"{scheme}://{host}{CALLBACK_PATH}"
+
+
+def _first(value: str | None) -> str:
+    return (value or "").split(",", 1)[0].strip()
 
 
 def redirect_uri_is_plain_http(uri: str) -> bool:
