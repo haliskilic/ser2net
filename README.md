@@ -113,7 +113,11 @@ düzenlemeye gerek yok.
 - **Onlarca eşleme:** tek ekrandan ekle/düzenle/sil/başlat/durdur, canlı durum; arama,
   durum filtresi, sıralama ve seçili eşlemeleri toplu başlat/durdur/yeniden başlat
   (*Gösterilenlerin hepsini seç*; toplu işlem yalnızca filtrenin gösterdiği işaretli
-  satırlara uygulanır ve önce sorar). Tablo yalnızca gösterdiği şey değiştiğinde yeniden
+  satırlara uygulanır ve önce sorar). Arama büyük/küçük harfe ve aksanlara bakmaz, Türkçe
+  İ/ı da buna dahil (`istanbul` *İSTANBUL DEPO*'yu, `corlu` *Çorlu*'yu bulur); adlar,
+  içlerindeki sayılar sayı olarak ele alınarak sıralanır (*Hat 2*, *Hat 10*'dan önce
+  gelir; algılanan portlarda da COM2, COM10'dan önce). Tablo yalnızca gösterdiği şey
+  değiştiğinde yeniden
   çizilir: yeni bayt sayıları yalnızca kendi hücrelerini günceller, bağlantı süreleri
   tarayıcıda sayılır, arka plandaki sekme yenilenmez; böylece titreme olmaz, seçim, ipucu
   ya da tıklama kaybolmaz. Çizim, köprüleri yürüten olay döngüsünün dışında yapılır.
@@ -669,7 +673,8 @@ içindeki dosyalar başka kullanıcılarca okunamaz:
   de geri alınabilir; indirilen yedekte oturum anahtarı yer almaz.
 - `all.log` — global etkinlik (boyutla döner); `audit.log` — girişler, config değişiklikleri,
   konsol / hex görünümü açılışları ve trace indirmeleri: kim/nereden/ne (döner). Ayarlar →
-  *Audit log*'da aranabilir, CSV olarak indirilebilir.
+  *Audit log*'da aranabilir (panodaki gibi büyük/küçük harfe ve aksanlara bakılmaz), CSV
+  olarak indirilebilir.
 - `logs/<id>.log` — eşleme başına geçmiş (saatlik bakım: >15 gün veya >100MB kırpılır).
 - `traces/<id>-<ad>` — eşlemenin trafik kaydı (trace). Trace dosyaları **yalnızca burada**
   tutulur; boyut sınırına gelince döner (varsayılan 10 MB × 3 eski dosya). v2.7'deki tam

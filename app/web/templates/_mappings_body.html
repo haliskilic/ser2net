@@ -24,8 +24,10 @@
     {% set st = statuses.get(m.id) %}
     {% set state = st.state if st else ('stopped' if not m.enabled else 'stopped') %}
     {% set problem = state in ('error', 'device-missing', 'reconnecting') %}
-    <tr data-mid="{{ m.id }}" data-name="{{ m.name|lower }}" data-state="{{ 'problem' if problem else state }}"
-        data-search="{{ (m.name ~ ' ' ~ m.serial.port ~ ' ' ~ m.serial_b.port ~ ' ' ~ m.network.bind_ip ~ ':' ~ m.network.port ~ ' ' ~ m.network.remote_host ~ ' ' ~ m.network.protocol ~ ' ' ~ (st.device if st else ''))|lower }}"
+    {#- data-search: folded as app.js folds what is typed (İ/ı/I/i one letter, no accents);
+        data-name as it is (sorted by the browser, in the page's language) #}
+    <tr data-mid="{{ m.id }}" data-name="{{ m.name }}" data-state="{{ 'problem' if problem else state }}"
+        data-search="{{ (m.name ~ ' ' ~ m.serial.port ~ ' ' ~ m.serial_b.port ~ ' ' ~ m.network.bind_ip ~ ':' ~ m.network.port ~ ' ' ~ m.network.remote_host ~ ' ' ~ m.network.protocol ~ ' ' ~ (st.device if st else ''))|searchkey }}"
         data-port="{{ m.network.port if m.kind == 'net' and m.network.mode != 'client' else m.network.remote_port }}"
         data-clients="{{ st.client_count|default(0) if st else 0 }}">
       {# the ids: htmx puts the keyboard focus back on a control after the table's 2-second

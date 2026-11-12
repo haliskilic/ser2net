@@ -22,6 +22,7 @@ from starlette.responses import JSONResponse, PlainTextResponse, RedirectRespons
 from starlette.templating import Jinja2Templates
 
 from .. import i18n
+from ..textfold import search_key
 from ..config import ROLE_RANK
 from . import auth
 from .routes import build_routes
@@ -214,6 +215,8 @@ def make_templates() -> Jinja2Templates:
     templates.env.filters["softbreak"] = softbreak
     templates.env.filters["domid"] = domid
     templates.env.filters["bytesize"] = bytesize
+    # data-search of the dashboard rows: app.js folds what is typed the same way
+    templates.env.filters["searchkey"] = search_key
     # _("...") in every template, translated for the request's language (app/i18n.py);
     # newstyle: _("Hello %(name)s", name=x) formats and escapes x
     templates.env.add_extension("jinja2.ext.i18n")

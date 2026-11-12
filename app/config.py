@@ -29,6 +29,7 @@ import uuid
 from dataclasses import dataclass, field, asdict
 from typing import Any, Optional
 from .i18n import _
+from .textfold import fold  # how names compare; still importable as app.config.fold
 
 # ---------------------------------------------------------------------------
 # Allowed value sets (mirror pyserial; kept here so config validation has no
@@ -1120,17 +1121,6 @@ class NotificationSettings:
                 raise ConfigError(_("Each e-mail recipient needs an @."))
         if not _is_int(self.repeat_s) or not (0 <= self.repeat_s <= 86400):
             raise ConfigError(_("The repeat interval must be between 0 and 86400 seconds."))
-
-
-def fold(text) -> str:
-    """How names compare where letter case doesn't count (LDAP and OIDC group names, LDAP
-    user names, an LDAP/OIDC sign-in name or a new account's name against the existing
-    ones): NFC, every run of white space (no-break spaces too) as one space, and letter
-    case folded so that Turkish İ, I, ı and i are one letter — str.lower() turns 'İ'
-    into 'i' + U+0307 and leaves 'ı' as it is, so KALİTE and Kalite, or BAKIM and Bakım,
-    would differ."""
-    s = " ".join(unicodedata.normalize("NFC", str(text)).split())
-    return s.replace("\u0130", "i").replace("\u0131", "i").casefold().replace("i\u0307", "i")
 
 
 class AccountNameError(ValueError):
