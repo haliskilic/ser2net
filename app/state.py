@@ -20,6 +20,7 @@ import logging
 import os
 import re
 import secrets
+import shutil
 import stat
 import sys
 import time
@@ -42,6 +43,7 @@ from .web.auth import LoginRateLimiter, RevokedSessions
 
 # Per-mapping log retention (automatic maintenance).
 LOG_MAX_BYTES = 100 * 1024 * 1024     # cap each mapping log at 100 MB
+LOG_TRIM_TO = 0.9                      # ... cut to 90% of it then, so the next passes leave it
 LOG_MAX_AGE_DAYS = 15                  # drop entries older than 15 days
 LOG_MAINTENANCE_INTERVAL = 3600       # run maintenance hourly (and once at startup)
 # Global log rotation (all.log via RotatingFileHandler; audit.log rotated manually).
@@ -68,6 +70,16 @@ VIEW_REPEAT_S = 300
 VIEW_RECORDS = 50
 # first-run setup through a host name that isn't this machine's needs this file's code
 SETUP_CODE_FILE = "setup-code.txt"
+# the log trim (_trim_log_file): what it copies at a time, what of a line's start it reads
+# for the line's time, and how often it tries to swap the file (Windows: a log view may
+# hold it open for a moment)
+_COPY_CHUNK = 1024 * 1024
+_STAMP_BYTES = 64
+_REPLACE_TRIES = 3
+# a line's time as text ('YYYY-MM-DD HH:MM:SS', the zone's local time): one that sorts more
+# than _SURELY_OLDER_S before the cutoff's is older whatever the zone was, without parsing
+_STAMP = re.compile(rb"\d{4}-\d\d-\d\d \d\d:\d\d:\d\d")
+_SURELY_OLDER_S = 2 * 86400
 
 
 # characters that must not reach an audit record: control characters (tab / CR / LF and
@@ -212,47 +224,118 @@ def _parse_log_ts(line: str) -> float | None:
         return None
 
 
-def _trim_log_file(path: str, cutoff_ts: float, max_bytes: int) -> bool:
-    """Rewrite a log file in place keeping only lines newer than cutoff_ts and,
-    if still over max_bytes, only the most recent max_bytes. Returns True if the
-    file changed. Runs in a worker thread (no event-loop blocking)."""
-    # newline="" so CRLF line endings (logging writes "\n" -> "\r\n" on Windows) are
-    # preserved verbatim on both read and write; otherwise the read collapses them to
-    # "\n", the byte-count is undercounted, and the rewritten file blows past max_bytes.
+def _line_start(fh, offset: int) -> int:
+    """The offset of the first line that begins at or after `offset` in the open binary
+    file `fh` (only a line feed ends a line); its end when no line begins there."""
+    if offset <= 0:
+        return 0
+    fh.seek(offset - 1)
+    if fh.read(1) == b"\n":
+        return offset
+    while True:
+        chunk = fh.readline(_COPY_CHUNK)
+        if not chunk or chunk.endswith(b"\n"):
+            return fh.tell()
+
+
+@contextlib.contextmanager
+def _holding(handlers):
+    """Hold the locks of these logging handlers: a record logged meanwhile waits."""
+    held = []
     try:
-        with open(path, "r", encoding="utf-8", errors="replace", newline="") as fh:
-            content = fh.read()
+        for h in handlers:
+            h.acquire()
+            held.append(h)
+        yield
+    finally:
+        for h in reversed(held):
+            h.release()
+
+
+def _trim_log_file(path: str, cutoff_ts: float, max_bytes: int, handlers=()) -> bool:
+    """Trim a log file in place: drop the lines older than cutoff_ts and, if it is still
+    over max_bytes, keep only its newest LOG_TRIM_TO part, from a line's start. Returns True if the file changed. Runs in a worker thread.
+
+    Only a line feed ends a line (a CR, NEL or U+2028 inside a message doesn't). Lines are
+    in time order, so the age filter keeps the file from its first line with a time at or
+    after cutoff_ts. A line without a time (the rest of a message that had a line break,
+    as older versions wrote it) belongs to the one before it: skipped there, it goes or
+    stays with that one; nothing is dropped for its age from a file in which no line has a
+    time. Lines before the size cut go anyway, so the age filter starts there.
+
+    In constant memory: only the start of each line the trim reaches is read (a file
+    within its limits: its first line), and what is kept is copied in chunks, byte for
+    byte (CRLF, invalid UTF-8), to <path>.tmp, which then replaces the file. `handlers`:
+    the logging FileHandlers that write to it, which stay attached: under their locks the
+    lines they wrote meanwhile are copied too and their files closed for the swap (each
+    opens the new one with its next record). A file deleted meanwhile (its mapping was)
+    is not made again; <path>.tmp never stays."""
+    older = time.strftime("%Y-%m-%d %H:%M:%S",
+                          time.localtime(cutoff_ts - _SURELY_OLDER_S)).encode()
+    try:
+        size = os.path.getsize(path)
+        with open(path, "rb") as fh:
+            size_cut = _line_start(fh, size - int(max_bytes * LOG_TRIM_TO)) \
+                if size > max_bytes else 0
+            start, pos, dated = None, size_cut, False
+            fh.seek(pos)
+            while True:
+                head = fh.readline(_STAMP_BYTES)
+                if not head:
+                    break
+                line_at, rest = pos, head
+                while rest and not rest.endswith(b"\n"):  # the rest of a long line
+                    rest = fh.readline(_COPY_CHUNK)
+                pos = fh.tell()
+                if head[:19] < older and _STAMP.match(head):
+                    ts: float | None = 0.0  # (most of a long scan: strptime is slow)
+                else:
+                    ts = _parse_log_ts(head.decode("utf-8", errors="replace"))
+                if ts is None:
+                    continue
+                dated = True
+                if ts >= cutoff_ts:
+                    start = line_at
+                    break
+            if start is None:
+                start = size if dated else size_cut
     except OSError:
         return False
-    if not content:
-        return False
-
-    lines = content.splitlines(keepends=True)
-    # 1) age filter — lines are chronological, so keep from the first recent one
-    start = len(lines)
-    for i, ln in enumerate(lines):
-        ts = _parse_log_ts(ln)
-        if ts is None or ts >= cutoff_ts:
-            start = i
-            break
-    data = "".join(lines[start:])
-
-    # 2) size cap — keep only the last max_bytes, trimmed to a line boundary
-    encoded = data.encode("utf-8")
-    if len(encoded) > max_bytes:
-        text = encoded[-max_bytes:].decode("utf-8", errors="ignore")
-        nl = text.find("\n")
-        data = text[nl + 1:] if nl != -1 else text
-
-    if data == content:
+    if start <= 0:
         return False
     tmp = path + ".tmp"
-    with open(tmp, "w", encoding="utf-8", newline="") as fh:
-        fh.write(data)
-        fh.flush()
-        os.fsync(fh.fileno())
-    os.replace(tmp, path)
-    return True
+    try:
+        with open(path, "rb") as src, open(tmp, "wb") as out:
+            src.seek(start)
+            shutil.copyfileobj(src, out, _COPY_CHUNK)  # while the handlers write on
+            copied = src.tell()
+            out.flush()
+            os.fsync(out.fileno())
+        for attempt in range(_REPLACE_TRIES):
+            with _holding(handlers):
+                if not os.path.exists(path):
+                    return False
+                with open(path, "rb") as src, open(tmp, "ab") as out:
+                    src.seek(copied)
+                    shutil.copyfileobj(src, out, _COPY_CHUNK)  # what they wrote meanwhile
+                    copied = src.tell()
+                    out.flush()
+                    os.fsync(out.fileno())
+                for h in handlers:
+                    stream = h.setStream(None)
+                    if stream is not None:
+                        stream.close()
+                try:
+                    os.replace(tmp, path)
+                    return True
+                except PermissionError:  # Windows: a log view has it open for a moment
+                    if attempt == _REPLACE_TRIES - 1:
+                        raise
+            time.sleep(0.2)
+        return False
+    finally:
+        with _suppress(OSError):
+            os.remove(tmp)
 
 
 def _snapshot(value: Any) -> tuple:
@@ -643,31 +726,27 @@ class AppState:
 
     async def run_log_maintenance(self) -> None:
         """Trim every per-mapping log: drop entries older than LOG_MAX_AGE_DAYS and
-        cap each file at LOG_MAX_BYTES (keeping the most recent portion). The file's
-        logging handler is detached while its file is rewritten, then reattached."""
+        cap each file at LOG_MAX_BYTES (keeping the most recent portion), in a worker
+        thread (_trim_log_file). The mapping's log handler stays attached: what it writes
+        meanwhile is kept."""
         cutoff = time.time() - LOG_MAX_AGE_DAYS * 86400
         try:
             files = [f for f in os.listdir(self.logs_dir) if f.endswith(".log")]
         except OSError:
             return
         for fn in files:
-            mid = fn[:-4]
-            path = os.path.join(self.logs_dir, fn)
-            lg = self._mapping_loggers.get(mid)
-            if lg is not None:  # detach so the open handler doesn't fight the rewrite
-                for h in list(lg.handlers):
-                    with _suppress(Exception):
-                        h.close()
-                    lg.removeHandler(h)
+            lg = self._mapping_loggers.get(fn[:-4])
+            handlers = [h for h in lg.handlers if isinstance(h, logging.FileHandler)] \
+                if lg is not None else []
             try:
-                changed = await asyncio.to_thread(_trim_log_file, path, cutoff, LOG_MAX_BYTES)
+                changed = await asyncio.to_thread(
+                    _trim_log_file, os.path.join(self.logs_dir, fn), cutoff, LOG_MAX_BYTES,
+                    handlers=handlers)
                 if changed:
-                    self.log(f"log maintenance: trimmed {fn} (>15d / >100MB)")
+                    self.log(f"log maintenance: trimmed {fn} (>{LOG_MAX_AGE_DAYS}d / "
+                             f">{LOG_MAX_BYTES // 1048576}MB)")
             except Exception as e:  # never let maintenance crash the loop
                 self.log(f"log maintenance error on {fn}: {e}")
-            finally:
-                if lg is not None:
-                    self._attach_mapping_handler(lg, mid)
 
     async def _log_maintenance_loop(self) -> None:
         await self.load_sign_ins()
