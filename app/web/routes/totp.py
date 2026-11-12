@@ -203,18 +203,15 @@ def routes(ctx: Ctx) -> list:
     async def _store(request, me, secret: str):
         """Save `secret` ("" = off) for the signed-in account and end its other sessions
         (pwd_version + 1); None when saved, else the page with the error."""
-        async with state.config_lock:
-            user = state.config.get_user(me.username)
-            if user is None or user is not me:  # deleted or replaced meanwhile
-                return _page(request, 409, error=_("Your account changed meanwhile. Sign in "
-                                                   "again."))
-            old = (user.totp_secret, user.pwd_version)
-            user.totp_secret, user.pwd_version = secret, user.pwd_version + 1
-            try:
-                await state.asave()
-            except ConfigError as e:
-                user.totp_secret, user.pwd_version = old
-                return _page(request, 400, error=str(e))
+        try:
+            async with state.edit_config():
+                user = state.config.get_user(me.username)
+                if user is None or user is not me:  # deleted or replaced meanwhile
+                    return _page(request, 409, error=_("Your account changed meanwhile. Sign "
+                                                       "in again."))
+                user.totp_secret, user.pwd_version = secret, user.pwd_version + 1
+        except ConfigError as e:  # not saved: nothing changed
+            return _page(request, 400, error=str(e))
         return None
 
     async def enable_post(request):

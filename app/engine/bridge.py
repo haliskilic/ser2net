@@ -43,8 +43,10 @@ while a TCP client is connected).
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
 import contextlib
 import errno
+import io
 import ipaddress
 import math
 import os
@@ -67,7 +69,7 @@ else:  # pragma: no cover - exercised only on Python 3.10
     from taskgroup import TaskGroup
     from exceptiongroup import BaseExceptionGroup
 
-from .. import i18n
+from .. import i18n, storage
 from ..config import (
     MQTT_TX_MAX_BYTES, MappingConfig, canonical_ip, host_port, mapping_file, mqtt_topic_problem,
     poll_bytes, udp_peer_address, udp_peer_timeout, udp_targets,
@@ -167,8 +169,10 @@ def trace_path(trace_dir: str, mapping: MappingConfig) -> str:
     return mapping_file(trace_dir, mapping.id, f"-{mapping.options.trace_both}")
 
 
-def open_tracer(mapping: MappingConfig, trace_dir: Optional[str], log) -> Optional["Tracer"]:
-    """The mapping's tracer when tracing is on (None when off or unavailable)."""
+def open_tracer(mapping: MappingConfig, trace_dir: Optional[str], log,
+                status: Optional["RunnerStatus"] = None) -> Optional["Tracer"]:
+    """The mapping's tracer when tracing is on (None when off or unavailable). `status`:
+    the runner's, whose trace_error the tracer keeps up to date."""
     if not mapping.options.trace_both:
         return None
     if not trace_dir:
@@ -179,11 +183,39 @@ def open_tracer(mapping: MappingConfig, trace_dir: Optional[str], log) -> Option
     except ValueError as e:
         log(f"trace not written: {e}")
         return None
-    tracer = Tracer(path, mapping.options, log=log)
-    if not tracer.active:
-        return None
-    log(f"tracing traffic to {tracer.path}")
+    tracer = Tracer(path, mapping.options, log=log, status=status)
+    if not tracer.error:  # else it said why, and keeps trying
+        log(f"tracing traffic to {tracer.path}")
     return tracer
+
+
+def remove_files(paths) -> dict[str, Optional[OSError]]:
+    """Delete these files: path -> None once it is gone (also when it was gone already),
+    else the OSError (e.g. Windows: the file is open for a download)."""
+    out: dict[str, Optional[OSError]] = {}
+    for path in paths:
+        try:
+            os.remove(path)
+            out[path] = None
+        except FileNotFoundError:
+            out[path] = None
+        except OSError as e:
+            out[path] = e
+    return out
+
+
+class _Job:
+    """Something a Tracer's writer thread does in turn with the lines queued before it."""
+
+    def __init__(self, fn) -> None:
+        self.fn = fn
+        self.future: concurrent.futures.Future = concurrent.futures.Future()
+
+    def run(self) -> None:
+        try:
+            self.future.set_result(self.fn())
+        except BaseException as e:  # for the waiter
+            self.future.set_exception(e)
 
 
 class Tracer:
@@ -192,48 +224,134 @@ class Tracer:
 
     ``write()`` only queues the chunk (with its arrival time); a writer thread formats,
     writes and flushes in batches and rotates the file once it passes ``max_bytes``
-    (<file>.1 ... <file>.<keep>; keep=0 starts the file over). If the disk can't keep
+    (<file>.1 ... <file>.<keep>; keep=0 begins a new file; rotated files past keep, left
+    when it was lowered, are deleted when the trace starts). If the disk can't keep
     up, at most QUEUE_MAX_BYTES wait in memory: newer chunks are dropped and the
-    trace says how many bytes are missing."""
+    trace says how many bytes are missing.
+
+    When the file can't be opened or written (the traces folder was removed, the disk is
+    full, no file descriptor is left, another program holds the file), the trace pauses
+    instead of ending: `error` says why (also the runner's status.trace_error), write()
+    only counts the bytes, the writer tries again every RETRY_S seconds (making the folder
+    again), and once it writes again the trace says how many bytes are missing. The log
+    says so at most once per LOG_EVERY_S. So does a disk almost full: below
+    storage.floor() free space (checked at each open and after every SPACE_CHECK_BYTES
+    written) the trace pauses before the disk fills up, and goes on once there is 10%
+    more again."""
 
     QUEUE_MAX_BYTES = 8 * 1024 * 1024
     BATCH = 256
+    RETRY_S = 5.0
+    LOG_EVERY_S = 600.0
+    SPACE_CHECK_BYTES = 8 * 1024 * 1024
 
-    def __init__(self, path: str, options, log=None) -> None:
+    def __init__(self, path: str, options, log=None,
+                 status: Optional["RunnerStatus"] = None) -> None:
         self.path = path
         self._hex = options.trace_hexdump
         self._ts = options.trace_timestamp
         self._max_bytes = max(1, int(options.trace_max_mb * 1024 * 1024))
         self._keep = int(options.trace_keep)
         self._log = log or (lambda _m: None)
+        self._log_failure = _LogEvery(self._log, self.LOG_EVERY_S)
+        self._log_rotation = _LogEvery(self._log, self.LOG_EVERY_S)
+        self._log_resumed = _LogEvery(self._log, self.LOG_EVERY_S)
+        self._status = status
         self._q: queue.SimpleQueue = queue.SimpleQueue()
         self._lock = threading.Lock()
         self._queued = 0      # bytes waiting for the writer
         self._dropped = 0     # bytes dropped since the last line written
-        self._fh = None
+        self._drop_reason = ""
+        self._closing = False  # aclose() was called: nothing more is queued
+        self._done = False     # the writer has ended (remove_files then returns None)
+        self._resumed = False  # opened again after an error: logged once it writes
+        self._unchecked = 0    # bytes written since the free space was checked
+        self._begun: Optional[float] = None  # when the traffic in the file begins (None: empty)
+        self._low_space = False  # paused for the free space (goes on with some to spare)
+        self.error = ""        # why the trace is not written now ("" while it is)
+        self._fh: Optional[io.BufferedWriter] = None
         try:
-            os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
-            self._fh = open(path, "ab")
+            self._reopen()
         except OSError as e:
-            self._log(f"trace disabled: cannot open {path}: {e}")
-            return
+            self._failed(e)
         self._thread = threading.Thread(target=self._run, daemon=True,
                                         name=f"trace:{os.path.basename(path)}")
         self._thread.start()
 
     @property
     def active(self) -> bool:
-        return self._fh is not None
+        """The trace is on (it may be paused, see `error`), not closed."""
+        return not self._closing
 
     def write(self, direction: str, data: bytes) -> None:
-        if self._fh is None or not data:
+        if not data or self._closing:
             return
         with self._lock:
+            if self.error:  # paused: only counted (the trace says so once it goes on)
+                self._dropped += len(data)
+                return
             if self._queued + len(data) > self.QUEUE_MAX_BYTES:
                 self._dropped += len(data)
+                self._drop_reason = "the trace file could not keep up"
                 return
             self._queued += len(data)
         self._q.put((time.time(), direction, bytes(data)))
+
+    def remove_files(self, paths) -> Optional[concurrent.futures.Future]:
+        """Delete some of this trace's files in the writer thread, in turn with the lines
+        queued before (so never in the middle of a rotation). The file it writes is
+        closed first and begun again with the next traffic: a deleted trace is never
+        written on (on POSIX an open file that was deleted keeps its disk space, on
+        Windows it can't be deleted). The future's result: as remove_files(). None once
+        the writer has ended: they are files like any other then."""
+        job = _Job(lambda: self._remove(paths))
+        with self._lock:
+            if self._done:
+                return None
+            self._q.put(job)
+        return job.future
+
+    def _prune_rotated(self) -> None:
+        """Delete this trace's rotated files past the number kept (<file>.N, N > keep):
+        left when keep was lowered, no rotation would ever reach them. Logged."""
+        folder, base = os.path.split(os.path.abspath(self.path))
+        try:
+            names = os.listdir(folder)
+        except OSError:
+            return
+        extra = []
+        for name in names:
+            number = name[len(base) + 1:] if name.startswith(base + ".") else ""
+            if number.isascii() and number.isdigit() and int(number) > self._keep:
+                extra.append(os.path.join(folder, name))
+        gone = [p for p, e in remove_files(extra).items() if e is None]
+        if gone:
+            self._log(f"trace: deleted {len(gone)} rotated file(s) of {self.path} past the "
+                      f"{self._keep} kept")
+
+    def renew_if_older(self, begun_before: float) -> Optional[concurrent.futures.Future]:
+        """Have the writer begin a new file (rotating this one, as at its size) if the file
+        it writes holds traffic from before `begun_before`, in turn with the lines queued
+        before: the retention by age (trace_max_age_days) can then delete it. The future's
+        result: whether it did. None once the writer has ended."""
+        job = _Job(lambda: self._renew(begun_before))
+        with self._lock:
+            if self._done:
+                return None
+            self._q.put(job)
+        return job.future
+
+    def _renew(self, begun_before: float) -> bool:
+        if self._fh is None or self._begun is None or self._begun >= begun_before:
+            return False
+        self._rotate()
+        return True
+
+    def _remove(self, paths) -> dict[str, Optional[OSError]]:
+        mine = os.path.normcase(os.path.abspath(self.path))
+        if any(os.path.normcase(os.path.abspath(p)) == mine for p in paths):
+            self._close_file()
+        return remove_files(paths)
 
     def _format(self, ts: float, direction: str, data: bytes) -> bytes:
         prefix = time.strftime("%Y-%m-%d %H:%M:%S ", time.localtime(ts)) if self._ts else ""
@@ -241,76 +359,186 @@ class Tracer:
             return f"{prefix}{direction} [{len(data)}] {data.hex(' ')}\n".encode()
         return prefix.encode() + direction.encode() + b" " + data + b"\n"
 
+    def _lines(self, ts: float, direction: str, data: bytes) -> list:
+        """The trace lines of one chunk, each with the traffic bytes it stands for: what
+        was not traced before it (if anything), then the chunk."""
+        with self._lock:
+            self._queued -= len(data)
+            dropped, self._dropped = self._dropped, 0
+            reason = self._drop_reason
+        lines = []
+        if dropped:
+            lines.append((self._format(ts, "!!", f"{dropped} bytes not traced "
+                                       f"({reason})".encode()), dropped))
+        lines.append((self._format(ts, direction, data), len(data)))
+        return lines
+
     def _run(self) -> None:
+        self._prune_rotated()
         stop = False
         while not stop:
-            batch = [self._q.get()]
+            try:  # paused: wake up to try the file again
+                first = self._q.get(timeout=self.RETRY_S) if self.error else self._q.get()
+            except queue.Empty:
+                try:
+                    self._reopen()
+                except OSError as e:
+                    self._failed(e)
+                continue
+            batch = [first]
             while len(batch) < self.BATCH:
                 try:
                     batch.append(self._q.get_nowait())
                 except queue.Empty:
                     break
-            out = []
-            for item in batch:
-                if item is None:
-                    stop = True
-                    continue
-                ts, direction, data = item
-                with self._lock:
-                    self._queued -= len(data)
-                    dropped, self._dropped = self._dropped, 0
-                if dropped:
-                    out.append(self._format(ts, "!!", f"{dropped} bytes not traced "
-                                            "(the trace file could not keep up)".encode()))
-                out.append(self._format(ts, direction, data))
-            if out:
+            out: list = []
+            try:
+                for item in batch:
+                    if item is None:
+                        stop = True
+                    elif isinstance(item, _Job):
+                        self._append(out)
+                        out = []
+                        item.run()
+                    else:
+                        out.extend(self._lines(*item))
                 self._append(out)
-        with contextlib.suppress(Exception):
-            if self._fh is not None:
-                self._fh.close()
-        self._fh = None
+            except Exception as e:  # never end the writer: the trace would stop unnoticed
+                self._failed(e)
+        with self._lock:
+            self._done = True
+        self._close_file()
+        self._set_error("")
+        while True:  # a job queued as the writer ended: the file is closed now
+            try:
+                item = self._q.get_nowait()
+            except queue.Empty:
+                break
+            if isinstance(item, _Job):
+                item.run()
 
     def _append(self, lines: list) -> None:
-        """Write a batch of lines; rotate as soon as the file reaches its size."""
+        """Write a batch of lines; rotate as soon as the file reaches its size. When that
+        fails, the trace pauses and the lines not written are counted as not traced."""
+        if not lines:
+            return
+        done = 0  # lines written
         try:
-            pending: list = []
-            size = self._fh.tell() if self._fh is not None else 0
-            for line in lines:
-                pending.append(line)
+            fh = self._fh if self._fh is not None else self._reopen()
+            size = fh.tell()
+            start = 0
+            for i, (line, _n) in enumerate(lines):
                 size += len(line)
                 if size >= self._max_bytes:
-                    self._write(pending)
-                    pending = []
+                    self._write(lines[start:i + 1])
+                    done = start = i + 1
                     self._rotate()
                     size = 0
-            if pending:
-                self._write(pending)
-        except OSError as e:
-            self._log(f"trace write failed ({self.path}): {e}")
+            if start < len(lines):
+                self._write(lines[start:])
+            done = len(lines)
+        except Exception as e:  # OSError mostly; ValueError for a file closed under it
+            self._failed(e, lines[done:])
+            return
+        if self._resumed:
+            self._resumed = False
+            self._log_resumed(f"trace written again ({self.path})")
 
     def _write(self, lines: list) -> None:
-        if self._fh is not None:
-            self._fh.write(b"".join(lines))
-            self._fh.flush()
+        if self._fh is None:
+            raise OSError(f"{self.path} is not open")
+        data = b"".join(line for line, _n in lines)
+        if self._begun is None:
+            self._begun = time.time()
+        self._unchecked += len(data)
+        if self._unchecked >= self.SPACE_CHECK_BYTES:
+            self._unchecked = 0
+            storage.check_space(os.path.dirname(os.path.abspath(self.path)))
+        self._fh.write(data)
+        self._fh.flush()
 
     def _rotate(self) -> None:
-        if self._fh is not None:
-            self._fh.close()
+        """Move the file to <file>.1 (the older ones up), or with keep=0 delete it, and
+        begin a new one. Never cut in place, so a download still reading the file gets
+        all of it (POSIX; on Windows a file open for a download can't be renamed or
+        deleted: the trace goes on in the same file until it can). Raises OSError when
+        the new file can't be opened."""
+        fh, self._fh = self._fh, None
+        if fh is not None:
+            fh.close()
         try:
             if self._keep > 0:
                 for i in range(self._keep, 0, -1):
                     src = self.path if i == 1 else f"{self.path}.{i - 1}"
                     if os.path.exists(src):
                         os.replace(src, f"{self.path}.{i}")
-            self._fh = open(self.path, "wb" if self._keep == 0 else "ab")
+            else:
+                with contextlib.suppress(FileNotFoundError):
+                    os.remove(self.path)
         except OSError as e:  # e.g. Windows: a rotated file is open for download
-            self._log(f"trace rotation failed ({self.path}): {e}; continuing in the same file")
-            self._fh = open(self.path, "ab")
+            self._log_rotation(f"trace rotation failed ({self.path}): {e}; "
+                               "continuing in the same file")
+        self._reopen()
+
+    def _reopen(self) -> io.BufferedWriter:
+        """Open the file to append, making its folder again (it may have been removed).
+        Raises OSError (storage.LowSpace: the disk is almost full)."""
+        folder = os.path.dirname(os.path.abspath(self.path))
+        os.makedirs(folder, mode=0o700, exist_ok=True)
+        storage.check_space(folder, resuming=self._low_space)
+        self._fh = open(self.path, "ab")
+        self._unchecked, self._low_space = 0, False
+        self._begun = self._first_time() if self._fh.tell() else None
+        if self.error:
+            self._resumed = True
+            self._set_error("")
+        return self._fh
+
+    def _first_time(self) -> float:
+        """When the traffic in the (not empty) file begins: the time of its first line
+        (trace_timestamp), else when it was last written (no earlier time is known)."""
+        try:
+            with open(self.path, "rb") as fh:
+                head = fh.read(19).decode("ascii")
+            return time.mktime(time.strptime(head, "%Y-%m-%d %H:%M:%S"))
+        except (OSError, ValueError, OverflowError):
+            try:
+                return os.path.getmtime(self.path)
+            except OSError:
+                return time.time()
+
+    def _close_file(self) -> None:
+        fh, self._fh = self._fh, None
+        if fh is not None:
+            with contextlib.suppress(Exception):
+                fh.close()
+
+    def _set_error(self, text: str) -> None:
+        with self._lock:
+            self.error = text
+        if self._status is not None:
+            self._status.trace_error = text
+
+    def _failed(self, e: BaseException, lost=()) -> None:
+        """Opening or writing the file failed: close it, count the lines `lost` as not
+        traced and pause until the file can be opened again."""
+        self._close_file()
+        reason = (e.strerror if isinstance(e, OSError) and e.strerror else str(e)) \
+            or type(e).__name__
+        self._low_space = isinstance(e, storage.LowSpace)
+        with self._lock:
+            self._dropped += sum(n for _line, n in lost)
+            self._drop_reason = ("the disk was almost full" if self._low_space else
+                                 "the trace file could not be written")
+        self._set_error(reason)
+        self._log_failure(f"trace not written ({self.path}): {reason}; trying again every "
+                          f"{self.RETRY_S:g} s (the trace will say how much is missing)")
 
     async def aclose(self) -> None:
         """Flush what is queued, close the file. Waits for the writer off the loop."""
-        if self._fh is None:
+        if self._closing:
             return
+        self._closing = True
         self._q.put(None)
         await asyncio.to_thread(self._thread.join, 10)
 
@@ -354,9 +582,17 @@ class RunnerStatus:
     # what to know about the serial port(s) open now (portdiag.Note): a setting a port did
     # not take at open (RTS / DTR, RS-485 mode); as_dict() has them (and hint) as text
     warnings: tuple = ()
+    trace_error: str = ""   # why the mapping's trace is not written now (bridge.Tracer)
     # the serial devices open now, for the Ports page's "in use" (both ports of a
     # serial<->serial bridge, whose `device` reads "A <-> B"); not part of as_dict()
     devices: tuple[str, ...] = ()
+    # what the device sends (watch_traffic): time.time() of the last byte seen from it,
+    # and, by time.monotonic(), since when it has sent nothing (from the port's opening)
+    # and since when what was sent to it has had no answer
+    last_rx: float = 0.0
+    _seen: tuple[int, int] = (0, 0)
+    _quiet_since: Optional[float] = None
+    _unanswered_since: Optional[float] = None
 
     def set_link(self, link: str, error: str = "") -> None:
         if link != self.link:
@@ -370,8 +606,28 @@ class RunnerStatus:
         self.clients = [{"peer": c.peer, "connected_at": c.connected_at, "priority": c.priority}
                         for c in sorted(clients, key=lambda c: c.seq)]
 
+    def watch_traffic(self, now: float) -> None:
+        """Compare the counters with the last look (as_dict, every POLL_S at least: the
+        notifier's): new bytes from the device end its silence; bytes to it with no reply
+        since begin a wait for one. Precise to that interval, which the no-data alarm
+        (at least NO_DATA_MIN_S) allows, and nothing is added to the data path."""
+        seen, self._seen = self._seen, (self.bytes_in, self.bytes_out)
+        if self.state != "running":
+            self._quiet_since = self._unanswered_since = None
+            return
+        if self.bytes_in != seen[0]:
+            self.last_rx = time.time()
+            self._quiet_since = now
+            self._unanswered_since = None
+        elif self._quiet_since is None:  # the port opened (or a first look): from now
+            self._quiet_since = now
+        if self.bytes_out != seen[1] and self.bytes_in == seen[0] and \
+                self._unanswered_since is None:
+            self._unanswered_since = now
+
     def as_dict(self) -> dict:
         now = time.monotonic()
+        self.watch_traffic(now)
         # connected_at (Unix time, whole seconds): the dashboard counts the duration on from
         # it. Worked out from the monotonic time each time, so it stays the same from one
         # refresh to the next, and a clock step moves it along with the server's clock
@@ -408,9 +664,26 @@ class RunnerStatus:
             # in the web UI's language on the dashboard (English for the REST API)
             "hint": self.hint.text(i18n.gettext) if self.hint else "",
             "warnings": portdiag.texts(self.warnings, i18n.gettext),
+            "trace_error": self.trace_error,
+            # the device: when it last sent something (None: not yet), how long it has sent
+            # nothing and how long what was sent to it has had no answer (s; None: not
+            # running / nothing waits for an answer)
+            "last_rx": self.last_rx or None,
+            "rx_idle_s": _since(self._quiet_since, now),
+            "reply_wait_s": _since(self._unanswered_since, now),
         }
 
 
+def _since(mark: Optional[float], now: float) -> Optional[float]:
+    return None if mark is None else round(now - mark, 1)
+
+
+def log_ignored_settings(mapping: MappingConfig, log) -> None:
+    """At a runner's start: each setting of the mapping that does nothing, in English
+    (MappingConfig.ignored_settings; the edit form shows the same)."""
+    with i18n.english():
+        for text in mapping.ignored_settings():
+            log(f"warning: {text}")
 _BANNER_ESCAPE = re.compile(r"\\([\\dNpIrn])")
 
 
@@ -522,11 +795,11 @@ class _ClientConn:
         init = bytearray(self._session.initial_net_bytes())
         if m.options.banner:
             init += _render_banner(m.options.banner, m, self.runner.status.device, self.peer_ip)
-        if init:
-            self.writer.write(bytes(init))
-            await self.writer.drain()
 
         try:
+            if init:  # (a client that resets right after connecting fails this write)
+                self.writer.write(bytes(init))
+                await self.writer.drain()
             async with TaskGroup() as tg:
                 tg.create_task(self._pump_net_to_serial())
                 tg.create_task(self._pump_serial_to_net())
@@ -536,6 +809,9 @@ class _ClientConn:
                     tg.create_task(self._idle_guard(m.options.idle_timeout_s))
                 if m.options.max_connection_time_s > 0:
                     tg.create_task(self._lifetime_guard(m.options.max_connection_time_s))
+        except (ConnectionError, OSError) as e:  # the client left before the pumps started
+            if not self.close_reason:
+                self.close_reason = describe_disconnect(e)
         except BaseExceptionGroup as eg:
             # Mirror the original `except*` split: connection-reset paths are a
             # normal disconnect (swallow them); log every other Exception; let
@@ -700,7 +976,7 @@ class MappingRunner:
         self._drop_log = _LogEvery(self._log)  # data for the device that was not written
         self._break_lock = asyncio.Lock()      # one serial BREAK at a time
         self._break_log = _LogEvery(self._log)
-        self._refused_log = _LogEvery(self._log, 10.0)  # clients turned away: no port
+        self._refusal_log = netguard.RefusalLog(self._log)  # refused connections
         # MQTT writes (<base_topic>/tx) waiting for the serial port, and their bytes
         self._tx_topic = ""
         self._tx_queue: list[bytes] = []
@@ -710,6 +986,9 @@ class MappingRunner:
         self._tx_task: Optional[asyncio.Task] = None
         self._poll_task: Optional[asyncio.Task] = None  # options.poll_string
         co = mapping.options.closeon
+        # nothing to close on UDP (ignored_settings says so at start)
+        if mapping.kind == "net" and mapping.network.mode == "udp":
+            co = ""
         self._closeon = co.encode("utf-8", "replace") if co else b""
         self._closeon_tail = b""  # rolling carry-over so matches across reads aren't missed
 
@@ -717,6 +996,16 @@ class MappingRunner:
     def serial_instance(self):
         """The open pyserial object (None while the port is closed)."""
         return self._link.serial
+
+    @property
+    def tracer(self) -> Optional[Tracer]:
+        """The trace writer while the mapping runs with tracing on."""
+        return self._tracer
+
+    @property
+    def listener(self) -> Optional[netguard.Listener]:
+        """The server mode listener while the mapping runs, else None."""
+        return self._server
 
     @property
     def needs_port(self) -> bool:
@@ -769,7 +1058,8 @@ class MappingRunner:
         self._stop.clear()
 
         if self.mapping.kind == "serialbridge":
-            self._tracer = open_tracer(self.mapping, self.trace_dir, self._log)
+            self._tracer = open_tracer(self.mapping, self.trace_dir, self._log, self.status)
+            log_ignored_settings(self.mapping, self._log)
             self._main_task = asyncio.create_task(
                 self._serialbridge_supervisor(), name=f"serbridge:{self.mapping.name}")
             self.status.state = "running"
@@ -802,11 +1092,15 @@ class MappingRunner:
                 sock.close()
                 raise netguard.BindError.of(e) from e
             self._log(f"UDP on {netguard.listen_where(net, [sock])}, {udp.describe()}")
+        if self._stop.is_set():  # stopped while the listener came up: it found none to close
+            await self.stop()
+            return
 
         # If the rest fails to come up, tear everything down (the listener too), so that
         # nothing is left holding the port or the serial device.
         try:
-            self._tracer = open_tracer(self.mapping, self.trace_dir, self._log)
+            self._tracer = open_tracer(self.mapping, self.trace_dir, self._log, self.status)
+            log_ignored_settings(self.mapping, self._log)
             # optional MQTT publisher: serial lines -> broker (net mappings), and with
             # tx_enabled writes from <base_topic>/tx -> the serial port
             if self.mapping.mqtt.enabled:
@@ -1147,6 +1441,9 @@ class MappingRunner:
         self.status.set_clients(self._clients)
 
     async def _on_client(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        if self._stop.is_set():  # accepted while the mapping stops
+            writer.close()
+            return
         peer_ip, peer_port = netguard.peer_address(writer)
         peer_label = netguard.client_label(peer_ip, peer_port)
 
@@ -1160,18 +1457,19 @@ class MappingRunner:
                 await asyncio.wait_for(ready.wait(),
                                        timeout=self.mapping.options.rfc2217_net_timeout_s)
             if not ready.is_set():
-                if self.drops_clients:  # (a poller retrying all the time: rate-limited)
-                    self._refused_log(f"rejected {peer_label}: the serial port is not open "
+                # (a poller retrying all the time: each reason once a minute, with a count)
+                if self.drops_clients:
+                    self._refusal_log(f"rejected {peer_label}: the serial port is not open "
                                       "(disconnect_without_device)")
                 else:
-                    self._log(f"rejected {peer_label}: serial not ready for RFC2217")
+                    self._refusal_log(f"rejected {peer_label}: serial not ready for RFC2217")
                 writer.close()
                 return
 
         # allow-list, then max connections (a priority client / kick_old_user makes room);
         # from here until the client is in self._clients nothing awaits, so connections
         # accepted together are admitted one after the other, each seeing the one before
-        admission = self._access.admit(peer_ip, peer_label, self._clients, self._log)
+        admission = self._access.admit(peer_ip, peer_label, self._clients, self._refusal_log)
         if not admission.admitted:
             if admission.at_capacity:
                 with contextlib.suppress(Exception):

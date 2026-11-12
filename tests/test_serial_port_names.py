@@ -180,7 +180,7 @@ def test_server():
         st, _, text = b.post(f"/api/mappings/{mid}/start", htmx=True)
         assert st == 400 and "both use serial port COM7" in text, (st, text)
         st, _, _ = b.post("/api/mappings/bulk", {"action": "start", "ids": [mid]}, htmx=True)
-        assert st == 200 and names()["second"]["enabled"] is False
+        assert st == 400 and names()["second"]["enabled"] is False
         assert "bulk start: Mappings 'first' and 'second'" in srv.output()
         req = urllib.request.Request(
             srv.base + "/api/cluster/control", method="POST",

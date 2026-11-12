@@ -17,7 +17,7 @@
     of its <section>; another one, at the top), which takes the keyboard focus (app.js);
     `submitted`: what a refused form had, shown again in it #}
 {% macro feedback(name) -%}
-{%- set where = section if section in ['account', 'admin-interface', 'access', 'audit-log', 'users', 'ldap', 'oidc', 'cluster-settings', 'notifications', 'tls', 'reverse-proxy', 'api-token', 'import', 'backups'] else 'account' -%}
+{%- set where = section if section in ['account', 'admin-interface', 'access', 'audit-log', 'retention', 'users', 'ldap', 'oidc', 'cluster-settings', 'notifications', 'tls', 'reverse-proxy', 'api-token', 'import', 'backups'] else 'account' -%}
 {%- if where == name -%}
 {% if ok %}<div class="banner ok" role="status" tabindex="-1" data-feedback>{{ ok }}</div>{% endif %}
 {% if error %}<div class="banner error" role="alert" tabindex="-1" data-feedback>{{ error }}</div>{% endif %}
@@ -63,10 +63,18 @@
 <section class="panel panel-narrow" id="admin-interface">
   <div class="panel-head"><h2>{{ _("Admin interface") }}</h2></div>
   {{ feedback('admin-interface') }}
-  <p>{{ _('Listening on <span class="mono">%(address)s</span>', address=host_port(admin.bind_ip, admin.port)) }}
-     {% if admin.tls_enabled %}<span class="tag">TLS</span>{% else %}<span class="tag">HTTP</span>{% endif %}</p>
+  <p>{{ _('Listening on <span class="mono">%(address)s</span>', address=serving_address) }}
+     {% if serving_tls %}<span class="tag">TLS</span>{% else %}<span class="tag">HTTP</span>{% endif %}</p>
+  {% if pending_address %}<div class="banner warn">{{ _('config.json sets <span class="mono">%(address)s</span>: the admin UI moves there when ser2net starts again.', address=pending_address) }}</div>{% endif %}
+  {% if pending_tls %}<div class="banner warn">{{ _('The admin TLS settings saved are used from the next start.') }}</div>{% endif %}
   {% if public_url %}<p>{{ _('Published as <a class="mono" href="%(url)s">%(url)s</a> (Settings → Reverse proxy)', url=public_url) }}</p>{% endif %}
-  <p class="muted">{{ _('To change the admin bind address, restart with <span class="mono">python3 ser2net.py --reconfigure</span>.') }}</p>
+  {% if address_hint == 'env' %}
+  <p class="muted">{{ _('The address comes from <span class="mono">SER2NET_BIND_IP</span> / <span class="mono">SER2NET_PORT</span> (for a container: its environment), which win over config.json at every start: change them there and start ser2net (the container) again.') }}</p>
+  {% elif address_hint == 'service' %}
+  <p class="muted">{{ _('To change the address, run <span class="mono">%(command)s</span> from an elevated prompt: it stops the service, asks for the address and starts the service again.', command=address_command) }}</p>
+  {% else %}
+  <p class="muted">{{ _('To change the address, stop ser2net and start it as the account it runs as with <span class="mono">%(command)s</span>, which asks for the address; or change <span class="mono">admin_ui.bind_ip</span> / <span class="mono">port</span> in config.json and restart ser2net.', command=address_command) }}</p>
+  {% endif %}
   {% if is_admin %}
   {% with admin = submitted.node or admin %}
   <form method="post" action="{{ base }}/settings/node-name" class="authform mt-sm">
@@ -146,6 +154,29 @@
     </label>
     <button class="btn" type="submit">{{ _("Save") }}</button>
   </form>
+</section>
+
+<section class="panel panel-narrow" id="retention">
+  <div class="panel-head"><h2>{{ _("Retention") }}</h2></div>
+  {{ feedback('retention') }}
+  {% if disk and disk.free is not none %}
+  {% if disk.free < disk.floor %}<div class="banner warn">{{ _("The data disk is almost full: trace files are paused. Delete trace files that are no longer needed, or make room on the disk.") }}</div>{% endif %}
+  <p class="muted">{{ _("The data folder’s disk: %(free)s free of %(total)s (trace files pause below %(floor)s free). Traces take %(traces)s, logs %(logs)s.", free=size_text(disk.free), total=size_text(disk.total), floor=size_text(disk.floor), traces=size_text(disk.traces), logs=size_text(disk.logs)) }}</p>
+  {% endif %}
+  {% with trace_days = submitted.retention.trace_max_age_days if submitted.retention else trace_days, log_days = submitted.retention.log_max_age_days if submitted.retention else log_days %}
+  <form method="post" action="{{ base }}/settings/retention" class="authform">
+    <input type="hidden" name="_csrf" value="{{ request.state.csrf_token }}">
+    <label>{{ _("Delete trace files not written for (days)") }} <span class="muted">({{ _("0 = keep them, the default · up to %(max)s", max=trace_days_max) }})</span>
+      <input type="number" name="trace_max_age_days" min="0" max="{{ trace_days_max }}" value="{{ trace_days }}" required>
+    </label>
+    <p class="muted">{{ _("Off by default: a trace file stays until an operator deletes it in its mapping’s Trace panel. With a number of days, every trace file not written for that long is deleted at once and then every hour, also the one a mapping is writing (the next traffic begins it again), and the log says how many went.") }} {{ _("A file a mapping keeps writing into begins anew once it holds traffic from that many days ago, so its traffic goes too, that many days after its last write.") }}</p>
+    <label>{{ _("Delete log and audit records and configuration backups older than (days)") }} <span class="muted">({{ _("0 = only the size limits, the default · up to %(max)s", max=log_days_max) }})</span>
+      <input type="number" name="log_max_age_days" min="0" max="{{ log_days_max }}" value="{{ log_days }}" required>
+    </label>
+    <p class="muted">{{ _("Off by default: all.log (10 MB × 6 files), audit.log (5 MB × 2) and the newest 50 configuration backups are kept within their sizes however old they are, and a mapping’s log keeps 15 days (always its last 1000 lines). With a number of days, all.log and audit.log begin a new file once their first record is a fifth of that old and delete a file once its first record is older (so at least four fifths of the period stay, sizes allowing; audit.log then keeps up to 6 files), a mapping’s log keeps no more days than that, and older backups go, but never the newest %(min)s. Checked at once and then every hour; a clock set ahead while ser2net runs deletes nothing early. The copy of the log on the standard output (Docker, journald) has its own limits.", min=backups_min) }}</p>
+    <button class="btn" type="submit">{{ _("Save") }}</button>
+  </form>
+  {% endwith %}
 </section>
 
 <section class="panel panel-narrow" id="users">
@@ -428,6 +459,12 @@
         'client_connected': _("Client connected"),
         'client_disconnected': _("Client disconnected"),
         'login_failed': _("Failed sign-in to this UI"),
+        'disk_low': _("Data disk almost full (traces pause)"),
+        'no_data': _("No data from a serial device (a mapping’s no-data alarm, set in its options)"),
+        'data_back': _("Data from that device again"),
+        'peer_offline': _("Cluster node offline (not heard from, or a configured peer that doesn’t answer)"),
+        'peer_back': _("Cluster node back"),
+        'service_started': _("ser2net started (which mappings run)"),
       } %}
       {% set event_hints = {
         'client_connected': _("sends the client’s IP address"),
@@ -494,7 +531,7 @@
 <section class="panel panel-narrow" id="tls">
   <div class="panel-head"><h2>{{ _("Admin TLS (HTTPS)") }}</h2></div>
   {{ feedback('tls') }}
-  <p class="muted mb-sm">{{ _("Encrypts this management UI. Changes take effect after a restart.") }}</p>
+  <p class="muted mb-sm">{{ _("Encrypts this management UI. A change applies to new connections at once (the files are read when you save, and again when ser2net reloads config.json); connections already open keep theirs.") }}</p>
   {% set cert = tls_certificate %}
   {% if cert and cert.problem == 'unreadable' %}<div class="banner warn">{{ _("The certificate file can’t be read (%(error)s): ser2net can’t start with TLS until it can.", error=cert.detail) }}</div>
   {% elif cert and cert.problem == 'not_pem' %}<div class="banner warn">{{ _("The certificate file holds no PEM certificate: ser2net can’t start with TLS like this.") }}</div>
@@ -702,7 +739,18 @@
 <section class="panel panel-narrow" id="backups">
   <div class="panel-head"><h2>{{ _("Configuration backups") }}</h2></div>
   {{ feedback('backups') }}
-  <p class="muted mb-sm">{{ _('Every change keeps the previous <span class="mono">config.json</span> in the data folder’s <span class="mono">backups/</span> (the newest 50). Restoring one brings back its mappings and settings after showing what changes for sign-in and access; the user accounts, the REST API token and the cluster key stay as they are unless you restore them too. The configuration it replaces is backed up first, so a restore can be undone. Backups contain password hashes and secrets: only admins see them, and a download leaves out the session key.') }}</p>
+  <p class="muted mb-sm">{{ _('Every change keeps the <span class="mono">config.json</span> it writes in the data folder’s <span class="mono">backups/</span>, and the one it replaces if that isn’t there yet (the newest 50; the one in use is marked), so the current configuration is kept there too, also when an older version takes over. Starting or stopping a mapping takes no backup of its own (the newest one is updated), so it doesn’t push out the backups of real changes. Restoring one brings back its mappings and settings after showing what changes for sign-in and access; the user accounts, the REST API token and the cluster key stay as they are unless you restore them too. A restore can be undone. Backups contain password hashes and secrets: only admins see them, and a download leaves out the session key.') }}</p>
+  {% if outside_edit %}<div class="banner warn">{{ _('config.json was changed outside ser2net (%(time)s) and is not in use: reload it to apply it. A change saved here before that replaces it; the edited file is then kept in the backups below.', time=outside_edit) }}</div>{% endif %}
+  {% if outside_gone %}<div class="banner warn">{{ _('config.json is gone from the data folder: ser2net goes on with the configuration in use and writes it again at the next change.') }}</div>{% endif %}
+  {% if replaced_edit and replaced_edit.backup %}<div class="banner warn">{{ _('A change saved at %(saved)s replaced a config.json edited outside ser2net (%(edited)s). The edited file is kept as <span class="mono">%(backup)s</span>: <a href="%(link)s">restore it</a> to use it.', saved=replaced_edit.saved, edited=replaced_edit.edited, backup=replaced_edit.backup, link=base ~ '/settings?restore=' ~ replaced_edit.backup ~ '#backups') }}</div>
+  {% elif replaced_edit %}<div class="banner warn">{{ _('A change saved at %(saved)s replaced a config.json edited outside ser2net (%(edited)s); its backup could not be written (all.log says why).', saved=replaced_edit.saved, edited=replaced_edit.edited) }}</div>{% endif %}
+  <form method="post" action="{{ base }}/settings/config/reload" class="authform mb-sm">
+    <input type="hidden" name="_csrf" value="{{ request.state.csrf_token }}">
+    <p class="muted mb-sm">{{ _('<span class="mono">config.json</span> changed by hand or by a tool (Ansible …) is used once ser2net reads it again: here, with <span class="mono">ser2net --reload</span>, or on Linux with SIGHUP (<span class="mono">systemctl reload ser2net</span>). Mappings whose settings didn’t change keep running with their clients; certificate files are read again. A file that doesn’t validate changes nothing (all.log says why); a new admin UI address waits for the next start.') }}</p>
+    <button class="btn" type="submit">{{ _("Reload config.json") }}</button>
+  </form>
+  {% if newer_writer %}<div class="banner warn">{{ _('At start-up, config.json had been written by ser2net %(newer)s, a newer version than this one (%(this)s). What only that version knows is not used here, and it is left out when this version saves config.json. The backups below keep the file as that version left it: restore it after upgrading again.', newer=newer_writer, this=asset_version) }}</div>{% endif %}
+  {% if unknown_keys %}<div class="banner warn">{{ _('At start-up, config.json had settings this version doesn’t know: %(keys)s. They are not used here, and they are left out when config.json is saved; the backups below keep the file with them.', keys=(unknown_keys[:10] | join(', ')) ~ (' …' if unknown_keys | length > 10 else '')) }}</div>{% endif %}
   {% if restore_preview %}
   {% set rp = restore_preview %}
   <h3 class="mt-sm">{{ _("Restore the configuration saved at %(time)s UTC", time=rp.time) }}</h3>
@@ -734,7 +782,7 @@
     {% for bk in backups %}
       <tr>
         <td class="mono">{{ bk.time }}</td>
-        <td>{{ _("%(mappings)s mappings, %(users)s users", mappings=bk.mappings if bk.mappings is not none else '?', users=bk.users if bk.users is not none else '?') }}
+        <td>{{ _("%(mappings)s mappings, %(users)s users", mappings=bk.mappings if bk.mappings is not none else '?', users=bk.users if bk.users is not none else '?') }}<br><span class="muted">{{ _("written by ser2net %(version)s", version=bk.written_by) if bk.written_by else _("written by 2.8.1 or older") }}</span>{% if bk.file_time %}<br><span class="muted">{{ _("saved at %(time)s UTC, when the clock was behind the newest backup", time=bk.file_time) }}</span>{% endif %}{% if bk.current %} <span class="tag">{{ _("in use") }}</span>{% endif %}
           {% if bk.accounts %}<details class="muted"><summary>{{ _("Accounts") }}</summary><span class="mono">{% for a in bk.accounts %}{{ a.username }} ({{ a.role }}{% if a.source != 'local' %}, {{ a.source|upper }}{% endif %}){% if not loop.last %}, {% endif %}{% endfor %}</span></details>{% endif %}</td>
         <td class="col-actions">
           <div class="row-actions">

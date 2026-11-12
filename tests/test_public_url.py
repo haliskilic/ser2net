@@ -180,6 +180,9 @@ def test_origins_and_sso() -> None:
             st, h, _ = a.call("POST", "/settings/proxy", fields={"_csrf": CSRF, "public_url": ""},
                               headers={"Cookie": jar})
             assert st == 303 and header(h, "location") == "/settings#reverse-proxy", (st, h)
+            # (nothing changed, so nothing was saved: config.json is written here, so that
+            # the change below has a backup to compare)
+            a.state.store.save(a.state.config)
             assert os.path.exists(a.state.store.path)
             for bad, why in (("https://s2n.example.com/login", "/login: that is a page"),
                              ("s2n.example.com", "http:// or https://")):
@@ -221,8 +224,8 @@ def test_origins_and_sso() -> None:
             st, _, page = a.call("GET", "/settings", headers={"Cookie": jar})
             assert 'data-uri="https://s2n.example.com/auth/oidc/callback">' in page
             assert "so it is made from the public URL" in page
-            backups = sorted(os.listdir(os.path.join(a.tmp, "backups")))
-            st, _, page = a.call("GET", f"/settings?restore={backups[-1]}", headers={"Cookie": jar})
+            oldest = a.state.store.backup_names()[-1]   # (the newest is what config.json holds)
+            st, _, page = a.call("GET", f"/settings?restore={oldest}", headers={"Cookie": jar})
             assert "Public URL: https://s2n.example.com → —" in page
         os.environ["SER2NET_PUBLIC_URL"] = PUBLIC
         try:

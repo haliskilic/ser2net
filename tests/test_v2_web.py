@@ -72,7 +72,8 @@ def main():
             "serial_port": "/dev/ttyX", "serial_baudrate": "9600", "serial_bytesize": "8",
             "serial_parity": "N", "serial_stopbits": "1", "serial_flowcontrol": "none",
             "network_mode": "server", "network_protocol": "raw", "network_bind_ip": "127.0.0.1",
-            "network_port": "47301", "network_max_connections": "1"})
+            "network_port": "47301", "network_max_connections": "1",
+            "mqtt_client_id": "s2n-mx"})
         cfgdoc = json.load(open(cfg))
         mid = cfgdoc["mappings"][0]["id"]
 
@@ -96,7 +97,11 @@ def main():
         # the copy must have bumped its port (no clash)
         ports = [m["network"]["port"] for m in json.load(open(cfg))["mappings"]]
         assert len(set(ports)) == len(ports), ports
-        print("duplicate: copy created with bumped port  OK")
+        # ...and no MQTT client id of its own: a broker drops one of two connections
+        # with the same id
+        ids = {m["name"]: m["mqtt"]["client_id"] for m in json.load(open(cfg))["mappings"]}
+        assert ids == {"MX": "s2n-mx", "MX (copy)": ""}, ids
+        print("duplicate: copy created with bumped port, without the MQTT client id  OK")
 
         # 3b) regression: deleting a mapping that never created a log file must NOT 500
         #     (the disabled "(copy)" never started, so data/logs/<id>.log doesn't exist)

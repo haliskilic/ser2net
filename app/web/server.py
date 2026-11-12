@@ -67,18 +67,24 @@ QUIET_PATTERN = re.compile(r"/api/mappings/[^/]+/log")
 # change, a read of the mappings — they hold the MQTT passwords — and any refusal) is.
 API_QUIET_PATHS = {"/api/v1/health", "/api/v1/status", "/api/v1/ports", "/api/v1/metrics",
                    "/api/v1/openapi.json"}
+# What monitoring polls in the web UI: not logged while it is answered (a refusal or an
+# error is), and a client that is not a browser is refused with 401, not sent to the
+# sign-in page (_monitoring_refusal)
+MONITORING_PATHS = {"/metrics"}
 
 
 def logs_request(mode: str, method: str, path: str, status: int) -> bool:
     """Whether a web UI request gets its "HTTP ..." line in all.log (admin_ui.request_log):
-    "all" every request but the static files and the automatic refreshes (QUIET_PATHS,
-    QUIET_PATTERN); "changes" only those that change something (not GET / HEAD / OPTIONS)
-    and the refused or failed ones (400 and up); "off" none."""
+    "all" every request but the static files, the automatic refreshes (QUIET_PATHS,
+    QUIET_PATTERN) and the answered scrapes of MONITORING_PATHS; "changes" only those that
+    change something (not GET / HEAD / OPTIONS) and the refused or failed ones (400 and
+    up); "off" none."""
     if path.startswith("/static") or mode == "off":
         return False
     if mode == "changes":
         return method not in auth.SAFE_METHODS or status >= 400
-    return not (method == "GET" and (path in QUIET_PATHS or QUIET_PATTERN.fullmatch(path)))
+    return not (method == "GET" and (path in QUIET_PATHS or QUIET_PATTERN.fullmatch(path)
+                                     or (path in MONITORING_PATHS and status < 400)))
 
 
 def _wants_json(request) -> bool:
@@ -95,6 +101,34 @@ def _login_url(request) -> str:
         return "/login"
     here = path + ("?" + request.url.query if request.url.query else "")
     return "/login?next=" + urllib.parse.quote(here, safe="")
+
+
+def _monitoring_refusal(request, path: str):
+    """The answer for MONITORING_PATHS without a session to a client that is not a browser
+    (it sends credentials, or doesn't ask for HTML): 401, which a Prometheus scrape reports
+    as such, instead of the redirect to the sign-in page, which it follows and then can't
+    parse. None for a browser (and every other path): it goes to the sign-in page."""
+    if path not in MONITORING_PATHS:
+        return None
+    if "authorization" not in request.headers and \
+            "text/html" in request.headers.get("accept", ""):
+        return None
+    return PlainTextResponse("unauthorized: sign in to the web UI, or read /api/v1/metrics "
+                             "with a REST API token\n", status_code=401,
+                             headers={"WWW-Authenticate": 'Bearer realm="ser2net"'})
+
+
+async def _answer(request, call_next, state):
+    """The handler's answer. One that failed with an exception (answered 500 by
+    server_error) is logged here, as the request line it would have had; its traceback
+    reaches all.log through uvicorn's error log (logsetup.LibraryLogHandler)."""
+    try:
+        return await call_next(request)
+    except Exception as e:
+        ip = client_ip(request)
+        state.log(f"HTTP {ip} {request.method} {proxy.route_path(request)} -> 500 "
+                  f"({type(e).__name__}: {e})")
+        raise
 
 
 class GuardMiddleware(BaseHTTPMiddleware):
@@ -120,7 +154,7 @@ class GuardMiddleware(BaseHTTPMiddleware):
         # English, like the logs (only the web UI is translated).
         if path.startswith("/api/v1"):
             response = await self._dispatch_api(request, call_next, cfg, path)
-            self._security_headers(response, cfg, path, request)
+            self._security_headers(response, state, path, request)
             return response
 
         lang = i18n.negotiate(auth.cookie(request, i18n.COOKIE),
@@ -131,7 +165,7 @@ class GuardMiddleware(BaseHTTPMiddleware):
             response = await self._dispatch_ui(request, call_next, state, cfg, path)
         finally:
             i18n.reset(token)
-        self._security_headers(response, cfg, path, request)  # also on a refusal or a redirect
+        self._security_headers(response, state, path, request)  # also on a refusal or a redirect
         return response
 
     async def _dispatch_ui(self, request, call_next, state, cfg, path):
@@ -146,7 +180,7 @@ class GuardMiddleware(BaseHTTPMiddleware):
                                   f"HTTP {ip} {request.method} {path} -> {early.status_code}")
             return early
 
-        response = await call_next(request)
+        response = await _answer(request, call_next, state)
 
         # all.log: every state-changing request, plus meaningful page loads (skip the
         # static assets and the periodic poll endpoints), or less (admin_ui.request_log)
@@ -236,6 +270,8 @@ class GuardMiddleware(BaseHTTPMiddleware):
                 if user is None:
                     if _wants_json(request):
                         return JSONResponse({"error": "unauthorized"}, status_code=401)
+                    if (refused := _monitoring_refusal(request, path)) is not None:
+                        return refused   # a scraper: 401 (a browser goes to the sign-in page)
                     return proxy.redirect(request, _login_url(request))
                 request.state.user = user  # available to handlers for role checks
         return None
@@ -254,7 +290,7 @@ class GuardMiddleware(BaseHTTPMiddleware):
             state.log_refused((ip, early.status_code),
                               f"HTTP {ip} {request.method} {path} -> {early.status_code}{by}")
             return early
-        response = await call_next(request)
+        response = await _answer(request, call_next, state)
         if not (request.method in ("GET", "HEAD") and response.status_code < 400
                 and path in API_QUIET_PATHS):
             by = f" by {token.audit_label}" if token is not None else ""
@@ -300,12 +336,13 @@ class GuardMiddleware(BaseHTTPMiddleware):
         return None, token
 
     @staticmethod
-    def _security_headers(response, cfg, path: str, request=None) -> None:
+    def _security_headers(response, state, path: str, request=None) -> None:
         # Nothing but the static files may be stored by the browser: pages show a new API
         # token or cluster key once, the mapping form an MQTT password, a download a
         # backup or the export, and a copy in the disk cache or the back/forward cache
         # outlives the session (Back after a logout on a shared PC). The static files
         # carry ?v=<version> and stay cacheable.
+        cfg = state.config
         if not path.startswith("/static"):
             response.headers.setdefault("Cache-Control", "no-store")
         # script-src stays 'self' (no inline JS — the important XSS guard). style-src
@@ -324,8 +361,9 @@ class GuardMiddleware(BaseHTTPMiddleware):
         # HSTS covers the host name on every port (Settings -> Admin TLS sets how long; 0
         # sends max-age=0, which makes browsers forget it). Behind a TLS proxy only when
         # asked for (Settings -> Reverse proxy): a direct http://name:port would stop working.
-        if cfg.admin_ui.tls_enabled or (cfg.admin_ui.proxy_hsts and request is not None
-                                        and auth.is_https(request, cfg)):
+        # TLS: what this listener serves (AppState.serving_tls), not what waits for a restart
+        if state.serving_tls or (cfg.admin_ui.proxy_hsts and request is not None
+                                 and auth.is_https(request, cfg)):
             response.headers.setdefault("Strict-Transport-Security",
                                         f"max-age={cfg.admin_ui.hsts_max_age}")
 
@@ -383,6 +421,8 @@ def make_templates() -> Jinja2Templates:
     # data-search of the dashboard rows: app.js folds what is typed the same way
     templates.env.filters["searchkey"] = search_key
     templates.env.filters["in_text_box"] = in_text_box   # a value as a text box sends it
+    from ..notify import no_data_for
+    templates.env.globals["no_data_for"] = no_data_for  # a mapping's no-data alarm, now
     # _("...") in every template, translated for the request's language (app/i18n.py);
     # newstyle: _("Hello %(name)s", name=x) formats and escapes x
     templates.env.add_extension("jinja2.ext.i18n")
@@ -390,6 +430,16 @@ def make_templates() -> Jinja2Templates:
     templates.env.globals["languages"] = i18n.LANGUAGES
     templates.env.globals.update(base_path=proxy.base, route_path=proxy.route_path)
     return templates
+
+
+async def server_error(request, exc) -> PlainTextResponse | JSONResponse:
+    """The answer to a request that failed with an unexpected exception (the server logs
+    its traceback): JSON under the REST API, whose clients expect nothing else, else the
+    usual plain text."""
+    if request.url.path.startswith("/api/v1"):
+        return JSONResponse({"error": "internal", "detail": "internal server error"},
+                            status_code=500)
+    return PlainTextResponse("Internal Server Error", status_code=500)
 
 
 def build_app(state) -> Starlette:
@@ -403,7 +453,8 @@ def build_app(state) -> Starlette:
     middleware = [Middleware(proxy.ProxyMiddleware, state=state),
                   Middleware(GuardMiddleware),
                   Middleware(RequestBodyLimitMiddleware, max_body_size=MAX_BODY_BYTES)]
-    app = Starlette(routes=routes, middleware=middleware)
+    app = Starlette(routes=routes, middleware=middleware,
+                    exception_handlers={Exception: server_error})
     app.state.appstate = state
     app.state.templates = templates
     return app

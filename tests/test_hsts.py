@@ -42,10 +42,18 @@ def test_config() -> None:
         cfg = AppConfig.from_dict({"admin_ui": {"hsts_max_age": value}})
         assert cfg.admin_ui.hsts_max_age == value and not cfg.load_notes, value
         assert cfg.to_dict()["admin_ui"]["hsts_max_age"] == value
-    for value in (-1, 2 * YEAR + 1, "86400", 1.5, True, None, [1]):
+    # numeric text is read as the number (the typed reader), with a load note
+    cfg = AppConfig.from_dict({"admin_ui": {"hsts_max_age": "86400"}})
+    assert cfg.admin_ui.hsts_max_age == 86400 and any(
+        n.startswith('config.json: admin_ui.hsts_max_age "86400" is read as 86400')
+        for n in cfg.load_notes), cfg.load_notes
+    # null is an unset value: the default, nothing to note
+    assert AppConfig.from_dict({"admin_ui": {"hsts_max_age": None}}).admin_ui.hsts_max_age == YEAR
+    for value in (-1, 2 * YEAR + 1, "a day", 1.5, True, [1]):
         cfg = AppConfig.from_dict({"admin_ui": {"hsts_max_age": value}})
         assert cfg.admin_ui.hsts_max_age == YEAR, value
-        assert any(n.startswith(f"admin_ui.hsts_max_age {value!r} is not a whole number")
+        # (the typed reader's note, or the range check's)
+        assert any("admin_ui.hsts_max_age" in n and "is not a whole number" in n
                    for n in cfg.load_notes), (value, cfg.load_notes)
         cfg.validate()   # a save is never refused for it
     print("config: one year by default (also without the key), 0 to two years kept, "
@@ -55,8 +63,9 @@ def test_config() -> None:
 def test_header() -> None:
     def sent(**admin) -> str | None:
         response = SimpleNamespace(headers={})
-        GuardMiddleware._security_headers(response, SimpleNamespace(admin_ui=AdminUI(**admin)),
-                                          "/")
+        ui = AdminUI(**admin)   # (the listener serves what is configured)
+        GuardMiddleware._security_headers(response, SimpleNamespace(
+            config=SimpleNamespace(admin_ui=ui), serving_tls=ui.tls_enabled), "/")
         return response.headers.get("Strict-Transport-Security")
 
     assert sent() is None                                       # no TLS: no HSTS

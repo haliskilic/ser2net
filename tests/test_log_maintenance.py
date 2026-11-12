@@ -1,6 +1,11 @@
-"""Per-mapping log retention: age (>15d) + size (>100MB) auto-trim; an import that
-replaces the mappings, or a restored backup, closes the log files of the mappings that
+"""Per-mapping log retention: age (>15d) + size (>100MB) auto-trim; the age trim never
+cuts into the last lines the Log panel shows, so a clock step can't empty it; an import
+that replaces the mappings, or a restored backup, closes the log files of the mappings that
 are gone (the files stay until the next start prunes them).
+
+The trim streams: a file within its limits is left alone after its first line, what is
+kept is copied in chunks byte for byte, in about constant memory, and lines the mapping
+logs meanwhile are kept.
 
 Only a line feed ends a line (CRLF kept as it is): a CR, NEL or U+2028 inside a message
 doesn't, and a line without a time (the rest of a message an older version wrote with
@@ -14,11 +19,15 @@ import os
 import shutil
 import sys
 import tempfile
+import threading
 import time
+import tracemalloc
+from unittest import mock
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "lib"))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
+import app.state as state_mod
 from app.state import _trim_log_file, AppState, LOG_MAX_AGE_DAYS
 from app.config import AppConfig, ConfigStore, MappingConfig
 
@@ -106,6 +115,257 @@ def test_size_cap():
         shutil.rmtree(d)
 
 
+def _cutoff():
+    return time.time() - LOG_MAX_AGE_DAYS * 86400
+
+
+def _bytes(path):
+    with open(path, "rb") as fh:
+        return fh.read()
+
+
+def test_within_limits_untouched():
+    """A file within its limits is neither rewritten nor read beyond its first line."""
+    d = tempfile.mkdtemp()
+    try:
+        p = os.path.join(d, "w.log")
+        with open(p, "w") as fh:
+            for i in range(2000):
+                fh.write(f"{ts(-3600)} line {i}\n")
+        before = os.stat(p)
+        reads = []
+        real_open = open
+
+        def counting_open(*a, **kw):
+            fh = real_open(*a, **kw)
+            real_readline = fh.readline
+            fh.readline = lambda *ra: reads.append(1) or real_readline(*ra)
+            return fh
+        with mock.patch("builtins.open", counting_open):
+            assert not _trim_log_file(p, _cutoff(), 1024 * 1024, keep_lines=1000)
+        after = os.stat(p)
+        assert (after.st_ino, after.st_mtime_ns, after.st_size) == \
+            (before.st_ino, before.st_mtime_ns, before.st_size)
+        assert len(reads) == 1, f"read {len(reads)} lines of a file with nothing to trim"
+        assert not os.path.exists(p + ".tmp")
+        print("a file within its limits: one line read, not rewritten  OK")
+    finally:
+        shutil.rmtree(d)
+
+
+def test_streaming_memory_and_bytes():
+    """Over its cap: cut to 90% of it from a line's start, byte for byte (CRLF, invalid
+    UTF-8, non-ASCII), in about constant memory; the next pass leaves it."""
+    d = tempfile.mkdtemp()
+    try:
+        p = os.path.join(d, "big.log")
+        line = lambda i, age: (f"{ts(age)} poll 'sıcaklık {i:06d}' fehlgeschlagen   x"
+                               .encode() + b" \xff\xfe\r\n")
+        with open(p, "wb") as fh:
+            for i in range(30000):  # about 30 days, the first ones old
+                fh.write(line(i, -(30000 - i) * 86.4))
+        data = _bytes(p)
+        size, cap = len(data), 256 * 1024
+        assert size > 4 * cap
+        tracemalloc.start()
+        try:
+            assert _trim_log_file(p, _cutoff(), cap)
+            peak = tracemalloc.get_traced_memory()[1]
+        finally:
+            tracemalloc.stop()
+        kept = _bytes(p)
+        assert len(kept) <= cap * 0.9 and len(kept) > cap * 0.9 - 200, len(kept)
+        assert data.endswith(kept) and data[-len(kept) - 1:-len(kept)] == b"\n", "a line's start"
+        # about one copy chunk (1 MiB), not several times the file (reading it whole took
+        # about 4.7 times its size)
+        assert peak < 2 * 1024 * 1024 < 1.5 * size, f"peak {peak} B for a {size} B file"
+        assert not _trim_log_file(p, _cutoff(), cap), "trimmed again at once"
+        # the age filter alone: lines older than 15 days go, from a line's start
+        head = data[:data.index(b"\n", 1200000) + 1]  # up to about 13 days ago
+        with open(p, "wb") as fh:
+            fh.write(head)
+        assert _trim_log_file(p, _cutoff(), 100 * 1024 * 1024)
+        rest = _bytes(p)
+        assert head.endswith(rest) and head[-len(rest) - 1:-len(rest)] == b"\n"
+        first = state_mod._parse_log_ts(rest[:40].decode("utf-8", "replace"))
+        assert first is not None and first >= _cutoff() - 1, first
+        print(f"over the cap: {size} B -> {len(kept)} B byte for byte, peak memory {peak} B  OK")
+    finally:
+        shutil.rmtree(d)
+
+
+def test_line_feed_only_and_undated():
+    """Only a line feed ends a line; a line without a time follows its record."""
+    d = tempfile.mkdtemp()
+    try:
+        p = os.path.join(d, "z.log")
+        recent = f"{ts(-3600)} NEW-A x\r\nrest of NEW-A\n{ts(-60)} NEW-B\r\n"
+        with open(p, "w", encoding="utf-8", newline="") as fh:
+            fh.write(f"{ts(-20*86400)} OLD point 'a b' failed\r\n"
+                     f"rest of an old message\n"
+                     f"{ts(-16*86400)} OLD-B\rstill OLD-B\x85 and   too\r\n" + recent)
+        assert _trim_log_file(p, _cutoff(), 100 * 1024 * 1024)
+        assert _bytes(p).decode() == recent
+        assert not _trim_log_file(p, _cutoff(), 100 * 1024 * 1024), "nothing more to trim"
+        new = f"{ts(-60)} NEW\n"
+        with open(p, "w", encoding="utf-8", newline="") as fh:
+            fh.write(f"x y orphan\n{ts(-17*86400)} OLD\n" + new)
+        assert _trim_log_file(p, _cutoff(), 100 * 1024 * 1024)
+        assert _bytes(p).decode() == new
+        with open(p, "w", encoding="utf-8", newline="") as fh:
+            fh.write("no time here\nnor here\n")
+        assert not _trim_log_file(p, _cutoff(), 100 * 1024 * 1024)
+        with open(p, "w", encoding="utf-8", newline="") as fh:
+            fh.write(f"{ts(-20*86400)} OLD\n{ts(-19*86400)} OLD too\n")
+        assert _trim_log_file(p, _cutoff(), 100 * 1024 * 1024)
+        assert _bytes(p) == b"", "every line older: nothing left (without a floor)"
+        print("only line feeds end a line; undated lines follow their record  OK")
+    finally:
+        shutil.rmtree(d)
+
+
+def test_lines_logged_meanwhile_kept():
+    """The handler stays attached: what is logged while the file is trimmed (another
+    thread, as the event loop does) is all kept, in order."""
+    d = tempfile.mkdtemp()
+    lg = logging.getLogger("ser2net.test.trim")
+    try:
+        p = os.path.join(d, "m.log")
+        with open(p, "w") as fh:
+            for i in range(3000):
+                fh.write(f"{ts(-20*86400)} old {i} " + "z" * 60 + "\n")
+        fh = logging.FileHandler(p, encoding="utf-8")
+        fh.setFormatter(logging.Formatter("%(asctime)s %(message)s", "%Y-%m-%d %H:%M:%S"))
+        lg.handlers[:] = [fh]
+        lg.propagate, lg.level = False, logging.INFO
+        go, done = threading.Event(), threading.Event()
+
+        def writer():
+            go.wait()
+            for i in range(3000):
+                lg.info(f"new {i}")
+            done.set()
+        real_copy = shutil.copyfileobj
+
+        def slow_copy(src, dst, length=0):
+            go.set()  # log while the kept part is copied ...
+            time.sleep(0.05)
+            return real_copy(src, dst, length)
+        t = threading.Thread(target=writer)
+        t.start()
+        with mock.patch.object(state_mod.shutil, "copyfileobj", slow_copy):
+            assert _trim_log_file(p, _cutoff(), 100 * 1024 * 1024, handlers=[fh])
+        t.join()
+        lg.info("after")  # ... and after the swap, into the new file
+        fh.flush()
+        lines = _bytes(p).decode().splitlines()
+        assert not any(" old " in ln for ln in lines), lines[:3]
+        assert [ln.split(" ", 2)[2] for ln in lines] == [f"new {i}" for i in range(3000)] + ["after"]
+        assert os.stat(p).st_ino == os.fstat(fh.stream.fileno()).st_ino, "writes the new file"
+        print("lines logged during the trim and after it: all kept, in order  OK")
+    finally:
+        for h in list(lg.handlers):
+            h.close()
+            lg.removeHandler(h)
+        shutil.rmtree(d)
+
+
+def test_swap_failures():
+    """A swap that keeps failing leaves the file as it was and no .tmp; a file deleted
+    meanwhile (its mapping was) is not made again."""
+    d = tempfile.mkdtemp()
+    try:
+        p = os.path.join(d, "f.log")
+        text = f"{ts(-20*86400)} OLD\n{ts(-60)} NEW\n"
+        with open(p, "w") as fh:
+            fh.write(text)
+        with mock.patch.object(state_mod.os, "replace",
+                               side_effect=PermissionError(13, "in use")) as rep, \
+                mock.patch.object(state_mod.time, "sleep"):
+            try:
+                _trim_log_file(p, _cutoff(), 100 * 1024 * 1024)
+                raise AssertionError("no error")
+            except PermissionError:
+                pass
+        assert rep.call_count == state_mod._REPLACE_TRIES
+        assert open(p).read() == text and os.listdir(d) == ["f.log"], os.listdir(d)
+        real_copy = shutil.copyfileobj
+
+        def delete_meanwhile(src, dst, length=0):
+            real_copy(src, dst, length)
+            os.remove(p)
+        if os.name != "nt":  # deleted while the trim reads it (Windows refuses that)
+            with mock.patch.object(state_mod.shutil, "copyfileobj", delete_meanwhile):
+                assert not _trim_log_file(p, _cutoff(), 100 * 1024 * 1024)
+            assert os.listdir(d) == [], os.listdir(d)
+
+        class DeletedBeforeTheSwap:
+            """The mapping's deletion (delete_mapping_log: its handler closed, the file
+            removed) done just as the trim takes the handler's lock for the swap, when the
+            trim holds the file open no more (also on Windows)."""
+            def acquire(self):
+                if os.path.exists(p):
+                    os.remove(p)
+
+            def release(self):
+                pass
+
+            def setStream(self, stream):  # (logging.Handler's name)
+                raise AssertionError("the swap went on with the file deleted")
+        with open(p, "w") as fh:
+            fh.write(text)
+        assert not _trim_log_file(p, _cutoff(), 100 * 1024 * 1024,
+                                  handlers=[DeletedBeforeTheSwap()])
+        assert os.listdir(d) == [], os.listdir(d)
+        print("failed swap: file unchanged, no .tmp; deleted meanwhile: not made again  OK")
+    finally:
+        shutil.rmtree(d)
+
+
+def _lines_file(path, stamps, tag="line"):
+    with open(path, "w", encoding="utf-8") as fh:
+        for i, t in enumerate(stamps):
+            fh.write(time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(t)) + f" {tag} {i}\n")
+
+
+def test_clock_steps():
+    """A clock one year ahead, or lines stamped 2009 by a clock that was behind and is
+    then corrected: the last 1000 lines stay (they were all dropped before); the size cap
+    still applies."""
+    d = tempfile.mkdtemp()
+    try:
+        p = os.path.join(d, "c.log")
+        now = time.time()
+        stamps = [now - 6 * 86400 + i * 300 for i in range(1500)]  # 1-6 days old
+        ahead = now + 365 * 86400 - LOG_MAX_AGE_DAYS * 86400       # cutoff a year ahead
+        _lines_file(p, stamps)
+        assert _trim_log_file(p, ahead, 100 * 1024 * 1024, keep_lines=0)
+        assert _bytes(p) == b"", "without the floor a step ahead empties the log"
+        _lines_file(p, stamps)
+        assert _trim_log_file(p, ahead, 100 * 1024 * 1024, keep_lines=1000)
+        kept = _bytes(p).decode().splitlines()
+        assert len(kept) == 1000 and kept[0].endswith(" line 500") and \
+            kept[-1].endswith(" line 1499"), (len(kept), kept[:1], kept[-1:])
+        assert not _trim_log_file(p, ahead, 100 * 1024 * 1024, keep_lines=1000)
+        # stamped 2009 (no RTC, before time sync), date corrected since
+        old_clock = time.mktime((2009, 1, 1, 0, 0, 0, 0, 0, -1))
+        _lines_file(p, [old_clock + i for i in range(1200)])
+        assert _trim_log_file(p, _cutoff(), 100 * 1024 * 1024, keep_lines=1000)
+        kept = _bytes(p).decode().splitlines()
+        assert len(kept) == 1000 and kept[0].startswith("2009-") and kept[0].endswith(" line 200")
+        # ... and a recent line before them protects them all, as before
+        _lines_file(p, [time.time() - 3600] + [old_clock + i for i in range(1200)])
+        assert not _trim_log_file(p, _cutoff(), 100 * 1024 * 1024, keep_lines=1000)
+        # the size cap goes on cutting into those lines
+        _lines_file(p, stamps[:1000])
+        assert _trim_log_file(p, ahead, 4096, keep_lines=1000)
+        assert os.path.getsize(p) <= 4096
+        print("clock a year ahead / 2009 stamps corrected: last 1000 lines kept; size cap "
+              "still cuts  OK")
+    finally:
+        shutil.rmtree(d)
+
+
 async def _integration():
     d = tempfile.mkdtemp()
     try:
@@ -121,7 +381,12 @@ async def _integration():
             fh.write(f"{ts(-20*86400)} ANCIENT\n{ts(-60)} fresh event 1\n")
 
         log = state.make_mapping_logger(m)   # opens the file handler (append)
-        await state.run_log_maintenance()    # should drop ANCIENT, keep fresh
+        handler = state._mapping_loggers[m.id].handlers[0]
+        await state.run_log_maintenance()    # the last 1000 lines stay
+        assert open(path).read().startswith(f"{ts(-20*86400)} ANCIENT")
+        with mock.patch.object(state_mod, "LOG_VIEW_LINES", 0):
+            await state.run_log_maintenance()    # should drop ANCIENT, keep fresh
+        assert state._mapping_loggers[m.id].handlers == [handler], "the handler stays"
 
         after = open(path).read()
         assert "ANCIENT" not in after, after
@@ -132,6 +397,13 @@ async def _integration():
         after2 = open(path).read()
         assert "fresh event 2" in after2, after2
         print("integration (old dropped + handler reattached, logging continues) OK")
+
+        # 1500 lines, all 20 days old: the Log panel's 1000 stay
+        _lines_file(path, [time.time() - 20 * 86400 + i for i in range(1500)])
+        await state.run_log_maintenance()
+        shown = state.read_mapping_log(m.id)
+        assert len(shown) == 1000 and shown[0].endswith(" line 1499"), (len(shown), shown[:1])
+        print("integration: a mapping idle for over 15 days keeps its last 1000 lines  OK")
     finally:
         _close_loggers()
         shutil.rmtree(d, ignore_errors=True)
@@ -197,6 +469,12 @@ if __name__ == "__main__":
     test_age_trim()
     test_undated_lines()
     test_size_cap()
+    test_within_limits_untouched()
+    test_streaming_memory_and_bytes()
+    test_line_feed_only_and_undated()
+    test_lines_logged_meanwhile_kept()
+    test_swap_failures()
+    test_clock_steps()
     asyncio.run(_integration())
     asyncio.run(_replaced())
     print("\nPASS: per-mapping log retention (age + size)")

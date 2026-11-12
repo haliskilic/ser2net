@@ -168,10 +168,12 @@ async def _retry():
             holder.close()  # the port is free: the next try starts it
             assert await _wait_for(lambda: sup.status(m.id)["state"] == "running"), \
                 (lines, sup.status(m.id))
+            # (as soon as it runs: the status no longer says it retries, the start is logged)
             st = sup.status(m.id)
             assert st["retrying"] is False and st["next_retry_s"] == 0 and not st["last_error"], st
             assert lines[-1].startswith(f"[{m.name}] started after "), lines
-            assert opened.serial == 1 and m.id not in sup._retries
+            assert opened.serial == 1
+            assert await _wait_for(lambda: m.id not in sup._retries, 5), "the retry did not end"
             with socket.create_connection(("127.0.0.1", port), timeout=5):
                 pass
             await sup.stop_all()

@@ -49,6 +49,12 @@ def test_numbers():
     with open(os.path.join(ROOT, "app", "web", "routes", "system.py"), encoding="utf-8") as fh:
         assert "max_age=365 * 86400" in fh.read(), "the language cookie's lifetime"
     assert "the language (1 year)" in en and "dil (1 yıl)" in tr
+    from app.config import BACKUPS_MIN_KEPT
+    assert state.AUDIT_FILES_KEPT == 5 and "up to 5 old files" in en and "en fazla 5 eski dosya" in tr
+    assert BACKUPS_MIN_KEPT == 5 and "never the newest 5" in en and "en yeni 5 hiçbir zaman" in tr
+    assert (state.LOG_VIEW_LINES, state.LOG_TRIM_TO) == (1000, 0.9)
+    assert "the last 1000 lines stay, a file over the size is cut to 90 MB" in en
+    assert "son 1000 satır kalır, boyutu aşan dosya 90 MB'a kısaltılır" in tr
     with open(os.path.join(ROOT, "app", "web", "routes", "login.py"), encoding="utf-8") as fh:
         assert "max_age=600" in fh.read(), "the SSO state cookie's lifetime"
     assert "its state (10 minutes)" in en and "durumu (10 dakika)" in tr
@@ -63,7 +69,7 @@ def test_settings_named():
     with open(os.path.join(ROOT, "app", "locale", "tr.json"), encoding="utf-8") as fh:
         catalog = json.load(fh)
     labels = ["Web UI requests in all.log", "Remove it from the backups", "Sign-in notice",
-              "Remove LDAP / OIDC accounts not signed in for (days)"]
+              "Remove LDAP / OIDC accounts not signed in for (days)", "Retention"]
     for label in labels:
         assert f'_("{label}")' in page, label
         assert f"*{label}*" in en, label

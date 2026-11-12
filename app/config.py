@@ -12,10 +12,12 @@ config.json still resets all config.
 """
 from __future__ import annotations
 
+import calendar
 import contextlib
 import dataclasses
 import functools
 import hashlib
+import hmac
 import ipaddress
 import json
 import math
@@ -27,11 +29,13 @@ import secrets
 import socket
 import tempfile
 import time
+import typing
 import unicodedata
 import urllib.parse
 import uuid
 from dataclasses import dataclass, field, asdict
-from typing import Any, Optional
+from typing import Any, Iterable, Optional, Union
+from . import __version__
 from .i18n import LANGUAGES, _
 from .textfold import fold  # how names compare; still importable as app.config.fold
 
@@ -51,6 +55,9 @@ COMMON_BAUDRATES = (
     115200, 230400, 460800, 921600,
 )
 MAX_TIMER_S = 365 * 86400  # upper bound for the per-connection timers (one year)
+# a mapping's no-data alarm (MappingOptions.no_data_alarm_s): looked at every 2 s
+NO_DATA_MIN_S = 10
+NO_DATA_MAX_S = 7 * 86400
 # web-UI sign-in session lifetime (AppConfig.session_timeout_s)
 SESSION_TIMEOUT_DEFAULT_S = 8 * 3600
 SESSION_TIMEOUT_MIN_S = 5 * 60
@@ -65,10 +72,23 @@ HSTS_MAX_AGE_MAX = 2 * 365 * 86400
 EXPIRE_DAYS_DEFAULT = 0
 EXPIRE_DAYS_MIN = SESSION_TIMEOUT_MAX_S // 86400
 EXPIRE_DAYS_MAX = 3650
+# trace files not written for this many days are deleted by the hourly maintenance
+# (AppConfig.trace_max_age_days, AppState.run_trace_maintenance); 0 = kept, the default
+TRACE_DAYS_MAX = 3650
+# log and audit records and configuration backups older than this many days are deleted by
+# the hourly maintenance (AppConfig.log_max_age_days, AppState.run_retention); 0 = only
+# their size and count limits, the default
+LOG_DAYS_MAX = 3650
 
 
 class ConfigError(ValueError):
     """Raised when a config object fails validation. Message is user-facing."""
+
+
+class ConfigWriteError(ConfigError):
+    """A change that validates but can't be written to config.json (a full or read-only
+    disk, a file another program holds): AppState.asave raises it for the OSError, so
+    whoever shows a refused save shows this one too. Message is user-facing."""
 
 
 def _new_id() -> str:
@@ -208,6 +228,265 @@ def _legacy_seconds(value: Any) -> Any:
     return min(value, MAX_TIMER_S)
 
 
+# ---------------------------------------------------------------------------
+# Reading JSON (config.json, the REST API, an import, a form) into the typed model
+# ---------------------------------------------------------------------------
+@dataclass(frozen=True)
+class FieldNote:
+    """What reading a JSON object into the model did with one of its values (_read_fields),
+    by its path in that object ("serial.baudrate", "modbus_poll.points[0].scale"):
+      unknown   - no setting of this version: left out (an edit warns about it);
+      converted - another JSON type, read as the field's type ("false" as false, "9600" as
+                  9600): an edit takes it as meant, loading config.json notes it;
+      invalid   - can't be read as the field's type: `used` instead, and an edit refuses
+                  it (`expected`: what it must be, a key of _EXPECTED);
+      replaced  - not supported together with the other settings: `used` instead, with a
+                  warning (`why` in English for the log, `warning` in the language of the
+                  request that sent it);
+      switch_text - a protective switch (_PROTECTIVE) given as text: loading reads it as
+                  before 2.9.0 (`used`: any text but "" is on), an edit refuses it.
+    A switch that is on only for JSON true (_ONLY_TRUE) given anything else is invalid
+    (`used`: false)."""
+    path: str
+    kind: str
+    value: Any = None
+    used: Any = None
+    expected: str = ""
+    why: str = ""
+    warning: str = ""
+
+    def text(self) -> str:
+        """The note in English, for the log (AppConfig.load_notes)."""
+        if self.kind == "unknown":
+            return f"{self.path} is not a setting of this version and is ignored"
+        if self.kind == "invalid":
+            return (f"{self.path} {_shown(self.value)} is not {_EXPECTED[self.expected]}: "
+                    f"{_shown(self.used)} is used")
+        if self.kind == "converted":
+            text = f"{self.path} {_shown(self.value)} is read as {_shown(self.used)}"
+            if self.used is False and isinstance(self.value, str) and self.value.strip():
+                text += " (versions before 2.9.0 took any text but \"\" as true)"
+            return text
+        return self.why
+
+    def error(self) -> str:
+        """An edit's refusal of an invalid value, in the UI's language."""
+        if self.kind == "switch_text":
+            return _("{0}: use true or false (JSON booleans), not a string.").format(self.path)
+        return _("{0}: {1} is not {2}.").format(self.path, _shown(self.value),
+                                                _expected(self.expected))
+
+
+# what a field of each kind must be (FieldNote.expected), for the log ...
+_EXPECTED = {"bool": "true or false", "int": "a whole number", "number": "a finite number",
+             "str": "text", "object": "a JSON object"}
+
+
+def _expected(kind: str) -> str:
+    """... and in the UI's language."""
+    return {"bool": _("true or false"), "int": _("a whole number"),
+            "number": _("a finite number"), "str": _("text"),
+            "object": _("a JSON object")}[kind]
+
+
+def _shown(value: Any, limit: int = 60) -> str:
+    """A value as JSON writes it, cut to `limit` characters, for messages."""
+    try:
+        text = json.dumps(value, ensure_ascii=False)
+    except (TypeError, ValueError):
+        text = repr(value)
+    return text if len(text) <= limit else text[:limit - 1] + "…"
+
+
+_TRUE_WORDS = ("true", "1", "on", "yes")
+_FALSE_WORDS = ("false", "0", "off", "no", "")
+# Field metadata of a switch that protects something (login, TLS, certificate checks,
+# read-only). Loading reads text in it as before 2.9.0 — on unless empty — so an upgrade
+# never weakens a hand-edited config whose "false" in quotes kept it on; an edit refuses
+# text in it, so a client sending "false" learns it was not taken (_read_fields)
+_PROTECTIVE = {"protective": True}
+# Field metadata of a switch that is on only for JSON true: what this release added and
+# checked that way from the start (`is True`: a listener that takes both families, MQTT
+# writes to the device, HSTS through a proxy ...). Any other value reads as false, with a
+# note, and an edit refuses it, so no text or number turns one on
+_ONLY_TRUE = {"only_true": True}
+
+
+def _text_number(text: str) -> Any:
+    """The number a text spells (an int when it is one), else None."""
+    t = text.strip()
+    try:
+        return int(t)
+    except ValueError:
+        pass
+    try:
+        return float(t)
+    except ValueError:
+        return None
+
+
+def _coerce(value: Any, hint: Any) -> tuple[bool, Any]:
+    """`value` read as a field of type `hint`: (True, the value) — converted from another
+    JSON type when that needs no guess — or (False, None) when it can't be. null is an
+    unset value: false, "", [] or {} (a number: _read_fields takes the field's default).
+    A list of text takes any value: a text is a one-entry list, anything else becomes
+    text, so no entry of an allow-list is ever dropped (unusable ones are reported where
+    they are used: client_networks)."""
+    if hint is bool:
+        if value is None:
+            return True, False
+        if isinstance(value, bool):
+            return True, value
+        if _is_int(value) and value in (0, 1):
+            return True, bool(value)
+        if isinstance(value, str):
+            word = value.strip().lower()
+            if word in _TRUE_WORDS:
+                return True, True
+            if word in _FALSE_WORDS:
+                return True, False
+        return False, None
+    if hint is int or hint is float:
+        if isinstance(value, str):
+            value = _text_number(value)
+        if isinstance(value, bool) or not _is_number(value):
+            return False, None
+        if isinstance(value, float):
+            if not math.isfinite(value):
+                return False, None
+            if hint is int and value.is_integer():
+                return True, int(value)
+        elif hint is float:
+            try:
+                float(value)
+            except OverflowError:  # an int too large for any float
+                return False, None
+        return True, value
+    if hint is str:
+        if isinstance(value, str):
+            return True, value
+        if value is None:
+            return True, ""
+        if _is_number(value):
+            return True, str(value)
+        return False, None
+    origin = typing.get_origin(hint)
+    if origin is list and typing.get_args(hint) == (str,):
+        if value is None:
+            return True, []
+        if isinstance(value, str):
+            return True, [value] if value.strip() else []
+        items = value if isinstance(value, list) else [value]
+        return True, [v if isinstance(v, str) else _shown(v, 200) for v in items]
+    if origin is dict:
+        if value is None:
+            return True, {}
+        return (True, value) if isinstance(value, dict) else (False, None)
+    return True, value
+
+
+def _kind_of(hint: Any) -> str:
+    return {bool: "bool", int: "int", float: "number", str: "str"}.get(hint, "object")
+
+
+def _same(value: Any, read: Any) -> bool:
+    """True when reading `value` changed nothing worth a note (null for an empty value,
+    4001.0 for 4001)."""
+    if value is None:
+        return read is False or (not isinstance(read, bool) and read in ("", [], {}))
+    if _is_number(value) and _is_number(read):
+        return value == read
+    return type(value) is type(read) and value == read
+
+
+@functools.cache
+def _hints(cls) -> dict[str, Any]:
+    return typing.get_type_hints(cls)
+
+
+def _field_default(f: dataclasses.Field) -> Any:
+    if f.default is not dataclasses.MISSING:
+        return f.default
+    return f.default_factory()  # type: ignore[operator]
+
+
+def _read_fields(cls, d: dict[str, Any], notes: list[FieldNote], path: str = "", *,
+                 skip: tuple = (), keep: tuple = (),
+                 fallback: Optional[dict[str, Any]] = None) -> dict[str, Any]:
+    """Keyword arguments for cls() from the JSON object `d`: each field `d` has, read as the
+    field's type (_coerce), except `skip` (the caller reads those). A value that can't be
+    takes the field's default — a true/false field the value's truth instead, as earlier
+    versions took it, or the field's `fallback`. Keys that are no field (or `keep`, read
+    elsewhere) are left out. What it did is added to `notes`, paths prefixed with `path`."""
+    hints = _hints(cls)
+    out: dict[str, Any] = {}
+    names = set()
+    for f in dataclasses.fields(cls):
+        names.add(f.name)
+        if f.name in skip or f.name not in d:
+            continue
+        value, hint = d[f.name], hints[f.name]
+        if value is None and hint in (int, float):  # a number left unset
+            out[f.name] = _field_default(f)
+            continue
+        if f.metadata.get("only_true") and value is not None and not isinstance(value, bool):
+            notes.append(FieldNote(path + f.name, "invalid", value, False, "bool"))
+            out[f.name] = False
+            continue
+        if isinstance(value, str) and f.metadata.get("protective"):
+            used = bool(value)
+            notes.append(FieldNote(
+                path + f.name, "switch_text", value, used,
+                why=f"{path}{f.name} {_shown(value)} is text, so it is read as "
+                    f"{_shown(used)}, as before: this protective switch takes true or false "
+                    "(without quotes)"))
+            out[f.name] = used
+            continue
+        ok, read = _coerce(value, hint)
+        if not ok:
+            if fallback and f.name in fallback:
+                read = fallback[f.name]
+            else:
+                read = bool(value) if hint is bool else _field_default(f)
+            notes.append(FieldNote(path + f.name, "invalid", value, read, _kind_of(hint)))
+        elif not _same(value, read):
+            notes.append(FieldNote(path + f.name, "converted", value, read))
+        out[f.name] = read
+    for key, value in d.items():
+        if key not in names and key not in keep:
+            notes.append(FieldNote(f"{path}{key}", "unknown", value))
+    return out
+
+
+def _section(d: dict[str, Any], key: str, path: str = "") -> dict[str, Any]:
+    """The JSON object d[key]; an absent or empty one is {} (as before). Anything else
+    raises ConfigError: config.json then fails to load, as it did before, rather than
+    lose that part of it."""
+    value = d.get(key)
+    if not value:
+        return {}
+    if not isinstance(value, dict):
+        raise ConfigError(_("{0} must be a JSON object, not {1}.").format(path + key,
+                                                                          _shown(value)))
+    return value
+
+
+def _objects(d: dict[str, Any], key: str, path: str = "") -> list[dict[str, Any]]:
+    """The JSON list of objects d[key]; an absent or empty one is []. Raises ConfigError
+    for anything else (see _section)."""
+    value = d.get(key)
+    if not value:
+        return []
+    if not isinstance(value, list):
+        raise ConfigError(_("{0} must be a JSON list, not {1}.").format(path + key,
+                                                                       _shown(value)))
+    for i, item in enumerate(value):
+        if not isinstance(item, dict):
+            raise ConfigError(_("{0} must be a JSON object, not {1}.").format(
+                f"{path}{key}[{i}]", _shown(item)))
+    return value
+
+
 TRACE_DEFAULT_NAME = "trace.log"
 # letters/digits of any script, "_", "." and "-"; path separators and the characters
 # Windows forbids become "_" (the <id>- prefix also rules out reserved names like CON)
@@ -345,6 +624,24 @@ def bind_ip_problem(value: Any) -> str:
     if ip.is_multicast or (ip.is_reserved and not (ip.is_loopback or ip.is_unspecified)):
         return _("Bind IP cannot be a multicast/reserved address.")
     return ""
+ClientNetwork = Union[ipaddress.IPv4Network, ipaddress.IPv6Network]
+
+
+def client_networks(entries: Iterable[Any]) -> tuple[list[ClientNetwork], list[str]]:
+    """The networks of an allowed / priority client list (an address is a one-host network;
+    0.0.0.0 and :: are everyone, see normalize_cidr), and the entries that are none: a host
+    name, a range, a comma-joined list ... Edits refuse those (NetworkSettings.validate), so
+    only a hand-edited config.json has them; where a list is used, they are left out (an
+    allow-list none of whose entries is usable admits nobody: engine/access.AccessPolicy)."""
+    nets: list[ClientNetwork] = []
+    ignored: list[str] = []
+    for entry in entries or []:
+        text = entry if isinstance(entry, str) else str(entry)
+        try:
+            nets.append(ipaddress.ip_network(normalize_cidr(text), strict=False))
+        except ValueError:
+            ignored.append(text)
+    return nets, ignored
 
 
 # ---------------------------------------------------------------------------
@@ -384,13 +681,14 @@ class SerialSettings:
     advanced: SerialAdvanced = field(default_factory=SerialAdvanced)
 
     @staticmethod
-    def from_dict(d: dict[str, Any]) -> "SerialSettings":
+    def from_dict(d: dict[str, Any], notes: Optional[list[FieldNote]] = None,
+                  path: str = "") -> "SerialSettings":
         d = dict(d or {})
-        adv = d.pop("advanced", {}) or {}
-        known = {f.name for f in dataclasses.fields(SerialAdvanced)}
-        advanced = SerialAdvanced(**{k: v for k, v in adv.items() if k in known})
-        known = {f.name for f in dataclasses.fields(SerialSettings)} - {"advanced"}
-        return SerialSettings(advanced=advanced, **{k: v for k, v in d.items() if k in known})
+        notes = [] if notes is None else notes
+        fields = _read_fields(SerialSettings, d, notes, path, skip=("advanced",))
+        adv = _section(d, "advanced", path)
+        advanced = SerialAdvanced(**_read_fields(SerialAdvanced, adv, notes, path + "advanced."))
+        return SerialSettings(advanced=advanced, **fields)
 
     def validate(self) -> None:
         if not self.port:
@@ -548,7 +846,7 @@ class NetworkSettings:
     # interfaces (IPv4 + IPv6)". It means nothing with another address (edits refuse
     # that); a release without it listens on the bind IP alone.
     bind_ip: str = "0.0.0.0"
-    dual_stack: bool = False
+    dual_stack: bool = field(default=False, metadata=_ONLY_TRUE)
     port: int = 4001
     # client mode: the connect-out target (UDP does not use these: see udp_peer_host)
     remote_host: str = ""
@@ -566,7 +864,7 @@ class NetworkSettings:
     # before anyone has), each "IP:port" ("[IPv6]:port"): e.g. an NMEA 0183 feed to a LAN's
     # broadcast address. Sending to a broadcast address needs udp_broadcast (SO_BROADCAST).
     udp_targets: list[str] = field(default_factory=list)
-    udp_broadcast: bool = False
+    udp_broadcast: bool = field(default=False, metadata=_ONLY_TRUE)
     max_connections: int = 1
     kick_old_user: bool = False
     # TCP (raw / telnet / rfc2217, server and connect-out): while the serial port is not
@@ -576,13 +874,13 @@ class NetworkSettings:
     # Off (default): clients stay connected and are taken, and what they send for the
     # device meanwhile is dropped (counted in bytes_dropped); RFC 2217 sessions follow a
     # reopened port.
-    disconnect_without_device: bool = False
+    disconnect_without_device: bool = field(default=False, metadata=_ONLY_TRUE)
     allowed_client_ips: list[str] = field(default_factory=list)
     # High-priority clients: when the port is at capacity, a connection from one of
     # these IPs/CIDRs is admitted by kicking an existing client (oldest non-priority
     # first), regardless of kick_old_user.
     priority_client_ips: list[str] = field(default_factory=list)
-    read_only: bool = False
+    read_only: bool = field(default=False, metadata=_PROTECTIVE)
     # Per-client outbound (serial->network) buffer, in chunks. A client slower than
     # the serial source is dropped once this fills. A chunk is one serial read, at most
     # 4 KB (8 KB with telnet / RFC 2217, which double 0xFF bytes), so the worst case per
@@ -610,7 +908,7 @@ class NetworkSettings:
     # remote_host, and/or be one of the SHA-256 fingerprints in tls_fingerprint (with
     # neither, the link only encrypts). tls_key_password decrypts an encrypted key (never
     # asked for on a terminal); edits load the files with it (MappingConfig.check_tls_files).
-    tls: bool = False
+    tls: bool = field(default=False, metadata=_PROTECTIVE)
     tls_cert: str = ""
     tls_key: str = ""
     tls_key_password: str = ""
@@ -635,11 +933,22 @@ class NetworkSettings:
         return "*" if self.both_families else shown_host(self.bind_ip)
 
     @staticmethod
-    def from_dict(d: dict[str, Any]) -> "NetworkSettings":
+    def from_dict(d: dict[str, Any], notes: Optional[list[FieldNote]] = None,
+                  path: str = "") -> "NetworkSettings":
         d = dict(d or {})
-        known = {f.name for f in dataclasses.fields(NetworkSettings)}
-        net = NetworkSettings(**{k: v for k, v in d.items() if k in known})
+        notes = [] if notes is None else notes
+        net = NetworkSettings(**_read_fields(NetworkSettings, d, notes, path))
         net.bind_ip = canonical_ip(net.bind_ip)  # (AppConfig.from_dict notes a change)
+        # a UDP mapping has no connection to negotiate telnet on, so it always ran raw: say
+        # so (validate() refuses RFC 2217 and Modbus over UDP, but older releases took telnet)
+        if net.mode == "udp" and net.protocol == "telnet":
+            notes.append(FieldNote(
+                path + "protocol", "replaced", "telnet", "raw",
+                why=f"{path}protocol telnet is not supported over UDP: raw is used (as it "
+                    "always was: no telnet negotiation or escaping over UDP)",
+                warning=_("Telnet is not supported over UDP, so the protocol is raw (as it "
+                          "always was in effect).")))
+            net.protocol = "raw"
         return net
 
     def validate(self) -> None:
@@ -689,16 +998,23 @@ class NetworkSettings:
             if bool(self.tls_cert) != bool(self.tls_key):  # connect-out: both or neither
                 raise ConfigError(_("Connect-out TLS: set both a certificate and a key (for a "
                                     "server that asks for a client certificate), or neither."))
-            for p in (self.tls_cert, self.tls_key):
-                if p and not os.path.isfile(data_path(p)):
-                    raise ConfigError(_("TLS file not found: {0}").format(p))
         for label, lst in ((_("allowed"), self.allowed_client_ips),
                            (_("priority"), self.priority_client_ips)):
-            for cidr in lst:
-                try:
-                    ipaddress.ip_network(normalize_cidr(cidr), strict=False)
-                except ValueError:
-                    raise ConfigError(_("Invalid {0} client IP/CIDR: {1}.").format(label, repr(cidr))) from None
+            _nets, bad = client_networks(lst)
+            if bad:
+                raise ConfigError(_("Invalid {0} client IP/CIDR: {1}.").format(label, repr(bad[0])))
+
+
+def tls_files_missing(net: NetworkSettings) -> list[str]:
+    """A TLS listener's certificate / key files that don't exist, one message each. Not a
+    rule of validate(): a file that goes missing (a mount, a renewal) must not block every
+    other change. An edit refuses them (MappingConfig.validate_input), start-up names them
+    (AppConfig.problems) and the mapping then fails to start, saying so."""
+    if not net.tls or net.mode == "udp":
+        return []
+    return [_("TLS file not found: {0}").format(p)
+            for p in dict.fromkeys((net.tls_cert, net.tls_key))
+            if p and not os.path.isfile(data_path(p))]
 
 
 def udp_peer_address(net: NetworkSettings) -> Optional[tuple[str, int]]:
@@ -840,16 +1156,39 @@ class MappingOptions:
     # poll_with_clients.
     poll_string: str = ""
     poll_interval_s: float = 0.0
-    poll_with_clients: bool = False
+    poll_with_clients: bool = field(default=False, metadata=_ONLY_TRUE)
+    # No-data alarm (notify.py: no_data / data_back, the dashboard, /metrics): the serial
+    # port is open but the device has sent nothing for this many seconds (0 = off,
+    # else NO_DATA_MIN_S..NO_DATA_MAX_S); with no_data_reply_only, only while something
+    # sent to it gets no answer (a device that speaks when asked, e.g. Modbus RTU).
+    no_data_alarm_s: int = 0
+    no_data_reply_only: bool = False
 
     @staticmethod
-    def from_dict(d: dict[str, Any]) -> "MappingOptions":
+    def from_dict(d: dict[str, Any], notes: Optional[list[FieldNote]] = None,
+                  path: str = "") -> "MappingOptions":
         d = dict(d or {})
-        known = {f.name for f in dataclasses.fields(MappingOptions)}
-        opts = MappingOptions(**{k: v for k, v in d.items() if k in known})
+        notes = [] if notes is None else notes
+        opts = MappingOptions(**_read_fields(MappingOptions, d, notes, path))
         opts.idle_timeout_s = _legacy_seconds(opts.idle_timeout_s)
         opts.trace_both = trace_file_name(opts.trace_both)
+        opts._limit_no_data_alarm(notes, path)
         return opts
+
+    def _limit_no_data_alarm(self, notes: list[FieldNote], path: str) -> None:
+        """A no-data alarm outside 0 / NO_DATA_MIN_S..NO_DATA_MAX_S takes the nearest value
+        it can have, with a note (loading notes it, an edit warns)."""
+        value = self.no_data_alarm_s
+        if value == 0 or NO_DATA_MIN_S <= value <= NO_DATA_MAX_S:
+            return
+        used = 0 if value < 0 else min(max(value, NO_DATA_MIN_S), NO_DATA_MAX_S)
+        notes.append(FieldNote(
+            path + "no_data_alarm_s", "replaced", value, used,
+            why=f"{path}no_data_alarm_s {value} is not 0 (off) or {NO_DATA_MIN_S}.."
+                f"{NO_DATA_MAX_S} seconds: {used} is used",
+            warning=_("The no-data alarm must be 0 (off) or {0} to {1} seconds: {2} is "
+                      "used.").format(NO_DATA_MIN_S, NO_DATA_MAX_S, used)))
+        self.no_data_alarm_s = used
 
     def validate(self) -> None:
         for label, value in ((_("Idle timeout"), self.idle_timeout_s),
@@ -884,7 +1223,7 @@ class MqttSettings:
     port: int = 1883
     base_topic: str = ""        # e.g. "ser2net/plc1"; serial lines publish to <base_topic>
     qos: int = 0                # 0 | 1 | 2
-    tls: bool = False
+    tls: bool = field(default=False, metadata=_PROTECTIVE)
     username: str = ""
     password: str = ""
     client_id: str = ""         # blank => auto
@@ -906,13 +1245,14 @@ class MqttSettings:
     # serial port as it is, and answer on <base_topic>/tx/result ("ok" / "error: ...").
     # Read-only refuses them; a retained one (the broker's copy, sent again after each
     # (re)connect) is ignored. Off: MQTT only publishes.
-    tx_enabled: bool = False
+    tx_enabled: bool = field(default=False, metadata=_ONLY_TRUE)
 
     @staticmethod
-    def from_dict(d: dict[str, Any]) -> "MqttSettings":
+    def from_dict(d: dict[str, Any], notes: Optional[list[FieldNote]] = None,
+                  path: str = "") -> "MqttSettings":
         d = dict(d or {})
-        known = {f.name for f in dataclasses.fields(MqttSettings)}
-        return MqttSettings(**{k: v for k, v in d.items() if k in known})
+        notes = [] if notes is None else notes
+        return MqttSettings(**_read_fields(MqttSettings, d, notes, path))
 
     def validate(self) -> None:
         if not self.enabled:
@@ -956,44 +1296,69 @@ class ModbusPoint:
     writable: bool = False
 
     @staticmethod
-    def from_dict(d: dict[str, Any]) -> "ModbusPoint":
+    def from_dict(d: dict[str, Any], notes: Optional[list[FieldNote]] = None,
+                  path: str = "") -> "ModbusPoint":
         d = dict(d or {})
-        known = {f.name for f in dataclasses.fields(ModbusPoint)}
-        return ModbusPoint(**{k: v for k, v in d.items() if k in known})
+        notes = [] if notes is None else notes
+        return ModbusPoint(**_read_fields(ModbusPoint, d, notes, path))
+
+
+MODBUS_POLL_DEFAULT_S = 5.0
 
 
 @dataclass
 class ModbusPoll:
-    interval_s: float = 5.0
+    interval_s: float = MODBUS_POLL_DEFAULT_S
     points: list[ModbusPoint] = field(default_factory=list)
 
     @staticmethod
-    def from_dict(d: dict[str, Any]) -> "ModbusPoll":
+    def from_dict(d: dict[str, Any], notes: Optional[list[FieldNote]] = None,
+                  path: str = "") -> "ModbusPoll":
         d = dict(d or {})
-        return ModbusPoll(
-            interval_s=float(d.get("interval_s", 5.0) or 5.0),
-            points=[ModbusPoint.from_dict(p) for p in d.get("points", [])],
-        )
+        notes = [] if notes is None else notes
+        poll = ModbusPoll(
+            points=[ModbusPoint.from_dict(p, notes, f"{path}points[{i}].")
+                    for i, p in enumerate(_objects(d, "points", path))],
+            **_read_fields(ModbusPoll, d, notes, path, skip=("points",)))
+        # 0 or less has always meant the default interval (an <input min> keeps the form
+        # from sending it); said now, where it matters
+        if poll.interval_s <= 0:
+            if poll.points:
+                was, now = _shown(poll.interval_s), f"{MODBUS_POLL_DEFAULT_S:g}"
+                notes.append(FieldNote(
+                    path + "interval_s", "replaced", poll.interval_s, MODBUS_POLL_DEFAULT_S,
+                    why=f"{path}interval_s {was} is not a poll interval (more than 0 "
+                        f"seconds): {now} s is used",
+                    warning=_("{0}interval_s {1} is not a poll interval (more than 0 seconds): "
+                              "{2} s is used.").format(path, was, now)))
+            poll.interval_s = MODBUS_POLL_DEFAULT_S
+        return poll
 
     def validate(self) -> None:
         if not self.points:
             return
-        if self.interval_s <= 0:
+        if not _is_number(self.interval_s) or not (0 < self.interval_s < math.inf):
             raise ConfigError(_("Modbus poll interval must be > 0 seconds."))
         seen = set()
         for p in self.points:
-            if not p.name.strip():
+            if not isinstance(p.name, str) or not p.name.strip():
                 raise ConfigError(_("Each Modbus poll point needs a name."))
             if p.name in seen:
                 raise ConfigError(_("Duplicate Modbus poll point name: {0}.").format(repr(p.name)))
             seen.add(p.name)
-            if not (0 <= p.unit <= 255):
+            if not _is_int(p.unit) or not (0 <= p.unit <= 255):
                 raise ConfigError(_("Point {0}: unit must be 0-255.").format(repr(p.name)))
-            if p.fn not in (1, 2, 3, 4):
+            if p.fn not in (1, 2, 3, 4) or not _is_int(p.fn):
                 raise ConfigError(_("Point {0}: function must be 1 (coils), 2 (discrete "
                                     "inputs), 3 (holding registers) or 4 (input registers).").format(repr(p.name)))
-            if not (0 <= p.address <= 65535):
+            if not _is_int(p.address) or not (0 <= p.address <= 65535):
                 raise ConfigError(_("Point {0}: address must be 0-65535.").format(repr(p.name)))
+            # from_dict reads both as numbers / true or false; a model built in code is
+            # refused here rather than fail at every poll
+            if not _is_number(p.scale) or not (isinstance(p.scale, int) or math.isfinite(p.scale)):
+                raise ConfigError(_("Point {0}: scale must be a number.").format(repr(p.name)))
+            if not isinstance(p.writable, bool):
+                raise ConfigError(_("Point {0}: writable must be true or false.").format(repr(p.name)))
             if p.dtype not in MODBUS_DTYPES:
                 raise ConfigError(_("Point {0}: dtype must be one of {1}.").format(repr(p.name), _choices(MODBUS_DTYPES)))
             if (p.fn in (1, 2)) != (p.dtype == "bool"):
@@ -1022,24 +1387,30 @@ class MappingConfig:
     options: MappingOptions = field(default_factory=MappingOptions)
     mqtt: MqttSettings = field(default_factory=MqttSettings)
     modbus_poll: ModbusPoll = field(default_factory=ModbusPoll)
+    # What from_dict did with the data it was given (FieldNote): loading config.json logs
+    # it, an edit refuses an invalid value (validate_input) and warns about the rest.
+    # Never persisted.
+    input_notes: list[FieldNote] = field(default_factory=list, repr=False, compare=False)
+
+    # what a mapping read back from the REST API has besides its settings (never stored)
+    _READ_ONLY_KEYS = ("status", "warnings")
 
     @staticmethod
     def from_dict(d: dict[str, Any]) -> "MappingConfig":
         # every way into the config (file, import, form, REST, cluster) passes here, so an
-        # id that is not a valid mapping id never gets further (see _mapping_id_from)
+        # id that is not a valid mapping id never gets further (see _mapping_id_from), nor a
+        # value of the wrong type (see _read_fields)
         d = dict(d or {})
-        m = MappingConfig(
-            id=_mapping_id_from(d.get("id")),
-            name=d.get("name", ""),
-            enabled=bool(d.get("enabled", True)),
-            kind=d.get("kind", "net"),
-            serial=SerialSettings.from_dict(d.get("serial", {})),
-            serial_b=SerialSettings.from_dict(d.get("serial_b", {})),
-            network=NetworkSettings.from_dict(d.get("network", {})),
-            options=MappingOptions.from_dict(d.get("options", {})),
-            mqtt=MqttSettings.from_dict(d.get("mqtt", {})),
-            modbus_poll=ModbusPoll.from_dict(d.get("modbus_poll", {})),
-        )
+        notes: list[FieldNote] = []
+        readers: dict[str, Any] = {
+            "serial": SerialSettings.from_dict, "serial_b": SerialSettings.from_dict,
+            "network": NetworkSettings.from_dict, "options": MappingOptions.from_dict,
+            "mqtt": MqttSettings.from_dict, "modbus_poll": ModbusPoll.from_dict}
+        fields = _read_fields(MappingConfig, d, notes, skip=("id", "input_notes", *readers),
+                              keep=MappingConfig._READ_ONLY_KEYS)
+        sections = {key: read(_section(d, key), notes, key + ".") for key, read in readers.items()}
+        m = MappingConfig(id=_mapping_id_from(d.get("id")), input_notes=notes,
+                          **sections, **fields)
         net = d.get("network")
         if (isinstance(net, dict) and "dual_stack" not in net and m.kind == "net"
                 and m.network.mode == "udp" and m.network.bind_ip == "::"
@@ -1051,7 +1422,18 @@ class MappingConfig:
         return m
 
     def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
+        d = asdict(self)
+        d.pop("input_notes", None)
+        return d
+
+    def input_warnings(self) -> list[str]:
+        """What an edit (REST API, import) is told about the data it sent: keys that are no
+        setting, settings replaced by supported ones (in the request's language; the REST
+        API's is English)."""
+        unknown = [n.path for n in self.input_notes if n.kind == "unknown"]
+        out = ([_("Not settings of this version, so they are ignored: {0}.").format(
+            ", ".join(unknown))] if unknown else [])
+        return out + [n.warning for n in self.input_notes if n.kind == "replaced"]
 
     def validate(self) -> None:
         if not self.name.strip():
@@ -1075,6 +1457,34 @@ class MappingConfig:
                 and not self.modbus_poll.points):
             raise ConfigError(_("Sparkplug B publishes Modbus poll points: add points (and use "
                                 "protocol = modbus), or use the plain MQTT format."))
+
+    def ignored_settings(self) -> list[str]:
+        """Settings this mapping has that do nothing, in the current language: the runner
+        logs them when it starts (in English), the edit form and the REST API show them.
+        validate() accepts them, as earlier versions did."""
+        out = []
+        if self.mqtt.enabled and self.kind == "serialbridge":
+            out.append(_("MQTT is on, but a serial-to-serial bridge does not publish to MQTT: "
+                         "its MQTT settings are not used."))
+        elif (self.mqtt.enabled and self.kind == "net" and self.network.protocol == "modbus"
+              and not self.modbus_poll.points):
+            out.append(_("MQTT is on, but a Modbus gateway publishes only its poll points, and "
+                         "it has none: nothing is published. Add poll points, or turn MQTT off."))
+        if self.kind == "net" and self.network.mode == "udp" and self.options.closeon:
+            out.append(_("A close-on string is set, but a UDP mapping has no connections to "
+                         "close: it is not used."))
+        if self.kind == "net":  # a list an edit would refuse: only in a hand-edited file
+            nets, bad = client_networks(self.network.allowed_client_ips)
+            if bad:
+                out.append(_("Allowed client IPs: these entries are not IP addresses or "
+                             "networks, so they are left out: {0}.").format(", ".join(bad))
+                           + ("" if nets else " " + _("No entry is usable, so every client "
+                                                      "is refused.")))
+            _nets, bad = client_networks(self.network.priority_client_ips)
+            if bad:
+                out.append(_("High-priority client IPs: these entries are not IP addresses or "
+                             "networks, so they are left out: {0}.").format(", ".join(bad)))
+        return out
 
     def serial_sides(self) -> list[SerialSettings]:
         """The serial ports this mapping opens: A, and B for a serial-to-serial bridge."""
@@ -1102,7 +1512,13 @@ class MappingConfig:
         import, cluster), checked there in addition to validate(). validate() must not
         refuse them: a stored config has to keep loading and saving (Docker re-saves it on
         every start), so a stored value they forbid is refused where it is used instead
-        (a URL serial port: when the mapping starts, see engine/serial_io.refuse_url)."""
+        (a URL serial port: when the mapping starts, see engine/serial_io.refuse_url), or
+        normalized when it is loaded (a value of the wrong type: from_dict)."""
+        for note in self.input_notes:
+            if note.kind in ("invalid", "switch_text"):
+                raise ConfigError(note.error())
+        if self.kind == "net" and (missing := tls_files_missing(self.network)):
+            raise ConfigError(missing[0])
         for side in self.serial_sides():
             if problem := port_problem(side.port):
                 raise ConfigError(problem)
@@ -1313,7 +1729,7 @@ class AdminUI:
     # Web-UI login can be switched off from Settings (trusted networks only): visitors
     # without a session then act with anonymous_role. Signing in still works, and the
     # REST API keeps its bearer token.
-    require_login: bool = True
+    require_login: bool = field(default=True, metadata=_PROTECTIVE)
     anonymous_role: str = "viewer"
     # web UI language when a visitor hasn't picked one: auto (the browser's), en, tr
     language: str = "auto"
@@ -1338,7 +1754,7 @@ class AdminUI:
     # default. proxy_hsts: HSTS (hsts_max_age) also on HTTPS requests through a proxy.
     public_url: str = ""
     trusted_proxies: list[str] = field(default_factory=list)
-    proxy_hsts: bool = False
+    proxy_hsts: bool = field(default=False, metadata=_ONLY_TRUE)
     # A name for this instance (Settings -> Admin interface; SER2NET_NODE_NAME for one run
     # instead), for instances that share a host name: notifications, the cluster's fleet
     # view, the browser tab and the top bar use it. '' = the host name, as before.
@@ -1360,6 +1776,14 @@ class AdminUI:
     @property
     def tls_enabled(self) -> bool:
         return bool(self.tls_cert and self.tls_key)
+
+    def check_tls_files(self) -> None:
+        """The certificate and key, when set, must be files that exist: checked when they
+        are set in Settings, and at start-up (runtime.require_admin_tls), not by every save
+        — a file that goes missing later must not block every other change."""
+        for path in (p for p in (self.tls_cert, self.tls_key) if p):
+            if not os.path.isfile(data_path(path)):
+                raise ConfigError(_("TLS file not found or not readable: {0}").format(path))
 
 
 NODE_NAME_MAX = 64
@@ -1666,8 +2090,9 @@ class LdapSettings:
     (insecure)."""
     enabled: bool = False
     server_uri: str = ""             # ldap://host:389 or ldaps://host:636
-    start_tls: bool = False
-    tls_verify: bool = True          # check the server's certificate (LDAPS / StartTLS)
+    start_tls: bool = field(default=False, metadata=_PROTECTIVE)
+    # check the server's certificate (LDAPS / StartTLS)
+    tls_verify: bool = field(default=True, metadata=_PROTECTIVE)
     ca_file: str = ""                # CA certificate(s) to trust instead of the system's
     user_dn_template: str = ""       # direct-bind template (mutually exclusive with search)
     bind_dn: str = ""                # service account for search+bind
@@ -1682,10 +2107,11 @@ class LdapSettings:
     nested_groups: bool = False      # AD: LDAP_MATCHING_RULE_IN_CHAIN group search
 
     @staticmethod
-    def from_dict(d: dict[str, Any]) -> "LdapSettings":
+    def from_dict(d: dict[str, Any], notes: Optional[list[FieldNote]] = None,
+                  path: str = "") -> "LdapSettings":
         d = dict(d or {})
-        known = {f.name for f in dataclasses.fields(LdapSettings)}
-        return LdapSettings(**{k: v for k, v in d.items() if k in known})
+        notes = [] if notes is None else notes
+        return LdapSettings(**_read_fields(LdapSettings, d, notes, path))
 
     @property
     def uses_tls(self) -> bool:
@@ -1731,10 +2157,11 @@ class OidcSettings:
     default_role: str = ""           # role when no group matched; "" => deny
 
     @staticmethod
-    def from_dict(d: dict[str, Any]) -> "OidcSettings":
+    def from_dict(d: dict[str, Any], notes: Optional[list[FieldNote]] = None,
+                  path: str = "") -> "OidcSettings":
         d = dict(d or {})
-        known = {f.name for f in dataclasses.fields(OidcSettings)}
-        return OidcSettings(**{k: v for k, v in d.items() if k in known})
+        notes = [] if notes is None else notes
+        return OidcSettings(**_read_fields(OidcSettings, d, notes, path))
 
     def validate(self) -> None:
         if not self.enabled:
@@ -1825,20 +2252,25 @@ class ClusterSettings:
     discovery: bool = True           # UDP beacons; off => manual peers only
 
     @staticmethod
-    def from_dict(d: dict[str, Any]) -> "ClusterSettings":
+    def from_dict(d: dict[str, Any], notes: Optional[list[FieldNote]] = None,
+                  path: str = "") -> "ClusterSettings":
         d = dict(d or {})
-        known = {f.name for f in dataclasses.fields(ClusterSettings)}
-        c = ClusterSettings(**{k: v for k, v in d.items() if k in known})
-        c.peers = [str(p).strip() for p in (c.peers or []) if str(p).strip()]
-        # a hand-edited key of null or a number: "" (cluster off, which start-up reports) or
-        # the number as text, instead of failing wherever the key is used
-        c.key = "" if c.key is None else str(c.key)
-        # the fields added after 2.8.0: a hand-edited value of the wrong type takes the default
-        c.previous_key = c.previous_key if isinstance(c.previous_key, str) else ""
+        notes = [] if notes is None else notes
+        # the fields added after 2.8.0 take their default for a hand-edited value of another
+        # type, as in 2.8.1: no text turns off the link to older nodes or discovery, and the
+        # previous key is never a number's text
+        for name, default in (("legacy_auth", True), ("discovery", True), ("previous_key", "")):
+            value = d.get(name)
+            if name in d and not isinstance(value, type(default)):
+                if value is not None:
+                    notes.append(FieldNote(path + name, "invalid", value, default,
+                                           _kind_of(type(default))))
+                del d[name]
+        # a hand-edited key of null or a number reads as "" (cluster off, which start-up
+        # reports) or the number as text, instead of failing wherever the key is used
+        c = ClusterSettings(**_read_fields(ClusterSettings, d, notes, path))
+        c.peers = [p.strip() for p in c.peers if p.strip()]
         c.previous_until = _epoch(c.previous_until)
-        for name in ("legacy_auth", "discovery"):
-            if not isinstance(getattr(c, name), bool):
-                setattr(c, name, True)
         return c
 
     @property
@@ -1867,7 +2299,8 @@ class ClusterSettings:
 
 
 NOTIFY_EVENTS = ("device_lost", "device_back", "start_failed", "link_lost", "link_back",
-                 "client_connected", "client_disconnected", "login_failed")
+                 "client_connected", "client_disconnected", "login_failed", "disk_low",
+                 "no_data", "data_back", "peer_offline", "peer_back", "service_started")
 # (a saved events list is kept as it is: these are what a config without one gets)
 NOTIFY_DEFAULT_EVENTS = ("device_lost", "device_back", "start_failed", "link_lost", "link_back")
 WEBHOOK_FORMATS = ("json", "slack", "teams", "discord", "telegram")
@@ -1878,8 +2311,10 @@ SMTP_SECURITY = ("starttls", "ssl", "none")
 class NotificationSettings:
     """Event notifications (app/notify.py): a webhook and/or e-mail when a serial
     device disappears or comes back, a mapping fails to start, clients connect or
-    disconnect, or a sign-in fails. Off by default; the same event for the same
-    mapping is sent at most once per repeat_s."""
+    disconnect, a sign-in fails, the data disk is almost full, a device sends nothing
+    (a mapping's no-data alarm), a cluster node goes offline or ser2net has started.
+    Off by default; the same event for the same mapping is sent at most once per
+    repeat_s."""
     enabled: bool = False
     events: list[str] = field(default_factory=lambda: list(NOTIFY_DEFAULT_EVENTS))
     repeat_s: int = 300
@@ -1898,14 +2333,15 @@ class NotificationSettings:
     # mask_personal_data, an address only as its network (IPv4 /24, IPv6 /48) and no
     # account name. email_separately: each recipient gets a message of their own, so the
     # recipients don't see each other's addresses. Both off by default (as up to 2.8).
-    mask_personal_data: bool = False
-    email_separately: bool = False
+    mask_personal_data: bool = field(default=False, metadata=_ONLY_TRUE)
+    email_separately: bool = field(default=False, metadata=_ONLY_TRUE)
 
     @staticmethod
-    def from_dict(d: dict[str, Any]) -> "NotificationSettings":
+    def from_dict(d: dict[str, Any], notes: Optional[list[FieldNote]] = None,
+                  path: str = "") -> "NotificationSettings":
         d = dict(d or {})
-        known = {f.name for f in dataclasses.fields(NotificationSettings)}
-        n = NotificationSettings(**{k: v for k, v in d.items() if k in known})
+        notes = [] if notes is None else notes
+        n = NotificationSettings(**_read_fields(NotificationSettings, d, notes, path))
         n.events = [e for e in (n.events or []) if e in NOTIFY_EVENTS]
         # a hand-edited value other than true is off, as before these settings existed
         n.mask_personal_data = n.mask_personal_data is True
@@ -2013,10 +2449,13 @@ class User:
         return self.source if self.source == "local" else self.source.upper()
 
     @staticmethod
-    def from_dict(d: dict[str, Any]) -> "User":
+    def from_dict(d: dict[str, Any], notes: Optional[list[FieldNote]] = None,
+                  path: str = "") -> "User":
         d = dict(d or {})
-        known = {f.name for f in dataclasses.fields(User)}
-        u = User(**{k: v for k, v in d.items() if k in known})
+        notes = [] if notes is None else notes
+        # a hand-edited totp_secret that is no text stays on (and matches no code), as text
+        u = User(**_read_fields(User, d, notes, path,
+                                fallback={"totp_secret": str(d.get("totp_secret") or "")}))
         if u.role not in ROLES:
             u.role = "viewer"
         if u.source not in ("local", "ldap", "oidc"):
@@ -2129,6 +2568,13 @@ class AppConfig:
     # LDAP/OIDC accounts not signed in for this many days are removed (0: never, the
     # default); Settings -> Users
     external_users_expire_days: int = EXPIRE_DAYS_DEFAULT
+    # trace files (data/traces) not written for this many days are deleted every hour (0:
+    # kept until deleted by hand, the default); Settings -> Retention
+    trace_max_age_days: int = 0
+    # all.log, audit.log and backups/ keep nothing older than this many days, the mapping
+    # logs at most that many of their 15 (0: only their size and count limits, the
+    # default); Settings -> Retention
+    log_max_age_days: int = 0
     # Web-UI accounts. Empty => first-run setup pending. A legacy single-password
     # config (top-level password_hash) is migrated to one 'admin' user on load.
     users: list[User] = field(default_factory=list)
@@ -2148,44 +2594,90 @@ class AppConfig:
     # Parts start-up accepted although validate() rejects them (tolerate_problems): part
     # key -> its content then. Never persisted.
     tolerated: dict[str, Any] = field(default_factory=dict, repr=False, compare=False)
+    # What the config.json this was loaded from had that this version doesn't use, for the
+    # Settings page (a load note each, too): the paths of the keys that are no setting, and
+    # the version that wrote it when that is newer than this one. Never persisted (every
+    # save writes this version's "written_by").
+    unknown_keys: list[str] = field(default_factory=list, repr=False, compare=False)
+    newer_writer: str = field(default="", repr=False, compare=False)
 
     # ----- (de)serialization -----
     @staticmethod
     def from_dict(d: dict[str, Any]) -> "AppConfig":
+        """The config in a config.json (a backup, a restore). Values of the wrong type are
+        normalized, with a load note each (_read_fields), never refused: a config that an
+        older release wrote or accepted keeps loading. A part that isn't shaped like one
+        (a section that is no JSON object, a list that is no list) raises ConfigError."""
         d = dict(d or {})
-        admin = d.get("admin_ui", {}) or {}
-        known = {f.name for f in dataclasses.fields(AdminUI)}
-        admin_ui = AdminUI(**{k: v for k, v in admin.items() if k in known})
-        users = [User.from_dict(u) for u in d.get("users", [])]
+        notes: list[FieldNote] = []
+        # read elsewhere: the sections, the values with their own rules, what is never stored
+        own = ("admin_ui", "api_token_role", "api_tokens", "session_timeout_s",
+               "external_users_expire_days", "users", "ldap", "oidc", "cluster",
+               "notifications", "mappings", "load_notes", "ids_created", "tolerated",
+               "unknown_keys", "newer_writer")
+        top = _read_fields(AppConfig, d, notes, skip=own,
+                           keep=("password_hash", "pwd_version", "written_by"))
+        admin = dict(_section(d, "admin_ui"))
+        if isinstance(admin.get("trusted_proxies"), str):  # one line (spaces or commas)
+            admin["trusted_proxies"] = split_proxy_entries(admin["trusted_proxies"])
+        admin_ui = AdminUI(**_read_fields(AdminUI, admin, notes, "admin_ui."))
+        if not isinstance(d.get("users", []), list):  # never read as "no accounts yet"
+            raise ConfigError(_("{0} must be a JSON list, not {1}.").format(
+                "users", _shown(d["users"])))
+        users = [User.from_dict(u, notes, f"users[{i}].")
+                 for i, u in enumerate(_objects(d, "users"))]
         if not users and d.get("password_hash"):  # migrate legacy single-password config
             users = [User(username="admin", password_hash=d["password_hash"],
                           role="admin", pwd_version=int(d.get("pwd_version", 0)))]
         token_role, token_note = _api_token_role(d)
         api_tokens, token_notes = _api_tokens(d.get("api_tokens"))
         cfg = AppConfig(
-            version=int(d.get("version", 1)),
             admin_ui=admin_ui,
-            secret_key=d.get("secret_key") or secrets.token_hex(32),
-            api_token_hash=d.get("api_token_hash", ""),
             api_token_role=token_role,
             api_tokens=api_tokens,
             session_timeout_s=_session_timeout(d.get("session_timeout_s")),
             external_users_expire_days=_expire_days(d.get("external_users_expire_days")),
             users=users,
-            ldap=LdapSettings.from_dict(d.get("ldap", {})),
-            oidc=OidcSettings.from_dict(d.get("oidc", {})),
-            cluster=ClusterSettings.from_dict(d.get("cluster", {})),
-            notifications=NotificationSettings.from_dict(d.get("notifications", {})),
-            instance_id=d.get("instance_id") or secrets.token_hex(8),
-            defaults=d.get("defaults", {}) or {},
-            mappings=[MappingConfig.from_dict(m) for m in d.get("mappings", [])],
+            ldap=LdapSettings.from_dict(_section(d, "ldap"), notes, "ldap."),
+            oidc=OidcSettings.from_dict(_section(d, "oidc"), notes, "oidc."),
+            cluster=ClusterSettings.from_dict(_section(d, "cluster"), notes, "cluster."),
+            notifications=NotificationSettings.from_dict(_section(d, "notifications"), notes,
+                                                         "notifications."),
+            mappings=[MappingConfig.from_dict(m) for m in _objects(d, "mappings")],
+            **top,
         )
+        cfg.secret_key = cfg.secret_key or secrets.token_hex(32)
+        cfg.instance_id = cfg.instance_id or secrets.token_hex(8)
+        writer = d.get("written_by")
+        if isinstance(writer, str) and _newer_version(writer, __version__):
+            cfg.newer_writer = writer[:40]
+            cfg.load_notes.append(
+                f"config.json was written by ser2net {cfg.newer_writer}, a newer version than "
+                f"this one ({__version__}): what only {cfg.newer_writer} knows is not used here "
+                "and is left out when this version saves config.json. backups/ keeps the file "
+                f"as {cfg.newer_writer} left it: restore it there after upgrading again")
+        cfg._note_fields("config.json", notes)
+        for i, m in enumerate(cfg.mappings):
+            cfg._note_fields(f"mapping '{m.name}'", m.input_notes)
+            cfg.unknown_keys += [f"mappings[{i}].{n.path}" for n in m.input_notes
+                                 if n.kind == "unknown"]
+        cfg.unknown_keys[:0] = [n.path for n in notes if n.kind == "unknown"]
         _normalize_admin_limits(cfg.admin_ui, cfg.load_notes)
         _normalize_proxy_settings(cfg.admin_ui, cfg.load_notes)
         _normalize_node_name(cfg.admin_ui, cfg.load_notes)
         _normalize_request_log(cfg.admin_ui, cfg.load_notes)
         _normalize_login_notice(cfg.admin_ui, cfg.load_notes)
         cfg.ids_created = not (d.get("secret_key") and d.get("instance_id"))
+        days = cfg.trace_max_age_days
+        if not 0 <= days <= TRACE_DAYS_MAX:  # a hand-edited value must not stop a start
+            cfg.trace_max_age_days = 0 if days < 0 else TRACE_DAYS_MAX
+            cfg.load_notes.append(f"trace_max_age_days {days} is not 0 (keep) or 1..{TRACE_DAYS_MAX} "
+                                  f"days: {cfg.trace_max_age_days} is used")
+        days = cfg.log_max_age_days
+        if not 0 <= days <= LOG_DAYS_MAX:  # (likewise)
+            cfg.log_max_age_days = 0 if days < 0 else LOG_DAYS_MAX
+            cfg.load_notes.append(f"log_max_age_days {days} is not 0 (size limits only) or "
+                                  f"1..{LOG_DAYS_MAX} days: {cfg.log_max_age_days} is used")
         raw_days = d.get("external_users_expire_days")
         if raw_days is not None and raw_days != cfg.external_users_expire_days:
             cfg.load_notes.append(
@@ -2221,14 +2713,15 @@ class AppConfig:
                 "private CA (Active Directory Certificate Services) or a self-signed "
                 "certificate, set Settings → LDAP / Active Directory → CA certificate file "
                 "(ldap.ca_file). Local accounts are not affected.")
-        for raw, m in zip(d.get("mappings", []), cfg.mappings, strict=False):
+        for raw, m in zip(_objects(d, "mappings"), cfg.mappings, strict=True):
             old_id = (raw or {}).get("id")
             if old_id and old_id != m.id:
                 cfg.load_notes.append(
                     f"mapping '{m.name}': its id {old_id!r} is not a valid mapping id (1-64 "
                     f"letters, digits or '_'), so it is now {m.id}: the REST API and /metrics "
                     "use the new id, and its log and traces start afresh under it")
-            raw_net = (raw or {}).get("network") or {}
+            raw_net = (raw or {}).get("network")
+            raw_net = raw_net if isinstance(raw_net, dict) else {}
             if m.network.dual_stack is True and "dual_stack" not in raw_net:  # (from_dict)
                 cfg.load_notes.append(
                     f"mapping '{m.name}': a UDP mapping on :: now takes IPv6 datagrams only, "
@@ -2241,12 +2734,24 @@ class AppConfig:
                     f"{m.network.bind_ip!r}"
                     + (" (an IPv4-mapped IPv6 address: the listener takes that IPv4 address)"
                        if ":" in raw_bind and ":" not in m.network.bind_ip else ""))
-            old = str(((raw or {}).get("options") or {}).get("trace_both") or "").strip()
-            if old and old != m.options.trace_both:
+            raw_options = (raw or {}).get("options")
+            raw_options = raw_options if isinstance(raw_options, dict) else {}
+            old = str(raw_options.get("trace_both") or "").strip()
+            # before 2.8 (written without trace_max_mb) a trace was a path: a bare name was a
+            # file in ser2net's working directory, so it moved too
+            if old and (old != m.options.trace_both or "trace_max_mb" not in raw_options):
                 cfg.load_notes.append(
                     f"mapping '{m.name}': its trace file is now traces/{m.id}-{m.options.trace_both} "
                     f"in the data directory (configured: {old!r}; traces are no longer written "
                     "outside it)")
+            for key in ("allowed_client_ips", "priority_client_ips"):
+                nets, bad = client_networks(getattr(m.network, key))
+                if bad and m.kind == "net":
+                    cfg.load_notes.append(
+                        f"mapping '{m.name}': network.{key} entries that are not IP addresses "
+                        f"or networks are left out: {', '.join(map(repr, bad))}"
+                        + ("; none is usable, so every client is refused until the list is "
+                           "fixed" if key == "allowed_client_ips" and not nets else ""))
             for side in m.serial_sides():
                 if url_port(side.port):
                     cfg.load_notes.append(
@@ -2284,10 +2789,23 @@ class AppConfig:
     def serial_conflict(self, m: MappingConfig) -> str:
         """serial_conflict of ``m`` next to this config's mappings."""
         return serial_conflict(m, self.mappings)
+    def _note_fields(self, where: str, notes: list[FieldNote]) -> None:
+        """Add what reading `where` did (FieldNote) to the load notes."""
+        self.load_notes.extend(f"{where}: {n.text()}" for n in notes if n.kind != "unknown")
+        unknown = [n.path for n in notes if n.kind == "unknown"]
+        if unknown:
+            shown = ", ".join(unknown[:20]) + (f" and {len(unknown) - 20} more"
+                                               if len(unknown) > 20 else "")
+            self.load_notes.append(
+                f"{where}: not settings of this version, so they are not used and are left "
+                f"out when config.json is next saved (backups/ keeps the file as it was): {shown}")
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "version": self.version,
+            # which release wrote the file (older ones drop it): a later load by an older
+            # release notes what it can't keep, and the backups list shows it
+            "written_by": __version__,
             "admin_ui": asdict(self.admin_ui),
             "secret_key": self.secret_key,
             "api_token_hash": self.api_token_hash,
@@ -2296,6 +2814,8 @@ class AppConfig:
             **({"api_tokens": [asdict(t) for t in self.api_tokens]} if self.api_tokens else {}),
             "session_timeout_s": self.session_timeout_s,
             "external_users_expire_days": self.external_users_expire_days,
+            "trace_max_age_days": self.trace_max_age_days,
+            "log_max_age_days": self.log_max_age_days,
             "users": [u.to_dict() for u in self.users],
             "ldap": asdict(self.ldap),
             "oidc": asdict(self.oidc),
@@ -2488,14 +3008,10 @@ class AppConfig:
             raise error
 
     def _validate_admin_ui(self) -> None:
-        # TLS: both files required together, and they must exist/be readable so a
-        # bad path fails fast at save time instead of crashing uvicorn at startup.
+        # TLS: both files required together (that they exist: AdminUI.check_tls_files)
         cert, key = self.admin_ui.tls_cert, self.admin_ui.tls_key
         if bool(cert) != bool(key):
             raise ConfigError(_("Set both TLS certificate and key, or neither."))
-        for path in (p for p in (cert, key) if p):
-            if not os.path.isfile(data_path(path)):
-                raise ConfigError(_("TLS file not found or not readable: {0}").format(path))
 
         # Admin UI bind IP (set via the console / --reconfigure, or a hand-edited
         # config). Catch a bad value here with a clear error instead of letting
@@ -2573,13 +3089,21 @@ class AppConfig:
         return found
 
     def _broken(self) -> list[tuple[str, str, Any]]:
-        """(key, problem, content) for every part validate() rejects and every clash."""
+        """(key, problem, content) for every part validate() rejects and every clash, and
+        each TLS file a mapping names that doesn't exist (tls_files_missing)."""
         found = []
+        missing = {f"mapping {m.id}": tls_files_missing(m.network)
+                   for m in self.mappings if m.kind == "net"}
         for key, label, content, check in self._parts():
             try:
                 check()
             except Exception as e:  # a hand-edited value of the wrong type raises others too
                 found.append((key, f"{label}: {e}", content()))
+            try:
+                found += [(key, f"{label}: {problem}", content())
+                          for problem in missing.get(key, ())]
+            except Exception:  # its content can't be read: named above already
+                pass
         try:
             found += [(key, str(error), None) for key, error in self._clashes()]
         except Exception as e:  # mappings too broken to compare
@@ -2637,10 +3161,31 @@ class AppConfig:
         return still
 
 
+def mapping_revision(secret_key: str, m: "MappingConfig") -> str:
+    """An opaque revision of a mapping's settings (never stored): what an edit form or a
+    REST client saw, to tell whether the mapping changed since. An HMAC with this node's
+    secret key, so it tells nothing about the settings (the MQTT password a viewer token
+    doesn't get), and another node's revision is its own."""
+    key = hmac.new(secret_key.encode(), b"ser2net mapping revision", hashlib.sha256).digest()
+    body = json.dumps(m.to_dict(), sort_keys=True, separators=(",", ":"), default=str)
+    return hmac.new(key, body.encode(), hashlib.sha256).hexdigest()[:24]
+
+
 def _mapping_content(m: "MappingConfig") -> dict[str, Any]:
     content = m.to_dict()
     content.pop("enabled", None)
     return content
+
+
+def _version_parts(text: str) -> Optional[tuple[int, ...]]:
+    """(2, 9, 0) for "2.9.0" (or "2.9.0rc1"), None for anything else."""
+    m = re.match(r"(\d+)\.(\d+)(?:\.(\d+))?", text.strip())
+    return tuple(int(x or 0) for x in m.groups()) if m else None
+
+
+def _newer_version(text: str, than: str) -> bool:
+    a, b = _version_parts(text), _version_parts(than)
+    return a is not None and b is not None and a > b
 
 
 def _api_token_role(d: dict[str, Any]) -> tuple[str, str]:
@@ -2722,18 +3267,54 @@ def _address_overlaps(a: str, b: str) -> bool:
 # Atomic store
 # ---------------------------------------------------------------------------
 BACKUPS_KEPT = 50
+# with log_max_age_days set, backups older than that go (ConfigStore.prune_backups), but
+# never the newest BACKUPS_MIN_KEPT: a clock far ahead must not take every way back
+BACKUPS_MIN_KEPT = 5
 _BACKUP_NAME = re.compile(r"^config-\d{8}T\d{6}Z(-\d+)?\.json$")
 
 
-class ConfigStore:
-    """config.json with atomic writes, plus automatic backups of earlier versions.
+def now() -> float:
+    """The wall clock that names backups (tests set another)."""
+    return time.time()
 
-    Every save that changes config.json first copies the version it replaces to
-    <data>/backups/config-<UTC time>.json (identical content is not copied twice; the
-    newest BACKUPS_KEPT are kept). Backups are never read back on their own: restoring one
-    is an explicit admin action (deleting config.json alone leaves them, and the next admin
-    sees them in Settings). An admin can delete backups, or remove a deleted account from
-    every backup (remove_account), in Settings -> Configuration backups."""
+
+class _Seen(typing.NamedTuple):
+    """config.json as a store last read or wrote it."""
+    key: Optional[tuple[int, int]]   # (mtime_ns, size); None: unknown
+    digest: str                      # sha256 of its text
+
+
+def _digest(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def _stat_key(st: os.stat_result) -> tuple[int, int]:
+    return st.st_mtime_ns, st.st_size
+
+
+class ConfigStore:
+    """config.json with atomic writes, plus automatic backups.
+
+    Every save keeps the file it writes as the newest backup,
+    <data>/backups/config-<UTC time>.json, and first the version it replaces when that is
+    not the newest backup already (an older release wrote it, or it was edited by hand).
+    So backups/ always holds the current config.json too: going back to a release that
+    keeps no backups (2.7) and drops what it doesn't know at its first save loses nothing.
+    Identical content is not copied twice; the newest BACKUPS_KEPT are kept. Starting and
+    stopping mappings takes no backup of its own (save(backup=False)), so it doesn't push
+    the backups of real changes out. A new name always sorts first, also when the clock
+    went back (it then takes the newest name's time, with the next number). Backups are
+    never read back on their own: restoring one is an explicit admin action (deleting
+    config.json alone leaves them, and the next admin sees them in Settings). An admin can
+    delete backups, or remove a deleted account from every backup (remove_account), in
+    Settings -> Configuration backups.
+
+    The store remembers what config.json held when it last read or wrote it. A save that
+    finds something else there replaces an edit made outside ser2net (by hand, a tool)
+    that was not reloaded: the save goes ahead (sign-ins, starts and stops must not fail
+    for it), the edited file is kept in backups/ first as any replaced version is, and
+    the replacement is reported (replaced_edit, a WARNING via log, on_replaced).
+    changed_on_disk() tells of such an edit before a save does."""
 
     def __init__(self, path: str):
         self.path = os.path.abspath(path)
@@ -2746,6 +3327,16 @@ class ConfigStore:
         self.backup_dir = os.path.join(directory, "backups")
         # what each backup holds, by name: ((size, mtime_ns), _backup_summary()) - see backups()
         self._backup_summaries: dict[str, tuple[tuple[int, int], dict[str, Any]]] = {}
+        # where a backup that fails, or a clock behind the backups, is reported (AppState
+        # sets its log; a save itself never fails because of a backup)
+        self.log: Any = lambda _msg: None
+        self._clock_noted = False
+        self._seen: Optional[_Seen] = None
+        # the last edit made outside ser2net that a save replaced: {"edited": its mtime,
+        # "saved": when, "backup": the backup's name ("" when none could be written)};
+        # on_replaced(that) is called too (AppState: an audit record)
+        self.replaced_edit: Optional[dict] = None
+        self.on_replaced: Any = None
 
     def exists(self) -> bool:
         return os.path.isfile(self.path)
@@ -2753,33 +3344,101 @@ class ConfigStore:
     def load(self) -> AppConfig:
         if not self.exists():
             return AppConfig()
+        text, seen = self.read_current()
+        config = AppConfig.from_dict(json.loads(text))
+        self.note_read(seen)
+        return config
+
+    def read_current(self) -> tuple[str, _Seen]:
+        """config.json's text, and what note_read() remembers of it once it is used."""
         with open(self.path, "r", encoding="utf-8") as fh:
-            data = json.load(fh)
-        return AppConfig.from_dict(data)
+            st = os.fstat(fh.fileno())
+            text = fh.read()
+        return text, _Seen(_stat_key(st), _digest(text))
+
+    def note_read(self, seen: _Seen) -> None:
+        """The configuration in use is the one read_current() gave (a load, a reload)."""
+        self._seen = seen
+
+    def changed_on_disk(self) -> Optional[float]:
+        """When config.json holds something other than what this store last read or wrote
+        (an edit made outside ser2net, which is not in use until it is reloaded): when it
+        was changed (its mtime; 0.0 when the file is gone). Else None. Blocking: a stat, and
+        a read only when the stat differs from what was seen."""
+        seen = self._seen
+        if seen is None:
+            return None
+        try:
+            st = os.stat(self.path)
+        except FileNotFoundError:
+            return 0.0
+        except OSError:
+            return None
+        if _stat_key(st) == seen.key:
+            return None
+        try:
+            text, now_seen = self.read_current()
+        except FileNotFoundError:
+            return 0.0
+        except (OSError, ValueError):
+            return st.st_mtime
+        if now_seen.digest == seen.digest:  # only touched
+            self._seen = now_seen
+            return None
+        return st.st_mtime
 
     def matches(self, config: AppConfig) -> bool:
         """True when config.json already holds exactly this configuration, so saving it
-        would change nothing (start-up then leaves the file alone)."""
+        would change nothing (start-up then leaves the file alone). Which release wrote it
+        doesn't count: an upgrade alone doesn't rewrite it."""
         try:
             with open(self.path, "r", encoding="utf-8") as fh:
-                return json.load(fh) == json.loads(json.dumps(config.to_dict()))
+                on_disk = json.load(fh)
         except (OSError, ValueError):
             return False
+        mine = json.loads(json.dumps(config.to_dict()))
+        if isinstance(on_disk, dict):
+            on_disk.pop("written_by", None)
+        mine.pop("written_by", None)
+        return on_disk == mine
 
-    def save(self, config: AppConfig, *, validate: bool = True) -> None:
+    def save(self, config: AppConfig, *, validate: bool = True, backup: bool = True) -> bool:
         """Atomically persist config to a single file (validates first: what start-up
         accepted while broken may stay as it was, see AppConfig.validate_for_save).
 
         Uses a temp file + os.replace so config.json is never partially written; the
-        version being replaced is kept in backups/ first (see the class docstring).
+        version being replaced is kept in backups/ first, the new one after (see the class
+        docstring). Content config.json holds already is not written again.
         validate=False is for a change the caller checked itself and that must not
         fail on an unrelated setting (account recovery, app/accounts.py; start-up right
         after tolerate_problems(), runtime.prepare_config).
-        """
+        backup=False: a change only of which mappings run (start / stop). It takes no backup
+        of its own: when the newest backup is the file it replaces, the new file takes its
+        place (as the newest backup, under a new name); otherwise it is kept as usual.
+        Returns whether the configuration config.json held before is kept in backups/
+        (False: that backup could not be written; logged)."""
         still_accepted = config.validate_for_save() if validate else config.tolerated
         data = json.dumps(config.to_dict(), indent=2, ensure_ascii=False)
         directory = os.path.dirname(self.path)
-        self._backup_current(data)
+        try:
+            current, current_seen = self.read_current()
+        except OSError:
+            current, current_seen = None, None  # first save: nothing to keep
+        if current == data:  # config.json holds this already: nothing to write
+            config.tolerated = still_accepted
+            self._add_backup(data)  # (newest already, unless backups/ was emptied)
+            self._seen = current_seen
+            return True
+        # an edit made outside ser2net, which this save replaces (kept, and reported)
+        outside = (current_seen is not None and self._seen is not None
+                   and current_seen.digest != self._seen.digest)
+        kept, replaces, kept_as = True, None, ""
+        if current is not None:
+            if not backup and (newest := self._newest()) is not None and newest[1] == current:
+                replaces = newest[0]  # the newest backup is the file replaced: it goes
+            else:
+                kept_as = self._add_backup(current)
+                kept = bool(kept_as)
 
         fd, tmp = tempfile.mkstemp(dir=directory, prefix=".cfg.", suffix=".tmp")
         try:
@@ -2787,50 +3446,106 @@ class ConfigStore:
                 fh.write(data)
                 fh.flush()
                 os.fsync(fh.fileno())
+                written = _stat_key(os.fstat(fh.fileno()))
             os.replace(tmp, self.path)
         finally:
             if os.path.exists(tmp):
                 os.unlink(tmp)
+        self._seen = _Seen(written, _digest(data))
         # written: only now does a part this save fixed stop being accepted while broken
         config.tolerated = still_accepted
         _fsync_dir(directory)
+        if self._add_backup(data, prune=replaces is None) and replaces is not None:
+            with contextlib.suppress(OSError):
+                os.remove(os.path.join(self.backup_dir, replaces))
+        if outside and current_seen is not None:
+            self._replaced(current_seen, kept_as)
+        return kept
+
+    def _replaced(self, edited: _Seen, backup: str) -> None:
+        """Report that a save replaced an edit made outside ser2net (see the class doc)."""
+        mtime = edited.key[0] / 1e9 if edited.key else 0.0
+        when = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(mtime)) if mtime else "?"
+        self.replaced_edit = {"edited": mtime, "saved": time.time(), "backup": backup}
+        where = (os.path.join("backups", backup) if backup
+                 else "nowhere: its backup could not be written (see above)")
+        self.log(f"WARNING: config.json had been changed outside ser2net ({when}) and was not "
+                 "reloaded; this save replaced it with the configuration in use. The edited "
+                 f"file is kept as {where}: restore it under Settings → Configuration backups, "
+                 "or edit config.json again and reload it")
+        if self.on_replaced is not None:
+            self.on_replaced(self.replaced_edit)
 
     # ----- backups -----
-    def _backup_current(self, new_data: str) -> None:
-        """Copy config.json into backups/ before it is replaced by new_data. Best
-        effort: a failing backup must never stop the save itself."""
-        try:
-            with open(self.path, "r", encoding="utf-8") as fh:
-                current = fh.read()
-        except OSError:
-            return  # first save: nothing to keep
-        if current == new_data:
-            return
+    def _newest(self) -> Optional[tuple[str, str]]:
+        """(name, text) of the newest backup, or None."""
+        for name in self.backup_names()[:1]:
+            try:
+                with open(os.path.join(self.backup_dir, name), encoding="utf-8") as fh:
+                    return name, fh.read()
+            except OSError:
+                return None
+        return None
+
+    def _add_backup(self, current: str, *, prune: bool = True) -> str:
+        """Make `current` (a config.json's text) the newest backup, unless it is that
+        already; its name when it is now, "" when not. Best effort: a failing backup is
+        logged, and never stops the save itself. The name sorts first: when the clock is
+        behind the newest backup, the new one takes that one's time with the next number."""
         try:
             os.makedirs(self.backup_dir, exist_ok=True)
             lock_down_dir(self.backup_dir)
-            names = self.backup_names()
-            if names:
-                with open(os.path.join(self.backup_dir, names[0]), encoding="utf-8") as fh:
-                    if fh.read() == current:
-                        return  # this version is already the newest backup
-            stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
+            newest = self._newest()
+            if newest is not None and newest[1] == current:
+                return newest[0]  # this version is already the newest backup
+            clock = time.strftime("%Y%m%dT%H%M%S", time.gmtime(now()))
+            stamp = clock
+            if newest is not None and (top := _backup_order(newest[0])[0]) > clock:
+                stamp = top
+                if not self._clock_noted:
+                    self._clock_noted = True
+                    self.log(f"WARNING: the system clock ({backup_time(f'config-{clock}')} "
+                             f"UTC) is behind the newest configuration backup "
+                             f"({backup_time(newest[0])} UTC): new backups are named after "
+                             f"that one, so that they stay the newest")
             # several saves in one second: -2, -3 ... (never reuse a pruned lower number,
             # or the newest backup would sort as the oldest)
-            same = [_backup_order(n)[1] for n in names if n.startswith(f"config-{stamp}")]
+            same = [_backup_order(n)[1] for n in self.backup_names()
+                    if _backup_order(n)[0] == stamp]
             n = max(same) + 1 if same else 1
-            name = f"config-{stamp}.json" if n == 1 else f"config-{stamp}-{n}.json"
+            name = f"config-{stamp}Z.json" if n == 1 else f"config-{stamp}Z-{n}.json"
             fd, tmp = tempfile.mkstemp(dir=self.backup_dir, prefix=".bak.", suffix=".tmp")
             with os.fdopen(fd, "w", encoding="utf-8") as fh:
                 fh.write(current)
                 fh.flush()
                 os.fsync(fh.fileno())
             os.replace(tmp, os.path.join(self.backup_dir, name))
-            for old in self.backup_names()[BACKUPS_KEPT:]:
+            for old in self.backup_names()[BACKUPS_KEPT:] if prune else ():
+                if old != name:  # (it sorts first; never the one just written)
+                    with contextlib.suppress(OSError):
+                        os.remove(os.path.join(self.backup_dir, old))
+            return name
+        except OSError as e:
+            self.log(f"WARNING: could not keep a backup of config.json in {self.backup_dir}: "
+                     f"{e}")
+            return ""
+
+    def prune_backups(self, max_age_s: float, now: float) -> list[str]:
+        """Delete the backups named for a time more than max_age_s before `now` (UTC, as
+        their names say: a backup taken while the clock was behind is named later, so it
+        stays longer), except the newest BACKUPS_MIN_KEPT; the newest one is what
+        config.json holds. Returns the names deleted. Blocking."""
+        gone = []
+        for name in self.backup_names()[BACKUPS_MIN_KEPT:]:
+            try:
+                named = calendar.timegm(time.strptime(_backup_order(name)[0], "%Y%m%dT%H%M%S"))
+            except ValueError:
+                continue
+            if named < now - max_age_s:
                 with contextlib.suppress(OSError):
-                    os.remove(os.path.join(self.backup_dir, old))
-        except OSError:
-            pass
+                    os.remove(os.path.join(self.backup_dir, name))
+                    gone.append(name)
+        return gone
 
     def backup_names(self) -> list[str]:
         """Backup file names, newest first."""
@@ -2842,17 +3557,27 @@ class ConfigStore:
 
     def backups(self) -> list[dict]:
         """[{name, time (UTC, 'YYYY-MM-DD HH:MM:SS'), size, mappings, users, accounts:
-        [{username, role, source}]}], newest first.
+        [{username, role, source}], written_by (the release that wrote it; None: 2.8.1 or
+        older), current (it is what config.json holds now), file_time (when the file was
+        written, UTC, if that is more than a minute before the time in its name: the clock
+        was behind the newest backup then, so it is named after that one; else "")}],
+        newest first.
 
         The Settings page lists them at every visit: a file's contents are read once and
         kept by its name, size and modification time (a backup is written once; one that
         remove_account rewrites gets a new modification time), so only a new or changed one
         is parsed again. In memory only: the files and their names stay as they are."""
+        try:
+            with open(self.path, "rb") as fh:
+                current: Optional[str] = hashlib.sha256(fh.read()).hexdigest()
+        except OSError:
+            current = None
         known, kept, out = self._backup_summaries, {}, []
         for name in self.backup_names():
             path = os.path.join(self.backup_dir, name)
             info: dict[str, Any] = {"name": name, "size": 0, "mappings": None, "users": None,
-                                    "accounts": [], "time": backup_time(name)}
+                                    "accounts": [], "time": backup_time(name),
+                                    "written_by": None, "current": False, "file_time": ""}
             try:
                 st = os.stat(path)
             except OSError:
@@ -2863,8 +3588,15 @@ class ConfigStore:
             summary = hit[1] if hit is not None and hit[0] == stamp else _backup_summary(path)
             if summary is not None:
                 kept[name] = (stamp, summary)
-                info.update(summary)
+                info.update({k: v for k, v in summary.items() if k != "digest"})
+                info["current"] = current is not None and summary["digest"] == current
             info["size"] = st.st_size
+            try:
+                named = calendar.timegm(time.strptime(_backup_order(name)[0], "%Y%m%dT%H%M%S"))
+            except ValueError:
+                named = 0
+            if named - st.st_mtime > 60:  # (a copy of data/ makes it later: not shown)
+                info["file_time"] = time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime(st.st_mtime))
             out.append(info)
         self._backup_summaries = kept  # pruned to the files there are
         return out
@@ -2915,22 +3647,29 @@ class ConfigStore:
 
 
 def _backup_summary(path: str) -> dict[str, Any] | None:
-    """What the backups list shows of one backup's contents: mappings, users and accounts
-    (no counts and no accounts for a file that isn't a configuration; None itself when it
-    can't be read now)."""
+    """What the backups list shows of one backup's contents: mappings, users, accounts and
+    the release that wrote it (no counts and no accounts for a file that isn't a
+    configuration; None itself when it can't be read now), and the digest of its text (is
+    it what config.json holds: ConfigStore.backups)."""
     try:
-        with open(path, encoding="utf-8") as fh:
-            doc = json.load(fh)
+        with open(path, "rb") as fh:
+            data = fh.read()
     except OSError:
         return None
+    empty: dict[str, Any] = {"mappings": None, "users": None, "accounts": [], "written_by": None,
+                             "digest": hashlib.sha256(data).hexdigest()}
+    try:
+        doc = json.loads(data.decode("utf-8"))
     except ValueError:
-        return {"mappings": None, "users": None, "accounts": []}
+        return empty
     try:
         accounts = _backup_accounts(doc)
-        return {"mappings": len(doc.get("mappings") or []), "users": len(accounts),
-                "accounts": accounts}
+        writer = doc.get("written_by")
+        return {**empty, "mappings": len(doc.get("mappings") or []), "users": len(accounts),
+                "accounts": accounts,
+                "written_by": writer[:40] if isinstance(writer, str) else None}
     except (AttributeError, TypeError):
-        return {"mappings": None, "users": None, "accounts": []}
+        return empty
 
 
 def _backup_accounts(doc: dict) -> list[dict]:

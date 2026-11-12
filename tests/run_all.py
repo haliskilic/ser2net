@@ -74,6 +74,7 @@ PORTABLE = [
     "test_standalone.py",     # binary part needs a build; CI 'standalone' workflow runs it
     "test_vendor_wheels.py",
     "test_trace.py",
+    "test_trace_files.py",
     "test_session_timeout.py",
     "test_session_revocation.py",
     "test_account_recovery.py",
@@ -150,6 +151,25 @@ PORTABLE = [
     "test_clock_check.py",    # a clock that reads earlier than it can: start-up log, Settings
     "test_text_fold.py",      # Turkish / Unicode search and sort (app.js part with node)
     "test_explain.py",        # OS / network errors explained in the page's language
+    "test_config_types.py",
+    "test_ignored_settings.py",
+    "test_allow_list_unusable.py",
+    "test_downgrade.py",
+    "test_supervisor_turns.py",
+    "test_config_edits.py",
+    "test_start_idempotent.py",
+    "test_mapping_form_roundtrip.py",  # every setting survives an unchanged form save
+    "test_mixed_version_edit.py",   # fleet-view edits with 2.7.1 / 2.8.0 / 2.8.1 nodes
+    "test_edit_conflicts.py",
+    "test_storage.py",         # disk space and retention (no real disk filled)
+    "test_retention.py",       # all.log / audit.log / backups / mapping logs by age
+    "test_metrics.py",         # /metrics: HELP/TYPE, states, 401 for scrapers, quiet scrapes
+    "test_console_log.py",     # the console copy of the log is written off the event loop
+    "test_error_logs.py",      # library warnings, 500s, reset at the banner, all.log rotation blocked
+    "test_liveness.py",        # event loop watchdog, hang.log, sd_notify, readiness hooks
+    "test_health_events.py",   # no-data alarm, offline cluster nodes, start-up summary
+    "test_tls_live.py",        # admin UI TLS applied to new connections, served-state cookies
+    "test_config_reload.py",   # SIGHUP / --reload / Settings: config.json applied part by part
 ]
 
 # Data-path tests that need socat-backed PTYs (Linux). Best-effort: skipped if the
@@ -167,6 +187,7 @@ SOCAT = [
     "test_v2_web.py",
     "test_web_e2e.py",
     "test_serial_reconnect.py",
+    "test_no_data_alarm.py",
 ]
 
 

@@ -14,6 +14,7 @@ same placeholders.
 """
 from __future__ import annotations
 
+import contextlib
 import contextvars
 import json
 import os
@@ -60,6 +61,17 @@ def set_language(lang: str):
 
 def reset(token) -> None:
     _lang.reset(token)
+
+
+@contextlib.contextmanager
+def english():
+    """English inside the block (text for the log while a request in another language is
+    being handled: a runner started from the web UI)."""
+    token = _lang.set(DEFAULT)
+    try:
+        yield
+    finally:
+        _lang.reset(token)
 
 
 def gettext(message: str) -> str:

@@ -34,7 +34,8 @@ from ..config import MappingConfig, ModbusPoint
 from . import modbus, netguard, sockopts, tls
 from .access import AccessPolicy, connection_order, server_ssl
 from .bridge import (
-    FROM_DEVICE, TO_DEVICE, RunnerStatus, Tracer, describe_disconnect, fmt_duration, open_tracer,
+    FROM_DEVICE, TO_DEVICE, RunnerStatus, Tracer, describe_disconnect, fmt_duration,
+    log_ignored_settings, open_tracer,
 )
 from .mqtt_pub import shown
 from .serial_link import SerialLink
@@ -94,12 +95,14 @@ class ModbusGatewayRunner:
         self._sparkplug: Optional[SparkplugNode] = None  # payload format sparkplug_b
         self._write_tasks: set = set()
         self._poll_task: Optional[asyncio.Task] = None
+        self._publish_error = ""   # the last publishing failure logged by the poll loop
         # plain MQTT: the command topic of each writable point, matched exactly (a point
         # name is never read back out of a topic)
         base = mapping.mqtt.base_topic.rstrip("/")
         self._set_points: dict[str, ModbusPoint] = {
             f"{base}/{p.name}/set": p for p in mapping.modbus_poll.points if p.writable}
         self._access = AccessPolicy(mapping.network)
+        self._refusal_log = netguard.RefusalLog(self._log)  # refused connections
         # inter-frame gap used to detect the end of an RTU reply (timing-based framing)
         baud = max(1, mapping.serial.baudrate)
         self._gap = max(0.01, 3.5 * 11 / baud)
@@ -108,6 +111,16 @@ class ModbusGatewayRunner:
     def _log(self, msg: str) -> None:
         if self.log:
             self.log(msg)
+
+    @property
+    def tracer(self) -> Optional[Tracer]:
+        """The trace writer while the mapping runs with tracing on."""
+        return self._tracer
+
+    @property
+    def listener(self) -> Optional[netguard.Listener]:
+        """The Modbus TCP listener while the mapping runs, else None."""
+        return self._server
 
     # ---- console monitors (watch the raw bus) ----
     def add_monitor(self, mon) -> None:
@@ -151,14 +164,18 @@ class ModbusGatewayRunner:
             allowed=self._access.allowed, log=self._log)
         self._log(f"modbus gateway listening on {netguard.listen_where(net, self._server.sockets)}"
                   f" ({'TLS, ' if net.tls else ''}{sockopts.describe(net)})")
+        if self._stop.is_set():  # stopped while the listener came up: it found none to close,
+            await self.stop()    # and no serial port, MQTT client or polling is started
+            return
         try:
-            self._tracer = open_tracer(self.mapping, self.trace_dir, self._log)
+            self._tracer = open_tracer(self.mapping, self.trace_dir, self._log, self.status)
             self.status.state = "running"  # the serial side reports its own from here on
             self.status.last_error = ""
             # the port is read per transaction; the link only watches for it going away
             self._serial_task = asyncio.create_task(
                 self._link.run(self._link.hold_open), name=f"modbus-serial:{self.mapping.name}")
             self._log_policy()
+            log_ignored_settings(self.mapping, self._log)
             # optional edge mode: poll Modbus registers off the bus and publish to MQTT
             # (plain topics, or as a Sparkplug B edge node); writable points take values back
             if self.mapping.mqtt.enabled and self.mapping.modbus_poll.points:
@@ -193,8 +210,12 @@ class ModbusGatewayRunner:
         self._traffic.clear()
         if self._poll_task is not None:
             self._poll_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
+            try:
                 await self._poll_task
+            except asyncio.CancelledError:
+                pass
+            except Exception as e:  # it had died: say why, and still send NDEATH etc. below
+                self._log(f"polling had stopped: {e!r}")
             self._poll_task = None
         for t in list(self._write_tasks):
             t.cancel()
@@ -303,7 +324,14 @@ class ModbusGatewayRunner:
                 except Exception as e:  # one bad point must not stop the loop
                     self._log(f"poll '{p.name}': {e}")
             if values:
-                self._publish_values(values)
+                try:
+                    self._publish_values(values)
+                    published = ""
+                except Exception as e:  # nor a value the publisher can't take
+                    published = f"poll: publishing failed: {e!r}"
+                    if published != self._publish_error:  # once, not every interval
+                        self._log(published)
+                self._publish_error = published
             try:
                 await asyncio.wait_for(self._stop.wait(), timeout=poll.interval_s)
                 break
@@ -433,12 +461,15 @@ class ModbusGatewayRunner:
         self.status.set_clients(self._clients)
 
     async def _on_client(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        if self._stop.is_set():  # accepted while the gateway stops
+            writer.close()
+            return
         peer_ip, peer_port = netguard.peer_address(writer)
         peer = netguard.client_label(peer_ip, peer_port)
         net = self.mapping.network
 
         # allow-list, then max connections (a priority master / kick_old_user makes room)
-        admission = self._access.admit(peer_ip, peer, self._clients, self._log)
+        admission = self._access.admit(peer_ip, peer, self._clients, self._refusal_log)
         if not admission.admitted:
             with contextlib.suppress(Exception):
                 writer.close()

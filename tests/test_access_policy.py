@@ -14,12 +14,13 @@ import asyncio
 import os
 import sys
 import time
+from unittest import mock
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "lib"))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from app.config import MappingConfig, NetworkSettings
-from app.engine import access, bridge
+from app.config import MappingConfig, NetworkSettings, client_networks
+from app.engine import access, bridge, netguard
 from app.engine.bridge import MappingRunner
 from app.engine.modbus_gateway import ModbusGatewayRunner
 from app.engine.serial_link import Backoff
@@ -73,6 +74,23 @@ def test_allow_list_families():
     assert p.allowed(v6) and p.allowed(link) and not p.allowed("2001:db8:0:1::7")
     print("allow-list: bare 0.0.0.0 / :: = every client of both families, ::ffff: entries match, "
           "networks keep their family  OK")
+def test_unusable_allow_list_admits_nobody():
+    """A list is set but no entry of it is an address or network (a hand-edited config.json:
+    edits refuse such entries): nobody gets in — before, the empty result admitted all."""
+    for entries in (["plc.local"], ["10.0.0.0/8, 192.168.1.0/24"], ["10.0.0.1-10.0.0.9"],
+                    ["10.0.0.0/33"], [""], "plc.local"):
+        p = policy(allowed_client_ips=entries)
+        for ip in ("10.0.0.7", "192.168.1.9", "127.0.0.1", "::1"):
+            assert not p.allowed(ip), (entries, ip)
+    # a bare text that is one network still works as that network (a one-entry list)
+    assert policy(allowed_client_ips="10.0.0.0/8").allowed("10.1.2.3")
+    nets, bad = client_networks(["10.0.0.0/8", "plc.local", "0.0.0.0", 7])
+    assert [str(n) for n in nets] == ["10.0.0.0/8", "0.0.0.0/0"] and bad == ["plc.local", "7"]
+    logs = []
+    a = policy(allowed_client_ips=["plc.local"]).admit("10.0.0.7", "10.0.0.7:5000", set(),
+                                                         logs.append)
+    assert not a.admitted and logs == ["rejected 10.0.0.7:5000: not in allowed list"], logs
+    print("allow-list with no usable entry: nobody admitted (was: everyone)  OK")
 
 
 def test_admit():
@@ -376,15 +394,40 @@ def test_backoff():
     print("backoff: 0.5 s + jitter first, stop ends it, reset() starts over  OK")
 
 
+def test_refusal_lines_limited():
+    """A client refused again and again (a retry loop, a scan) writes one line per reason
+    a minute, the next one saying how many were held back; a kick is logged as it is."""
+    logs, clock = [], [1000.0]
+    with mock.patch.object(netguard.time, "monotonic", lambda: clock[0]):
+        log = netguard.RefusalLog(logs.append)
+        p = policy(allowed_client_ips="10.0.0.0/24")
+        for i in range(50):
+            assert not p.admit(f"192.0.2.{i}", f"192.0.2.{i}:4000", [], log).admitted
+        full = policy(max_connections=1)
+        assert not full.admit("10.0.0.9", "10.0.0.9:1", [FakeClient("10.0.0.1:1", 1.0)],
+                              log).admitted
+        log("kicking 10.0.0.1:1 for priority client 10.0.0.2:2")
+        assert logs == ["rejected 192.0.2.0:4000: not in allowed list",
+                        "rejected 10.0.0.9:1: max connections reached",
+                        "kicking 10.0.0.1:1 for priority client 10.0.0.2:2"], logs
+        clock[0] += 61
+        p.admit("192.0.2.200", "192.0.2.200:4000", [], log)
+    assert logs[-1] == ("rejected 192.0.2.200:4000: not in allowed list (49 more since the "
+                        "last such line)"), logs[-1]
+    print("refused connections: one line per reason a minute, then the count  OK")
+
+
 def main():
     test_allow_list()
     test_allow_list_families()
+    test_unusable_allow_list_admits_nobody()
     test_admit()
     test_only_live_clients_count()
     test_normal_newcomer_never_evicts_priority()
     test_runners_admit_within_the_limit()
     test_connection_order()
     test_backoff()
+    test_refusal_lines_limited()
     print("\nPASS: client admission policy + reconnect backoff")
 
 

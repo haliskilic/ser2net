@@ -72,6 +72,47 @@ async def _stop_all():
 
 def test_stop_all():
     asyncio.run(_stop_all())
+    asyncio.run(_after_a_late_stop())
+
+
+async def _after_a_late_stop():
+    """A mapping whose stop outlives stop_all's limit holds its turn (Supervisor._turn)
+    until it ends; the start_all that follows (an import, a restore) starts the others at
+    once and that one in the background when its stop has ended, and a removal of one that
+    is gone doesn't wait for it either."""
+    from app.config import AppConfig
+    from app.engine.bridge import RunnerStatus
+    started, lines = [], []
+
+    class Startable:
+        def __init__(self, mapping):
+            self.mapping, self.status = mapping, RunnerStatus()
+
+        async def start(self):
+            started.append(self.mapping.name)
+
+        async def stop(self):
+            pass
+
+    cfg = AppConfig.from_dict({"mappings": [
+        {"id": f"{n}00000001", "name": n, "serial": {"port": f"/dev/ser2net-{n}"}}
+        for n in ("stuck", "other")]})
+    sup = Supervisor(logger=lines.append, lookup=cfg.get_mapping)
+    sup._runners = {"stuck00000001": FakeRunner("stuck", 1.2),
+                    "gone000000001": FakeRunner("gone", 1.2)}
+    with mock.patch.object(supervisor, "STOP_ALL_TIMEOUT_S", 0.3), \
+            mock.patch.object(supervisor, "_build_runner", lambda m, _log, _dir: Startable(m)):
+        await sup.stop_all()
+        t0 = time.monotonic()
+        await sup.start_all(cfg)
+        await sup.remove_mapping("gone000000001")
+        took = time.monotonic() - t0
+        assert took < 0.5 and started == ["other"], (took, started)
+        await asyncio.sleep(1.5)
+        assert started == ["other", "stuck"], started
+        assert not sup._late and sup.get_runner("stuck00000001") is not None
+    print(f"after a stop that outlived the limit: the others start at once ({took:.2f} s), "
+          "that one once its stop has ended; a removal doesn't wait  OK")
 
 
 async def _engine_budget():

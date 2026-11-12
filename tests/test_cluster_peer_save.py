@@ -21,7 +21,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from starlette.datastructures import FormData
 
-from app.web.routes.cluster import _peer_below_2_8, _peer_save_fields
+from app.config import MappingConfig
+from app.web.routes.cluster import _peer_below_2_8, _peer_save_fields, not_kept
 
 
 def form(**kw):
@@ -115,6 +116,45 @@ def test_mqtt_password_sent_to_store():
     fields, _ = _peer_save_fields(form(mqtt_password_write_only="1"), {"mqtt": ["odd"]}, "2.8.0")
     assert dict(fields)["mqtt_password"] == "", fields
     print("MQTT password: the peer is sent the one to store, never the write-only marker  OK")
+def test_older_peer_keeps_what_the_form_leaves_out():
+    # this node's form doesn't offer the banner, close-on string or client buffer for a
+    # Modbus gateway; a peer before 2.8.1 sets them from every form, so it gets its own
+    peer = {"options": {"trace_both": "", "banner": "Hi", "closeon": "BYE\r\n"},
+            "network": {"client_queue_max": 8192}}
+    modbus = form(network_protocol="modbus", network_port="502")
+    for version, sent in (("2.8.0", {"opt_banner": "Hi", "opt_closeon": "BYE\r\n",
+                                     "network_client_queue_max": "8192"}),
+                          ("2.8.1", {}), ("2.9.0", {})):
+        fields, err = _peer_save_fields(modbus, peer, version)
+        assert err is None, err
+        got = {k: v for k, v in fields if k in ("opt_banner", "opt_closeon",
+                                                "network_client_queue_max")}
+        assert got == sent, (version, got)
+    # a close-on string posted back as a one-line field shows it: the peer's own value
+    fields, _err = _peer_save_fields(form(opt_closeon="BYE"), peer, "2.9.0")
+    assert dict(fields)["opt_closeon"] == "BYE\r\n", fields
+    fields, _err = _peer_save_fields(form(opt_closeon="QUIT"), peer, "2.9.0")
+    assert dict(fields)["opt_closeon"] == "QUIT", fields
+    print("an older peer gets its stored banner/close-on/client buffer the form leaves out; "
+          "an unchanged close-on keeps its line breaks  OK")
+
+
+def test_not_kept():
+    # what a fleet-view save sent, against what the peer stores afterwards (read back):
+    # only the settings the peer has are compared, the trace and the id never
+    sent = MappingConfig.from_dict({
+        "id": "abc", "name": "m", "serial": {"port": "/dev/ttyS1"},
+        "network": {"mode": "client", "remote_host": "h", "remote_port": 1, "port": 5000},
+        "options": {"trace_both": "plc1.trace", "trace_max_mb": 2.5},
+        "modbus_poll": {"points": [{"name": "p", "fn": 1, "dtype": "bool", "writable": True}]}})
+    assert not_kept(sent, sent.to_dict()) == [], "the same version keeps everything"
+    older = sent.to_dict()   # a 2.7 node: no trace rotation, no "writable"; resets the port
+    del older["options"]["trace_max_mb"], older["modbus_poll"]["points"][0]["writable"]
+    older["options"]["trace_both"] = "data/trace-plc1.log"
+    older["network"]["port"] = 4001
+    older["id"] = "my-port&x"
+    assert not_kept(sent, older) == ["network.port"], not_kept(sent, older)
+    print("read back after a save: names what the peer didn't keep, of the settings it has  OK")
 
 
 def main():
@@ -126,6 +166,8 @@ def main():
     test_trace_new_name_refused_pre_2_8()
     test_unchanged_trace_kept_as_stored()
     test_mqtt_password_sent_to_store()
+    test_older_peer_keeps_what_the_form_leaves_out()
+    test_not_kept()
     print("\nPASS: fleet-view edit proxy forwards only known, validated fields")
 
 
