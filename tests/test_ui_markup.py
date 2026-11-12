@@ -246,6 +246,10 @@ def test_mapping_form_modbus_fields():
                  "mqtt_unit_status", "mqtt_unit_status_shown"):
         assert conditions(name) == ["mqtt_payload_format=plain", "network_protocol=modbus"], \
             (name, conditions(name))
+    # the Sparkplug primary host: Modbus gateways in Sparkplug B format; its own marker
+    assert conditions("mqtt_sparkplug_primary_host_id") == [
+        "mqtt_payload_format=sparkplug_b", "network_protocol=modbus", "kind=net"], \
+        conditions("mqtt_sparkplug_primary_host_id")
     # the response timeout: Modbus gateways only; the field is its own presence marker
     assert conditions("opt_modbus_response_timeout_s") == ["network_protocol=modbus"]
     field = next(n for n in root.walk() if n.attrs.get("name") == "opt_modbus_response_timeout_s")

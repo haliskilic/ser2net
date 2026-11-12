@@ -20,6 +20,7 @@ import contextlib
 import errno
 import math
 import select
+from collections.abc import Collection
 from typing import Any, Callable, Optional
 
 from .. import optional
@@ -40,11 +41,14 @@ class MqttPublisher:
     the broker also sends the last retained message of a topic on every (re)subscribe
     (after each reconnect, restart or config save), flagged as retained, and such a replay
     is dropped and logged unless ``accept_retained``. An empty message is never a command:
-    it is what clears a retained one (and reaches subscribers live, without the flag)."""
+    it is what clears a retained one (and reaches subscribers live, without the flag).
+    ``state_topics``: subscriptions that carry a state, not a command (a Sparkplug host's
+    STATE): their retained message is the current state and is handed on."""
 
     def __init__(self, settings, logger=None, client=None, *, will=None,
                  birth: bool = True, on_connect: Optional[Callable[[], None]] = None,
-                 subscriptions: Optional[dict] = None, accept_retained: bool = False) -> None:
+                 subscriptions: Optional[dict] = None, accept_retained: bool = False,
+                 state_topics: Collection[str] = ()) -> None:
         self._s = settings
         self._log = logger or (lambda _m: None)
         self._client = client            # injected in tests; otherwise built in connect()
@@ -58,7 +62,10 @@ class MqttPublisher:
         self._on_connect_cb = on_connect
         self._subs: dict[str, Callable[[str, bytes], None]] = dict(subscriptions or {})
         self._accept_retained = accept_retained
+        self._state_topics = frozenset(state_topics)
         self._loop: Optional[asyncio.AbstractEventLoop] = None
+        self._closing = False            # close() has begun (a restart then stops short)
+        self._renewals = 0               # Wills renewed by the disconnect hook (see restart)
 
     def connect(self) -> bool:
         owned = self._client is None  # an injected client (tests) is driven externally
@@ -122,6 +129,37 @@ class MqttPublisher:
     def _paho_on_disconnect(self, client, userdata, *args) -> None:
         if callable(self._will):  # paho reconnects with whatever will is set now
             self._set_will()
+            self._renewals += 1
+
+    async def restart(self, final: Optional[tuple] = None) -> None:
+        """End this MQTT session and begin a new one: send ``final`` (topic, payload, qos,
+        retain) first, disconnect cleanly (the broker publishes no Will then), and connect
+        again, with the Will renewed as after any disconnect. paho's network thread is
+        stopped and started again off the event loop (stopping it waits for it)."""
+        client = self._client
+        if client is None or self._closing:
+            return
+        if final is not None:
+            self._publish(final[0], final[1], qos=final[2], retain=final[3])
+        renewed = self._renewals
+
+        def cycle() -> None:
+            with contextlib.suppress(Exception):
+                client.disconnect()
+            with contextlib.suppress(Exception):
+                client.loop_stop()
+            if self._closing:
+                return
+            if callable(self._will) and self._renewals == renewed:
+                self._set_will()  # no disconnect callback came (it was not connected)
+            with contextlib.suppress(Exception):
+                client.connect_async(self._s.host, self._s.port, keepalive=30)
+                client.loop_start()
+            if self._closing:  # closed meanwhile: leave no connection behind
+                with contextlib.suppress(Exception):
+                    client.loop_stop()
+                    client.disconnect()
+        await asyncio.to_thread(cycle)
 
     # ---- paho callbacks (its network thread) -> the event loop ----
     def _call_soon(self, fn, *args) -> None:
@@ -161,7 +199,7 @@ class MqttPublisher:
         handler = self._subs.get(topic)
         if handler is None:  # a subscription with a wildcard
             handler = next((h for t, h in self._subs.items() if _matches(t, topic)), None)
-        if handler is not None and retained:
+        if handler is not None and retained and topic not in self._state_topics:
             if not self._accept_retained:
                 self._log(f"MQTT: ignored the retained message on {shown(topic, 120)}; a "
                           "command is applied when it is published, not again from the "
@@ -201,6 +239,7 @@ class MqttPublisher:
         the retained "offline" status (Sparkplug B: an NDEATH)."""
         if self._client is None:
             return
+        self._closing = True
         self._connected = False
         if final is not None:
             self._publish(final[0], final[1], qos=final[2], retain=final[3])

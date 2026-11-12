@@ -143,6 +143,8 @@ _OPTIONAL_FORM_FIELDS = {
     "opt_max_connection_time_s": ("options", ("max_connection_time_s",)),
     "opt_trace_max_mb": ("options", ("trace_max_mb", "trace_keep")),
     "mqtt_payload_format": ("mqtt", ("payload_format", "sparkplug_group_id", "sparkplug_node_id")),
+    # shown for Sparkplug B only (the field is its own marker)
+    "mqtt_sparkplug_primary_host_id": ("mqtt", ("sparkplug_primary_host_id",)),
     # a checkbox (absent when unticked) shown for plain-format Modbus points only
     "mqtt_apply_retained_set_shown": ("mqtt", ("apply_retained_set",)),
     "mqtt_unit_status_shown": ("mqtt", ("unit_status",)),
@@ -247,6 +249,8 @@ def _build_mapping_dict(form, strict: bool) -> dict:
                 "sparkplug_group_id": form.get("mqtt_sparkplug_group_id", "").strip() or "ser2net",
                 "sparkplug_node_id": form.get("mqtt_sparkplug_node_id", "").strip()}
                if "mqtt_payload_format" in form else {}),
+            **({"sparkplug_primary_host_id": form.get("mqtt_sparkplug_primary_host_id", "").strip()}
+               if "mqtt_sparkplug_primary_host_id" in form else {}),
             **({"apply_retained_set": _checkbox(form, "mqtt_apply_retained_set")}
                if "mqtt_apply_retained_set_shown" in form else {}),
             **({"unit_status": _checkbox(form, "mqtt_unit_status")}

@@ -24,7 +24,15 @@ metrics are that unit's poll points:
     republishes NBIRTH and the DBIRTHs. Commands are never retained (Sparkplug 3.0), so
     a retained NCMD / DCMD the broker replays on subscribe is dropped (MqttPublisher);
   * stopping the mapping publishes NDEATH before disconnecting (a host then takes the
-    node's devices offline too).
+    node's devices offline too);
+  * with a primary host (mqtt.sparkplug_primary_host_id), the node also subscribes to
+    that host application's STATE (Sparkplug 3.0: spBv1.0/STATE/<id>, JSON {"online",
+    "timestamp"}; also the older STATE/<id>, ONLINE / OFFLINE) and publishes its births
+    only while it says online: after each (re)connect it waits for it (the broker sends
+    the retained STATE on subscribe), and when the host goes offline the node sends
+    NDEATH, disconnects and connects again, to wait once more. A STATE older than the
+    newest one taken is ignored. One broker only: no list to walk, and nothing is kept
+    for a host that is away (no store and forward).
 After a lost connection the next session gets bdSeq + 1 (the Will is renewed in
 MqttPublisher's disconnect hook), as the specification asks. With a data folder
 (``state_dir``), the bdSeq of every session is stored there per edge node (BDSEQ_FILE), and
@@ -35,6 +43,7 @@ written, at a random bdSeq (logged).
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import math
 import os
@@ -137,6 +146,18 @@ class SparkplugNode:
         self.seq = 0
         self._sessions = 0           # connects seen (the first one keeps the first bdSeq)
         self._born = False           # this MQTT session's NBIRTH and DBIRTHs are out
+        # the primary host application whose STATE gates the births ("" = none)
+        self.primary_host = str(mq.sparkplug_primary_host_id or "").strip()
+        if self.primary_host:
+            try:
+                sparkplug.state_topic(self.primary_host)
+            except ValueError as e:
+                self._log(f"Sparkplug: primary host ID ignored, births don't wait for it: {e}")
+                self.primary_host = ""
+        self._host_online = False    # its last STATE in this session said online
+        self._host_stamp: Optional[int] = None  # timestamp of the newest 3.0 STATE taken
+        self._waiting_said = False   # "waiting for the primary host" logged this session
+        self._restart: Optional[asyncio.Task] = None  # NDEATH + a new session, under way
 
     def topic(self, kind: str, device: str | None = None) -> str:
         return sparkplug.topic(self.group, kind, self.node, device)
@@ -190,6 +211,7 @@ class SparkplugNode:
         a publish as soon as it has a socket, before the broker has accepted the
         connection)."""
         self._born = False
+        self._host_online = self._waiting_said = False  # wait for its STATE again
         if self._sessions:
             self.bdseq = (self.bdseq + 1) % 256
             self._save_bdseq()
@@ -198,12 +220,18 @@ class SparkplugNode:
 
     def publisher(self) -> MqttPublisher:
         dcmd = "/".join((sparkplug.TOPIC_NAMESPACE, self.group, "DCMD", self.node, "+"))
+        subscriptions = {self.topic("NCMD"): self.on_node_command, dcmd: self.on_device_command}
+        state_topics: tuple = ()
+        if self.primary_host:  # its STATE is retained: the current state, not a command
+            state_topics = (sparkplug.state_topic(self.primary_host),
+                            f"STATE/{self.primary_host}")  # Sparkplug 2.2
+            subscriptions.update(dict.fromkeys(state_topics, self.on_host_state))
         self._pub = MqttPublisher(self.mapping.mqtt, logger=self._log, will=self._will,
                                   birth=False, on_connect=self.birth, accept_retained=False,
-                                  subscriptions={self.topic("NCMD"): self.on_node_command,
-                                                 dcmd: self.on_device_command})
+                                  subscriptions=subscriptions, state_topics=state_topics)
+        host = f"; births wait for primary host {self.primary_host!r}" if self.primary_host else ""
         self._log(f"Sparkplug B edge node {self.group}/{self.node}: "
-                  f"{len(self.devices)} device(s), {len(self.points)} metrics")
+                  f"{len(self.devices)} device(s), {len(self.points)} metrics{host}")
         return self._pub
 
     def _metric(self, name: str, now: int) -> sparkplug.Metric:
@@ -226,7 +254,14 @@ class SparkplugNode:
         self._pub.publish_raw(topic, sparkplug.encode_payload(payload), qos=0)
 
     def birth(self) -> None:
-        """NBIRTH, then a DBIRTH per device (after each connect, and on a rebirth request)."""
+        """NBIRTH, then a DBIRTH per device (after each connect, and on a rebirth request);
+        with a primary host, only while it is online."""
+        if self.primary_host and (not self._host_online or self._restart is not None):
+            if not self._waiting_said:
+                self._waiting_said = True
+                self._log(f"Sparkplug: waiting for primary host {self.primary_host!r} to be "
+                          f"online ({sparkplug.state_topic(self.primary_host)}) before NBIRTH")
+            return
         self.seq = 0
         self._publish(self.topic("NBIRTH"), [
             sparkplug.Metric(name=sparkplug.BDSEQ, datatype=INT64, value=self.bdseq),
@@ -319,6 +354,60 @@ class SparkplugNode:
                 self._log("Sparkplug rebirth requested")
                 self.birth()
 
+    def on_host_state(self, topic: str, payload: bytes) -> None:
+        """The primary host's STATE: online -> births (if not born yet in this session);
+        offline -> NDEATH and a new session, which waits for it again."""
+        online = self._host_state(topic, payload)
+        if online is None:
+            return
+        self._host_online = online
+        if online and not self._born and self._restart is None:
+            self._log(f"Sparkplug: primary host {self.primary_host!r} is online")
+            self.birth()
+        elif not online and self._born and self._restart is None and self._pub is not None:
+            self._log(f"Sparkplug: primary host {self.primary_host!r} is offline: NDEATH, then "
+                      "a new session that waits for it")
+            self._born = False
+            pub, final = self._pub, self._ndeath()
+
+            async def restart() -> None:
+                try:
+                    await pub.restart(final)
+                finally:
+                    self._restart = None
+                if self._host_online and not self._born and self._pub is pub:
+                    self.birth()  # its STATE came back while the new session began
+            self._restart = asyncio.get_running_loop().create_task(
+                restart(), name=f"sparkplug-restart:{self.node}")
+
+    def _host_state(self, topic: str, payload: bytes) -> Optional[bool]:
+        """Whether a STATE message says online (None: not a usable one, or older than the
+        newest taken). Sparkplug 3.0: JSON {"online": bool, "timestamp": ms}; 2.2 (topic
+        STATE/<id>): the text ONLINE / OFFLINE."""
+        what = f"Sparkplug STATE of {self.primary_host!r} ignored"
+        if not topic.startswith(sparkplug.TOPIC_NAMESPACE + "/"):
+            text = payload.decode("utf-8", "replace").strip().upper()
+            if text in ("ONLINE", "OFFLINE"):
+                return text == "ONLINE"
+            self._log(f"{what}: {shown(payload)} is neither ONLINE nor OFFLINE")
+            return None
+        try:
+            doc = json.loads(payload.decode("utf-8"))
+        except ValueError:  # UnicodeDecodeError too
+            self._log(f"{what}: not JSON ({shown(payload)})")
+            return None
+        online = doc.get("online") if isinstance(doc, dict) else None
+        if not isinstance(online, bool):
+            self._log(f"{what}: no \"online\": true / false in {shown(payload)}")
+            return None
+        stamp = doc.get("timestamp")
+        if isinstance(stamp, int) and not isinstance(stamp, bool):
+            if self._host_stamp is not None and stamp < self._host_stamp:
+                self._log(f"{what}: older ({stamp}) than the one taken ({self._host_stamp})")
+                return None
+            self._host_stamp = stamp
+        return online
+
     def on_device_command(self, topic: str, payload: bytes) -> None:
         dev = topic.rsplit("/", 1)[-1]
         names = self.devices.get(dev)
@@ -349,6 +438,8 @@ class SparkplugNode:
             self._write(point, value)
 
     def close(self) -> None:
+        if self._restart is not None:  # its new session must not outlive the mapping
+            self._restart.cancel()
         if self._pub is not None:
             self._pub.close(final=self._ndeath())
             self._pub = None
