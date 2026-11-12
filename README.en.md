@@ -15,7 +15,7 @@ with low latency.
 
 ## 📸 Screenshots
 
-**Dashboard — dozens of mappings, live status, detected ports and the LAN cluster panel:**
+**Dashboard — mappings, live status, search and bulk actions, the LAN cluster panel:**
 
 ![Dashboard](docs/screenshots/02-dashboard.png)
 
@@ -23,11 +23,11 @@ with low latency.
 
 ![Cluster](docs/screenshots/06-cluster.png)
 
-| Add mapping (all serial/network options) | In-browser serial console (xterm.js) |
+| Add mapping (all serial/network options) | In-browser serial console, hex view |
 |---|---|
 | ![Mapping form](docs/screenshots/03-add-mapping.png) | ![Console](docs/screenshots/05-console.png) |
 
-| Settings (password · TLS · cluster · backup) | Login |
+| Settings → Notifications | Login |
 |---|---|
 | ![Settings](docs/screenshots/04-settings.png) | ![Login](docs/screenshots/01-login.png) |
 

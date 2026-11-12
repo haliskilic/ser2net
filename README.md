@@ -16,21 +16,21 @@ web arayüzünden yönetilen, çapraz-platform (Windows + Linux) saf-Python köp
 
 ## 📸 Ekran Görüntüleri
 
-**Pano — onlarca eşleme, canlı durum, algılanan portlar ve LAN cluster paneli:**
+**Pano — eşlemeler, canlı durum, arama ve toplu işlemler, LAN cluster paneli:**
 
-![Pano](docs/screenshots/02-dashboard.png)
+![Pano](docs/screenshots/tr/02-dashboard.png)
 
 **LAN cluster — tüm düğümlerin eşlemeleri tek tabloda; düğüm sağlığı + uzaktan başlat/durdur:**
 
-![Cluster](docs/screenshots/06-cluster.png)
+![Cluster](docs/screenshots/tr/06-cluster.png)
 
-| Eşleme ekleme (tüm seri/ağ seçenekleri) | Tarayıcı-içi seri konsol (xterm.js) |
+| Eşleme ekleme (tüm seri/ağ seçenekleri) | Tarayıcı-içi seri konsol, hex görünümü |
 |---|---|
-| ![Eşleme formu](docs/screenshots/03-add-mapping.png) | ![Konsol](docs/screenshots/05-console.png) |
+| ![Eşleme formu](docs/screenshots/tr/03-add-mapping.png) | ![Konsol](docs/screenshots/tr/05-console.png) |
 
-| Ayarlar (parola · TLS · cluster · yedek) | Giriş |
+| Ayarlar → Bildirimler | Giriş |
 |---|---|
-| ![Ayarlar](docs/screenshots/04-settings.png) | ![Giriş](docs/screenshots/01-login.png) |
+| ![Ayarlar](docs/screenshots/tr/04-settings.png) | ![Giriş](docs/screenshots/tr/01-login.png) |
 
 ---
 
