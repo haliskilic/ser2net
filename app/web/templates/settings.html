@@ -1,5 +1,5 @@
 {% extends "_shell.html" %}
-{% block title %}{{ _("Settings") }} — ser2net{% endblock %}
+{% block title %}{% if node_name %}{{ node_name }} · {% endif %}{{ _("Settings") }} — ser2net{% endblock %}
 {% block main %}
 {% set is_admin = me and me.role == 'admin' %}
 {% set is_operator = me and me.role in ['operator', 'admin'] %}
@@ -48,6 +48,16 @@
      {% if admin.tls_enabled %}<span class="tag">TLS</span>{% else %}<span class="tag">HTTP</span>{% endif %}</p>
   {% if public_url %}<p>{{ _('Published as <a class="mono" href="%(url)s">%(url)s</a> (Settings → Reverse proxy)', url=public_url) }}</p>{% endif %}
   <p class="muted">{{ _('To change the admin bind address, restart with <span class="mono">python3 ser2net.py --reconfigure</span>.') }}</p>
+  {% if is_admin %}
+  <form method="post" action="{{ base }}/settings/node-name" class="authform mt-sm">
+    <input type="hidden" name="_csrf" value="{{ request.state.csrf_token }}">
+    <label>{{ _("Name of this instance") }} <span class="muted">({{ _("for instances that share a host name: notifications, the browser tab, the top bar and the cluster’s fleet view show it · blank: the host name, %(host)s", host=hostname) }})</span>
+      {% if node_name_env %}<input type="text" value="{{ node_name }}" disabled>
+      {% else %}<input type="text" name="node_name" value="{{ admin.node_name }}" maxlength="{{ node_name_max }}" placeholder="{{ hostname }}" autocomplete="off" spellcheck="false" data-1p-ignore data-lpignore="true" data-bwignore>{% endif %}</label>
+    {% if node_name_env %}<p class="muted">{{ _('Set by <span class="mono">%(name)s</span> for this run; the field takes effect again once that is removed.', name=node_name_env) }}</p>{% endif %}
+    <button class="btn primary" type="submit">{{ _("Save name") }}</button>
+  </form>
+  {% endif %}
 </section>
 
 {% if is_admin %}

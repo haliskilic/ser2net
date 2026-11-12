@@ -110,6 +110,7 @@ PORTABLE = [
     "test_secure_cookies.py",  # Secure cookies and HSTS behind a TLS reverse proxy
     "test_public_url.py",      # admin_ui.public_url and the path the UI is served under
     "test_cookie_names.py",    # cookie names per port, path and scheme; 2.8 names moved
+    "test_node_name.py",       # Settings -> Admin interface -> Name of this instance
 ]
 
 # Data-path tests that need socat-backed PTYs (Linux). Best-effort: skipped if the

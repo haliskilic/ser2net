@@ -7,6 +7,10 @@ services:
     image: ghcr.io/haliskilic/ser2net:latest   # published for amd64 + arm64 with every release
     # build: .                                 # or build it from this checkout
     container_name: ser2net
+    # The container's host name, which notifications and the LAN cluster show while the
+    # instance has no name of its own (SER2NET_NODE_NAME below); without it, the container
+    # id, which changes whenever the container is re-created (e.g. an image upgrade).
+    # hostname: line-1
     restart: unless-stopped
     ports:
       - "8080:8080"   # web UI
@@ -26,6 +30,9 @@ services:
     environment:
       SER2NET_BIND_IP: "0.0.0.0"
       SER2NET_PORT: "8080"
+      # This instance's name in notifications, the browser tab and the fleet view (else
+      # Settings -> Admin interface, else the host name):
+      # SER2NET_NODE_NAME: "line-1"
     # ser2net also writes its log to /data/all.log (rotated); cap Docker's own copy
     logging:
       driver: json-file

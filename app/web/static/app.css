@@ -45,7 +45,11 @@ a:hover { text-decoration: underline; }
   display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap;
   gap: 8px 16px; padding: 12px 20px; background: var(--panel); border-bottom: 1px solid var(--border);
 }
-.brand { font-weight: 700; font-size: 16px; letter-spacing: .3px; }
+.brand { font-weight: 700; font-size: 16px; letter-spacing: .3px; min-width: 0; max-width: 100%; }
+.brand .node-name {
+  display: inline-block; max-width: min(22rem, 60vw); vertical-align: bottom; overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap; font-weight: 600; color: var(--muted);
+}
 .topbar nav { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; min-width: 0; }
 .topbar .who { max-width: 18rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 main { max-width: 1180px; margin: 22px auto; padding: 0 20px; }

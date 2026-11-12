@@ -21,7 +21,7 @@ from starlette.responses import JSONResponse, PlainTextResponse
 from starlette.templating import Jinja2Templates
 
 from .. import i18n
-from ..config import ROLE_RANK
+from ..config import ROLE_RANK, node_name
 from ..engine import netguard
 from . import auth, proxy
 from .routes import build_routes
@@ -229,12 +229,20 @@ class GuardMiddleware(BaseHTTPMiddleware):
                                         f"max-age={cfg.admin_ui.hsts_max_age}")
 
 
+def _page_context(request) -> dict:
+    """What every template gets: base, the path prefix of the request, which its links go
+    under (app/web/proxy.py); node_name, this instance's name ('' = none: Settings -> Admin
+    interface), which the signed-in pages (_shell.html) show in the title and the top bar."""
+    state = getattr(request.app.state, "appstate", None)
+    return {"base": proxy.base(request),
+            "node_name": node_name(state.config.admin_ui) if state is not None else ""}
+
+
 def make_templates() -> Jinja2Templates:
     """The Jinja environment every page is rendered with (globals + filters)."""
-    # base: the path prefix of the request, which its links go under (app/web/proxy.py);
-    # base_path(request) / route_path(request) for macros imported without the context
-    templates = Jinja2Templates(directory=TEMPLATES_DIR, context_processors=[
-        lambda request: {"base": proxy.base(request)}])
+    # _page_context for every page; base_path(request) / route_path(request) for macros
+    # imported without the context
+    templates = Jinja2Templates(directory=TEMPLATES_DIR, context_processors=[_page_context])
 
     # template globals used across pages
     from ..config import (

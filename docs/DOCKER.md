@@ -109,6 +109,20 @@ In short:
 - the UI port stays off the network: publish it to the host only (`127.0.0.1:8080:8080`),
   or not at all when the proxy runs in the same Docker network.
 
+## Several instances
+
+One container per instance, each with its own volume, `container_name` and published UI
+port (inside, every one listens on 8080: `-p 8081:8080`; for the LAN cluster use the same
+port inside and out, `SER2NET_PORT=8081` and `-p 8081:8081`, since that is the port a node
+advertises). Give each a name with `SER2NET_NODE_NAME` (or Settings → Admin interface):
+notifications, the browser tab, the top bar and the fleet view then tell them apart.
+Without one they show the container's host name, which is its id unless `hostname:` /
+`--hostname` sets one, and a new id comes with every re-creation (an image upgrade).
+The browser keeps their sign-ins apart (on another port than 8080 the cookies' names carry
+a tag of the port). Don't copy a volume to make another instance: start it empty and import
+the mappings (Settings → Mappings export / import); a copy has the same cluster identity
+and session key. README, *Several instances on one machine*, has the whole checklist.
+
 ## Serial devices
 
 - **Access.** Pass each port with `--device` (compose `devices:`). A device keeps its

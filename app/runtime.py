@@ -32,7 +32,7 @@ else:  # pragma: no cover - exercised only on Python 3.10
     from taskgroup import Runner
 
 from . import accounts, console, datalock, i18n, standalone
-from .config import ConfigError, ConfigStore
+from .config import NODE_NAME_ENV, ConfigError, ConfigStore, node_name, node_name_problem
 from .engine import netguard
 from .state import AppState, write_audit_record
 from .web import httpguard, proxy
@@ -329,6 +329,14 @@ def use_worker_threads(loop: asyncio.AbstractEventLoop) -> None:
         max_workers=WORKER_THREADS, thread_name_prefix="ser2net"))
 
 
+def node_name_notes(env: Optional[Mapping[str, str]] = None) -> list[str]:
+    """The start-up warning for a SER2NET_NODE_NAME that can't be used (none otherwise)."""
+    raw = ((os.environ if env is None else env).get(NODE_NAME_ENV) or "").strip()
+    if raw and (why := node_name_problem(raw)) is not None:
+        return [f"WARNING: {NODE_NAME_ENV} {raw[:80]!r} is not used: {why}"]
+    return []
+
+
 def plain_http_warning(admin, published: str = "") -> str:
     """The start-up warning for an admin UI that answers plain HTTP on a network address
     ('' when there is none), behind a TLS reverse proxy (`published`: the public URL) too:
@@ -373,12 +381,14 @@ async def _serve(store: ConfigStore, config, loop_note: str = "") -> int:
     admin = config.admin_ui
     scheme = "https" if admin.tls_enabled else "http"
     published = proxy.public_url(admin)
-    state.log(f"ser2net starting — admin UI on {scheme}://{admin.bind_ip}:{admin.port}"
+    name = node_name(admin)
+    state.log(f"ser2net starting{f' as {name!r}' if name else ''} — admin UI on "
+              f"{scheme}://{admin.bind_ip}:{admin.port}"
               + (f", published as {published} "
                  f"({proxy.PUBLIC_URL_ENV if proxy.public_url_from_env() else 'admin_ui.public_url'})"
                  if published else ""))
     for note in (standalone.notes + config.load_notes + ([loop_note] if loop_note else [])
-                 + proxy.start_notes(admin)):
+                 + proxy.start_notes(admin) + node_name_notes()):
         state.log(note)
     for line in (netguard.raise_fd_limit(), netguard.fd_budget_warning(config)):
         if line:

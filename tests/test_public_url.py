@@ -127,7 +127,7 @@ def test_warning_and_notifications() -> None:
     # the notifier sends the public URL it has at that moment
     sent = []
     real = notify.send_webhook
-    notify.send_webhook = lambda s, *args: sent.append(args)
+    notify.send_webhook = lambda s, *args, **kw: sent.append(args)
     try:
         with App(_cfg(public_url=PUBLIC)) as a:
             a.state.config.notifications.webhook_url = "https://hooks.example/x"

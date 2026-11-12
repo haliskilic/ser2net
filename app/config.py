@@ -22,6 +22,7 @@ import math
 import os
 import re
 import secrets
+import socket
 import tempfile
 import time
 import unicodedata
@@ -792,10 +793,63 @@ class AdminUI:
     public_url: str = ""
     trusted_proxies: list[str] = field(default_factory=list)
     proxy_hsts: bool = False
+    # A name for this instance (Settings -> Admin interface; SER2NET_NODE_NAME for one run
+    # instead), for instances that share a host name: notifications, the cluster's fleet
+    # view, the browser tab and the top bar use it. '' = the host name, as before.
+    node_name: str = ""
 
     @property
     def tls_enabled(self) -> bool:
         return bool(self.tls_cert and self.tls_key)
+
+
+NODE_NAME_MAX = 64
+NODE_NAME_ENV = "SER2NET_NODE_NAME"
+
+
+def node_name_problem(value: Any) -> str | None:
+    """Why `value` can't be admin_ui.node_name, or None when it can (also when blank): at
+    most NODE_NAME_MAX characters and no control characters or line breaks (it goes into
+    e-mail subjects, where one would stop every message)."""
+    if not isinstance(value, str):
+        return _("The instance name must be text.")
+    text = value.strip()
+    if len(text) > NODE_NAME_MAX:
+        return _("The instance name can have at most {0} characters.").format(NODE_NAME_MAX)
+    if any(unicodedata.category(c) in ("Cc", "Cf", "Cs", "Zl", "Zp") for c in text):
+        return _("The instance name can’t have control characters or line breaks.")
+    return None
+
+
+def node_name_from_env(env=None) -> str:
+    """SER2NET_NODE_NAME when it is set and usable, else ''."""
+    raw = ((os.environ if env is None else env).get(NODE_NAME_ENV) or "").strip()
+    return raw if raw and node_name_problem(raw) is None else ""
+
+
+def node_name(admin: "AdminUI", env=None) -> str:
+    """This instance's name ('' = none: the host name is used): SER2NET_NODE_NAME when it
+    is set and usable, else admin_ui.node_name."""
+    return node_name_from_env(env) or admin.node_name
+
+
+def node_label(admin: "AdminUI") -> str:
+    """What names this instance where the host name did up to 2.8: node_name(), else the
+    host name (notifications, the cluster's beacon and fleet view)."""
+    return node_name(admin) or socket.gethostname()
+
+
+def _normalize_node_name(admin: "AdminUI", notes: list[str]) -> None:
+    """A hand-edited admin_ui.node_name that can't be used is left out, with a load note."""
+    value = admin.node_name
+    if value == "":
+        return
+    if node_name_problem(value) is not None:
+        notes.append(f"admin_ui.node_name {str(value)[:80]!r} is not usable "
+                     f"({node_name_problem(value)}); the host name is used")
+        admin.node_name = ""
+    else:
+        admin.node_name = value.strip()
 
 
 # The first path segments of the UI's own pages: a public URL's path can't start with one,
@@ -1386,6 +1440,7 @@ class AppConfig:
         )
         _normalize_admin_limits(cfg.admin_ui, cfg.load_notes)
         _normalize_proxy_settings(cfg.admin_ui, cfg.load_notes)
+        _normalize_node_name(cfg.admin_ui, cfg.load_notes)
         cfg.ids_created = not (d.get("secret_key") and d.get("instance_id"))
         raw_days = d.get("external_users_expire_days")
         if raw_days is not None and raw_days != cfg.external_users_expire_days:

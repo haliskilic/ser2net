@@ -14,14 +14,13 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import re
-import socket
 import time
 
 from starlette.responses import JSONResponse, PlainTextResponse, Response
 from starlette.routing import Route
 
 from ... import __version__
-from ...config import ConfigError, MappingConfig, peer_host, trace_file_name
+from ...config import ConfigError, MappingConfig, node_label, peer_host, trace_file_name
 from ...engine import netinfo, portlist
 from ...engine.cluster import AUTH_HEADER, REFUSALS, peer_addr, peer_port, peer_url
 from ...i18n import _
@@ -158,7 +157,7 @@ def routes(ctx: Ctx) -> list:
                 "client_count": st.get("client_count", 0),
                 "bytes_in": st.get("bytes_in", 0), "bytes_out": st.get("bytes_out", 0),
             })
-        return {"id": cfg.instance_id, "name": socket.gethostname(),
+        return {"id": cfg.instance_id, "name": node_label(cfg.admin_ui),
                 "ip": ip, "port": port, "scheme": scheme,
                 "version": __version__, "uptime_s": int(time.time() - state.started_at),
                 "mapping_count": len(maps), "running_count": running, "mappings": maps}
