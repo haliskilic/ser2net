@@ -480,6 +480,49 @@ def test_form_mqtt_unit_status():
     print("form: the MQTT unit status checkbox is parsed when shown, kept when not posted  OK")
 
 
+def test_form_mqtt_retain_and_value_format():
+    """Plain MQTT: the retain checkbox (shown for plain-format mappings, serial lines too)
+    and the Modbus value format select (plain-format points) are parsed when posted and
+    kept when the form leaves them out (Sparkplug B selected, an older peer's form); off /
+    text for new mappings and older configs. An edit refuses a value format this version
+    doesn't know; a stored one still loads and saves."""
+    base = {"name": "gw", "kind": "net", "enabled": "on", "serial_port": "COM7",
+            "serial_baudrate": "9600", "network_mode": "server", "network_protocol": "modbus",
+            "network_bind_ip": "0.0.0.0", "network_port": "502", "mqtt_enabled": "on",
+            "mqtt_host": "b", "mqtt_base_topic": "plant/a", "mqtt_payload_format": "plain"}
+    existing = MappingConfig.from_dict({"name": "gw", "serial": {"port": "COM7"},
+                                        "network": {"protocol": "modbus", "port": 502},
+                                        "mqtt": {"retain": True, "value_format": "json"}})
+    for m in (MappingConfig(), MappingConfig.from_dict({"mqtt": {}})):
+        assert m.mqtt.retain is False and m.mqtt.value_format == "text"
+
+    def parsed(form):
+        m = MappingConfig.from_dict(_build_mapping_dict(form, strict=True))
+        _preserve_unmanaged_fields(m, existing if form.get("id") else None, form)
+        return m.mqtt.retain, m.mqtt.value_format
+
+    shown = dict(base, mqtt_retain_shown="1", mqtt_value_format="text")
+    assert parsed(dict(shown, id=existing.id)) == (False, "text"), "unticked, text"
+    assert parsed(dict(shown, id=existing.id, mqtt_retain="on",
+                       mqtt_value_format="json")) == (True, "json")
+    assert parsed(dict(base, id=existing.id)) == (True, "json"), "not posted: kept"
+    assert parsed(dict(base)) == (False, "text"), "a new mapping without them: defaults"
+    for fmt in ("text", "json"):
+        MappingConfig.from_dict(dict(existing.to_dict(), mqtt=dict(
+            existing.to_dict()["mqtt"], value_format=fmt))).validate_input()
+    later = MappingConfig.from_dict(dict(existing.to_dict(), mqtt=dict(
+        existing.to_dict()["mqtt"], value_format="csv")))
+    later.validate()
+    AppConfig.from_dict({"mappings": [later.to_dict()]}).validate()
+    try:
+        later.validate_input()
+        raise AssertionError("an edit took value format 'csv'")
+    except ConfigError as e:
+        assert "value format" in str(e), e
+    print("form: MQTT retain and value format parsed when shown, kept when not posted; an "
+          "unknown value format refused at edit time only  OK")
+
+
 def test_form_modbus_response_timeout():
     """The Modbus response timeout is in the form for Modbus gateways only (before 2.9 it was
     in config.json only): parsed when posted (blank = the default 1 s), kept when a form
@@ -559,6 +602,7 @@ def main():
     test_form_udp_reply_fields()
     test_form_modbus_response_timeout()
     test_form_mqtt_unit_status()
+    test_form_mqtt_retain_and_value_format()
     test_invalid_admin_bind_ip_rejected()
     test_ldap_validation()
     test_modbus_poll_requires_gateway()

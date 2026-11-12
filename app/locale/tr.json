@@ -871,5 +871,11 @@
   "blank = in the certificate file": "boş = sertifika dosyasının içinde",
   "Client key password": "İstemci anahtarı parolası",
   "off: a certificate that does not name the broker host is accepted too (it must still come from a trusted CA)": "kapalı: broker'ın host adını taşımayan bir sertifika da kabul edilir (yine de güvenilen bir CA'dan gelmeli)",
-  "Check the broker’s host name": "Broker'ın host adını doğrula"
+  "Check the broker’s host name": "Broker'ın host adını doğrula",
+  "MQTT value format must be one of {0}.": "MQTT değer biçimi {0} değerlerinden biri olmalı.",
+  "Retain the data": "Verileri retained yayınla",
+  "serial lines, Modbus values: a subscriber that connects later gets the last one at once": "seri satırlar, Modbus değerleri: sonradan bağlanan bir abone son değeri hemen alır",
+  "Value format": "Değer biçimi",
+  "Text: the value alone": "Metin: yalnızca değer",
+  "JSON: {\"value\", \"ts\", \"quality\"}": "JSON: {\"value\", \"ts\", \"quality\"}"
 }

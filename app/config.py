@@ -524,6 +524,7 @@ def modbus_response_timeout(opts: MappingOptions) -> float:
 # ---------------------------------------------------------------------------
 # Per-mapping MQTT publishing (optional northbound to an IIoT broker)
 # ---------------------------------------------------------------------------
+MQTT_VALUE_FORMATS = ("text", "json")  # plain-format Modbus values (mqtt.value_format)
 MQTT_FORMATS = ("plain", "sparkplug_b")
 
 
@@ -566,6 +567,15 @@ class MqttSettings:
     client_key: str = ""
     client_key_password: str = ""
     tls_check_hostname: bool = True
+    # Plain format: publish the data (serial lines, polled Modbus values) retained, so a
+    # subscriber that (re)connects gets the last one at once. Sparkplug B never retains
+    # data (the specification asks so); command results are never retained.
+    retain: bool = False
+    # Plain-format Modbus values: "text" (1 / 0 for a bit), or "json": {"value", "ts" (read
+    # time, ms since the epoch), "quality"}, with "bad" (value null) once for a point whose
+    # read fails or whose unit stops answering. Edits refuse other values; a stored one
+    # (a later version's) is published as text.
+    value_format: str = "text"
 
     @staticmethod
     def from_dict(d: dict[str, Any]) -> "MqttSettings":
@@ -771,6 +781,9 @@ class MappingConfig:
             if not _is_number(timeout) or not (low <= timeout <= high):
                 raise ConfigError(_("The Modbus response timeout must be between {0} and {1} "
                                     "seconds.").format(f"{low:g}", f"{high:g}"))
+            if self.mqtt.value_format not in MQTT_VALUE_FORMATS:
+                raise ConfigError(_("MQTT value format must be one of {0}.").format(
+                    MQTT_VALUE_FORMATS))
             host = self.mqtt.sparkplug_primary_host_id
             if self.mqtt.payload_format == "sparkplug_b" and host != "":
                 if not isinstance(host, str) or any(c in host for c in "/+#"):

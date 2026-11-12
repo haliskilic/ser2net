@@ -339,7 +339,7 @@ class MqttPublisher:
                 self._log(f"MQTT on-connect handler failed: {e}")
         held, self._held = self._held, {}
         for topic, payload in held.items():
-            self._publish(topic, payload)
+            self._publish(topic, payload, retain=self._s.retain)
 
     def handle_disconnect(self, reason: str, failed: bool, refused: bool = False) -> None:
         """The connection ended (on the event loop): ``failed`` — not because it was asked
@@ -390,8 +390,9 @@ class MqttPublisher:
                 self._log(f"MQTT message on {topic}: {e}")
 
     def publish_value(self, subtopic: str, payload: bytes) -> None:
-        """Publish a payload to <base_topic>/<subtopic> (used by Modbus register polling).
-        At QoS 1/2 while not connected, only the latest value per topic is kept."""
+        """Publish a payload to <base_topic>/<subtopic> (used by Modbus register polling),
+        retained with mqtt.retain. At QoS 1/2 while not connected, only the latest value
+        per topic is kept."""
         if not self._connected:
             return
         topic = self._data_topic + "/" + subtopic
@@ -399,10 +400,11 @@ class MqttPublisher:
             self._held.pop(topic, None)  # (in the order they were last read)
             self._held[topic] = payload
             return
-        self._publish(topic, payload)
+        self._publish(topic, payload, retain=self._s.retain)
 
     def feed(self, data: bytes) -> None:
-        """Buffer serial bytes and publish each complete (newline-delimited) line."""
+        """Buffer serial bytes and publish each complete (newline-delimited) line (retained
+        with mqtt.retain: a subscriber that connects later gets the last line)."""
         if not self._connected or self._client is None:
             return
         self._buf += data
@@ -413,7 +415,7 @@ class MqttPublisher:
             line = bytes(self._buf[:nl]).rstrip(b"\r")
             del self._buf[:nl + 1]
             if line:
-                self._publish(self._data_topic, line)
+                self._publish(self._data_topic, line, retain=self._s.retain)
         if len(self._buf) > MAX_LINE_BUFFER:  # no newline in sight — don't grow forever
             del self._buf[:-4096]
 

@@ -233,6 +233,10 @@
     <label>{{ _("Base topic") }} <span class="muted">({{ _("lines publish here; status at &lt;topic&gt;/status") }})</span>
       <input type="text" name="mqtt_base_topic" value="{{ mapping.mqtt.base_topic }}" placeholder="{{ _('e.g. %(example)s', example='ser2net/plc1') }}">
     </label>
+    <div data-show-when="mqtt_payload_format=plain">
+      <input type="hidden" name="mqtt_retain_shown" value="1">
+      <label class="chk"><input type="checkbox" name="mqtt_retain" {% if mapping.mqtt.retain %}checked{% endif %}> {{ _("Retain the data") }} <span class="muted">({{ _("serial lines, Modbus values: a subscriber that connects later gets the last one at once") }})</span></label>
+    </div>
     <div class="grid3">
       <label>{{ _("Username") }} <input type="text" name="mqtt_username" value="{{ mapping.mqtt.username }}" placeholder="{{ _('optional') }}" autocapitalize="none" autocorrect="off" spellcheck="false"></label>
       <label>{{ _("Password") }} <input type="password" name="mqtt_password" value="{{ mapping.mqtt.password }}" placeholder="{{ _('optional') }}"></label>
@@ -281,6 +285,11 @@
     <div data-show-when="mqtt_payload_format=plain">
       <input type="hidden" name="mqtt_apply_retained_set_shown" value="1">
       <label class="chk"><input type="checkbox" name="mqtt_apply_retained_set" {% if mapping.mqtt.apply_retained_set %}checked{% endif %}> {{ _("Re-apply a retained /set after every connect") }} <span class="muted">({{ _("off: a command is written when it is published; the retained copy the broker sends again after a reconnect, restart or save is ignored") }})</span></label>
+      <label>{{ _("Value format") }}
+        <select name="mqtt_value_format">
+          <option value="text" {% if mapping.mqtt.value_format != 'json' %}selected{% endif %}>{{ _("Text: the value alone") }}</option>
+          <option value="json" {% if mapping.mqtt.value_format == 'json' %}selected{% endif %}>{{ _('JSON: {"value", "ts", "quality"}') }}</option>
+        </select></label>
       <input type="hidden" name="mqtt_unit_status_shown" value="1">
       <label class="chk"><input type="checkbox" name="mqtt_unit_status" {% if mapping.mqtt.unit_status %}checked{% endif %}> {{ _('Publish each unit’s state to <span class="mono">&lt;topic&gt;/unit&lt;N&gt;/status</span>') }} <span class="muted">({{ _("retained online / offline; offline once a unit gave no reply to any of its points in 3 polls in a row. It keeps the last state while the mapping is stopped: read it together with &lt;topic&gt;/status") }})</span></label>
     </div>

@@ -28,12 +28,18 @@ unit, and keeps track of each unit's health (_poll_unit): a unit that gives no r
 of its points in UNIT_OFFLINE_AFTER cycles in a row, or whose serial port stays gone that
 long, is offline (logged once; a Sparkplug B node sends its DDEATH) and is polled with one
 point per cycle until it answers; then all its points are read again (Sparkplug B: a DBIRTH
-with those values). Requests from Modbus/TCP masters are not affected.
+with those values). Requests from Modbus/TCP masters are not affected. Plain MQTT publishes
+each value as text (1 / 0 for a bit), or with mqtt.value_format "json" as {"value", "ts"
+(the read time, ms since the epoch), "quality": "good"}; then a point whose read fails, or
+whose unit goes offline, is published once as {"value": null, "quality": "bad"} until it
+reads again (encode_value).
 """
 from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
+import math
 import re
 import time
 from dataclasses import dataclass, field
@@ -185,6 +191,7 @@ class ModbusGatewayRunner:
             if p.unit != modbus.BROADCAST:
                 self._units.setdefault(p.unit, _Unit(p.unit)).points.append(p)
         self._failing: dict[str, bool] = {}
+        self._bad: set[str] = set()  # plain JSON values: points last published as "bad"
 
     def _log(self, msg: str) -> None:
         if self.log:
@@ -377,9 +384,24 @@ class ModbusGatewayRunner:
         if self._sparkplug is not None:
             self._sparkplug.update(values, stamps)
         elif self._mqtt is not None:
+            fmt = self.mapping.mqtt.value_format
             for name, v in values.items():
-                text = ("1" if v else "0") if isinstance(v, bool) else str(v)
-                self._mqtt.publish_value(name, text.encode())
+                self._bad.discard(name)
+                self._mqtt.publish_value(name, encode_value(
+                    v, fmt, (stamps or {}).get(name) or _now_ms()))
+
+    def _publish_bad(self, names) -> None:
+        """Plain MQTT, JSON values: points whose read failed, or whose unit stopped
+        answering, are published once as quality "bad" (value null), until they read
+        again (text values: nothing is published for them)."""
+        if (self._sparkplug is not None or self._mqtt is None
+                or self.mapping.mqtt.value_format != "json"):
+            return
+        now = _now_ms()
+        for name in names:
+            if name not in self._bad:
+                self._bad.add(name)
+                self._mqtt.publish_value(name, encode_value(None, "json", now, good=False))
 
     async def _poll_loop(self) -> None:
         """Edge mode: read the configured points off the RTU bus on an interval, unit by
@@ -443,6 +465,7 @@ class ModbusGatewayRunner:
         for name in reads.values:
             if self._failing.pop(name, False):
                 self._log(f"poll '{name}' reads again")
+        self._publish_bad([p.name for p, _e in reads.failed])
         if back and self._sparkplug is not None:
             self._sparkplug.device_online(u.unit, reads.values, reads.stamps)
         elif reads.values:
@@ -500,6 +523,7 @@ class ModbusGatewayRunner:
             u.since = time.time()
             if self._sparkplug is not None:
                 self._sparkplug.device_offline(u.unit)
+            self._publish_bad([p.name for p in u.points])
             self._unit_state_changed(u)
         if cause == "no reply":
             n = len(u.points)
@@ -856,6 +880,19 @@ class ModbusGatewayRunner:
 
 def _now_ms() -> int:
     return int(time.time() * 1000)
+
+
+def encode_value(value, fmt: str, ts: int, good: bool = True) -> bytes:
+    """A polled value as a plain MQTT payload: text (1 / 0 for a bit; also for a value_format
+    this version doesn't know), or for "json" {"value", "ts" (ms since the epoch),
+    "quality"}: a bit is true / false, a NaN or infinite reading null; ``good`` False: the
+    read failed (value null, quality "bad")."""
+    if fmt != "json":
+        return (("1" if value else "0") if isinstance(value, bool) else str(value)).encode()
+    if not good or (isinstance(value, float) and not math.isfinite(value)):
+        value = None
+    return json.dumps({"value": value, "ts": ts, "quality": "good" if good else "bad"},
+                      separators=(",", ":")).encode()
 
 
 def _units_text(units: list[int]) -> str:

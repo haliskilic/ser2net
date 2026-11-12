@@ -242,7 +242,16 @@ everything from a **password-protected web UI** — no CLI or hand-edited config
   latest value of each point instead (no burst of stale readings after an outage).
   Stopping or restarting a mapping waits at most 3 s for the broker to take its last
   message (`offline`, or a Sparkplug NDEATH; beyond that the Last-Will says the same),
-  without holding up the other mappings or the UI.
+  without holding up the other mappings or the UI. **Retain the data** (plain format)
+  publishes the serial lines and the polled Modbus values retained, so a subscriber that
+  connects later (Home Assistant, Node-RED, Telegraf) gets the last one at once instead of
+  waiting for the next poll or line (Sparkplug B never retains data, command results are
+  not retained; to drop a retained value, publish an empty retained message to its
+  topic). Modbus values are plain text by default; **Value format: JSON** publishes
+  `{"value": 21.5, "ts": 1731400000123, "quality": "good"}` (`ts`: when it was read, in ms
+  since the epoch; a bit is `true` / `false`, a NaN reading `null`), and once
+  `{"value": null, …, "quality": "bad"}` for a point whose read fails or whose unit stops
+  answering, until it reads again. The client speaks MQTT 3.1.1.
   Needs `paho-mqtt` (optional; the bridge runs normally without it).
 - **Migrating from classic ser2net:** `ser2net.yaml` (4.x) and `ser2net.conf` (3.x) files
   import through Settings with a preview; options without an equivalent are listed as

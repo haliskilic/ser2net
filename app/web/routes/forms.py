@@ -148,6 +148,10 @@ _OPTIONAL_FORM_FIELDS = {
     # a checkbox (absent when unticked) shown for plain-format Modbus points only
     "mqtt_apply_retained_set_shown": ("mqtt", ("apply_retained_set",)),
     "mqtt_unit_status_shown": ("mqtt", ("unit_status",)),
+    # plain format: retained data (a checkbox shown for plain-format mappings) and the
+    # Modbus value format (shown for plain-format points; the select is its own marker)
+    "mqtt_retain_shown": ("mqtt", ("retain",)),
+    "mqtt_value_format": ("mqtt", ("value_format",)),
     # MQTT over TLS: CA file, client certificate (mutual TLS), host name check (2.9)
     "mqtt_ca_file": ("mqtt", ("ca_file", "client_cert", "client_key", "client_key_password",
                               "tls_check_hostname")),
@@ -258,6 +262,10 @@ def _build_mapping_dict(form, strict: bool) -> dict:
                if "mqtt_apply_retained_set_shown" in form else {}),
             **({"unit_status": _checkbox(form, "mqtt_unit_status")}
                if "mqtt_unit_status_shown" in form else {}),
+            **({"retain": _checkbox(form, "mqtt_retain")}
+               if "mqtt_retain_shown" in form else {}),
+            **({"value_format": form.get("mqtt_value_format", "text")}
+               if "mqtt_value_format" in form else {}),
             **({"ca_file": form.get("mqtt_ca_file", "").strip(),
                 "client_cert": form.get("mqtt_client_cert", "").strip(),
                 "client_key": form.get("mqtt_client_key", "").strip(),
