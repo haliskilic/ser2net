@@ -508,6 +508,15 @@ class AppState:
         return sorted((p for p in paths if os.path.isfile(p)),
                       key=lambda p: os.path.getmtime(p), reverse=True)
 
+    def traced_mapping_ids(self) -> set[str]:
+        """The ids that have at least one file in data/traces: what comes before the first
+        "-" of a file's name (a valid mapping id has none). Blocking: one listdir."""
+        try:
+            names = os.listdir(self.traces_dir)
+        except OSError:
+            return set()
+        return {n.partition("-")[0] for n in names if "-" in n}
+
     def delete_mapping_traces(self, mapping_id: str) -> None:
         for path in self.trace_files(mapping_id):
             with _suppress(OSError):

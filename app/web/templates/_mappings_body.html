@@ -70,7 +70,7 @@
           <div class="btn-group">
             <button class="btn sm" hx-get="/api/mappings/{{ m.id }}/log" hx-target="#form-panel" hx-swap="innerHTML">{{ _("Log") }}</button>
             <button class="btn sm" hx-get="/api/mappings/{{ m.id }}/console-view" hx-target="#form-panel" hx-swap="innerHTML">{{ _("Monitor") }}</button>
-            {% if can_edit and m.options.trace_both %}<button class="btn sm" hx-get="/api/mappings/{{ m.id }}/traces" hx-target="#form-panel" hx-swap="innerHTML">{{ _("Trace") }}</button>{% endif %}
+            {% if can_edit and (m.options.trace_both or m.id in traced) %}<button class="btn sm" hx-get="/api/mappings/{{ m.id }}/traces" hx-target="#form-panel" hx-swap="innerHTML">{{ _("Trace") }}</button>{% endif %}
             {% if can_edit %}
             <button class="btn sm" hx-post="/api/mappings/{{ m.id }}/duplicate" hx-swap="none">{{ _("Copy") }}</button>
             <button class="btn sm danger" hx-delete="/api/mappings/{{ m.id }}"

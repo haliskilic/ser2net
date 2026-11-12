@@ -326,7 +326,8 @@ olarak yazdığı dosyalar klasörün sahibine verilir; yükseltmede elle bir ş
 - **Monitor:** tarayıcıda canlı seri terminal (xterm.js); ağ eşlemelerinde operator'ler
   cihaza yazabilir. Hex görünümü iki yönü gösterir; viewer'lar yalnızca cihazın
   gönderdiklerini görür.
-- **Trace** (operator): eşlemenin trace dosyaları; listelenir ve indirilir.
+- **Trace** (operator): eşlemenin trace dosyaları; listelenir ve indirilir. Tracing
+  açıkken ve kapatıldıktan sonra da dosya kaldığı sürece görünür.
 - **Ayarlar:** parola değiştir, **web arayüzü erişimi** (giriş zorunlu / parolasız rol),
   admin TLS (yol ver veya self-signed üret), **REST API token'ı** üret/iptal et, mapping
   **yedek al/yükle** (JSON), durum.

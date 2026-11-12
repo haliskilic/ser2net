@@ -316,7 +316,8 @@ The image has a `HEALTHCHECK` (`ser2net --healthcheck`). Details:
 - **Monitor:** live serial terminal in the browser (xterm.js); operators type to the
   device on network mappings. The hex view shows both directions; viewers see only what
   the device sends.
-- **Trace** (operators): the mapping's trace files, to list and download.
+- **Trace** (operators): the mapping's trace files, to list and download — while
+  tracing is on, and after it was switched off as long as files are left.
 - **Settings:** change password, **web UI access** (login required / open access with a
   role), admin TLS (provide paths or generate self-signed), generate/revoke the **REST API
   token**, mappings **backup/restore** (JSON), status.
