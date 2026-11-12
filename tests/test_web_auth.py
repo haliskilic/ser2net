@@ -24,9 +24,9 @@ sys.path.insert(0, ROOT)
 UI = 8087
 BASE = f"http://127.0.0.1:{UI}"
 
-from _server import Server  # noqa: E402
+from _server import Server
 
-from app.web import auth  # noqa: E402
+from app.web import auth
 
 
 def raw(port, method, path, headers, body=None):

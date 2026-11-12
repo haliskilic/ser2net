@@ -34,7 +34,7 @@ MAILS: list = []
 
 
 class Hook(BaseHTTPRequestHandler):
-    def do_POST(self):  # noqa: N802 (http.server API)
+    def do_POST(self):  # http.server API
         body = self.rfile.read(int(self.headers.get("Content-Length", 0)))
         RECEIVED.append((self.path, json.loads(body)))
         self.send_response(500 if self.path == "/fail" else 204)
@@ -48,7 +48,7 @@ class Smtp(socketserver.StreamRequestHandler):
     """Just enough SMTP (no TLS, no auth) to receive one message."""
 
     def handle(self):
-        w = lambda s: self.wfile.write(s.encode() + b"\r\n")  # noqa: E731
+        w = lambda s: self.wfile.write(s.encode() + b"\r\n")
         w("220 test ESMTP")
         rcpt, data = [], None
         while True:

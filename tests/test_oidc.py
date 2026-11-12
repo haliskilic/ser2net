@@ -189,7 +189,7 @@ def test_https_only():
 
     # a redirect to plain http is not followed (the loopback server itself may be http)
     class Redirect(http.server.BaseHTTPRequestHandler):
-        def do_GET(self):  # noqa: N802 (http.server API)
+        def do_GET(self):  # http.server API
             self.send_response(302)
             self.send_header("Location", "http://idp.example.com/.well-known/x")
             self.end_headers()
@@ -226,7 +226,7 @@ def test_ca_certificates_read_per_request():
     cert, key = ca.issue(d, "idp", ["127.0.0.1"])
 
     class Discovery(http.server.BaseHTTPRequestHandler):
-        def do_GET(self):  # noqa: N802 (http.server API)
+        def do_GET(self):  # http.server API
             body = b'{"issuer": "https://127.0.0.1"}'
             self.send_response(200)
             self.send_header("Content-Type", "application/json")

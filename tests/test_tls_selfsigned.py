@@ -37,10 +37,10 @@ ROOT = os.path.join(os.path.dirname(__file__), "..")
 sys.path.insert(0, os.path.join(ROOT, "lib"))
 sys.path.insert(0, ROOT)
 
-from _optional import need  # noqa: E402
+from _optional import need
 
-from app.web import selfsigned  # noqa: E402
-from app.web.auth import hash_password  # noqa: E402
+from app.web import selfsigned
+from app.web.auth import hash_password
 
 
 class EmptyPath:

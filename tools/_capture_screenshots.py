@@ -21,8 +21,8 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "lib"))
 sys.path.insert(0, ROOT)
 
-from playwright.sync_api import sync_playwright   # noqa: E402
-from app.web.auth import hash_password            # noqa: E402
+from playwright.sync_api import sync_playwright
+from app.web.auth import hash_password
 
 SHOTS = os.path.join(ROOT, "docs", "screenshots")
 UI = 8099            # primary node (the browser drives this one)

@@ -11,7 +11,7 @@ import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "tools"))
 
-import refresh_wheels as rw  # noqa: E402
+import refresh_wheels as rw
 
 
 def test_markers():

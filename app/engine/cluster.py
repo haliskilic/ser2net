@@ -1049,7 +1049,8 @@ class ClusterDiscovery:
                 "sig": request_mac(how["key"], method, target, body, me, how["to"], ts, nonce)})
         if body is not None:
             headers["Content-Type"] = "application/x-www-form-urlencoded"
-        req = urllib.request.Request(url, data=body, method=method, headers=headers)
+        req = urllib.request.Request(url, data=body, method=method,  # noqa: S310 - peer_url(): http(s)
+                                     headers=headers)
         try:
             with self._opener.open(req, timeout=timeout) as r:
                 status, reply = r.status, r.headers.get(AUTH_HEADER)

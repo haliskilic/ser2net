@@ -43,12 +43,12 @@ ROOT = os.path.join(os.path.dirname(__file__), "..")
 sys.path.insert(0, os.path.join(ROOT, "lib"))
 sys.path.insert(0, ROOT)
 
-from app.config import AppConfig, ClusterSettings              # noqa: E402
-from app.engine import netinfo                                  # noqa: E402
-from app.engine.cluster import (AUTH_HEADER, PEER_TTL, ClusterDiscovery, _sign,  # noqa: E402
+from app.config import AppConfig, ClusterSettings
+from app.engine import netinfo
+from app.engine.cluster import (AUTH_HEADER, PEER_TTL, ClusterDiscovery, _sign,
                                 canonical_target, format_auth, key_header, parse_auth,
                                 reply_mac, request_mac)
-from app.web.auth import hash_password                         # noqa: E402
+from app.web.auth import hash_password
 
 
 def free_port():

@@ -471,7 +471,7 @@ class _ClientConn:
     async def _pump_net_to_serial(self) -> None:
         m = self.runner.mapping
         session = self._session
-        assert session is not None  # the pumps start after run() created it
+        assert session is not None  # noqa: S101 - the pumps start after run() created it
         while not self._closing:
             data = await self.reader.read(READ_CHUNK)
             if not data:
@@ -510,7 +510,7 @@ class _ClientConn:
 
     async def _pump_poll(self) -> None:
         session = self._session
-        assert session is not None
+        assert session is not None  # noqa: S101 - as above
         interval = session.poll_interval or 1.0
         while not self._closing:
             await asyncio.sleep(interval)
