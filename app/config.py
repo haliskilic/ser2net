@@ -1694,8 +1694,12 @@ class AppConfig:
                     f"mapping '{m.name}': its id {old_id!r} is not a valid mapping id (1-64 "
                     f"letters, digits or '_'), so it is now {m.id}: the REST API and /metrics "
                     "use the new id, and its log and traces start afresh under it")
-            old = str(((raw or {}).get("options") or {}).get("trace_both") or "").strip()
-            if old and old != m.options.trace_both:
+            raw_options = (raw or {}).get("options")
+            raw_options = raw_options if isinstance(raw_options, dict) else {}
+            old = str(raw_options.get("trace_both") or "").strip()
+            # before 2.8 (written without trace_max_mb) a trace was a path: a bare name was a
+            # file in ser2net's working directory, so it moved too
+            if old and (old != m.options.trace_both or "trace_max_mb" not in raw_options):
                 cfg.load_notes.append(
                     f"mapping '{m.name}': its trace file is now traces/{m.id}-{m.options.trace_both} "
                     f"in the data directory (configured: {old!r}; traces are no longer written "

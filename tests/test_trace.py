@@ -84,10 +84,15 @@ def test_legacy_config_notes():
     cfg = AppConfig.from_dict(json.load(open(FIXTURE, encoding="utf-8")))
     names = {m.name: m.options.trace_both for m in cfg.mappings}
     assert names["PLC-1 raw"] == "plc1.trace" and names["Modbus gateway"] == "modbus.log"
-    assert len(cfg.load_notes) == 2, cfg.load_notes   # the two absolute paths
+    # the two absolute paths, and the bare name: 2.7.1 wrote it in its working directory
+    assert len(cfg.load_notes) == 3, cfg.load_notes
     assert all("trace file is now traces/" in n for n in cfg.load_notes), cfg.load_notes
+    assert any("now traces/aaaa00000006-modbus.log" in n for n in cfg.load_notes)
     cfg.validate()
-    print("v2.7.1 config: trace paths mapped into data/traces, a note per change  OK")
+    # written by 2.8.0 or later (it has trace_max_mb): a bare name was in traces/ already
+    again = AppConfig.from_dict(cfg.to_dict())
+    assert not again.load_notes, again.load_notes
+    print("v2.7.1 config: trace paths and names mapped into data/traces, a note per move  OK")
 
 
 class _Opts:
