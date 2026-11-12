@@ -119,16 +119,20 @@ def build_api_routes(state):
         try:
             async with state.edit_config():
                 existing = state.config.get_mapping(mid)
-                if existing:
+                # the same settings again: nothing to save, its runner stays as it is
+                if existing and existing.to_dict() != mapping.to_dict():
                     state.config.mappings[state.config.mappings.index(existing)] = mapping
         except ConfigError as e:  # not saved: not changed either
             return _not_saved(e)
         if not existing:
             return JSONResponse({"error": "not_found"}, status_code=404)
-        await state.supervisor.apply_mapping(mapping)
+        same = existing.to_dict() == mapping.to_dict()
+        _ok, _msg, restarted = await state.supervisor.ensure_running(existing if same else mapping)
         state.log(f"api: mapping updated: {mapping.name}")
         state.audit(_client_ip(request), "api_mapping_update", mapping.name, user="api-token")
-        return JSONResponse(_edit_view(mapping, state))
+        view = _edit_view(mapping, state)
+        view["changed"] = not same or restarted  # False: the same settings, still running
+        return JSONResponse(view)
 
     async def delete_mapping(request):
         mid = request.path_params["mid"]
@@ -154,7 +158,8 @@ def build_api_routes(state):
             return _not_saved(res.error)
         state.log(f"api: mapping {action}: {res.name}")
         state.audit(_client_ip(request), f"api_mapping_{action}", res.name, user="api-token")
-        out = {"id": mid, "action": action, "status": state.supervisor.status(mid)}
+        out = {"id": mid, "action": action, "status": state.supervisor.status(mid),
+               "changed": res.changed}
         if res.warning:  # stopped, but config.json could not keep it
             out["warning"] = res.warning
         return JSONResponse(out)
@@ -241,6 +246,8 @@ def openapi_spec(admin) -> dict:
                 "put": {"summary": "Replace a mapping", "security": bearer,
                         "requestBody": {"required": True, "content": {"application/json": {
                             "schema": {"$ref": "#/components/schemas/Mapping"}}}},
+                        "description": "The same settings again change nothing: the "
+                                       "mapping keeps running as it is (`changed`: false).",
                         "responses": {"200": {"description": "updated (see `warnings`)"},
                                       "400": {"description": "validation error"},
                                       "404": {"description": "not found"},
@@ -259,7 +266,11 @@ def openapi_spec(admin) -> dict:
                      "schema": {"type": "string", "enum": ["start", "stop", "restart"]}},
                 ],
                 "post": {"summary": "Start/stop/restart a mapping", "security": bearer,
-                         "description": "A start or restart that can't be saved changes "
+                         "description": "start and stop are idempotent: a start of a "
+                                        "mapping that runs with its settings, or a stop of "
+                                        "a stopped one, changes nothing (`changed`: false); "
+                                        "restart always restarts. "
+                                        "A start or restart that can't be saved changes "
                                         "nothing (400 validation: e.g. it would share a "
                                         "serial port with a running mapping; 500 "
                                         "save_failed: config.json can't be written). A stop "

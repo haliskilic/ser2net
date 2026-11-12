@@ -22,6 +22,9 @@ from ..config import AppConfig, MappingConfig
 from . import serial_io
 from .bridge import MappingRunner, RunnerStatus
 
+# a runner in these states runs: the serial side retries a missing device on its own
+ALIVE_STATES = ("running", "reconnecting", "device-missing")
+
 
 class Runner(Protocol):
     """What the supervisor and the web layer use of a mapping's runner: the transparent
@@ -208,16 +211,36 @@ class Supervisor:
     async def start_mapping(self, mapping: MappingConfig) -> tuple[bool, str]:
         return await self.apply_mapping(mapping)
 
-    async def stop_mapping(self, mapping_id: str) -> None:
+    async def ensure_running(self, mapping: MappingConfig) -> tuple[bool, str, bool]:
+        """apply_mapping, unless the mapping's runner is what its config asks for already:
+        built from the same settings, and running (ALIVE_STATES) when it is enabled or
+        stopped when it is not. So a start of a running mapping keeps its clients, serial
+        port and MQTT connection; one that stopped or failed is started again. Returns
+        (ok, message, changed): changed is False when nothing was done."""
+        async with self._turn(mapping.id):
+            current = self._current(mapping)
+            runner = self._runners.get(mapping.id)
+            built = getattr(runner, "mapping", None)
+            if (current is not None and runner is not None and built is not None
+                    and runner.status.state in (ALIVE_STATES if current.enabled else ("stopped",))
+                    and built.to_dict() == current.to_dict()):
+                return True, "running" if current.enabled else "disabled", False
+            ok, message = await self._apply(mapping.id, current)
+            return ok, message, True
+
+    async def stop_mapping(self, mapping_id: str) -> bool:
         """Stop a mapping's runner (kept, stopped, for its status) — unless its config has
-        it enabled by now: a start saved after this stop takes its own turn."""
+        it enabled by now: a start saved after this stop takes its own turn. Returns
+        whether a runner was stopped (False: none, or stopped already)."""
         async with self._turn(mapping_id):
             current = self._lookup(mapping_id) if self._lookup is not None else None
             if current is not None and current.enabled:
-                return
+                return False
             runner = self._runners.get(mapping_id)
-            if runner is not None:
-                await self._stop_runner(runner)
+            if runner is None or runner.status.state == "stopped":
+                return False
+            await self._stop_runner(runner)
+            return True
 
     async def restart_mapping(self, mapping: MappingConfig) -> tuple[bool, str]:
         return await self.apply_mapping(mapping)  # which stops the old runner first

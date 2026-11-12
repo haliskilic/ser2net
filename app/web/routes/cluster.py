@@ -267,7 +267,8 @@ def routes(ctx: Ctx) -> list:
         ip = client_ip(request)
         state.log(f"cluster: remote {action} of '{name}' from {ip}")
         state.audit(ip, f"cluster_remote_{action}", name, user="cluster-peer")
-        return _peer_json(a, {"ok": True, "name": name})
+        # changed: False when it ran (or was stopped) already (ignored by nodes before 2.9)
+        return _peer_json(a, {"ok": True, "name": name, "changed": res.changed})
 
     async def cluster_control_peer(request):
         """Browser-facing proxy: an operator on THIS node controls a mapping on a peer.

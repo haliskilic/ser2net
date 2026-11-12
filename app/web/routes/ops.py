@@ -86,18 +86,21 @@ class ActionResult(NamedTuple):
     name: str = ""
     error: Optional[ConfigError] = None  # not done: its change can't be saved
     warning: str = ""                    # done, but config.json could not keep it
+    changed: bool = False                # False: it ran (or was stopped) already
 
 
 async def apply_action(state, mid, action) -> ActionResult:
     """Start/stop/restart a local mapping by id. Shared by the UI action and bulk
     endpoints, the cluster remote-control endpoint and the REST API.
 
-    The enabled flag is saved first, then the supervisor brings the runner in line (it
-    reads the config when the mapping's turn comes). A start or restart that can't be
-    saved (e.g. the mapping shares a serial port with a running one, or config.json can't
-    be written) changes nothing and gives `error`. A stop always stops: when config.json
-    can't be written, the mapping stays stopped (in memory too) and `warning` says it
-    starts again when ser2net restarts."""
+    The enabled flag is saved first (only when it changes), then the supervisor brings the
+    runner in line (it reads the config when the mapping's turn comes). Start and stop
+    are idempotent: a start leaves a mapping that runs with its settings as it is, clients
+    and serial port included (changed=False); restart always restarts. A start or restart
+    that can't be saved (e.g. the mapping shares a serial port with a running one, or
+    config.json can't be written) changes nothing and gives `error`. A stop always stops:
+    when config.json can't be written, the mapping stays stopped (in memory too) and
+    `warning` says it starts again when ser2net restarts."""
     stop = action == "stop"
     m = None
     warning = ""
@@ -116,12 +119,13 @@ async def apply_action(state, mid, action) -> ActionResult:
     if m is None:
         return ActionResult(False)
     if stop:
-        await state.supervisor.stop_mapping(mid)
+        changed = await state.supervisor.stop_mapping(mid)
     elif action == "restart":
         await state.supervisor.restart_mapping(m)
+        changed = True
     else:  # start
-        await state.supervisor.apply_mapping(m)
-    return ActionResult(True, m.name, warning=warning)
+        _ok, _msg, changed = await state.supervisor.ensure_running(m)
+    return ActionResult(True, m.name, warning=warning, changed=changed)
 
 
 async def delete_mapping(state, mid):
