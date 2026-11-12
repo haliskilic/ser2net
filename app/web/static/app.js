@@ -33,11 +33,25 @@ document.addEventListener("htmx:configRequest", function (e) {
 });
 
 // 1a) Detected-ports panel: "show / hide the ports without hardware" sticks across the
-//     5-second refreshes (the polling element carries the choice).
+//     5-second refreshes and the Refresh button (the panel carries the choice; it is the
+//     target of both requests, the button their element).
 document.addEventListener("htmx:configRequest", function (e) {
-  var el = e.detail.elt;
+  var el = e.detail.target || e.detail.elt;
   if (el && el.id === "ports-table" && el.getAttribute("data-show-all") === "1")
     e.detail.parameters["all"] = "1";
+});
+
+// 1a') Mapping form: ↻ next to Device lists the serial ports again (an adapter plugged in
+//      after the form was opened), keeping what is chosen and the rest of the form.
+document.addEventListener("click", function (e) {
+  var b = e.target.closest ? e.target.closest("[data-port-rescan]") : null;
+  if (!b || !window.htmx) return;
+  var pick = b.closest(".port-pick"), prefix = b.getAttribute("data-port-rescan");
+  var field = pick ? pick.querySelector('[name="' + prefix + 'port"]') : null;
+  if (!pick) return;
+  htmx.ajax("GET", "/api/ports/select?prefix=" + encodeURIComponent(prefix) +
+            "&selected=" + encodeURIComponent(field ? field.value : ""),
+            {target: pick, swap: "outerHTML"});
 });
 document.addEventListener("click", function (e) {
   var b = e.target.closest ? e.target.closest("[data-ports-all]") : null;

@@ -6,11 +6,15 @@ from starlette.routing import Route
 
 from ... import i18n
 from ...engine import netguard, portlist
+from ...i18n import _
 from .common import Ctx
+
+# the serial sides of a mapping form (GET /api/ports/select?prefix=)
+_PORT_FIELDS = ("serial_", "serial_b_")
 
 
 def routes(ctx: Ctx) -> list:
-    state, render = ctx.state, ctx.render
+    state, render, require_role = ctx.state, ctx.render, ctx.require_role
 
     async def healthz(request):
         return PlainTextResponse("ok")
@@ -73,10 +77,18 @@ def routes(ctx: Ctx) -> list:
     async def api_ports_json(request):
         return JSONResponse(await state.ports.current())
 
-    async def api_ports_refresh(request):
-        ports = await state.ports.current(max_age=0.0)
-        selected = request.query_params.get("selected", "")
-        return render(request, "_serial_port_select.html", ports=ports, selected=selected)
+    async def api_ports_select(request):
+        """An open mapping form's Device field again, with the serial ports there are now
+        (its ↻ button): ?prefix=serial_|serial_b_&selected=<what the form has chosen>. For
+        operators, as the form is."""
+        if deny := require_role(request, "operator"):
+            return deny
+        prefix = request.query_params.get("prefix", "")
+        if prefix not in _PORT_FIELDS:
+            return PlainTextResponse(_("Unknown serial port field."), status_code=400)
+        return render(request, "_serial_port_select.html", fragment=True, prefix=prefix,
+                      selected=request.query_params.get("selected", "")[:1024],
+                      ports=portlist.visible(await state.ports.current()))
 
     async def api_ports_table(request):
         ports = await state.ports.current()
@@ -104,7 +116,7 @@ def routes(ctx: Ctx) -> list:
         Route("/healthz", healthz),
         Route("/metrics", metrics),
         Route("/api/ports.json", api_ports_json),
-        Route("/api/ports/refresh", api_ports_refresh, methods=["POST"]),
+        Route("/api/ports/select", api_ports_select),
         Route("/api/ports/table", api_ports_table),
     ]
 

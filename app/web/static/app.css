@@ -151,8 +151,10 @@ legend { color: var(--muted); font-size: 11px; text-transform: uppercase; letter
   gap: 8px 12px; margin-bottom: 14px;
 }
 .form-head h3 { flex: 1 1 16rem; min-width: 0; margin: 0; overflow-wrap: anywhere; }
-.select-with-btn { display: flex; gap: 8px; align-items: flex-end; }
-.portsel-wrap { flex: 1; }
+/* the mapping form's Device field: the select, and ↻ next to it (local forms) */
+.port-row { display: flex; gap: 8px; align-items: flex-end; }
+.port-row > label { flex: 1 1 auto; min-width: 0; }
+.port-rescan { margin-bottom: 12px; }
 
 /* banners */
 .banner { padding: 10px 14px; border-radius: 8px; margin-bottom: 14px; font-size: 13px; overflow-wrap: anywhere; }
