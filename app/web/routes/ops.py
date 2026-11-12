@@ -2,7 +2,10 @@
 validate + persist + apply, without any HTTP concerns."""
 from __future__ import annotations
 
-from ...config import ConfigError, MappingConfig, check_mqtt_clashes, valid_mapping_id
+import itertools
+
+from ...config import (ConfigError, MappingConfig, _ip_overlaps, check_mqtt_clashes,
+                       sparkplug_identity, valid_mapping_id)
 from ...engine import portlist
 from ...i18n import _
 from .forms import _checkbox, _mapping_from_form, _preserve_unmanaged_fields
@@ -83,6 +86,60 @@ async def save_mapping_from_form(state, form) -> tuple[bool, str]:
             return False, str(e)
     await state.supervisor.apply_mapping(mapping)
     return True, mapping.name
+
+
+def copy_of(config, m: MappingConfig) -> MappingConfig:
+    """The dashboard's Copy: ``m``'s settings under a new id, disabled, and nothing in it
+    that clashes with ``m`` (or another mapping) when it is enabled next to it, once its
+    serial port is changed: the name "<name> (copy)" ("(copy 2)", … when taken), the next
+    free listening port for its transport and address (searched down from ``m``'s once
+    65535 is reached), no MQTT client ID (a broker keeps one connection per ID), the base
+    topic "<topic>-copy" ("-copy-2", …) so a /set is not written by both, and a Sparkplug
+    B edge node ID made from the new name. Raises ConfigError when no port is free."""
+    d = m.to_dict()
+    d.pop("id", None)
+    d["enabled"] = False  # don't auto-start a duplicate
+    dup = MappingConfig.from_dict(d)
+    names = {x.name for x in config.mappings}
+    dup.name, k = f"{m.name} (copy)", 1
+    while dup.name in names:
+        k += 1
+        dup.name = f"{m.name} (copy {k})"
+    mq = dup.mqtt
+    mq.client_id = ""
+    base = str(mq.base_topic).rstrip("/")
+    if base:
+        topics = {str(x.mqtt.base_topic).rstrip("/") for x in config.mappings}
+        mq.base_topic, k = f"{base}-copy", 1
+        while mq.base_topic in topics:
+            k += 1
+            mq.base_topic = f"{base}-copy-{k}"
+    mq.sparkplug_node_id = ""  # made from the name, unless another mapping has that one
+    if mq.payload_format == "sparkplug_b":
+        nodes = {sparkplug_identity(x) for x in config.mappings
+                 if x.mqtt.payload_format == "sparkplug_b"}
+        group, node = sparkplug_identity(dup)
+        k = 1
+        while (group, mq.sparkplug_node_id or node) in nodes:
+            k += 1
+            mq.sparkplug_node_id = f"{node}_{k}"
+    net = dup.network
+    if dup.kind == "net" and net.listens:
+        proto = "udp" if net.mode == "udp" else "tcp"
+        taken = {x.network.port for x in config.mappings
+                 if x.kind == "net" and x.network.listens
+                 and ("udp" if x.network.mode == "udp" else "tcp") == proto
+                 and _ip_overlaps(x.network.bind_ip, net.bind_ip)}
+        if net.port in taken:
+            free = (p for p in itertools.chain(range(max(net.port + 1, 1), 65536),
+                                               range(min(net.port - 1, 65535), 0, -1))
+                    if p not in taken)
+            port = next(free, None)
+            if port is None:
+                raise ConfigError(_("No free {0} port is left on {1} for the copy.").format(
+                    proto.upper(), net.bind_ip))
+            net.port = port
+    return dup
 
 
 async def apply_action(state, mid, action) -> tuple[bool, str]:
