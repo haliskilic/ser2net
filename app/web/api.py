@@ -422,8 +422,11 @@ _ENUMS = {
     ("NetworkSettings", "protocol"): config.PROTOCOLS,
     ("MqttSettings", "qos"): (0, 1, 2),
     ("MqttSettings", "payload_format"): config.MQTT_FORMATS,
+    ("MqttSettings", "line_end"): config.MQTT_LINE_ENDS,
+    ("MqttSettings", "value_format"): config.MQTT_VALUE_FORMATS,
     ("ModbusPoint", "fn"): (1, 2, 3, 4),
     ("ModbusPoint", "dtype"): config.MODBUS_DTYPES,
+    ("ModbusPoint", "word_order"): config.MODBUS_WORD_ORDERS,
 }
 _NOTES = {
     ("MappingConfig", "id"): "Assigned by the server (1-64 letters, digits or _); "

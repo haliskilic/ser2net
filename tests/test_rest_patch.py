@@ -134,6 +134,12 @@ def test_spec():
     assert net["bind_ip"]["default"] == "0.0.0.0" and net["port"]["default"] == 4001
     assert net["mode"]["enum"] == list(config.NET_MODES)
     assert schemas["SerialSettings"]["properties"]["stopbits"]["enum"] == [1, 1.5, 2]
+    mq = schemas["MqttSettings"]["properties"]
+    assert mq["value_format"]["enum"] == ["text", "json"] and mq["line_end"]["enum"] == [
+        "lf", "cr", "any"], mq["value_format"]
+    assert "Masked" in mq["client_key_password"]["description"]
+    assert schemas["ModbusPoint"]["properties"]["word_order"]["enum"] == list(
+        config.MODBUS_WORD_ORDERS)
     print("openapi.json: the mapping schemas name every config field with its type and "
           "default; id and status read-only; open to new fields  OK")
 
