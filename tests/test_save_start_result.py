@@ -1,20 +1,23 @@
-"""Saving a mapping that then doesn't start says so where the form was.
+"""Saving or starting a mapping that then doesn't start says so.
 
 The save answered as if all was well even when the mapping could not start (its port held
 by another program - another ser2net instance on the machine - or its TLS files missing):
 only the dashboard row showed it. Checks:
-  * a mapping saved on a port another socket listens on: kept in config.json, and the
-    answer (instead of an empty one that closes the form) says it didn't start, with the
-    error and, for a taken port, what to do and that it is tried again (the supervisor's
-    bind retry); the table is refreshed and the row says error;
-  * a mapping that is saved stopped (or starts) closes the form as before;
+  * a mapping saved on a port another socket listens on: kept in config.json, the form
+    closes (empty answer, the table refreshed) and the answer's notice (X-Notice, the
+    dashboard's feedback area) warns that it didn't start, with the reason in the page's
+    language and the error as its tooltip, what to do about a taken port and that it is
+    tried again (the supervisor's bind retry); the row says error;
+  * Start on such a mapping says the same; a mapping saved stopped just says "saved";
   * which errors count as a taken port (Linux, macOS, Windows texts).
 
 Calls the web app in this process. Run: python3 tests/test_save_start_result.py
 """
 from __future__ import annotations
 
+import json
 import socket
+import urllib.parse
 
 from _asgi import App, cookies, header
 
@@ -34,6 +37,11 @@ def _sign_in(a: App) -> dict:
     return {"Cookie": jar, "X-CSRF-Token": CSRF, "HX-Request": "true"}
 
 
+def notice(headers) -> dict:
+    """The X-Notice of an answer (percent-encoded JSON)."""
+    return json.loads(urllib.parse.unquote(header(headers, "x-notice")))
+
+
 def form(name: str, port: int, enabled: bool) -> dict:
     return {"name": name, "kind": "net", "enabled": "on" if enabled else "",
             "network_mode": "server", "network_protocol": "raw",
@@ -51,24 +59,38 @@ def test_save() -> None:
         h = _sign_in(a)
         st, hdrs, body = a.call("POST", "/api/mappings/save", fields=form("Line <1>", port, True),
                                 headers=h)
-        assert st == 200 and header(hdrs, "hx-trigger") == "refreshMappings", (st, hdrs)
-        assert 'class="banner warn"' in body and "“Line &lt;1&gt;” is saved, but it didn’t start:" \
-            in body, body
-        assert "listens on that port: give the mapping a port of its own." in body, body
-        assert "It is started as soon as it can listen there" in body, body
+        assert st == 200 and body == "" and header(hdrs, "hx-trigger") == "refreshMappings", \
+            (st, hdrs, body[:300])
+        n = notice(hdrs)
+        assert n["kind"] == "warn" and n["text"].startswith("“Line <1>” saved, but it could not "
+                                                            "start: "), n
+        assert "The port is already in use by another program" in n["text"], n
+        assert "listens on that port: give the mapping a port of its own." in n["text"], n
+        assert "It is started as soon as it can listen there" in n["text"], n
+        assert "address already in use" in n["detail"].lower(), "the error itself: the tooltip"
         saved = [m for m in a.state.config.mappings if m.name == "Line <1>"]
         assert len(saved) == 1 and a.state.store.load().mappings[0].name == "Line <1>"
+        assert n["focus"] == f"m-{saved[0].id}-edit", n
         status = a.state.supervisor.status(saved[0].id)
         assert status is not None and status["state"] == "error" and status["retrying"], status
         assert "mapping saved: Line <1>" in a.lines
+        # Start on it again: the same hints
+        st, hdrs, _ = a.call("POST", f"/api/mappings/{saved[0].id}/start", headers=h)
+        n = notice(hdrs)
+        assert st == 200 and n["kind"] == "warn" and "could not start" in n["text"], (st, n)
+        assert "give the mapping a port of its own" in n["text"] and \
+            "It is started as soon as it can listen there" in n["text"], n
         # saved stopped (on a port of its own: this instance's mappings may not share one):
         # the form closes as before
         st, hdrs, body = a.call("POST", "/api/mappings/save", fields=form("Off", port + 1, False),
                                 headers=h)
         assert st == 200 and body == "" and header(hdrs, "hx-trigger") == "refreshMappings", \
             (st, body[:300])
-    print("mapping save: a mapping that didn't start is kept and the answer says why (a taken "
-          "port: what to do); one saved stopped closes the form as before  OK")
+        assert notice(hdrs) == {"kind": "ok", "text": "“Off” saved.",
+                                "focus": notice(hdrs)["focus"]}, notice(hdrs)
+    print("mapping save / start: a mapping that didn't start is kept and the notice says why "
+          "(a taken port: what to do, and that it is tried again); one saved stopped says "
+          "saved  OK")
 
 
 def test_port_taken() -> None:

@@ -225,8 +225,10 @@ class Supervisor:
     async def _retry(self, mapping: MappingConfig, runner: Runner, error: str,
                      backoff: Backoff, pause: float) -> None:
         """Start ``runner`` again, with a backoff, while its listener can't bind. Logs a
-        changed error and the start that worked; any other error ends the retries."""
+        changed error and the start that worked (all.log and the mapping's own log, as
+        apply_mapping does); any other error ends the retries."""
         st = runner.status
+        log = self._logger_factory(mapping)
         try:
             while True:
                 st.retry_at = time.monotonic() + pause
@@ -243,16 +245,16 @@ class Supervisor:
                     raise
                 e = attempt.exception()
                 if e is None:
-                    self.log(f"[{mapping.name}] started after {backoff.attempt} "
-                             f"retr{'y' if backoff.attempt == 1 else 'ies'}")
+                    log(f"started after {backoff.attempt} "
+                        f"retr{'y' if backoff.attempt == 1 else 'ies'}")
                     return
                 st.state, st.last_error = "error", str(e)
                 if not isinstance(e, BindError):
-                    self.log(f"[{mapping.name}] start failed: {e}")
+                    log(f"start failed: {e}")
                     return
                 if str(e) != error:
                     error = str(e)
-                    self.log(f"[{mapping.name}] start failed again: {e}")
+                    log(f"start failed again: {e}")
                 pause = backoff.pause()
         finally:
             st.retry_at = 0.0
