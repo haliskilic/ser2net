@@ -376,7 +376,7 @@ def test_reply_address_validation():
                                    "network": {"mode": "server", "udp_peer_host": "junk"}})
     tcp.validate()
     tcp.validate_input()
-    refused(mapping(udp_peer_timeout_s="soon"), "Peer timeout must be between 0")
+    refused(mapping(udp_peer_timeout_s="soon"), 'network.udp_peer_timeout_s: "soon" is not a')
     soon = mapping(udp_peer_timeout_s="soon")
     soon.validate()
     assert _UdpBridge(MappingRunner(soon)).timeout == 0, "a stored non-number reads as never"

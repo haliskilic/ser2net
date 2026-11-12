@@ -129,29 +129,31 @@ def test_left_alone_unless_changed():
     try:
         with env(**CONTAINER):
             runtime.prepare_config(path)  # first run: created (no console picker: env set)
-            assert os.path.isfile(path) and backups(data) == []
-            before = file_state(path)
+            assert os.path.isfile(path) and len(backups(data)) == 1, "the file written is kept"
+            before, kept = file_state(path), backups(data)
             _store, cfg = runtime.prepare_config(path)
             assert file_state(path) == before, "an unchanged config.json was rewritten"
-            assert backups(data) == [] and warnings(cfg) == [], (backups(data), cfg.load_notes)
-        print("same settings on the next start: config.json not rewritten, no backup  OK")
+            assert backups(data) == kept and warnings(cfg) == [], (backups(data), cfg.load_notes)
+        print("same settings on the next start: config.json not rewritten, no new backup  OK")
 
         with env(SER2NET_BIND_IP="0.0.0.0", SER2NET_PORT="9090"):
             runtime.prepare_config(path)
         with open(path, encoding="utf-8") as fh:
             assert json.load(fh)["admin_ui"]["port"] == 9090
-        assert len(backups(data)) == 1, backups(data)
-        print("a new SER2NET_PORT: saved, the previous file backed up  OK")
+        assert len(backups(data)) == 2, backups(data)
+        print("a new SER2NET_PORT: saved, and kept in backups/ next to the previous file  OK")
 
         shutil.copy(FIXTURE, path)  # an upgrade: 2.8 adds keys and moves the trace paths
         with env(**CONTAINER):
             runtime.prepare_config(path)
             with open(path, encoding="utf-8") as fh:
                 assert "session_timeout_s" in json.load(fh)
-            newest = ConfigStore(path).backup_names()[0]
-            with open(os.path.join(data, "backups", newest), encoding="utf-8") as fh, \
+            newest, replaced = ConfigStore(path).backup_names()[:2]
+            with open(os.path.join(data, "backups", replaced), encoding="utf-8") as fh, \
                     open(FIXTURE, encoding="utf-8") as orig:
                 assert json.load(fh) == json.load(orig), "the 2.7.1 file must be backed up"
+            with open(os.path.join(data, "backups", newest), encoding="utf-8") as fh:
+                assert fh.read() == read_text(path), "the newest backup is config.json"
             before, kept = file_state(path), backups(data)
             runtime.prepare_config(path)
             assert file_state(path) == before and backups(data) == kept
@@ -172,9 +174,11 @@ def broken_config(ports: dict) -> dict:
         "users": [{"username": "admin", "password_hash": hash_password("admin-pass-1"),
                    "role": "admin", "pwd_version": 1, "source": "local"}],
         "api_token_hash": hash_token(TOKEN),
-        "cluster": {"enabled": True, "key": "cluster-key", "discovery_port": "not-a-port"},
+        "cluster": {"enabled": True, "key": "cluster-key", "discovery_port": 70000},
         "mappings": [
-            {"id": "b00000000000", "name": "ok", "serial": {"port": "/dev/s2n-missing-0"},
+            # valid: its baud rate as text is read as that number (with a load note)
+            {"id": "b00000000000", "name": "ok",
+             "serial": {"port": "/dev/s2n-missing-0", "baudrate": "19200"},
              "network": dict(net, port=ports["ok"])},
             # rejected, but runs (the bad entry is skipped): must keep listening
             {"id": "b00000000001", "name": "acl-typo", "serial": {"port": "/dev/s2n-missing-1"},
@@ -189,9 +193,9 @@ def broken_config(ports: dict) -> dict:
             {"id": "b00000000003", "name": "tls-on", "serial": {"port": "/dev/s2n-missing-3"},
              "network": dict(net, port=ports["tls_on"], tls=True, tls_cert=missing,
                              tls_key=missing)},
-            # a hand-edited value the runner can't even be built from
+            # a hand-edited baud rate no serial port takes
             {"id": "b00000000004", "name": "baud-typo",
-             "serial": {"port": "/dev/s2n-missing-4", "baudrate": "9600"},
+             "serial": {"port": "/dev/s2n-missing-4", "baudrate": 0},
              "network": dict(net, protocol="modbus", port=ports["modbus"])},
         ],
     }
@@ -205,7 +209,7 @@ def test_problems_listed():
     cfg.ldap.enabled = True  # a second broken section: each one is listed, by name
     found = cfg.problems()
     assert found[0].startswith("LDAP: LDAP is enabled but no server URI"), found
-    assert found[1] == "LAN cluster: Cluster discovery port must be a number.", found
+    assert found[1] == "LAN cluster: Cluster discovery port must be 1..65535.", found
     assert [p.split(":")[0] for p in found[2:]] == [
         "mapping 'acl-typo'", "mapping 'tls-off'", "mapping 'tls-on'", "mapping 'baud-typo'"], found
     assert "TLS file not found" in found[3] and "Baud rate" in found[5], found
@@ -250,7 +254,7 @@ def test_saves_refuse_only_new_problems():
         assert len(accepted) == 5 and not os.path.exists(store.path)
         store.save(cfg)  # nothing changed: the accepted problems don't block the save
         saved = read_json(store.path)
-        assert "tolerated" not in saved and saved["cluster"]["discovery_port"] == "not-a-port"
+        assert "tolerated" not in saved and saved["cluster"]["discovery_port"] == 70000
 
         by = {m.name: m for m in cfg.mappings}
         by["ok"].enabled = by["tls-on"].enabled = False  # stopping: fine, broken or not
@@ -329,13 +333,14 @@ def test_invalid_settings_still_start():
         written = json.load(fh)
     with srv:
         log = srv.output()
-        for line in ("WARNING: config.json: LAN cluster: Cluster discovery port must be a number.",
+        for line in ("WARNING: config.json: LAN cluster: Cluster discovery port must be 1..65535.",
                      "WARNING: config.json: mapping 'acl-typo': Invalid allowed client IP/CIDR",
                      "WARNING: config.json: mapping 'tls-off': TLS file not found",
                      "WARNING: config.json: mapping 'baud-typo': Baud rate must be",
                      "ser2net starts with the setting(s) above anyway",
-                     "cluster: discovery port 'not-a-port' is not a port number",
-                     "[tls-on] start failed", "[baud-typo] start failed",
+                     "cluster: discovery port 70000 is not a port number",
+                     "mapping 'ok': serial.baudrate \"19200\" is read as 19200",
+                     "[tls-on] start failed",
                      f"listening on 127.0.0.1:{ports['ok']}",
                      f"listening on 127.0.0.1:{ports['acl']}"):
             assert line in log, f"{line!r} not logged:\n{log[-3000:]}"
@@ -344,10 +349,12 @@ def test_invalid_settings_still_start():
         saved = srv.saved_config()
         by = {m["name"]: m for m in saved["mappings"]}
         assert by["tls-on"]["network"]["tls_cert"] == MISSING
-        assert by["baud-typo"]["serial"]["baudrate"] == "9600"
-        assert saved["cluster"]["discovery_port"] == "not-a-port" and "tolerated" not in saved
-        assert len(backups(srv.data)) == 1
-        with open(os.path.join(srv.data, "backups", backups(srv.data)[0]), encoding="utf-8") as fh:
+        assert by["baud-typo"]["serial"]["baudrate"] == 0
+        assert by["ok"]["serial"]["baudrate"] == 19200, "a text value is saved as its number"
+        assert saved["cluster"]["discovery_port"] == 70000 and "tolerated" not in saved
+        oldest_first = ConfigStore(srv.config_path).backup_names()[::-1]
+        assert len(oldest_first) == 2, oldest_first  # the original, and the new file
+        with open(os.path.join(srv.data, "backups", oldest_first[0]), encoding="utf-8") as fh:
             assert json.load(fh) == written, "the original file must be backed up"
         with urllib.request.urlopen(srv.base + "/healthz", timeout=10) as r:
             assert r.read().strip() == b"ok"
@@ -356,10 +363,7 @@ def test_invalid_settings_still_start():
         st, _h, _body = b.get("/")
         assert st == 200, st
         st, _h, table = b.get("/api/status")  # the dashboard's mapping table
-        assert st == 200, st
-        row = table[table.index('data-mid="b00000000004"'):]
-        row = row[:row.index("</tr>")]  # the mapping its runner can't even be built for
-        assert "state-error" in row and "its settings can&#39;t be used" in row, row
+        assert st == 200 and 'data-mid="b00000000004"' in table, st
         with socket.create_connection(("127.0.0.1", ports["acl"]), timeout=5):
             pass
         print("rejected settings: logged per part, accepted, saved as they were; UI up, the "
@@ -378,7 +382,7 @@ def test_invalid_settings_still_start():
             == [False, False]
         assert saved["users"][0]["pwd_version"] == 2
         st, baud = api(srv, "GET", f"/mappings/{mid['baud-typo']}")
-        baud["name"] = "baud-typo-renamed"  # still "9600": refused, with its own error
+        baud["name"] = "baud-typo-renamed"  # still 0: refused, with its own error
         st, body = api(srv, "PUT", f"/mappings/{mid['baud-typo']}", baud)
         assert st == 400 and "Baud rate must be a positive integer" in body["detail"], (st, body)
         baud["serial"]["baudrate"] = 9600
@@ -416,9 +420,9 @@ def test_accounts_saved_once():
             assert [(u["username"], u["role"]) for u in saved["users"]] == [("boss", "admin")]
             assert saved["secret_key"] == cfg.secret_key and saved["instance_id"] == cfg.instance_id
             assert (saved["cluster"]["discovery_port"], saved["mappings"][3]["network"]["tls_cert"],
-                    saved["mappings"][4]["serial"]["baudrate"]) == ("not-a-port", MISSING, "9600"), \
+                    saved["mappings"][4]["serial"]["baudrate"]) == (70000, MISSING, 0), \
                 "the broken parts must stay as they were"
-            assert len(backups(data)) == 1, backups(data)
+            assert len(backups(data)) == 2, backups(data)  # the file it replaced, and the new one
             assert "admin account 'boss' created from SER2NET_ADMIN_PASSWORD_FILE" in cfg.load_notes
             assert "first_run_setup\tSER2NET_ADMIN_PASSWORD_FILE\tboss" in \
                 read_text(os.path.join(data, "audit.log"))

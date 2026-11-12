@@ -33,6 +33,15 @@ leaves the folder's permissions as they are. A new service won't take over a dat
 that holds files owned by another account (a standard user can create folders in
 `C:\ProgramData`): check and delete it, or take it over, and install again.
 
+## In a console window or as a service
+
+The exe also runs in a console window (double-click, or from a prompt), which is handy to
+try it out. For production install the service: it starts at boot and needs nobody signed
+in. In a console window, a click into it (QuickEdit mode, on by default) or *Edit → Mark*
+pauses the window's output until you press Esc or Enter; ser2net keeps forwarding
+meanwhile, only its console lines wait (and past a limit are dropped and counted, the next
+line says how many); `all.log` in the data directory has every line.
+
 ## Install
 
 From an elevated (**Run as administrator**) Command Prompt or PowerShell:
@@ -51,6 +60,26 @@ Run several instances side by side with `--service-name NAME` (each needs its ow
 ```bat
 ser2net-windows-x64.exe --uninstall-service
 ```
+
+### When the service doesn't start
+
+The service is *Starting* until its mappings were started and its admin UI listens, and
+*Running* from then on, so `--install-service` waits for that and reports a service that
+stops while it starts (its exit code, and where to look) instead of success. A service
+whose event loop is stuck for 90 s writes `hang.log` and exits, and is started again 5 s
+later (`SER2NET_LOOP_WATCHDOG`, a system environment variable, sets the limit; `0` = off).
+
+Look in the data directory (`C:\ProgramData\ser2net\` by default):
+
+- `all.log` — ser2net's log, with the reason a start failed (a `config.json` that can't be
+  read, an admin UI address that is in use or not on this machine, a TLS file that can't
+  be loaded).
+- `service.log` — what Python itself reports (a traceback no handler took, a crash
+  dump), begun anew at each start; the previous start's is `service.log.1`.
+- *Event Viewer → Windows Logs → Application*, source `ser2net` (the service name): one
+  error entry with the reason when the service stops on an error. (The source is not
+  registered, so Event Viewer first says it can't find a description for event 1; the
+  reason follows.)
 
 ### Upgrading the service
 
@@ -136,13 +165,27 @@ an unplugged cable, a port still held by another program), the service keeps run
 mappings start, and the admin UI and each such mapping try again on their own, at most
 30 s apart, until they can listen (`all.log` says so once, and again when they are up).
 
+## Changing config.json while the service runs
+
+After editing `config.json` (by hand or with a deployment tool), have the running service
+read it again — no restart, mappings whose settings didn't change keep their clients:
+
+```bat
+"C:\Program Files\ser2net\ser2net.exe" --reload --data-dir C:\ProgramData\ser2net
+```
+
+(or Settings → *Configuration backups* → *Reload config.json*). A file that doesn't
+validate changes nothing; `all.log` says why. A renewed admin UI certificate at the same
+paths is read by a reload too. A new admin UI address needs the reinstall above.
+
 ## One instance per data directory
 
 ser2net locks its data directory (`ser2net.lock`) while it runs, so a second instance on
 the **same** data directory refuses to start rather than two processes overwriting each
 other's `config.json` — a plain `--reconfigure` while the service runs, too.
-`--set-password` and `--sign-out-all` (account recovery) are not refused: while the service
-runs they hand the change to it, which applies it at once; while it is stopped they take
+`--set-password`, `--sign-out-all` (account recovery) and `--reload` are not refused: while
+the service runs they hand the request to it, which applies it at once; while it is stopped
+`--reload` has nothing to do, and the other two take
 the lock for the moment they change `config.json`, and a service that starts meanwhile
 waits for them.
 `--install-service` only checks the lock, after stopping the service it upgrades. To run a

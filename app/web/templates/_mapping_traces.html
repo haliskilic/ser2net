@@ -1,27 +1,39 @@
 <div class="form-head">
   <h3 id="panel-title" tabindex="-1">{{ _("Traces — %(name)s", name=mapping_name|softbreak) }}</h3>
   <div class="actions">
+    {% if files %}<button class="btn sm danger" id="traces-delete-all" hx-delete="{{ base }}/api/mappings/{{ mid }}/traces" hx-target="#form-panel" hx-swap="innerHTML"
+            hx-confirm="{{ _('Delete all %(n)s trace file(s) of “%(name)s”?', n=files|length, name=mapping_name) }}">{{ _("Delete all") }}</button>{% endif %}
     <button class="btn sm" id="traces-refresh" hx-get="{{ base }}/api/mappings/{{ mid }}/traces" hx-target="#form-panel" hx-swap="innerHTML">{{ _("↻ Refresh") }}</button>
     <button type="button" class="btn sm" id="traces-close" data-cancel>{{ _("Close") }}</button>
   </div>
 </div>
+{% if ok %}<div class="banner ok">{{ ok }}</div>{% endif %}
+{% if error %}<div class="banner error">{{ error }}</div>{% endif %}
+{% if tracing and trace_error %}
+<div class="banner warn">{{ _("Not recording now: %(error)s. ser2net tries again every few seconds; the trace then says how many bytes are missing.", error=trace_error) }}</div>
+{% endif %}
 {% if tracing %}
 <p class="muted mb-sm">{{ ngettext('Recording to <span class="mono">traces/%(file)s</span> in the data folder (%(mb)s MB per file, %(num)s older file kept).', 'Recording to <span class="mono">traces/%(file)s</span> in the data folder (%(mb)s MB per file, %(num)s older files kept).', keep, file=current|softbreak, mb=max_mb) }}{% if hexdump %} {{ _("Hex dump.") }}{% endif %}</p>
 {% else %}
 <p class="muted mb-sm">{{ _("Tracing is off for this mapping (set a trace file name in its options). Files recorded earlier are listed below.") }}</p>
 {% endif %}
+<p class="muted mb-sm">{{ _("Traces hold the raw traffic in both directions, personal data and passwords typed to the device included: delete them once they are no longer needed.") }}{% if trace_days %} {{ _("Trace files not written for %(days)s days are deleted every hour (Settings → Retention).", days=trace_days) }}{% endif %}</p>
 {% if files %}
 <p class="muted mb-sm">{{ _("Times in trace files are the server’s local time (now %(zone)s).", zone=server_zone()) }}</p>
 <div class="table-scroll">
-<table class="grid">
+<table class="grid stackable">
   <thead><tr><th>{{ _("File") }}</th><th>{{ _("Size") }}</th><th>{{ _("Last written") }}</th><th class="col-actions"></th></tr></thead>
   <tbody>
   {% for f in files %}
     <tr>
-      <td class="mono">{{ f.name|softbreak }}</td>
-      <td class="mono nowrap">{{ f.size_text }}</td>
-      <td class="mono nowrap">{{ f.time }}</td>
-      <td class="col-actions"><a class="btn sm" href="{{ base }}/api/mappings/{{ mid }}/traces/{{ f.name|urlencode }}">{{ _("⤓ Download") }}</a></td>
+      <td class="mono col-name">{{ f.name|softbreak }}</td>
+      <td class="mono nowrap" data-label="{{ _('Size') }}">{{ f.size_text }}</td>
+      <td class="mono nowrap" data-label="{{ _('Last written') }}">{{ f.time }}</td>
+      <td class="col-actions"><div class="row-actions"><div class="btn-group">
+        <a class="btn sm" href="{{ base }}/api/mappings/{{ mid }}/traces/{{ f.name|urlencode }}">{{ _("⤓ Download") }}</a>
+        <button class="btn sm danger" hx-delete="{{ base }}/api/mappings/{{ mid }}/traces/{{ f.name|urlencode }}" hx-target="#form-panel" hx-swap="innerHTML"
+                hx-confirm="{{ _('Delete the trace file “%(name)s”?', name=f.name) }}">{{ _("Delete") }}</button>
+      </div></div></td>
     </tr>
   {% endfor %}
   </tbody>

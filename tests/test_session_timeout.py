@@ -71,10 +71,13 @@ def main():
         assert "Session lifetime must be between 5 minutes and 30 days" in page, page[:400]
         assert srv.saved_config()["session_timeout_s"] == 600
         st, _, page = b.post("/settings/access", {"require_login": "on", "anonymous_role": "viewer",
+                                                  "session_minutes": "inf"})
+        assert st == 200 and "Session lifetime must be a number of minutes" in page, (st, page[:400])
+        st, _, page = b.post("/settings/access", {"require_login": "on", "anonymous_role": "viewer",
                                                   "session_minutes": "45"})
         assert st == 200 and srv.saved_config()["session_timeout_s"] == 2700, page[:400]
         assert "web UI session lifetime set to 45 min" in srv.output()
-        print("Settings -> Web UI access: 1 min refused, 45 min saved  OK")
+        print("Settings -> Web UI access: 1 min and 'inf' refused, 45 min saved  OK")
 
         b2 = Browser(srv.base)
         st, h, _ = b2.post("/login", {"username": "admin", "password": PASSWORD})

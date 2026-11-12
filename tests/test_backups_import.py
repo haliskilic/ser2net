@@ -2,8 +2,9 @@
 
 Before v2.8 "Import" replaced every mapping at once and config.json was never backed
 up, so a wrong import or edit could not be undone. Checks:
-  * every change keeps the replaced config.json in data/backups (no duplicates,
-    newest 50 kept; names that aren't ours are rejected);
+  * every save keeps the config.json it writes in data/backups, and the one it
+    replaces when that isn't kept yet (no duplicates, newest 50 kept; names that aren't
+    ours are rejected);
   * listing them (the Settings page, at every visit) parses each file only once;
   * the import form first previews (nothing changes), then merges — same name =
     update keeping the id, new = add, others untouched — or replaces;
@@ -15,6 +16,9 @@ up, so a wrong import or edit could not be undone. Checks:
     what an update changes and keeps; the same file again is "unchanged"; the port
     locking, the families a :: listener takes (dual_stack, ipv6n4) and a TLS client CA
     follow the same rules (never wider, a CA is not dropped);
+  * starting and stopping mappings takes no backup of its own (the newest one is
+    updated), a save that changes nothing writes nothing, a new backup sorts first also
+    when the clock went back, and a backup that can't be written is logged and said so;
   * an admin can download (without the session key) and restore a backup; the restore
     is undoable, keeps the session working, and a backup without users is refused;
   * a restore first shows what changes for sign-in and access. By default it brings back
@@ -31,6 +35,7 @@ Run: python3 tests/test_backups_import.py
 """
 import json
 import os
+import shutil
 import tempfile
 import urllib.error
 import urllib.request
@@ -57,21 +62,40 @@ def test_store_backups():
     d = tempfile.mkdtemp(prefix="s2n_bk_")
     store = ConfigStore(os.path.join(d, "config.json"))
     cfg = AppConfig()
+
+    def newest_is_current():
+        with open(store.path, encoding="utf-8") as fh:
+            return store.read_backup(store.backup_names()[0]) == fh.read()
+
     store.save(cfg)
-    assert store.backup_names() == [], "the first save has nothing to back up"
+    assert len(store.backup_names()) == 1 and newest_is_current(), \
+        "the first save keeps what it wrote"
     cfg.session_timeout_s = 3600
     store.save(cfg)
     store.save(cfg)  # same content again: no new file
     names = store.backup_names()
-    assert len(names) == 1, names
-    assert json.loads(store.read_backup(names[0]))["session_timeout_s"] == 28800
+    assert len(names) == 2 and newest_is_current(), names
+    assert json.loads(store.read_backup(names[1]))["session_timeout_s"] == 28800
     for i in range(BACKUPS_KEPT + 5):
         cfg.session_timeout_s = 600 + i
         store.save(cfg)
     names = store.backup_names()
     assert len(names) == BACKUPS_KEPT, len(names)
-    newest = json.loads(store.read_backup(names[0]))["session_timeout_s"]
-    assert newest == 600 + BACKUPS_KEPT + 3, newest  # the version before the last save
+    assert newest_is_current(), "the newest backup is what config.json holds"
+    before = json.loads(store.read_backup(names[1]))["session_timeout_s"]
+    assert before == 600 + BACKUPS_KEPT + 3, before  # the version before the last save
+    # config.json edited by hand (or by an older release): kept before it is replaced
+    with open(store.path, "r+", encoding="utf-8") as fh:
+        doc = json.load(fh)
+        doc["session_timeout_s"] = 7200
+        fh.seek(0)
+        fh.truncate()
+        json.dump(doc, fh)
+    cfg.session_timeout_s = 900
+    store.save(cfg)
+    names = store.backup_names()
+    assert json.loads(store.read_backup(names[1]))["session_timeout_s"] == 7200, names
+    assert newest_is_current()
     for bad in ("../config.json", "config.json", "config-20260101T000000Z.json.x", ""):
         try:
             store.read_backup(bad)
@@ -81,7 +105,111 @@ def test_store_backups():
             raise AssertionError(f"read_backup accepted {bad!r}")
     info = store.backups()[0]
     assert info["mappings"] == 0 and info["users"] == 0 and len(info["time"]) == 19, info
-    print(f"store: each change backs up the old file, no duplicates, newest {BACKUPS_KEPT} kept  OK")
+    assert info["current"] is True and store.backups()[1]["current"] is False
+    print(f"store: each save keeps what it wrote (and the file it replaces if not kept yet), "
+          f"no duplicates, newest {BACKUPS_KEPT} kept  OK")
+
+
+def test_store_start_stop_and_clock():
+    """A start / stop takes no backup of its own; a save that changes nothing writes
+    nothing; a new backup is the newest also when the clock went back; a backup that can't
+    be written is reported."""
+    import app.config as config_module
+
+    d = tempfile.mkdtemp(prefix="s2n_bk2_")
+    real_now = config_module.now
+    try:
+        store = ConfigStore(os.path.join(d, "config.json"))
+        logs = []
+        store.log = logs.append
+        cfg = AppConfig.from_dict({"mappings": [mapping("aaaaaaaaaaa1", "A", 5001)]})
+
+        def text(name):
+            return store.read_backup(name)
+
+        def newest_is_current():
+            with open(store.path, encoding="utf-8") as fh:
+                return text(store.backup_names()[0]) == fh.read()
+
+        store.save(cfg)
+        cfg.session_timeout_s = 3600
+        store.save(cfg)  # a real change
+        before_change = store.backup_names()[1]
+        m = cfg.mappings[0]
+        for _ in range(BACKUPS_KEPT + 5):  # many starts and stops
+            m.enabled = not m.enabled
+            assert store.save(cfg, backup=False) is True
+        names = store.backup_names()
+        assert len(names) == 2 and names[1] == before_change and newest_is_current(), names
+        assert json.loads(text(names[0]))["mappings"][0]["enabled"] is m.enabled
+        written = os.stat(store.path).st_mtime_ns
+        assert store.save(cfg) is True and os.stat(store.path).st_mtime_ns == written, \
+            "a save that changes nothing must not write config.json"
+        with open(store.path, "r+", encoding="utf-8") as fh:  # edited by hand meanwhile
+            doc = json.load(fh)
+            doc["session_timeout_s"] = 7200
+            fh.seek(0)
+            fh.truncate()
+            json.dump(doc, fh)
+        m.enabled = not m.enabled
+        store.save(cfg, backup=False)  # ... is kept, start / stop or not
+        names = store.backup_names()
+        assert len(names) == 4 and json.loads(text(names[1]))["session_timeout_s"] == 7200
+        assert newest_is_current()
+        print("store: starts and stops take no backup of their own (a hand edit is still "
+              "kept); a save that changes nothing writes nothing  OK")
+
+        for i in range(BACKUPS_KEPT):  # the newest 50 backups, from the clock's time now
+            cfg.session_timeout_s = 600 + i
+            store.save(cfg)
+        prev = top = store.backup_names()[0]
+        config_module.now = lambda: 1230768000.0  # 2009-01-01: a CMOS battery gone flat
+        for i in range(3):
+            cfg.session_timeout_s = 1200 + i
+            store.save(cfg)
+            names = store.backup_names()
+            assert len(names) == BACKUPS_KEPT and newest_is_current(), names[:3]
+            assert names[1] == prev and names[0].startswith(top[:len("config-20260101T000000Z")])
+            prev = names[0]
+        assert json.loads(text(names[1]))["session_timeout_s"] == 1201
+        assert not any(n.startswith("config-2009") for n in names)
+        clock = [line for line in logs if "the system clock" in line]
+        assert len(clock) == 1 and "(2009-01-01 00:00:00 UTC) is behind" in clock[0], logs
+        print("store: with the clock behind the backups, a new one is still the newest (named "
+              "after it), not pruned at once; said once in the log  OK")
+        config_module.now = real_now
+
+        future = os.path.join(store.backup_dir, "config-20990101T000000Z.json")
+        with open(store.path, encoding="utf-8") as fh, open(future, "w", encoding="utf-8") as out:
+            out.write(fh.read())
+        info = store.backups()
+        assert info[0]["name"] == "config-20990101T000000Z.json" and info[0]["file_time"], info[0]
+        assert not info[1]["file_time"], info[1]
+        print("store: a backup named after a later time than it was saved shows its file time  OK")
+
+        with open(store.path, "a", encoding="utf-8") as fh:
+            fh.write("\n")  # not the newest backup any more (a hand edit)
+        real_mkstemp = config_module.tempfile.mkstemp
+
+        def mkstemp(*a, **k):  # backups/ is full, config.json's folder is not
+            if k.get("prefix") == ".bak.":
+                raise OSError(28, "No space left on device")
+            return real_mkstemp(*a, **k)
+
+        config_module.tempfile.mkstemp = mkstemp
+        try:
+            cfg.session_timeout_s = 4000
+            assert store.save(cfg) is False, "a backup that failed was reported as kept"
+        finally:
+            config_module.tempfile.mkstemp = real_mkstemp
+        assert json.loads(open(store.path, encoding="utf-8").read())["session_timeout_s"] == 4000
+        assert any(line.startswith("WARNING: could not keep a backup of config.json")
+                   for line in logs), logs
+        print("store: a backup that can't be written is logged and reported; the save is "
+              "done  OK")
+    finally:
+        config_module.now = real_now
+        shutil.rmtree(d, ignore_errors=True)
 
 
 def test_backup_list_cache():
@@ -309,14 +437,51 @@ def test_classic_merge_serial_fields():
     assert _overlay(plain_tls, other).network.tls_client_ca == "/etc/other-ca.pem"
     print("classic merge: dual-stack (ipv6n4) not taken over an IPv6-only listener, a "
           "narrower one is; port locking from the file; a TLS client CA is never dropped  OK")
+def test_planner_keeps_absent_settings():
+    """A merge import of an export written by an older version (2.7.1's, which has no
+    "writable", trace rotation, Sparkplug ...) keeps the current values of the settings
+    the file doesn't have, a Modbus point's by its name; replace takes the defaults."""
+    with open(os.path.join(os.path.dirname(__file__), "fixtures", "config-2.7.1.json"),
+              encoding="utf-8") as fh:
+        old = next(m for m in json.load(fh)["mappings"] if m["name"] == "Modbus gateway")
+    now = MappingConfig.from_dict(old)
+    now.options.trace_max_mb, now.mqtt.payload_format = 2.5, "sparkplug_b"
+    for p in now.modbus_poll.points:
+        p.writable = p.fn in (1, 3)
+    assert any(p.writable for p in now.modbus_poll.points)
+    plan = parse_mappings_file(json.dumps({"mappings": [old]}).encode())
+    assert {"options.trace_max_mb", "modbus_poll.points[0].writable"} <= set(plan.absent[0])
+    assert "mqtt.payload_format" in plan.absent[0], plan.absent
+    note = next(w for w in plan.warnings if "the file has no" in w)
+    assert "options.trace_max_mb" in note, note  # (the note names the first 8)
+    assert [r["action"] for r in plan_rows([now], plan.mappings, "merge", plan.absent)] == ["same"]
+    merged, touched = apply_import([now], plan.mappings, "merge", plan.absent)
+    assert merged[0].to_dict() == now.to_dict() and not touched, "nothing the file has changed"
+    # what the file has still wins
+    old2 = json.loads(json.dumps(old))
+    old2["modbus_poll"]["points"][0]["address"] += 1
+    old2["modbus_poll"]["points"][1]["fn"] = 4   # an input register now: can't be written
+    plan = parse_mappings_file(json.dumps({"mappings": [old2]}).encode())
+    merged, touched = apply_import([now], plan.mappings, "merge", plan.absent)
+    got = merged[0].modbus_poll.points
+    assert got[0].address == now.modbus_poll.points[0].address + 1 and touched
+    assert got[0].writable == now.modbus_poll.points[0].writable and not got[1].writable
+    assert merged[0].options.trace_max_mb == 2.5 and merged[0].mqtt.payload_format == "sparkplug_b"
+    replaced, _ = apply_import([now], plan.mappings, "replace", plan.absent)
+    assert replaced[0].options.trace_max_mb == 10.0 and not any(
+        p.writable for p in replaced[0].modbus_poll.points), "replace: the defaults"
+    print("planner: a merge keeps the settings an older export doesn't have (points by name); "
+          "the preview names them  OK")
 
 
 def main():
     test_store_backups()
     test_backup_list_cache()
+    test_store_start_stop_and_clock()
     test_planner()
     test_classic_merge()
     test_classic_merge_serial_fields()
+    test_planner_keeps_absent_settings()
     users = [{"username": "admin", "password_hash": hash_password(PW), "role": "admin", "pwd_version": 1},
              {"username": "op", "password_hash": hash_password(PW), "role": "operator", "pwd_version": 1}]
     p1, p2, p3 = free_port(), free_port(), free_port()
@@ -408,9 +573,76 @@ def main():
         assert "has no user accounts" in page and srv.saved_config()["users"], "pre-setup backup restored"
         print("restoring the accounts of a backup without any is refused (would reopen setup)  OK")
     test_restore_accounts()
+    test_start_stop_backups()
     test_cluster_setting_changes()
     test_restore_cluster_keys()
     print("\nPASS: configuration backups + import preview / merge / replace")
+
+
+def test_start_stop_backups():
+    """Starting and stopping mappings (REST API, bulk) takes no backup of its own, so the
+    backups of real changes stay; an import whose backup can't be written says so."""
+    from app.web.auth import hash_token
+
+    token = "s2n_backup-start-stop"
+    users = [{"username": "admin", "password_hash": hash_password(PW), "role": "admin",
+              "pwd_version": 1}]
+    a, b = "aaaaaaaaaaa1", "aaaaaaaaaaa2"
+    config = {"users": users, "api_token_hash": hash_token(token), "api_token_role": "admin",
+              "mappings": [mapping(a, "A", free_port()), mapping(b, "B", free_port())]}
+
+    def call(method, path, body=None):
+        req = urllib.request.Request(
+            srv.base + "/api/v1" + path, method=method,
+            data=None if body is None else json.dumps(body).encode(),
+            headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=20) as r:
+            return json.loads(r.read())
+
+    with Server(config) as srv:
+        store = ConfigStore(srv.config_path)
+        view = call("GET", f"/mappings/{b}")
+        call("PUT", f"/mappings/{b}", dict(view, name="B2"))  # a real change
+        names = store.backup_names()
+        before_change = names[1]
+        for _ in range(25):
+            call("POST", f"/mappings/{a}/start")
+            call("POST", f"/mappings/{a}/stop")
+        admin = Browser(srv.base)
+        admin.login("admin", PW)
+        for action in ("start", "stop", "start", "stop"):
+            st, _, _ = admin.post("/api/mappings/bulk", {"action": action, "ids": [a, b]},
+                                  htmx=True)
+            assert st == 200, st
+        after = store.backup_names()
+        assert len(after) == len(names) and before_change in after, (names, after)
+        with open(srv.config_path, encoding="utf-8") as fh:
+            assert store.read_backup(after[0]) == fh.read(), "the newest backup is config.json"
+        print("UI/REST: 25 start/stop cycles and bulk actions take no backup of their own; the "
+              "backup from before a real change stays  OK")
+
+        with open(srv.config_path, "a", encoding="utf-8") as fh:
+            fh.write("\n")  # edited by hand: not the newest backup any more
+        away = store.backup_dir + ".away"
+        os.rename(store.backup_dir, away)
+        open(store.backup_dir, "w").close()  # backups/ can't be written
+        try:
+            export = json.dumps({"version": 1, "mappings": [mapping("ffffffffff07", "C",
+                                                                    free_port())]}).encode()
+            st, _, page = admin.post("/settings/config/import", {"step": "preview", "mode": "merge"},
+                                     files={"file": ("m.json", export)})
+            token_ = page.split('name="token" value="', 1)[1].split('"', 1)[0]
+            st, _, page = admin.post("/settings/config/import/apply", {"token": token_,
+                                                                       "mode": "merge"})
+            assert "Imported: 1 added" in page and \
+                "The previous configuration could not be kept as a backup (see all.log)." in page, \
+                page[page.find("banner"):][:400]
+        finally:
+            os.remove(store.backup_dir)
+            os.rename(away, store.backup_dir)
+        with open(os.path.join(srv.data, "all.log"), encoding="utf-8") as fh:
+            assert "WARNING: could not keep a backup of config.json" in fh.read()
+        print("UI import: a backup that can't be written is said so (and logged)  OK")
 
 
 def api_status(base, token):

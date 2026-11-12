@@ -1,8 +1,10 @@
 {% from "_serial_port_select.html" import device_field %}
 {% macro serial_fields(s, prefix, ports) %}
   {{ device_field(s.port, prefix, ports, not remote, links) }}
+  {% if 'usb_match' not in hide %}
   <input type="hidden" name="{{ prefix }}usb_match_shown" value="1">
   <label class="chk"><input type="checkbox" name="{{ prefix }}usb_match" {% if s.identity %}checked{% endif %}> {{ _("Find this device by its USB identity if its name changes") }} <span class="muted">({{ _("COMx / ttyUSBx renumbering after re-plugging · VID:PID + serial number") }}{% if s.identity %} · {{ _("bound to") }} <span class="mono">{{ identity_text(s.match) }}</span>{% endif %})</span></label>
+  {% endif %}
   <div class="grid3">
     <label>{{ _("Baud rate") }}
       <select name="{{ prefix }}baudrate" data-custom="{{ prefix }}custom_baud">
@@ -49,9 +51,9 @@
     <label class="chk"><input type="checkbox" name="{{ prefix }}rs485_enabled" {% if s.advanced.rs485_enabled %}checked{% endif %}> {{ _("Enable RS-485 mode") }} <span class="muted">({{ _('Linux <span class="mono">TIOCSRS485</span>; the driver must support it') }})</span></label>
     <div class="grid3">
       <label>{{ _("RTS delay before TX (ms)") }}
-        <input type="number" step="0.1" min="0" name="{{ prefix }}rs485_delay_before_tx_ms" value="{{ s.advanced.rs485_delay_before_tx_ms }}"></label>
+        <input type="number" step="any" min="0" name="{{ prefix }}rs485_delay_before_tx_ms" value="{{ s.advanced.rs485_delay_before_tx_ms }}"></label>
       <label>{{ _("RTS delay after TX (ms)") }}
-        <input type="number" step="0.1" min="0" name="{{ prefix }}rs485_delay_after_tx_ms" value="{{ s.advanced.rs485_delay_after_tx_ms }}"></label>
+        <input type="number" step="any" min="0" name="{{ prefix }}rs485_delay_after_tx_ms" value="{{ s.advanced.rs485_delay_after_tx_ms }}"></label>
       <label class="chk chk-pad"><input type="checkbox" name="{{ prefix }}rs485_rts_level_for_tx" {% if s.advanced.rs485_rts_level_for_tx %}checked{% endif %}> {{ _("RTS high during TX") }}</label>
     </div>
   </details>
@@ -68,12 +70,15 @@
   <input type="hidden" name="port" value="{{ remote.port }}">
   {% endif %}
   {% if not is_new %}<input type="hidden" name="id" value="{{ remote.id if remote else mapping.id }}">{% endif %}
+  {% if rev and not is_new %}<input type="hidden" name="rev" value="{{ rev }}">{% endif %}
 
   <div class="form-head">
     <h3 id="panel-title" tabindex="-1">{{ _("New mapping") if is_new else _("Edit mapping") }}{% if remote %} <span class="tag">{{ _("on %(host)s", host=remote.addr) }}</span>{% endif %}</h3>
     <button type="button" class="btn sm" id="form-cancel" data-cancel>{{ _("Cancel") }}</button>
   </div>
+  {% if remote and remote.version_note %}<div class="banner warn">{{ remote.version_note }}</div>{% endif %}
   {% if error %}<div class="banner error" role="alert" tabindex="-1">{{ error }}</div>{% endif %}
+  {% for note in mapping.ignored_settings() %}<div class="banner warn">{{ note }}</div>{% endfor %}
 
   <div class="grid3">
     <label>{{ _("Name") }} <input type="text" name="name" value="{{ mapping.name }}" placeholder="{{ _('e.g. %(example)s', example='PLC-1') }}" required></label>
@@ -107,7 +112,7 @@
         </select>
       </label>
       <label>{{ _("Protocol") }}
-        <select name="network_protocol">{% for pr in protocols %}<option value="{{ pr }}" {% if pr == mapping.network.protocol %}selected{% endif %}>{{ pr }}</option>{% endfor %}</select>
+        <select name="network_protocol">{% for pr in protocols %}<option value="{{ pr }}" {% if pr == mapping.network.protocol %}selected{% endif %}{% if pr != 'raw' %} data-show-when="network_mode=server,client"{% endif %}>{{ pr }}</option>{% endfor %}</select>
       </label>
       <label class="chk chk-pad"><input type="checkbox" name="network_read_only" {% if mapping.network.read_only %}checked{% endif %}> {{ _("Read-only") }}</label>
     </div>
@@ -137,7 +142,6 @@
       <div class="grid3">
         <label>{{ _("Max connections") }} <input type="number" required name="network_max_connections" min="1" value="{{ mapping.network.max_connections }}"></label>
         <label class="chk chk-pad"><input type="checkbox" name="network_kick_old_user" {% if mapping.network.kick_old_user %}checked{% endif %}> {{ _("Kick old client") }}</label>
-        <label data-show-when="network_protocol=raw,telnet,rfc2217">{{ _("Client buffer (chunks)") }} <input type="number" required name="network_client_queue_max" min="16" value="{{ mapping.network.client_queue_max }}"></label>
       </div>
       <label>{{ _("High-priority client IPs / CIDRs") }} <span class="muted">({{ _("kick an existing client when full") }})</span>
         <input type="text" name="network_priority_client_ips" value="{{ mapping.network.priority_client_ips | join(' ') }}" placeholder="{{ _('e.g. %(example)s', example='192.168.1.10') }}">
@@ -147,12 +151,17 @@
       {% endif %}
     </div>
 
+    <div class="grid3" data-show-when="network_mode=server,client">
+      <label data-show-when="network_protocol=raw,telnet,rfc2217">{{ _("Client buffer (chunks)") }} <input type="number" required name="network_client_queue_max" min="16" value="{{ mapping.network.client_queue_max }}"></label>
+    </div>
+
     <div data-show-when="network_mode=server,udp">
       <label>{{ _("Allowed client IPs / CIDRs") }} <span class="muted">({{ _("blank = any; enforced for TCP server and UDP") }})</span>
         <input type="text" name="network_allowed_client_ips" value="{{ mapping.network.allowed_client_ips | join(' ') }}" placeholder="{{ _('e.g. %(example)s', example='192.168.1.0/24') }}">
       </label>
     </div>
 
+    {% if 'udp_reply' not in hide %}
     <div data-show-when="network_mode=udp">
       <div class="grid3">
         <label>{{ _("Reply to IP") }} <span class="muted">({{ _("blank = the last sender") }})</span>
@@ -169,6 +178,7 @@
       </div>
       <p class="sub mb-sm">{{ _("The device’s output goes to the sender of the last datagram from an allowed IP, so any of them can take it over; with a reply address it always goes there. The allow-list checks a datagram’s source address, which can be forged: on an untrusted network use TCP with TLS, or a firewall.") }}</p>
     </div>
+    {% endif %}
 
     <div data-show-when="network_mode=server,client">
       <label class="chk"><input type="checkbox" name="network_tls" {% if mapping.network.tls %}checked{% endif %}> {{ _("TLS (encrypt the data bridge)") }}</label>
@@ -225,6 +235,7 @@
         {%- if mapping.options.closeon|in_text_box != mapping.options.closeon %}<span class="muted">{{ hidden_chars }}</span>{% endif %}
       </label>
     </div>
+    {% if 'rfc2217_restore' not in hide %}
     <div data-show-when="network_protocol=rfc2217">
       <input type="hidden" name="opt_rfc2217_restore_on_disconnect_shown" value="1">
       <label class="chk"><input type="checkbox" name="opt_rfc2217_restore_on_disconnect" {% if mapping.options.rfc2217_restore_on_disconnect %}checked{% endif %}> {{ _("Restore the serial settings when the RFC 2217 client leaves") }} <span class="muted">({{ _("baud rate, data bits, parity, stop bits and flow control go back to this mapping’s; RTS/DTR stay as they are") }})</span></label>
@@ -240,6 +251,7 @@
         <label class="chk chk-pad"><input type="checkbox" name="opt_poll_with_clients" {% if mapping.options.poll_with_clients %}checked{% endif %}> {{ _("Also while a TCP client is connected") }}</label>
       </div>
     </div>
+    {% endif %}
     <div class="grid2">
       <label>{{ _("Idle timeout (s)") }} <span class="muted">({{ _("TCP; no traffic either way · 0 = off") }})</span>
         <input type="number" required name="opt_idle_timeout_s" min="0" value="{{ mapping.options.idle_timeout_s }}"></label>
@@ -247,11 +259,18 @@
         <input type="number" required name="opt_max_connection_time_s" min="0" value="{{ mapping.options.max_connection_time_s }}"></label>
     </div>
     <div class="grid2">
+      <label>{{ _("No-data alarm (s)") }} <span class="muted">({{ _("the device sends nothing this long while its port is open: dashboard, log, notification · 0 = off, else 10 to 604800") }})</span>
+        <input type="number" name="opt_no_data_alarm_s" min="0" max="604800" value="{{ mapping.options.no_data_alarm_s }}"></label>
+      <label class="chk chk-pad"><input type="checkbox" name="opt_no_data_reply_only" {% if mapping.options.no_data_reply_only %}checked{% endif %}> {{ _("Only while it doesn’t answer what is sent to it") }} <span class="muted">({{ _("a device that speaks only when asked, e.g. Modbus RTU") }})</span></label>
+    </div>
+    <div class="grid2">
       <label>{{ _("Trace file name") }} <span class="muted">({{ _('record the traffic; kept in the data folder’s <span class="mono">traces/</span> · empty = off') }})</span>
         <input type="text" name="opt_trace_both" value="{{ mapping.options.trace_both }}" placeholder="{{ _('optional, e.g. %(example)s', example='plc1.trace') }}">
       </label>
       <label class="chk chk-pad"><input type="checkbox" name="opt_trace_hexdump" {% if mapping.options.trace_hexdump %}checked{% endif %}> {{ _("Trace as hex dump") }}</label>
     </div>
+    <p class="muted mb-sm">{{ _("Traces hold the raw traffic in both directions, personal data and passwords typed to the device included: delete them once they are no longer needed.") }}</p>
+    {% if 'trace_rotation' not in hide %}
     <div class="grid2">
       <label>{{ _("Trace file size (MB)") }} <span class="muted">({{ _("then it is rotated") }})</span>
         <input type="number" required name="opt_trace_max_mb" min="0.1" max="1024" step="any" value="{{ '%g'|format(mapping.options.trace_max_mb) }}"></label>
@@ -270,11 +289,12 @@
           ("cp437", _("CP437 (DOS, US)"))] %}<option value="{{ value }}" {% if value == mapping.options.console_encoding %}selected{% endif %}>{{ label }}</option>{% endfor %}</select>
       </label>
     </div>
+    {% endif %}
   </fieldset>
 
   <fieldset data-show-when="kind=net">
     <legend>{{ _("MQTT publishing") }} <span class="muted" data-show-when="network_protocol=raw,telnet,rfc2217">({{ _("serial lines → broker; needs paho-mqtt") }})</span><span class="muted" data-show-when="network_protocol=modbus">({{ _("Modbus points → broker, commands → writable points; needs paho-mqtt") }})</span></legend>
-    <label class="chk"><input type="checkbox" name="mqtt_enabled" {% if mapping.mqtt.enabled %}checked{% endif %}> {{ _("Publish serial lines to MQTT") }}</label>
+    <label class="chk"><input type="checkbox" name="mqtt_enabled" {% if mapping.mqtt.enabled %}checked{% endif %}> <span data-show-when="network_protocol=raw,telnet,rfc2217">{{ _("Publish serial lines to MQTT") }}</span><span data-show-when="network_protocol=modbus">{{ _("Publish the Modbus poll points to MQTT (add them below)") }}</span></label>
     <div class="grid3">
       <label>{{ _("Broker host") }} <input type="text" name="mqtt_host" value="{{ mapping.mqtt.host }}" placeholder="{{ _('e.g. %(example)s', example='192.168.1.5') }}"></label>
       <label>{{ _("Port") }} <input type="number" required name="mqtt_port" min="1" max="65535" value="{{ mapping.mqtt.port }}"></label>
@@ -282,9 +302,14 @@
         <select name="mqtt_qos">{% for q in [0, 1, 2] %}<option value="{{ q }}" {% if q == mapping.mqtt.qos %}selected{% endif %}>{{ q }}</option>{% endfor %}</select>
       </label>
     </div>
-    <label>{{ _("Base topic") }} <span class="muted">({{ _("lines publish here; status at &lt;topic&gt;/status") }})</span>
-      <input type="text" name="mqtt_base_topic" value="{{ mapping.mqtt.base_topic }}" placeholder="{{ _('e.g. %(example)s', example='ser2net/plc1') }}">
-    </label>
+    <div class="grid2">
+      <label>{{ _("Base topic") }} <span class="muted">({{ _("lines publish here; status at &lt;topic&gt;/status") }})</span>
+        <input type="text" name="mqtt_base_topic" value="{{ mapping.mqtt.base_topic }}" placeholder="{{ _('e.g. %(example)s', example='ser2net/plc1') }}">
+      </label>
+      <label>{{ _("Client ID") }} <span class="muted">({{ _("blank = auto") }})</span>
+        <input type="text" name="mqtt_client_id" value="{{ mapping.mqtt.client_id }}" placeholder="{{ _('e.g. %(example)s', example='s2n-plc1') }}" autocapitalize="none" autocorrect="off" spellcheck="false">
+      </label>
+    </div>
     <div class="grid3">
       <label>{{ _("Username") }} <input type="text" name="mqtt_username" value="{{ mapping.mqtt.username }}" placeholder="{{ _('optional') }}" autocomplete="off" autocapitalize="none" autocorrect="off" spellcheck="false"></label>
       {# write-only: the stored password is never in the page; blank keeps it #}
@@ -308,6 +333,7 @@
       </div>
       {% if mapping.accepts_mqtt_tx and not (mapping.mqtt.tls and mapping.mqtt.username) %}<div class="banner warn">{{ _("MQTT messages are written to the device over a broker connection without TLS or a username: any client the broker lets publish to &lt;topic&gt;/tx can write to it. Restrict that topic with the broker’s ACLs, and use TLS and credentials.") }}</div>{% endif %}
     </div>
+    {% if 'payload_format' not in hide %}
     <div class="grid3" data-show-when="network_protocol=modbus">
       <label>{{ _("Payload format") }} <span class="muted">({{ _("Modbus points") }})</span>
         <select name="mqtt_payload_format">
@@ -318,11 +344,12 @@
       <label>{{ _("Sparkplug edge node ID") }} <span class="muted">({{ _("blank = mapping name") }})</span>
         <input type="text" name="mqtt_sparkplug_node_id" value="{{ mapping.mqtt.sparkplug_node_id }}" placeholder="{{ _('e.g. %(example)s', example='line-3-plc') }}"></label>
     </div>
+    {% endif %}
   </fieldset>
 
   <fieldset data-show-when="network_protocol=modbus">
     <legend>{{ _("Modbus register polling → MQTT") }} <span class="muted">({{ _("edge mode; also enable MQTT above") }})</span></legend>
-    <label>{{ _("Poll interval (s)") }} <input type="number" name="modbus_poll_interval_s" min="0.1" step="0.1" value="{{ mapping.modbus_poll.interval_s }}"></label>
+    <label>{{ _("Poll interval (s)") }} <input type="number" name="modbus_poll_interval_s" min="0.1" step="any" value="{{ mapping.modbus_poll.interval_s }}"></label>
     <label>{{ _("Points — JSON array") }}
       <span class="muted">[{"name","unit","fn":1 coils|2 discrete inputs|3 holding|4 input,"address","dtype":"uint16|int16|uint32|int32|float32|bool","scale","writable":true}] — {{ _('writable points (coils, holding registers) take values from MQTT <span class="mono">&lt;topic&gt;/&lt;point&gt;/set</span> or a Sparkplug DCMD to their unit’s device (<span class="mono">unit&lt;N&gt;</span>)') }}</span>
       <textarea name="modbus_points" rows="5" spellcheck="false"
@@ -330,10 +357,12 @@
     </label>
     <p class="sub mb-sm">{{ _('Who may write is up to the broker: let only trusted clients publish to <span class="mono">&lt;topic&gt;/+/set</span> (Sparkplug: the node’s NCMD and DCMD topics), and use TLS and a username. Read-only refuses every write.') }}</p>
     {% if mapping.accepts_mqtt_writes and not (mapping.mqtt.tls and mapping.mqtt.username) %}<div class="banner warn">{{ _('Writable points take MQTT commands over a broker connection without TLS or a username: any client the broker lets publish to the command topics can write them. Restrict those topics with the broker’s ACLs, and use TLS and credentials.') }}</div>{% endif %}
+    {% if 'retained_set' not in hide %}
     <div data-show-when="mqtt_payload_format=plain">
       <input type="hidden" name="mqtt_apply_retained_set_shown" value="1">
       <label class="chk"><input type="checkbox" name="mqtt_apply_retained_set" {% if mapping.mqtt.apply_retained_set %}checked{% endif %}> {{ _("Re-apply a retained /set after every connect") }} <span class="muted">({{ _("off: a command is written when it is published; the retained copy the broker sends again after a reconnect, restart or save is ignored") }})</span></label>
     </div>
+    {% endif %}
   </fieldset>
 
   <button class="btn primary" type="submit">{{ _("Create mapping") if is_new else _("Save changes") }}</button>

@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import errno
 import os
+import shlex
 import socket
 import sys
 
@@ -65,6 +66,32 @@ def in_use_warning(ip: str, port: int) -> str:
     return (f"WARNING: port {port} on {shown_host(ip)} is in use (another ser2net instance or another "
             "program?) — the web UI can't listen there until it is free. Give this instance "
             "its own port: --reconfigure, or SER2NET_BIND_IP + SER2NET_PORT")
+
+
+def _quoted(arg: str) -> str:
+    if os.name == "nt":
+        return f'"{arg}"' if " " in arg else arg
+    return shlex.quote(arg)
+
+
+def reconfigure_hint(data_dir: str, service_name: str = "", environ=None) -> tuple[str, str]:
+    """How this installation changes the admin UI's address (for the Settings page):
+    ("env", "") when SER2NET_BIND_IP sets it (a container: its environment wins at every
+    start); ("service", command) for the Windows service, whose reinstall with --reconfigure
+    asks for it again; else ("console", command), a start with --reconfigure."""
+    environ = os.environ if environ is None else environ
+    if (environ.get("SER2NET_BIND_IP") or "").strip():
+        return "env", ""
+    if getattr(sys, "frozen", False):
+        prog = _quoted(sys.executable)
+    else:
+        script = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                              "ser2net.py")
+        prog = f"{_quoted(sys.executable)} {_quoted(script)}"
+    if service_name:
+        name = "" if service_name == "ser2net" else f" --service-name {_quoted(service_name)}"
+        return "service", f"{prog} --install-service --reconfigure{name}"
+    return "console", f"{prog} --reconfigure --data-dir {_quoted(data_dir)}"
 
 
 def choose_admin_bind(current: AdminUI | None = None,

@@ -6,11 +6,16 @@ to defaults (new mapping) or the stored values (edit, see _preserve_unmanaged_fi
 """
 from __future__ import annotations
 
+import copy
+import dataclasses
 import json
 import math
 import re
 
-from ...config import REDACTED, ConfigError, LdapSettings, MappingConfig, OidcSettings
+from ...config import (
+    REDACTED, ConfigError, LdapSettings, MappingConfig, OidcSettings, SerialSettings,
+    mapping_revision,
+)
 from ...engine import netinfo, portlist
 from ...i18n import _
 
@@ -164,6 +169,10 @@ def _serial_dict(form, prefix: str, strict: bool) -> dict:
     }
 
 
+_RS485 = ("rs485_enabled", "rs485_delay_before_tx_ms", "rs485_delay_after_tx_ms",
+          "rs485_rts_level_for_tx")
+_SERIAL = tuple(f.name for f in dataclasses.fields(SerialSettings))
+
 # Form fields that are not always posted: data-show-when hides AND disables a block,
 # so the keepalive block isn't sent for UDP and the connect timeout only in client
 # mode — and an older cluster peer's form (remote edit) doesn't know them at all. An
@@ -171,7 +180,27 @@ def _serial_dict(form, prefix: str, strict: bool) -> dict:
 # _preserve_unmanaged_fields keeps the stored values on edit, so switching mode back
 # and forth or a mixed-version remote edit never silently resets them.
 #   presence-marker form field -> (config section, attributes it governs)
+# A marker must be in every form that has any of its attributes (an older one too):
+# a form with the marker sets them all.
 _OPTIONAL_FORM_FIELDS = {
+    # serial↔serial only: the whole B side (a Serial ↔ Network mapping doesn't use it)
+    "serial_b_port": ("serial_b", _SERIAL),
+    # the USB-identity binding (see apply_usb_match); forms before 2.8.0 don't have it
+    "serial_usb_match_shown": ("serial", ("match",)),
+    "serial_b_usb_match_shown": ("serial_b", ("match",)),
+    # in every form since 2.6.3
+    "serial_rs485_delay_before_tx_ms": ("serial.advanced", _RS485),
+    "serial_b_rs485_delay_before_tx_ms": ("serial_b.advanced", _RS485),
+    # TCP server and UDP: where it listens
+    "network_port": ("network", ("bind_ip", "port")),
+    # TCP client: where it connects to
+    "network_remote_host": ("network", ("remote_host", "remote_port")),
+    # TCP server: who may connect
+    "network_max_connections": ("network", ("max_connections", "kick_old_user",
+                                            "priority_client_ips")),
+    "network_allowed_client_ips": ("network", ("allowed_client_ips",)),   # + UDP
+    # TCP (server and client)
+    "network_tls_cert": ("network", ("tls", "tls_cert", "tls_key")),
     "network_keepalive_idle_s": ("network", ("tcp_keepalive", "keepalive_idle_s",
                                              "keepalive_interval_s", "keepalive_count")),
     "network_connect_timeout_s": ("network", ("connect_timeout_s",)),
@@ -181,10 +210,14 @@ _OPTIONAL_FORM_FIELDS = {
     # TLS listener: the CA file the clients' certificates must come from
     "network_tls_client_ca": ("network", ("tls_client_ca",)),
     "opt_max_connection_time_s": ("options", ("max_connection_time_s",)),
+    # forms before 2.9.0 don't have the no-data alarm
+    "opt_no_data_alarm_s": ("options", ("no_data_alarm_s", "no_data_reply_only")),
     "opt_trace_max_mb": ("options", ("trace_max_mb", "trace_keep")),
     # forms before 2.9 don't have it
     "opt_console_encoding": ("options", ("console_encoding",)),
     "mqtt_payload_format": ("mqtt", ("payload_format", "sparkplug_group_id", "sparkplug_node_id")),
+    # every node since 2.3.0 reads it, but forms before 2.9.0 have no input for it
+    "mqtt_client_id": ("mqtt", ("client_id",)),
     # a checkbox (absent when unticked) shown for plain-format Modbus points only
     "mqtt_apply_retained_set_shown": ("mqtt", ("apply_retained_set",)),
     # serial lines (not a Modbus gateway): the line end, and writes from <base_topic>/tx
@@ -214,7 +247,31 @@ _OPTIONAL_FORM_FIELDS = {
     # dot is a section of a section
     "serial_port_lock_shown": ("serial.advanced", ("tiocexcl", "respect_uucp_locks")),
     "serial_b_port_lock_shown": ("serial_b.advanced", ("tiocexcl", "respect_uucp_locks")),
+    # Modbus gateways only (the points: see _keep_point_fields)
+    "modbus_poll_interval_s": ("modbus_poll", ("interval_s",)),
 }
+
+# Settings the mapping form doesn't have: an edit always keeps the stored values.
+#   config section -> attributes
+_UNMANAGED_FIELDS = {
+    "serial.advanced": ("hangup_when_done", "nobreak"),
+    "serial_b.advanced": ("hangup_when_done", "nobreak"),
+    "options": ("openstr", "closestr", "trace_timestamp", "rfc2217_poll_modem_interval_s",
+                "rfc2217_net_timeout_s", "modbus_response_timeout_s"),
+}
+
+# One-line text inputs that can hold a stored value they can't show: a browser drops
+# its line breaks (CR, LF) and turns a NUL into U+FFFD, so posted back unchanged it
+# differs (close-on strings imported from a ser2net configuration have them).
+#   form field -> (config section, attribute)
+_TEXT_INPUTS = {
+    "opt_banner": ("options", "banner"),
+    "opt_closeon": ("options", "closeon"),
+}
+
+# What a form from before 2.8.0 (an older cluster node's) leaves out of each Modbus
+# point, kept from the stored point of the same name (see _keep_point_fields).
+_POINT_FIELDS_SINCE_2_8 = ("writable",)
 
 
 def _section(mapping, path: str):
@@ -321,6 +378,9 @@ def _build_mapping_dict(form, strict: bool) -> dict:
         options["trace_keep"] = _num(form, "opt_trace_keep", 3, strict=strict)
     if "opt_console_encoding" in form:
         options["console_encoding"] = form.get("opt_console_encoding", "").strip()
+    if "opt_no_data_alarm_s" in form:
+        options["no_data_alarm_s"] = _num(form, "opt_no_data_alarm_s", 0, strict=strict)
+        options["no_data_reply_only"] = _checkbox(form, "opt_no_data_reply_only")
     if "opt_rfc2217_restore_on_disconnect_shown" in form:
         options["rfc2217_restore_on_disconnect"] = _checkbox(
             form, "opt_rfc2217_restore_on_disconnect")
@@ -350,7 +410,8 @@ def _build_mapping_dict(form, strict: bool) -> dict:
             "tls": _checkbox(form, "mqtt_tls"),
             "username": form.get("mqtt_username", "").strip(),
             "password": form.get("mqtt_password", ""),
-            "client_id": form.get("mqtt_client_id", "").strip(),
+            **({"client_id": form.get("mqtt_client_id", "").strip()}
+               if "mqtt_client_id" in form else {}),
             **({"payload_format": form.get("mqtt_payload_format", "plain"),
                 "sparkplug_group_id": form.get("mqtt_sparkplug_group_id", "").strip() or "ser2net",
                 "sparkplug_node_id": form.get("mqtt_sparkplug_node_id", "").strip()}
@@ -398,25 +459,131 @@ def in_text_box(value: str) -> str:
     return value.replace("\0", "\ufffd").replace("\r", "").replace("\n", "")
 
 
+def apply_usb_match(mapping: MappingConfig, form, ports: list, existing=None,
+                    strict: bool = True) -> None:
+    """Set each serial side's stable USB identity (serial.match) from the form's
+    "find this device by its USB identity" box: the selected port's VID/PID (+ serial
+    number when it has one), so the engine re-finds the adapter after COMx / ttyUSBx
+    renumbering. A device that is not plugged in right now keeps its stored identity.
+    Raises ValueError when the box is set for a port without a USB identity (not strict:
+    that side keeps its stored identity instead)."""
+    for prefix, settings, old in (("serial_", mapping.serial, existing.serial if existing else None),
+                                  ("serial_b_", mapping.serial_b, existing.serial_b if existing else None)):
+        if f"{prefix}usb_match_shown" not in form or (prefix == "serial_b_" and mapping.kind != "serialbridge"):
+            continue
+        if not _checkbox(form, prefix + "usb_match"):
+            settings.match = {}
+            continue
+        port = portlist.find(ports, settings.port, resolve=True)  # (this node's ports)
+        if port is not None and port.get("vid") and port.get("pid"):
+            # a binding to a USB socket too (location, set through the REST API or by hand)
+            # stays one, to the socket the adapter is in now
+            keys = ("vid", "pid", "serial_number") + (
+                ("location",) if old is not None and old.identity.get("location") else ())
+            settings.match = {k: port[k] for k in keys if port.get(k)}
+        elif port is None and old is not None and old.match:
+            settings.match = dict(old.match)  # unplugged now: keep what it was bound to
+        elif strict:
+            raise ValueError(_("{0} has no USB identity (VID/PID) to find it by; untick “Find "
+                               "this device by its USB identity”.").format(settings.port or _("This port")))
+        else:
+            settings.match = dict(old.match) if old is not None else {}
+
+
+def mapping_from_form(form, existing, ports: list) -> MappingConfig:
+    """The mapping a submitted mapping form describes: parsed (a value it can't read
+    raises ValueError / TypeError ...), with the stored values of `existing` (None: a new
+    mapping) kept for what the form doesn't post (_preserve_unmanaged_fields) and the USB
+    identity set from the form (apply_usb_match, with this node's `ports`). The save of
+    the local UI and of a cluster remote edit."""
+    mapping = MappingConfig.from_dict(_mapping_from_form(form))
+    _preserve_unmanaged_fields(mapping, existing, form)
+    apply_usb_match(mapping, form, ports, existing)
+    return mapping
+
+
+def mapping_for_rerender(form, existing, ports: list) -> MappingConfig:
+    """The mapping to show again in a form that came back with an error (local or a
+    cluster peer's): what was submitted, read leniently, with what a save would keep —
+    the stored values for fields the form didn't post, the USB identity — so saving the
+    form shown again never silently resets them. Never raises."""
+    try:
+        mapping = MappingConfig.from_dict(_build_mapping_dict(form, strict=False))
+        _preserve_unmanaged_fields(mapping, existing, form)
+        apply_usb_match(mapping, form, ports, existing, strict=False)
+    except Exception:
+        mapping = MappingConfig(name=form.get("name", ""))
+    return mapping
+
+
+# Blocks of the form a node reads only from this version on: the fleet view leaves them
+# out of the form for a peer running an older version, which would not keep them.
+#   block (as _mapping_form.html names it) -> the first version that reads it
+FORM_BLOCKS_SINCE = {
+    "usb_match": (2, 8, 0),         # "Find this device by its USB identity"
+    "trace_rotation": (2, 8, 0),    # trace file size / rotated files kept
+    "payload_format": (2, 8, 0),    # MQTT payload format (Sparkplug B)
+    "retained_set": (2, 8, 1),      # re-apply a retained /set
+    "rfc2217_restore": (2, 8, 1),   # restore the serial settings after an RFC 2217 client
+    "udp_reply": (2, 8, 1),         # UDP reply address and peer timeout
+}
+
+
+def blocks_not_read(version) -> frozenset[str]:
+    """The FORM_BLOCKS_SINCE blocks a node running *version* (a (major, minor, patch);
+    None: unknown) doesn't read."""
+    if version is None:
+        return frozenset(FORM_BLOCKS_SINCE)
+    return frozenset(b for b, since in FORM_BLOCKS_SINCE.items() if version < since)
+
+
+def form_context(mapping: MappingConfig, ports: list, ips: list, *, is_new: bool,
+                 error=None, remote=None, hide=frozenset(), rev: str = "", links=None,
+                 mqtt_stored: str = "", tls_stored: str | None = None, form=None) -> dict:
+    """What _mapping_form.html is rendered with (every place that shows the form);
+    `hide`: blocks the node that saves it doesn't read (blocks_not_read); `rev`: the
+    stored mapping's revision (config.mapping_revision) on the node that saves it;
+    `links`: the other names of the serial ports (portlist.links). The stored MQTT
+    password and TLS key password are never shown, only whether there is one
+    (`mqtt_stored`, `tls_stored`; None: the form goes by the mapping it shows), and after
+    an error what was typed and the remove boxes of the submitted `form`
+    (mqtt_password_view, tls_password_view)."""
+    out = {"mapping": mapping, "is_new": is_new,
+           "modbus_points_json": _modbus_points_json(mapping),
+           "ports": portlist.visible(ports), "ips": ips, "error": error, "remote": remote,
+           "hide": hide, "rev": rev, "links": links or {},
+           **mqtt_password_view(mqtt_stored, form)}
+    if tls_stored is not None:
+        out.update(tls_password_view(tls_stored, form))
+    return out
+
+
 def _preserve_unmanaged_fields(new_map, existing, form=None) -> None:
-    """Carry over config fields the mapping form does not expose, so editing an
-    existing mapping never silently discards them: the stable-id `match` (when the
-    form has no USB-identity field), the two
-    advanced serial flags the form omits (`hangup_when_done`, `nobreak`), open/close
-    strings, the trace-timestamp flag and the RFC2217 interop knobs (and a banner or
-    close-on string the text box could not show as it is). The RS-485 fields
-    ARE in the form now, so they're taken from the submission. Given the submitted
-    `form`, the not-always-posted fields (_OPTIONAL_FORM_FIELDS) are kept too when
-    absent, and the stored MQTT password when the form keeps it (mqtt_password_from_form).
-    No-op when creating."""
+    """Carry over what an edit's form did not set, so editing an existing mapping never
+    silently discards it: the settings the form doesn't have (_UNMANAGED_FIELDS), the
+    not-always-posted fields the submitted `form` lacks (_OPTIONAL_FORM_FIELDS; no form
+    = none posted), a one-line text field posted back unchanged although it can't show
+    the stored value (_TEXT_INPUTS: a banner or close-on string with a NUL, CR or LF,
+    in_text_box), the stored MQTT password and TLS key password, which the form never
+    shows, when it keeps them (mqtt_password_from_form; a blank key password field), the
+    dual-stack choice of a form that doesn't offer it, and the per-point Modbus fields a
+    form from before 2.8.0 leaves out. No-op when creating."""
     if existing is None:
         return
-    if form is not None:
-        for marker, (section, attrs) in _OPTIONAL_FORM_FIELDS.items():
-            if marker not in form:
-                for attr in attrs:
-                    setattr(_section(new_map, section), attr,
-                            getattr(_section(existing, section), attr))
+    posted = form is not None
+    form = {} if form is None else form
+    keep = [(section, attrs) for section, attrs in _UNMANAGED_FIELDS.items()]
+    keep += [(section, attrs) for marker, (section, attrs) in _OPTIONAL_FORM_FIELDS.items()
+             if marker not in form]
+    for section, attrs in keep:
+        cur, old = _section(new_map, section), _section(existing, section)
+        for attr in attrs:
+            setattr(cur, attr, copy.deepcopy(getattr(old, attr)))
+    for field, (section, attr) in _TEXT_INPUTS.items():
+        cur, old = _section(new_map, section), _section(existing, section)
+        if field in form and getattr(cur, attr) == in_text_box(getattr(old, attr)):
+            setattr(cur, attr, getattr(old, attr))
+    if posted:
         new_map.mqtt.password = mqtt_password_from_form(form, existing.mqtt.password)
         net = new_map.network
         if not form.get("network_tls_key_password", ""):
@@ -431,28 +598,24 @@ def _preserve_unmanaged_fields(new_map, existing, form=None) -> None:
                 net.dual_stack = True
             elif not net.both_families:
                 net.dual_stack = False
-    for prefix, cur, old in (("serial_", new_map.serial, existing.serial),
-                             ("serial_b_", new_map.serial_b, existing.serial_b)):
-        # the USB-identity binding is in the form now (ops.apply_usb_match); a form
-        # without it (an older cluster peer's) keeps the stored one
-        if form is None or f"{prefix}usb_match_shown" not in form:
-            cur.match = old.match
-        cur.advanced.hangup_when_done = old.advanced.hangup_when_done
-        cur.advanced.nobreak = old.advanced.nobreak
-    o, prev = new_map.options, existing.options
-    o.openstr = prev.openstr
-    o.closestr = prev.closestr
-    # the banner and close-on string are one-line text boxes, which hand a value back with
-    # a NUL as U+FFFD and without its CR/LF (HTML): a value that comes back so is the
-    # stored one (an imported close-on string like "ctrl-a\001nil\000" or "\r\n")
-    for key in ("banner", "closeon"):
-        stored = getattr(prev, key)
-        if getattr(o, key) == in_text_box(stored) != stored:
-            setattr(o, key, stored)
-    o.trace_timestamp = prev.trace_timestamp
-    o.rfc2217_poll_modem_interval_s = prev.rfc2217_poll_modem_interval_s
-    o.rfc2217_net_timeout_s = prev.rfc2217_net_timeout_s
-    o.modbus_response_timeout_s = prev.modbus_response_timeout_s
+    # every 2.8.0+ form has the A side's USB-identity marker (its block is never hidden)
+    if "serial_usb_match_shown" not in form:
+        _keep_point_fields(new_map, existing)
+
+
+def _keep_point_fields(new_map, existing) -> None:
+    """A form from before 2.8.0 (an older cluster node's) lists the Modbus points without
+    "writable" (_POINT_FIELDS_SINCE_2_8): each point keeps the stored value of the point
+    with the same name — "writable" only while it is still a coil or holding register."""
+    stored = {p.name: p for p in existing.modbus_poll.points}
+    for p in new_map.modbus_poll.points:
+        old = stored.get(p.name)
+        if old is None:
+            continue
+        for attr in _POINT_FIELDS_SINCE_2_8:
+            setattr(p, attr, getattr(old, attr))
+        if p.fn not in (1, 3):
+            p.writable = False
 
 
 def tls_password_view(stored: str, form=None) -> dict:
@@ -465,25 +628,20 @@ def tls_password_view(stored: str, form=None) -> dict:
 
 
 def _form_error(render, request, state, form, message: str):
-    """Re-render the mapping form with the submitted values and an error banner."""
-    existing = None
-    try:
-        mapping = MappingConfig.from_dict(_build_mapping_dict(form, strict=False))
-        # keep stored values for fields this form didn't post (else the re-rendered,
-        # hidden inputs would carry defaults into the next save)
-        existing = state.config.get_mapping(mapping.id)
-        _preserve_unmanaged_fields(mapping, existing, form)
-    except Exception:
-        mapping = MappingConfig(name=form.get("name", ""))
-    is_new = not form.get("id")
-    ports = portlist.visible(state.ports.get())
-    existing = None if is_new else state.config.get_mapping(form.get("id"))
+    """Re-render the mapping form with the submitted values and an error banner. It
+    carries the mapping's current revision: the save checks the revision before anything
+    else, so the error is either that it changed (a second save then replaces the
+    changes, as the banner says) or about the values. A mapping deleted meanwhile is
+    shown as a new one: saving it adds it again."""
+    ports = state.ports.get()
+    stored = state.config.get_mapping(form.get("id") or "")
+    mapping = mapping_for_rerender(form, stored, ports)
+    rev = mapping_revision(state.config.secret_key, stored) if stored is not None else ""
     return render(request, "_mapping_form.html", status_code=400,
-                  mapping=mapping, is_new=is_new,
-                  modbus_points_json=_modbus_points_json(mapping),
-                  ports=ports, ips=netinfo.list_ip_candidates(),
-                  links=portlist.links(ports, (mapping.serial.port, mapping.serial_b.port)),
-                  error=message,
-                  **mqtt_password_view(existing.mqtt.password if existing else "", form),
-                  **tls_password_view(existing.network.tls_key_password if existing else "",
-                                      form))
+                  **form_context(mapping, ports, netinfo.list_ip_candidates(),
+                                 is_new=stored is None, error=message, rev=rev,
+                                 links=portlist.links(portlist.visible(ports),
+                                                      (mapping.serial.port, mapping.serial_b.port)),
+                                 mqtt_stored=stored.mqtt.password if stored else "",
+                                 tls_stored=stored.network.tls_key_password if stored else "",
+                                 form=form))

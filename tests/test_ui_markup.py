@@ -208,7 +208,8 @@ def test_cluster_table():
         {"name": "peer-host", "self": False, "source": "manual", "ip": "fd00::2", "port": 8443,
          "addr": "[fd00::2]:8443", "url": "https://[fd00::2]:8443/", "reported": EVIL,
          "scheme": "https", "online": True, "uptime": "2h", "version": __version__,
-         "running_count": 1, "mapping_count": 2, "mappings": node_maps},
+         "running_count": 1, "mapping_count": 2, "mappings": node_maps,
+         "caps": frozenset({"control", "edit"})},
         {"name": "gone", "self": False, "source": "auto", "ip": "10.0.0.3", "port": 8080,
          "addr": "10.0.0.3:8080", "url": "http://10.0.0.3:8080/", "scheme": "http",
          "online": False, "mappings": []},
@@ -228,6 +229,30 @@ def test_cluster_table():
     assert opens == ["https://[fd00::2]:8443/"], "Open only for an online peer, at its URL"
     check_table_contract(tpl.render(nodes=[], can_edit=True), "empty cluster table")
     print("cluster table: wrapper, card labels, buttons in their cell, escaping  OK")
+
+    # what a peer can do decides its buttons: 2.5.x (no version) is only shown, 2.6.0
+    # has no remote edit; another version is tagged, and a mixed cluster gets a banner
+    from app.web.routes.cluster import peer_caps
+    for payload, caps, labels in (
+            ({"version": __version__, "caps": ["control", "edit"]}, {"control", "edit"},
+             ["Stop", "Restart", "Edit", "Start", "Edit"]),
+            ({}, set(), []), ({"version": "2.5.0"}, set(), []),
+            ({"version": "2.6.0"}, {"control"}, ["Stop", "Restart", "Start"]),
+            ({"version": "2.6.1"}, {"control", "edit"}, ["Stop", "Restart", "Edit", "Start", "Edit"]),
+            ({"version": "3.0.0", "caps": ["control"]}, {"control"}, ["Stop", "Restart", "Start"])):
+        assert peer_caps(payload) == caps, (payload, peer_caps(payload))
+        peer = dict(nodes[1], caps=peer_caps(payload), version=payload.get("version", ""),
+                    age="older" if payload.get("version", "x") < __version__ else "")
+        out = tpl.render(nodes=[nodes[0], peer], can_edit=True,
+                         notes={"versions": ["2.6.0", __version__]})
+        got = re.findall(r'<button class="btn sm"[^>]*>([^<]*)</button>', out)
+        assert got == labels, (payload, got)
+        assert ("view only" in out) == (not caps) and ("no remote edit" in out) == (
+            caps == {"control"}), (payload, out[:2000])
+        assert ("older version" in out) == (peer["age"] == "older"), payload
+        assert "run different versions (2.6.0, " in out
+    print("cluster table: actions follow what the peer can do (caps, else its version); "
+          "other versions tagged, a mixed cluster pointed out  OK")
 
 
 def test_counters_and_empty_state():
@@ -894,6 +919,51 @@ def test_app_js_inserts_no_server_html():
         assert sink not in src, sink
     assert "textContent = text" in src, "feedback messages go in as text"
     print("app.js: server texts as textContent, no HTML sinks  OK")
+def test_mapping_form_protocols_and_ignored_settings():
+    """UDP offers raw only (app.js hides and disables an <option> whose data-show-when
+    doesn't hold, and picks the first one left); the MQTT box says what a Modbus gateway
+    publishes; a setting the mapping has but doesn't use is pointed out at the top."""
+    import re
+
+    class Req:
+        class state:
+            csrf_token = "t"
+            user = None
+    tpl = make_templates().env.get_template("_mapping_form.html")
+
+    def render(d):
+        m = MappingConfig.from_dict({"id": "pr1", "name": "pr", "serial": {"port": "COM3"}, **d})
+        return tpl.render(request=Req, mapping=m, is_new=False, modbus_points_json="",
+                          ports=[], ips=[], error=None)
+
+    out = render({"network": {"mode": "server", "protocol": "telnet"}})
+    select = next(n for n in parse(out).walk() if n.attrs.get("name") == "network_protocol")
+    options = {o.attrs["value"]: o.attrs.get("data-show-when")
+               for o in select.walk() if o.tag == "option"}
+    assert options == {"raw": None, "telnet": "network_mode=server,client",
+                       "rfc2217": "network_mode=server,client",
+                       "modbus": "network_mode=server,client"}, options
+    box = out[out.index('name="mqtt_enabled"'):]
+    box = box[:box.index("</label>")]
+    assert ('<span data-show-when="network_protocol=raw,telnet,rfc2217">Publish serial lines '
+            'to MQTT</span><span data-show-when="network_protocol=modbus">Publish the Modbus '
+            'poll points to MQTT (add them below)</span>') in box, box
+
+    def banners(html_text):
+        return re.findall(r'<div class="banner warn">(.*?)</div>', html_text)
+
+    assert banners(out) == [], banners(out)
+    mqtt = {"enabled": True, "host": "b", "base_topic": "t"}
+    assert banners(render({"kind": "serialbridge", "serial_b": {"port": "COM4"},
+                           "mqtt": mqtt})) == [
+        "MQTT is on, but a serial-to-serial bridge does not publish to MQTT: its MQTT "
+        "settings are not used."]
+    assert "nothing is published" in banners(render(
+        {"network": {"protocol": "modbus", "port": 502}, "mqtt": mqtt}))[0]
+    assert "no connections to close" in banners(render(
+        {"network": {"mode": "udp"}, "options": {"closeon": "BYE"}}))[0]
+    print("mapping form: raw only over UDP, the MQTT box per protocol, unused settings "
+          "pointed out  OK")
 
 
 def main():
@@ -912,6 +982,7 @@ def main():
     test_mapping_form_rfc2217_restore()
     test_mapping_form_port_lock()
     test_mapping_form_kick_hint()
+    test_mapping_form_protocols_and_ignored_settings()
     test_mqtt_command_tags()
     test_mqtt_tx_tags()
     test_feedback_area()
