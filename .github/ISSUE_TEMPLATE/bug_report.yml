@@ -7,6 +7,8 @@ body:
       value: |
         Güvenlik açığı bildirmek için bu formu **kullanmayın**; bkz. [SECURITY.md](https://github.com/haliskilic/ser2net/blob/main/SECURITY.md).
         Do **not** use this form for security vulnerabilities — see [SECURITY.md](https://github.com/haliskilic/ser2net/blob/main/SECURITY.md).
+
+        Linux'ta açılmayan bir seri port için önce / For a serial port that doesn't open on Linux, first see [docs/LINUX-SERIAL.md](https://github.com/haliskilic/ser2net/blob/main/docs/LINUX-SERIAL.md).
   - type: textarea
     id: what
     attributes:
@@ -27,24 +29,45 @@ body:
     id: about
     attributes:
       label: "`ser2net --about` çıktısı / output"
-      description: "Sürüm, işletim sistemi ve bileşenler. Bilinen klasörler kısaltılır (`<python>`, `<ser2net>`, `~`); kalan yollarda hesap adınız görünebilir, göndermeden önce bakın. / Version, OS and components. Known folders are shortened (`<python>`, `<ser2net>`, `~`); other paths can show your account name, so check before posting."
+      description: "Sürüm, işletim sistemi ve bileşenler. Bilinen klasörler kısaltılır (`<python>`, `<ser2net>`, `<bundle>`, `<override>`, `~`); kalan yollarda hesap adınız görünebilir, göndermeden önce bakın. / Version, OS and components. Known folders are shortened (`<python>`, `<ser2net>`, `<bundle>`, `<override>`, `~`); other paths can show your account name, so check before posting."
       render: text
     validations:
       required: true
   - type: dropdown
     id: install
     attributes:
-      label: Kurulum / Installation
+      label: Nasıl çalışıyor? / How is it run?
       options:
-        - Standalone binary (Windows .exe)
-        - Standalone binary (Linux)
-        - Docker
+        - Windows .exe (elle / by hand)
+        - Windows servisi / Windows service (--install-service)
+        - Linux binary (elle / by hand)
+        - Linux binary, systemd (ser2net-install.sh)
         - Kaynak / source (python ser2net.py)
+        - Kaynak, systemd / source, systemd (ser2net.service, ser2net@.service)
+        - Docker
+        - Diğer / Other
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Alan / Area
+      options:
+        - Seri port / Serial port
+        - Ağ, TCP / UDP / telnet / RFC 2217 / Network
+        - Modbus gateway
+        - MQTT / Sparkplug B
+        - Web arayüzü / Web UI
+        - Giriş, LDAP / OIDC / Sign-in
+        - REST API
+        - LAN cluster
+        - Kurulum, yükseltme / Install, upgrade
+        - Diğer / Other
     validations:
       required: true
   - type: textarea
     id: logs
     attributes:
       label: Log
-      description: "`data/all.log` ve ilgili eşlemenin log'undan ilgili satırlar. Göndermeden önce bakın: log'larda IP adresleri, kullanıcı adları ve host adı vardır; bunları biçimi koruyarak maskeleyin (ör. 10.0.x.x, user1). Parola, API token'ı ya da cluster anahtarını asla yapıştırmayın. / Relevant lines from data/all.log and the mapping's log. Check before posting: logs show IP addresses, user names and the host name; mask them, keeping the format (e.g. 10.0.x.x, user1). Never paste passwords, the API token or the cluster key."
+      description: "Veri klasöründeki `all.log` ile ilgili eşlemenin log'undan ilgili satırlar. Göndermeden önce bakın: log'larda IP adresleri, kullanıcı adları ve host adı vardır; bunları biçimi koruyarak maskeleyin (ör. 10.0.x.x, user1). Parola, API token'ı ya da cluster anahtarını asla yapıştırmayın. / Relevant lines from all.log in the data directory and the mapping's log. Check before posting: logs show IP addresses, user names and the host name; mask them, keeping the format (e.g. 10.0.x.x, user1). Never paste passwords, the API token or the cluster key."
       render: text

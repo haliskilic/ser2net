@@ -47,6 +47,14 @@ everything from a **password-protected web UI** — no CLI or hand-edited config
 - RFC2217 for devices that need remote baud/parity changes
 - Bridge two serial ports together (serial↔serial)
 
+**Guides** (in `docs/`): [Docker](docs/DOCKER.md) · [Windows](docs/WINDOWS.md) ·
+[Linux serial ports](docs/LINUX-SERIAL.md) · [reverse proxy](docs/REVERSE-PROXY.md) ·
+[MQTT, Modbus points and Sparkplug B](docs/MODBUS-MQTT.md) ·
+[LDAP / AD and OIDC sign-in](docs/SSO.md) ·
+[moving from the classic ser2net](docs/MIGRATING-FROM-SER2NET.md) ·
+[virtual COM ports on the client](docs/VIRTUAL-COM.md) · [privacy](docs/PRIVACY.md) ·
+[code signing](docs/SIGNING.md).
+
 ---
 
 ## ✨ Features
@@ -223,9 +231,13 @@ everything from a **password-protected web UI** — no CLI or hand-edited config
   with the id the master sent (many masters address a gateway's device as 255 or 0).
   Retries are not added: a unit that stops answering is polled once per cycle (see
   above). A v2.8 node (a fleet edit from one) or a downgrade drops `word_order`, `bit`,
-  `length`, the block reads and the unit map, and its polling fails on the new types.
+  `length`, `"poll": false` (a write-only point is polled there again), the block reads and
+  the unit map, and its polling fails on the new types. Every topic, payload, write and
+  Sparkplug B metric in tables, with a REST API example:
+  [`docs/MODBUS-MQTT.md`](docs/MODBUS-MQTT.md).
 - **Client-side virtual COM:** recipes to surface a remote port as a local `COMx`/`tty`
-  (pySerial `rfc2217://`, Linux `socat`, Windows com0com+com2tcp / HW VSP3) — see
+  (pySerial `rfc2217://`; Linux ttynvt for an rfc2217 mapping, `socat` for a raw one;
+  Windows com0com + hub4com's `com2tcp-rfc2217.bat`, HW VSP3) — see
   [`docs/VIRTUAL-COM.md`](docs/VIRTUAL-COM.md).
 - **Full serial config:** baud (incl. custom), data/stop bits, parity, flow control
   (none/RTS-CTS/XON-XOFF/DSR-DTR), RTS/DTR on open, port locking, and RS-485 hardware
@@ -263,7 +275,7 @@ everything from a **password-protected web UI** — no CLI or hand-edited config
   the adapter stays in that socket). A by-id name is made from vendor, model and serial
   number, so identical adapters without a serial number of their own (CH340, most PL2303,
   clones that all carry one number) share one, which udev gives to one of them, and which
-  one can change at a reboot or a re-plug: the Ports page marks such adapters
+  one can change at a reboot or a re-plug: the *Detected serial ports* list marks such adapters
   (`same USB identity`, `by-id not unique`) and the form says so; bind those by USB
   socket. In the mapping form, ↻ next to Device lists the ports again without closing the
   form, and **Other device path…** takes a path that is not listed (a board's UART such as
@@ -397,10 +409,11 @@ everything from a **password-protected web UI** — no CLI or hand-edited config
 - **LDAP / Active Directory auth (optional):** users authenticate by binding to the
   directory; LDAP group membership maps to a role. Works alongside local accounts;
   needs `ldap3`. LDAPS / StartTLS check the server's certificate (the system's CAs or
-  your own CA file).
+  your own CA file). Setup for Active Directory and OpenLDAP: [`docs/SSO.md`](docs/SSO.md).
 - **OIDC single sign-on (optional):** authorization-code flow with PKCE, with Keycloak /
   Entra ID / Google / Okta; the id_token is validated (signature/iss/aud/exp/nonce) and a
-  claim maps to a role. Needs `authlib`.
+  claim maps to a role. Needs `authlib`. Keycloak, Entra ID and Google settings, and what
+  to look for in `all.log`: [`docs/SSO.md`](docs/SSO.md).
 - **REST API:** a JSON API (`/api/v1`) for automation — mapping CRUD, start/stop/restart,
   status and ports; **bearer-token** auth (with a role — `viewer` is read-only); OpenAPI
   3.0 (`/api/v1/openapi.json`). The token is generated in Settings.
@@ -515,7 +528,8 @@ everything from a **password-protected web UI** — no CLI or hand-edited config
 - **Turkish / English UI:** pick **TR / EN** in the top bar (remembered per browser);
   otherwise the browser's language or the admin's default (Settings → Web UI access), which
   notifications use as well. Logs, the audit log and the REST API stay English.
-- **Fully offline:** all dependencies bundled as wheels; no internet required.
+- **Fully offline:** the required dependencies are bundled as wheels, so no internet is
+  needed (the optional ones: see *Offline install*; the standalone binary has them all).
 
 ---
 
@@ -533,8 +547,11 @@ everything from a **password-protected web UI** — no CLI or hand-edited config
   ```bash
   sudo usermod -aG "$(stat -L -c %G /dev/ttyUSB0)" "$USER"   # then log out/in
   ```
+  A port that won't open, a device that disappears, a Raspberry Pi UART:
+  [`docs/LINUX-SERIAL.md`](docs/LINUX-SERIAL.md).
 - Windows: no extra privileges for COM ports.
-- Optional: `openssl` (self-signed TLS).
+- Optional: `cryptography` (`requirements-optional.txt`) to generate a self-signed admin
+  certificate, else the `openssl` command is used if there is one.
 
 ---
 
@@ -691,6 +708,22 @@ The image has a `HEALTHCHECK` (`ser2net --healthcheck`). Behind a reverse proxy,
 ([`docs/REVERSE-PROXY.md`](docs/REVERSE-PROXY.md)). Details:
 [`docs/DOCKER.md`](docs/DOCKER.md).
 
+### Moving from the classic ser2net
+Coming from the classic `ser2net` daemon (the distribution package)? Import its
+`/etc/ser2net/ser2net.yaml` or `/etc/ser2net.conf` in **Settings → Mappings export /
+import**: the preview shows each connection as the mapping it becomes, which come in
+disabled and why, and what works differently. Then, before you start the mappings:
+- stop and disable the classic daemon (`sudo systemctl disable --now ser2net`), which holds
+  the same ports and devices; its unit has the same name, `ser2net.service`, so remove its
+  package or run this one as an instance of `ser2net@.service`;
+- give the service `CAP_NET_BIND_SERVICE` for ports below 1024, or move them up (the classic
+  daemon usually ran as root; *Ports below 1024* under Run as a service);
+- check the TLS / client certificate rows and the ones that came in disabled.
+
+A mapping keeps its serial device open, so an open string goes out once when the port opens
+(not for each client) and other programs can't use the device between sessions. The steps,
+what differs and an option table: [`docs/MIGRATING-FROM-SER2NET.md`](docs/MIGRATING-FROM-SER2NET.md).
+
 ---
 
 ## 🖥️ Usage
@@ -767,8 +800,9 @@ The image has a `HEALTHCHECK` (`ser2net --healthcheck`). Behind a reverse proxy,
 Nothing keeps other programs off a serial port unless all of them lock it, and the kernel
 console, a login prompt and ModemManager use a port without asking. ser2net then shares
 the port's bytes with them (stray characters, Modbus timeouts), and a login prompt hangs
-the port up whenever it restarts. The Ports page marks such ports (**kernel console**,
-**login prompt**, **ModemManager**, and **no access** for a port ser2net may not open), and
+the port up whenever it restarts. The dashboard's *Detected serial ports* list marks such
+ports (**kernel console**, **login prompt**, **ModemManager**, and **no access** for a port
+ser2net may not open), and
 a mapping that has one open says so under its state (a port hung up and reopened at once
 is counted there as well).
 - **Kernel console, login prompt** (a Raspberry Pi's GPIO UART, a VM's serial console): on
@@ -784,6 +818,11 @@ is counted there as well).
 - **Permission denied:** the dashboard names the group the device belongs to and what is
   missing (see Requirements); **busy:** the mapping of this ser2net that has the port open,
   or the kind of lock another program holds.
+
+More — a table from what the dashboard shows to the cause, groups, udev rules, stable
+device names, finding who holds a port, brltty and the Raspberry Pi UARTs (the Pi 3/4 mini
+UART has no parity: Modbus RTU 8E1 needs the PL011) — in
+[`docs/LINUX-SERIAL.md`](docs/LINUX-SERIAL.md).
 
 ---
 
