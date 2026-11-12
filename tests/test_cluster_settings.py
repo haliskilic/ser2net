@@ -24,7 +24,7 @@ import time
 import urllib.error
 import urllib.request
 
-from _server import Browser, Server, free_port
+from _server import Browser, Server, free_udp_port
 
 from app.engine.cluster import _sign, key_header
 from app.web.auth import hash_password
@@ -61,7 +61,10 @@ def wait_for(fn, timeout=5.0):
 
 
 def main():
-    disc = free_port()
+    # discovery listens for UDP on every address: a port free for that (free_port() only
+    # knows TCP on 127.0.0.1, and on Windows the server's SO_REUSEADDR would share a UDP
+    # port another program holds, which then may get the beacons)
+    disc = free_udp_port("")
     cfg = {"users": [{"username": "admin", "password_hash": hash_password(PW), "role": "admin",
                       "pwd_version": 1}],
            "cluster": {"enabled": True, "key": KEY, "discovery_port": disc}}
@@ -144,7 +147,9 @@ def main():
                 udp.sendto(beacon("some-other-fleet-key-000", id="stranger1"), ("127.0.0.1", disc))
                 udp.sendto(beacon(gen, id=node_id), ("127.0.0.1", disc))
                 return "Another node uses this node’s identity" in admin.get("/settings")[2]
-            assert wait_for(broadcast), "a copy of this node must be reported in Settings"
+            # (sent again until seen: the discovery listener restarts with each save above)
+            assert wait_for(broadcast, timeout=30), \
+                "a copy of this node must be reported in Settings:\n" + srv.output()[-2000:]
             st, _, fleet = admin.get("/api/cluster/status")
             assert "Another node uses this node’s identity" in fleet and "copy-of-me" in fleet
             assert "broadcast with a different cluster key" in fleet and "127.0.0.1" in fleet
