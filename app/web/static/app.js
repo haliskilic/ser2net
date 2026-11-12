@@ -93,11 +93,15 @@ document.addEventListener("htmx:afterRequest", function (e) {
 //     while it is scrolled down to older ones (the newest are at the top). A refresh an
 //     action asks for (refreshMappings) is shown all the same. A refresh not shown keeps
 //     the panel's old hash, so the next one brings the news.
-var pressed = null;
-document.addEventListener("pointerdown", function (e) { pressed = e.target; }, true);
+//     (For 15 seconds at most: a selection left behind, or a release the page never saw,
+//     must not keep a panel out of date.)
+var pressed = null, heldAt = 0;
+document.addEventListener("pointerdown", function (e) { pressed = e.target; heldAt = Date.now(); }, true);
 document.addEventListener("pointerup", function () { pressed = null; }, true);
 document.addEventListener("pointercancel", function () { pressed = null; }, true);
+document.addEventListener("selectionchange", function () { heldAt = Date.now(); });
 function busyIn(el) {
+  if (Date.now() - heldAt > 15000) return false;
   if (pressed && el.contains(pressed)) return true;
   var sel = window.getSelection ? window.getSelection() : null;
   return !!(sel && !sel.isCollapsed && sel.rangeCount &&
