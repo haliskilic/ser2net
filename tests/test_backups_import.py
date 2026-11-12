@@ -248,8 +248,9 @@ def test_planner_keeps_absent_settings():
     assert any(p.writable for p in now.modbus_poll.points)
     plan = parse_mappings_file(json.dumps({"mappings": [old]}).encode())
     assert {"options.trace_max_mb", "modbus_poll.points[0].writable"} <= set(plan.absent[0])
+    assert "mqtt.payload_format" in plan.absent[0], plan.absent
     note = next(w for w in plan.warnings if "the file has no" in w)
-    assert "options.trace_max_mb" in note and "mqtt.payload_format" in note, note
+    assert "options.trace_max_mb" in note, note  # (the note names the first 8)
     assert [r["action"] for r in plan_rows([now], plan.mappings, "merge", plan.absent)] == ["same"]
     merged, touched = apply_import([now], plan.mappings, "merge", plan.absent)
     assert merged[0].to_dict() == now.to_dict() and not touched, "nothing the file has changed"
