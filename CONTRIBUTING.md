@@ -29,7 +29,7 @@ python ser2net.py --no-bootstrap --data-dir /tmp/s2n-dev
 | Coverage (CI fails below the floor in `ci.yml`, job `coverage`) | `pip install coverage && python tests/coverage_run.py && coverage report` |
 | Browser layout | `pip install playwright && python -m playwright install chromium`, then `SER2NET_UI_TESTS=1 python tests/test_ui_layout.py` |
 | Offline wheels | `python tests/test_vendor_wheels.py`; against PyPI (network): `python tools/refresh_wheels.py --verify` |
-| Offline first start (a fresh checkout without `lib/`; CI: Linux arm64, macOS, armv7 under QEMU) | `tests/offline_first_start.sh python3` |
+| Offline first start (a fresh checkout without `lib/`; CI: every test leg, plus Linux arm64, macOS, armv7 under QEMU) | `tests/offline_first_start.sh python3` |
 | Known vulnerabilities | `pip install pip-audit && pip-audit -r requirements.txt` |
 | Workflow lint | `pip install zizmor && zizmor --offline .` (settings in `.github/zizmor.yml`) |
 
@@ -73,12 +73,26 @@ can still hold it. `tests/test_harness.py` fails on a fixed listening port unles
   parsed).
 
 ### Code layout
-`app/engine/` the bridges (serial, TCP/UDP, protocols, Modbus, MQTT, cluster) ·
-`app/web/routes/` one module per UI area (`login`, `settings`, `mappings`, `console`,
-`cluster`, `system`) with shared helpers in `common`, `forms` and `ops` ·
-`app/web/api.py` the REST API · `app/config.py` the config model ·
-`tests/` one file per feature, collected by `tests/run_all.py`. Every web route and
-WebSocket has an access class (who may use it, how CSRF is checked) in
+`ser2net.py` parses the command line and starts `app/runtime.py`, which owns the event loop
+and runs the web server and the engine side by side; each module's docstring says more.
+
+| Where | What |
+|---|---|
+| `app/config.py` | the configuration model (dataclasses), reading `config.json` typed, validation, atomic saves and `backups/` |
+| `app/state.py` | the shared state: config, supervisor, port watcher, `all.log` / audit log; `app/reload.py` (SIGHUP), `app/tlsreload.py`, `app/storage.py` (free space, retention), `app/watchdog.py`, `app/datalock.py` |
+| `app/engine/supervisor.py` | one runner per mapping, applying config changes; `bridge.py` (serial ↔ TCP/UDP, telnet / RFC 2217), `serial_link.py` / `serial_io.py` / `serial_compat.py` (the serial port), `modbus_gateway.py` + `modbus.py` (Modbus RTU ↔ TCP, polling), `mqtt_pub.py`, `sparkplug_node.py` + `sparkplug.py`, `tls.py`, `access.py` / `netguard.py` (who may connect, limits), `portlist.py` / `portdiag.py` (ports and what's wrong with them), `cluster.py`, `netinfo.py`, `bindhint.py`, `sockopts.py` |
+| `app/web/server.py` | the Starlette app and its middleware; `auth.py` (sessions, CSRF, sign-in limits), `ldap_auth.py`, `oidc_auth.py`, `totp.py`, `proxy.py` (reverse proxy), `httpguard.py`, `api.py` (REST API `/api/v1`), `certinfo.py`, `selfsigned.py` |
+| `app/web/routes/` | one module per UI area (`login`, `totp`, `settings`, `mappings`, `console`, `cluster`, `system`), shared helpers in `common`, `forms` and `ops` |
+| `app/web/templates/`, `app/web/static/` | Jinja templates; `app.js`, `points.js`, `app.css` and the vendored htmx / xterm.js |
+| `app/notify.py` | webhook / e-mail notifications |
+| `app/importer.py`, `app/ser2net_import.py` | mapping imports and the classic ser2net reader |
+| `app/accounts.py` | `--set-password`, `--sign-out-all`, the first admin |
+| `app/winservice.py`, `app/standalone.py`, `app/sdnotify.py` | the Windows service, the PyInstaller executables, systemd's notify |
+| `app/i18n.py`, `app/locale/tr.json` | translations |
+| `app/clock.py`, `app/explain.py`, `app/logtext.py`, `app/logsetup.py`, `app/textfold.py`, `app/optional.py`, `app/signins.py`, `app/healthcheck.py`, `app/console.py` | times, error texts, log lines, text comparison, optional packages, last sign-ins, `--healthcheck`, the first-run console picker |
+| `tests/` | one file per feature, collected by `tests/run_all.py` |
+
+Every web route and WebSocket has an access class (who may use it, how CSRF is checked) in
 `tests/test_route_access.py`; a new route fails that test until it is classified there.
 
 ### Translations
@@ -155,7 +169,10 @@ the CI legs that install `requirements-optional.txt`.
 ### Commits and pull requests
 Short imperative subjects with a prefix: `feat:`, `fix:`, `test:`, `docs:`, `ci:`,
 `deps:`, `refactor:` (optionally a scope, e.g. `fix(modbus): …`). Keep a pull request to
-one topic and describe in it what changes for users. Releases are cut by the
+one topic and describe in it what changes for users. A pull request that changes the UI
+shows it (before / after screenshots) and keeps `tr.json` complete; one that changes
+documented behaviour updates both READMEs and the guide in `docs/` it touches
+(`tests/test_docs.py` checks the CLI options and the links). Releases are cut by the
 maintainer (below).
 
 ### Releases
@@ -180,11 +197,19 @@ code change gets a new patch version instead of a moved tag. **Actions → Relea
 pipeline on any branch: it attests, releases and tags nothing (it leaves one untagged image
 version on GHCR).
 
-After a minor release (`vX.Y.0`) is tagged, freeze the `config.json` it writes: add the
-settings it introduced to `FEATURES` in `tests/make_config_fixture.py`, run
-`python tests/make_config_fixture.py vX.Y.0` and commit `tests/fixtures/config-X.Y.0.json`
-with an upgrade test like `tests/test_upgrade_from_2_8.py` (its data folder layout too, and
-a step in `tests/docker_smoke.sh`), before the next release changes the config model.
+The release commit also updates the version lines of `ROADMAP.md` (its header and the
+Shipped entry) and the image tag examples in both READMEs (`:X.Y`, `:X.Y.Z`); when the UI
+changed, the screenshots are taken again (`tools/_capture_screenshots.py`, both languages).
+
+After a release is tagged, freeze what it writes: add the settings it introduced to
+`FEATURES` in `tests/make_config_fixture.py`, run `python tests/make_config_fixture.py
+vX.Y.Z` and commit `tests/fixtures/config-X.Y.Z.json` with an upgrade test like
+`tests/test_upgrade_from_2_8.py` (its data folder layout too; `tests/docker_smoke.sh` boots
+the 2.7.1 one), and run `python tests/make_form_fixtures.py vX.Y.Z` for the mixed-version
+fleet edits (`tests/fixtures/forms-X.Y.Z.json`, `tests/test_mixed_version_edit.py`), before
+the next release changes the config model or the mapping form. A field the mapping form
+gains goes into a `FORM_BLOCKS_SINCE` block (`app/web/routes/forms.py`) of the version that
+reads it.
 
 ## Türkçe
 
@@ -209,7 +234,8 @@ Yukarıdaki tablodaki komutların hepsi her pull request'te CI'da çalışır: `
 `mypy` (ayrıca `--platform win32` ile), `python tests/run_all.py -v` (Linux'ta `socat` ile
 `--socat`), coverage, tarayıcı yerleşim testi, çevrimdışı wheel kontrolü, `pip-audit` ve
 workflow denetimi (`zizmor`). `tests/offline_first_start.sh python3`, `lib/`'i olmayan temiz
-bir checkout'ta çevrimdışı ilk açılışı dener (CI'da Linux arm64, macOS ve QEMU altında armv7).
+bir checkout'ta çevrimdışı ilk açılışı dener (CI'da her test leg'inde, ayrıca Linux arm64,
+macOS ve QEMU altında armv7).
 
 `ci-ok` işi ancak diğer bütün CI işleri geçince geçer (zorunlu olmayan en yeni Python leg'i
 hariç); birleştirme onu bekler, bu yüzden `ci.yml`'ye eklenen her iş onun `needs` listesine
@@ -225,7 +251,8 @@ Dependabot günceller, tag ile verilen bir referansta zizmor ve
 
 `tests/test_dead_peer.py` iptables ile loopback trafiği kestiği için
 `SER2NET_BLACKHOLE_TESTS=1` ile yalnızca silinebilir bir ağ ad alanında (network namespace)
-ya da sanal makinede çalıştırın. `tests/systemd_smoke.sh` (CI'daki `systemd unit` ve
+ya da sanal makinede çalıştırın. Standalone binary denetimleri bir derleme ister
+(`SER2NET_STANDALONE_BIN=dist/ser2net python tests/test_standalone.py`). `tests/systemd_smoke.sh` (CI'daki `systemd unit` ve
 `systemd unit (binary)` işleri) systemd unit'lerini README'deki gibi kurar ve runner'ın
 systemd'sinde çalıştırır: bir `ser2net` kullanıcısı, `/opt/ser2net` ve servisi ekler; bu
 yüzden yalnızca silinebilir bir sanal makinede çalıştırın. `systemd/` altındaki bir unit'te
@@ -260,9 +287,30 @@ bir metin iki İngilizce biçimle yazılır, asla "record(s)" diye değil: şabl
 metin iki kez). Türkçesini `app/locale/tr.json`'a ekleyin (yeni girdiler sona);
 `tests/test_i18n.py` eksik ya da kullanılmayan girdide, yer tutucusunu ya da HTML etiketini
 kaybeden çeviride ve "(s)" ile yazılmış bir sayıda başarısız olur. Diller tek bir yerde,
-`app/i18n.py`'deki `LANGUAGES` içinde listelenir.
+`app/i18n.py`'deki `LANGUAGES` içinde listelenir. Şablonlarda değerler `%(ad)s` olarak
+yazılır: `{{ _("Port %(port)s", port=p) }}`. Log'lar, denetim kaydı ve REST API mesajları
+çevrilmez.
 
-### Route'lar
+### Kod düzeni
+`ser2net.py` komut satırını okur ve olay döngüsüne sahip olan, web sunucusuyla motoru yan
+yana çalıştıran `app/runtime.py`'yi başlatır; her modülün docstring'i ayrıntısını anlatır.
+
+| Nerede | Ne |
+|---|---|
+| `app/config.py` | yapılandırma modeli (dataclass'lar), `config.json`'u tipiyle okuma, doğrulama, atomik kayıt ve `backups/` |
+| `app/state.py` | paylaşılan durum: config, supervisor, port izleyici, `all.log` / denetim kaydı; `app/reload.py` (SIGHUP), `app/tlsreload.py`, `app/storage.py` (boş alan, saklama süresi), `app/watchdog.py`, `app/datalock.py` |
+| `app/engine/supervisor.py` | eşleme başına bir runner, config değişikliklerini uygular; `bridge.py` (seri ↔ TCP/UDP, telnet / RFC 2217), `serial_link.py` / `serial_io.py` / `serial_compat.py` (seri port), `modbus_gateway.py` + `modbus.py` (Modbus RTU ↔ TCP, okuma), `mqtt_pub.py`, `sparkplug_node.py` + `sparkplug.py`, `tls.py`, `access.py` / `netguard.py` (kim bağlanabilir, sınırlar), `portlist.py` / `portdiag.py` (portlar ve sorunları), `cluster.py`, `netinfo.py`, `bindhint.py`, `sockopts.py` |
+| `app/web/server.py` | Starlette uygulaması ve middleware'i; `auth.py` (oturum, CSRF, giriş sınırları), `ldap_auth.py`, `oidc_auth.py`, `totp.py`, `proxy.py` (reverse proxy), `httpguard.py`, `api.py` (REST API `/api/v1`), `certinfo.py`, `selfsigned.py` |
+| `app/web/routes/` | arayüzün her bölümü için bir modül (`login`, `totp`, `settings`, `mappings`, `console`, `cluster`, `system`); ortak yardımcılar `common`, `forms` ve `ops` içinde |
+| `app/web/templates/`, `app/web/static/` | Jinja şablonları; `app.js`, `points.js`, `app.css` ve gömülü htmx / xterm.js |
+| `app/notify.py` | webhook / e-posta bildirimleri |
+| `app/importer.py`, `app/ser2net_import.py` | eşleme içe aktarma ve klasik ser2net okuyucusu |
+| `app/accounts.py` | `--set-password`, `--sign-out-all`, ilk admin |
+| `app/winservice.py`, `app/standalone.py`, `app/sdnotify.py` | Windows servisi, PyInstaller binary'leri, systemd notify |
+| `app/i18n.py`, `app/locale/tr.json` | çeviriler |
+| `app/clock.py`, `app/explain.py`, `app/logtext.py`, `app/logsetup.py`, `app/textfold.py`, `app/optional.py`, `app/signins.py`, `app/healthcheck.py`, `app/console.py` | zamanlar, hata metinleri, log satırları, metin karşılaştırma, isteğe bağlı paketler, son girişler, `--healthcheck`, ilk açılıştaki konsol seçicisi |
+| `tests/` | her özellik için bir dosya, `tests/run_all.py` toplar |
+
 Her web route'unun ve WebSocket'in bir erişim sınıfı vardır (kim kullanabilir, CSRF nasıl
 denetlenir): `tests/test_route_access.py`. Yeni bir route orada sınıflandırılana kadar bu
 test başarısız olur.
@@ -326,8 +374,11 @@ açar (diğerleri gruplu gelir): değişiklik günlüklerini okuyun; ldap3 / pya
 
 ### Commit ve pull request
 Kısa, emir kipinde ve önekli başlıklar: `feat:`, `fix:`, `test:`, `docs:`, `ci:`,
-`deps:`, `refactor:`. Bir pull request tek konu içersin ve kullanıcılar için neyin
-değiştiğini anlatsın. Sürümleri proje sahibi çıkarır (aşağıda).
+`deps:`, `refactor:` (isteğe bağlı bir kapsamla, ör. `fix(modbus): …`). Bir pull request tek
+konu içersin ve kullanıcılar için neyin değiştiğini anlatsın. Arayüzü değiştiren bir pull
+request bunu gösterir (önce / sonra ekran görüntüleri) ve `tr.json`'u eksiksiz tutar;
+belgelenmiş bir davranışı değiştiren her iki README'yi ve dokunduğu `docs/` rehberini
+günceller (`tests/test_docs.py` komut satırı seçeneklerini ve bağlantıları denetler). Sürümleri proje sahibi çıkarır (aşağıda).
 
 ### Sürümler
 Sürüm `app/__init__.py`'ye, tarihli bir `## [X.Y.Z] — YYYY-MM-DD` bölümü `CHANGELOG.md`'ye
@@ -354,9 +405,17 @@ değişikliği gereken bir release tag taşınarak değil, yeni bir yama sürüm
 deneme olarak çalıştırır: hiçbir şeyi attest etmez, yayımlamaz ya da tag'lemez (GHCR'da
 tag'siz bir imaj sürümü bırakır).
 
-Bir ara sürüm (`vX.Y.0`) tag'lendikten sonra yazdığı `config.json` dondurulur: getirdiği
-ayarlar `tests/make_config_fixture.py` içindeki `FEATURES`'a eklenir,
-`python tests/make_config_fixture.py vX.Y.0` çalıştırılır ve
-`tests/fixtures/config-X.Y.0.json`, `tests/test_upgrade_from_2_8.py` gibi bir yükseltme
-testiyle (data klasörü düzeni ve `tests/docker_smoke.sh`'ta bir adımla birlikte), bir
-sonraki sürüm config modelini değiştirmeden önce commit'lenir.
+Sürüm commit'i `ROADMAP.md`'nin sürüm satırlarını (başlığı ve Shipped girdisini) ve iki
+README'deki imaj tag örneklerini (`:X.Y`, `:X.Y.Z`) de günceller; arayüz değiştiyse ekran
+görüntüleri yeniden alınır (`tools/_capture_screenshots.py`, iki dilde).
+
+Bir sürüm tag'lendikten sonra yazdıkları dondurulur: getirdiği ayarlar
+`tests/make_config_fixture.py` içindeki `FEATURES`'a eklenir,
+`python tests/make_config_fixture.py vX.Y.Z` çalıştırılır ve
+`tests/fixtures/config-X.Y.Z.json`, `tests/test_upgrade_from_2_8.py` gibi bir yükseltme
+testiyle (data klasörü düzeniyle birlikte; `tests/docker_smoke.sh` 2.7.1'inkiyle açılır)
+commit'lenir; karışık sürümlü küme düzenlemeleri için de
+`python tests/make_form_fixtures.py vX.Y.Z` çalıştırılır (`tests/fixtures/forms-X.Y.Z.json`,
+`tests/test_mixed_version_edit.py`). Bunlar bir sonraki sürüm config modelini ya da eşleme
+formunu değiştirmeden önce yapılır. Eşleme formuna eklenen bir alan, onu okuyan sürümün
+`FORM_BLOCKS_SINCE` bloğuna girer (`app/web/routes/forms.py`).
