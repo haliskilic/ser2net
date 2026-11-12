@@ -155,7 +155,7 @@ def test_ui_port_held_at_start():
     holder.bind(("127.0.0.1", srv.port))
     holder.listen()
     try:
-        srv.start()  # (its port check is answered by the holder)
+        srv.start(served=False)  # (its port is the holder's)
         wait(lambda: "the mappings start anyway" in read_log(srv), what="the UI's log line")
         wait(lambda: f"[Works] listening on 127.0.0.1:{work_port}" in read_log(srv),
              what="the mapping")

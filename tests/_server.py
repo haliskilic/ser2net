@@ -48,6 +48,23 @@ def wait_port(port: int, timeout: float = 20) -> bool:
     return False
 
 
+def wait_served(port: int, timeout: float = 20) -> bool:
+    """Wait until the admin UI on 127.0.0.1:``port`` answers (anything, a close too: a TLS
+    listener closes a plain request). Its port listens before the mappings start and is
+    served only after, so this also means the mappings have started."""
+    end = time.time() + timeout
+    while time.time() < end:
+        try:
+            with socket.create_connection(("127.0.0.1", port), timeout=1) as s:
+                s.settimeout(2)
+                s.sendall(b"GET /healthz HTTP/1.0\r\nHost: 127.0.0.1\r\n\r\n")
+                s.recv(1)
+                return True
+        except OSError:  # refused, reset, or no answer yet
+            time.sleep(0.2)
+    return False
+
+
 def silent_tls_client(port: int, ctx, timeout: float = 5) -> socket.socket:
     """A TLS client that completes its handshake (``ctx``) with 127.0.0.1:``port`` and
     then neither reads nor answers anything, not even the server's close_notify. Returns
@@ -103,14 +120,16 @@ class Server:
                         **(env or {}))
         self.base = f"http://127.0.0.1:{self.port}"
 
-    def start(self) -> "Server":
+    def start(self, served: bool = True) -> "Server":
+        """Start it and wait until the admin UI answers (its mappings have started then);
+        served=False: only until its port takes a connection."""
         self.log_path = os.path.join(self.tmp, "server.log")
         self._log = open(self.log_path, "wb")
         self.proc = subprocess.Popen(
             [sys.executable, "ser2net.py", "--no-bootstrap", "--data-dir", self.data],
             cwd=ROOT, env=self.env, stdin=subprocess.DEVNULL, stdout=self._log,
             stderr=subprocess.STDOUT)
-        if not wait_port(self.port):
+        if not (wait_served(self.port) if served else wait_port(self.port)):
             raise AssertionError("server did not start:\n" + self.output()[-2000:])
         return self
 
