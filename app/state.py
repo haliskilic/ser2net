@@ -57,6 +57,9 @@ AUDIT_LOG_MAX_BYTES = 5 * 1024 * 1024  # rotate audit.log past 5 MB (one backup 
 # hourly retention deletes an older file once its first record is past the limit. audit.log
 # then keeps up to AUDIT_FILES_KEPT older files (audit.log.1 ...), so the period fits.
 AUDIT_FILES_KEPT = 5
+# all.log could not be renamed for its rotation (Windows: another program has it open):
+# written on, and rotated at the first record after this many seconds
+ROLL_RETRY_S = 60.0
 # One all.log message is cut after this many characters: a request (a sign-in attempt, a
 # URL) needs no account, and must not write megabytes into the log at a time.
 LOG_MESSAGE_MAX = 2000
@@ -194,6 +197,8 @@ class RetainingFileHandler(RotatingFileHandler):
         super().__init__(*args, **kwargs)
         self.max_age_s = 0.0
         self.first = _first_stamp(self.baseFilename)  # the live file's first record
+        self._retry_at = 0.0     # time.monotonic() before which a failed rotation waits
+        self._failing = False    # the last rotation failed (said so in the file once)
 
     def too_old(self, now: float) -> bool:
         if not self.max_age_s or self.first is None:
@@ -201,11 +206,58 @@ class RetainingFileHandler(RotatingFileHandler):
         return now - self.first >= self.max_age_s / max(1, self.backupCount)
 
     def shouldRollover(self, record) -> bool:  # noqa: N802 (logging API)
+        if self._retry_at and time.monotonic() < self._retry_at:
+            return False
         return bool(super().shouldRollover(record)) or self.too_old(record.created)
 
     def doRollover(self) -> None:  # noqa: N802 (logging API)
-        super().doRollover()
+        """Rotate: all.log -> all.log.1 -> ... -> all.log.<backupCount> (the oldest gone).
+        all.log is moved aside first: when that fails (Windows: another program has it open
+        without delete sharing) nothing is shifted or deleted, the record is written to
+        all.log as it is and rotating is tried again after ROLL_RETRY_S. (Python's own
+        rotation shifted the backups first, then dropped the record, and did both again for
+        every later record: the history was gone after a few lines.)"""
+        if self.backupCount <= 0:
+            super().doRollover()
+            return
+        if self.stream:
+            self.stream.close()
+            self.stream = None  # (reopened below, or by emit)
+        base = self.baseFilename
+        aside = base + ".rotating"
+        try:
+            os.replace(base, aside)
+        except FileNotFoundError:
+            aside = ""
+        except OSError as e:
+            self._rotation_failed(e)
+            return
+        try:
+            for i in range(self.backupCount - 1, 0, -1):
+                older = f"{base}.{i}"
+                if os.path.exists(older):
+                    os.replace(older, f"{base}.{i + 1}")
+            if aside:
+                os.replace(aside, f"{base}.1")
+        except OSError as e:  # a backup held open: put all.log back, keep what is there
+            with _suppress(OSError):
+                os.replace(aside, base)
+            self._rotation_failed(e)
+            return
+        self._retry_at, self._failing = 0.0, False
         self.first = None
+        if not self.delay:
+            self.stream = self._open()
+
+    def _rotation_failed(self, e: OSError) -> None:
+        self._retry_at = time.monotonic() + ROLL_RETRY_S
+        self.stream = self._open()
+        if not self._failing:
+            self._failing = True
+            self.stream.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')} WARNING: "
+                              f"{os.path.basename(self.baseFilename)} could not be rotated "
+                              f"({e.strerror or e}: another program may have it open) — "
+                              f"writing on, trying again every {ROLL_RETRY_S:g} s\n")
 
     def emit(self, record) -> None:
         super().emit(record)

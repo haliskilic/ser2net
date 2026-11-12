@@ -85,6 +85,19 @@ def _monitoring_refusal(request, path: str):
                              headers={"WWW-Authenticate": 'Bearer realm="ser2net"'})
 
 
+async def _answer(request, call_next, state):
+    """The handler's answer. One that failed with an exception (answered 500 by
+    server_error) is logged here, as the request line it would have had; its traceback
+    reaches all.log through uvicorn's error log (logsetup.LibraryLogHandler)."""
+    try:
+        return await call_next(request)
+    except Exception as e:
+        ip = request.client.host if request.client else "?"
+        state.log(f"HTTP {ip} {request.method} {request.url.path} -> 500 "
+                  f"({type(e).__name__}: {e})")
+        raise
+
+
 class GuardMiddleware(BaseHTTPMiddleware):
     """Single gate: CSRF + setup-redirect + session auth + security headers + csrf cookie."""
 
@@ -149,7 +162,7 @@ class GuardMiddleware(BaseHTTPMiddleware):
                     return RedirectResponse("/login", status_code=303)
                 request.state.user = user  # available to handlers for role checks
 
-        response = await call_next(request)
+        response = await _answer(request, call_next, state)
 
         # audit log: every state-changing request, plus meaningful page loads
         # (skip the static assets and the periodic poll endpoints)
@@ -184,7 +197,7 @@ class GuardMiddleware(BaseHTTPMiddleware):
                 return JSONResponse(
                     {"error": "forbidden", "detail": "API token role 'viewer' is read-only"},
                     status_code=403)
-        response = await call_next(request)
+        response = await _answer(request, call_next, request.app.state.appstate)
         self._security_headers(response, cfg)
         return response
 

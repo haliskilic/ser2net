@@ -702,7 +702,11 @@ inside aren't readable by other users:
   the box to restore them too (that also signs everyone else out). *Only its mappings*
   goes through the import preview. A restore can be undone too; a downloaded backup
   leaves out the session key.
-- `all.log` — global activity (size-rotated); `audit.log` — sign-ins, config changes,
+- `all.log` — global activity (size-rotated), also the warnings and errors of the web
+  server and other libraries (an address the admin UI can't use, a request it can't parse,
+  the traceback of a request that failed; each message at most once a minute). On Windows,
+  when another program holds it open and it can't be rotated, it is written on and rotated
+  later, its older files kept; `audit.log` — sign-ins, config changes,
   console / hex view opens and trace downloads: who/from where/what (rotated). Searchable
   under Settings → *Audit log*, CSV export.
 - **Retention.** By default the logs keep their size limits however old the records are
