@@ -1,5 +1,9 @@
 """Per-mapping log retention: age (>15d) + size (>100MB) auto-trim.
 
+Only a line feed ends a line (CRLF kept as it is): a CR, NEL or U+2028 inside a message
+doesn't, and a line without a time (the rest of a message an older version wrote with
+a line break in it) goes or stays with the line before it - it can't stop the age trim.
+
 Run: python3 tests/test_log_maintenance.py
 """
 import asyncio
@@ -46,6 +50,36 @@ def test_age_trim():
         assert "OLD-A" not in content and "OLD-B" not in content, content
         assert "NEW-A" in content and "NEW-B" in content, content
         print("age trim (>15d dropped, recent kept) OK")
+    finally:
+        shutil.rmtree(d)
+
+
+def test_undated_lines():
+    d = tempfile.mkdtemp()
+    try:
+        p = os.path.join(d, "z.log")
+        with open(p, "w", encoding="utf-8", newline="") as fh:
+            fh.write(f"{ts(-20*86400)} OLD point 'a\u2028b' failed\r\n"
+                     f"rest of an old message\n"
+                     f"{ts(-16*86400)} OLD-B\rstill OLD-B\x85 and \u2029 too\r\n"
+                     f"{ts(-3600)} NEW-A\u2028x\r\nrest of NEW-A\n{ts(-60)} NEW-B\r\n")
+        cutoff = time.time() - LOG_MAX_AGE_DAYS * 86400
+        assert _trim_log_file(p, cutoff, 100 * 1024 * 1024)
+        with open(p, encoding="utf-8", newline="") as fh:
+            content = fh.read()
+        assert content == f"{ts(-3600)} NEW-A\u2028x\r\nrest of NEW-A\n{ts(-60)} NEW-B\r\n", content
+        assert not _trim_log_file(p, cutoff, 100 * 1024 * 1024), "nothing more to trim"
+        # the orphan line an older version left at the top: skipped, not a stop
+        with open(p, "w", encoding="utf-8") as fh:
+            fh.write(f"x\u2028y orphan\n{ts(-17*86400)} OLD\n{ts(-60)} NEW\n")
+        assert _trim_log_file(p, cutoff, 100 * 1024 * 1024)
+        assert open(p, encoding="utf-8").read() == f"{ts(-60)} NEW\n"
+        # no line with a time at all: kept (its age is unknown)
+        with open(p, "w", encoding="utf-8") as fh:
+            fh.write("no time here\nnor here\n")
+        assert not _trim_log_file(p, cutoff, 100 * 1024 * 1024)
+        print("age trim: only line feeds end a line; undated lines follow their record "
+              "(an orphan no longer stops the trim)  OK")
     finally:
         shutil.rmtree(d)
 
@@ -102,6 +136,7 @@ async def _integration():
 
 if __name__ == "__main__":
     test_age_trim()
+    test_undated_lines()
     test_size_cap()
     asyncio.run(_integration())
     print("\nPASS: per-mapping log retention (age + size)")

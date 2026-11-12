@@ -53,8 +53,29 @@ def test_tail_read_returns_recent_lines():
         shutil.rmtree(d, ignore_errors=True)
 
 
+def test_only_line_feeds_end_a_line():
+    """A CR, NEL or U+2028 inside a message (as an older version wrote them) doesn't cut
+    the line in two; a CRLF ends one like a line feed."""
+    d = tempfile.mkdtemp(prefix="s2n_logread_")
+    try:
+        state = AppState(ConfigStore(os.path.join(d, "config.json")), AppConfig())
+        os.makedirs(state.logs_dir, exist_ok=True)
+        with open(state.mapping_log_path("m2"), "w", encoding="utf-8", newline="") as fh:
+            fh.write("2026-06-09 00:00:00 a\u2028b\x85c\rd\r\n2026-06-09 00:00:01 e\u2029f\n"
+                     "2026-06-09 00:00:02 last")
+        assert state.read_mapping_log("m2") == [
+            "2026-06-09 00:00:02 last", "2026-06-09 00:00:01 e\u2029f",
+            "2026-06-09 00:00:00 a\u2028b\x85c\rd"], state.read_mapping_log("m2")
+        assert state.read_mapping_log("nosuch") == []
+        print("read_mapping_log: only a line feed (or CRLF) ends a line  OK")
+    finally:
+        _close_loggers()
+        shutil.rmtree(d, ignore_errors=True)
+
+
 def main():
     test_tail_read_returns_recent_lines()
+    test_only_line_feeds_end_a_line()
     print("\nPASS: mapping log tail read (M6)")
 
 
