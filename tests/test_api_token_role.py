@@ -140,8 +140,7 @@ def test_unknown_role_in_config():
         st, _, page = admin.post("/settings/api-token", {"api_token_role": "Operator"})
         new = re.search(r"s2n_[A-Za-z0-9_\-]+", page).group(0)
         # shown once: in a box a click selects whole (.token-box), with a Copy button for it
-        assert f'<div class="mono token-box" id="new-api-token">{new}</div>' in page
-        assert 'data-copy="new-api-token"' in page
+        assert f'<div class="mono token-box">{new}</div>\n    <button type="button" class="btn sm mt-sm" data-copy>' in page
         assert srv.saved_config()["api_token_role"] == "operator" and new != secret
         assert call("GET", "/api/v1/status", secret)[0] == 401, "the old token must stop working"
         assert call("GET", "/api/v1/mappings", new)[1]["mappings"][0]["mqtt"]["password"] == "broker-secret"

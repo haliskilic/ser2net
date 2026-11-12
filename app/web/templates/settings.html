@@ -277,8 +277,8 @@
   {% endfor %}
   {% if new_cluster_key %}
   <div class="banner ok">{{ _("New cluster key (copy it now — it is not shown again). Set the same key on every node:") }}
-    <div class="mono token-box" id="new-cluster-key">{{ new_cluster_key }}</div>
-    <button type="button" class="btn sm mt-sm" data-copy="new-cluster-key">{{ _("Copy") }}</button>
+    <div class="mono token-box">{{ new_cluster_key }}</div>
+    <button type="button" class="btn sm mt-sm" data-copy>{{ _("Copy") }}</button>
   </div>
   {% endif %}
   {% if cluster_key_hint == 'weak' %}
@@ -411,8 +411,8 @@
   <p class="muted mb-sm">{{ _('A bearer token for the JSON API at <span class="mono">/api/v1</span> (automation, Ansible, fleet tools). Send it as <span class="mono">Authorization: Bearer &lt;token&gt;</span>. Spec: <a href="/api/v1/openapi.json">openapi.json</a>.') }}</p>
   {% if new_api_token %}
   <div class="banner ok">{{ _("New token (copy now — shown only once):") }}
-    <div class="mono token-box" id="new-api-token">{{ new_api_token }}</div>
-    <button type="button" class="btn sm mt-sm" data-copy="new-api-token">{{ _("Copy") }}</button>
+    <div class="mono token-box">{{ new_api_token }}</div>
+    <button type="button" class="btn sm mt-sm" data-copy>{{ _("Copy") }}</button>
   </div>
   {% endif %}
   <p>{{ _("Status:") }}
