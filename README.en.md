@@ -552,6 +552,9 @@ everything from a **password-protected web UI** — no CLI or hand-edited config
   install to `./lib` on first run (offline), on any OS and CPU. An older `python3` (RHEL /
   AlmaLinux / Rocky 8 and 9) is refused with a message: install a newer one
   (`sudo dnf install python3.11`; `./start.sh` picks it up) or use the standalone binary.
+  CI tests 3.10–3.14; a Python past its end of life (3.10) stays supported until a
+  dependency pinned for it has a known vulnerability no release for it fixes, announced
+  one minor release ahead ([CONTRIBUTING → Python versions](CONTRIBUTING.md#python-versions)).
 - Linux: membership in the serial devices' group to **open** serial ports (listing ports
   needs no privilege). It is `dialout` on Debian, Ubuntu, Raspberry Pi OS, Fedora, RHEL and
   openSUSE, but `uucp` on Arch, Manjaro and EndeavourOS (which have no `dialout` group); a
@@ -568,6 +571,12 @@ everything from a **password-protected web UI** — no CLI or hand-edited config
 ---
 
 ## 🚀 Install & run
+
+| Way | Runs on | Needs |
+|---|---|---|
+| [Standalone binary](#standalone-binary-nothing-else-to-install) | Windows x64; Linux x86_64 and arm64 with glibc ≥ 2.28 (Raspberry Pi 3/4/5 with a 64-bit OS) | nothing |
+| [Docker](#docker) | Linux hosts: amd64, arm64, arm/v7 (32-bit Raspberry Pi OS) | Docker |
+| From source (below) | any OS and CPU: also macOS, 32-bit ARM, Windows on ARM | Python 3.10+ with pip; offline from the bundled wheels |
 
 ```bash
 # Linux / macOS / Raspberry Pi (any CPU)

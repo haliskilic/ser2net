@@ -325,7 +325,7 @@ def _pip_install(online: bool) -> bool:
                 "            do not match this platform/Python version, or they are\n"
                 "            missing. Re-run with --online on a networked machine, or\n"
                 "            populate vendor/wheels/ with matching wheels.\n"
-                "            (See README.md > Offline installation.)",
+                "            (See README.en.md > Offline install; README.md > Offline kurulum.)",
                 file=sys.stderr,
             )
         return False

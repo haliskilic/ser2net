@@ -572,6 +572,10 @@ düzenlemeye gerek yok.
   sisteminde ve işlemcide. Daha eski bir `python3` (RHEL / AlmaLinux / Rocky 8 ve 9) bir
   mesajla reddedilir: daha yenisini kurun (`sudo dnf install python3.11`; `./start.sh` onu
   bulur) ya da standalone binary'yi kullanın.
+  CI 3.10–3.14'ü dener; ömrünü doldurmuş bir Python (3.10), onun için sabitlenmiş bir
+  bağımlılıkta onu destekleyen hiçbir sürümün düzeltmediği bilinen bir açık çıkana kadar
+  desteklenir ve bırakılması bir ara sürüm önceden duyurulur
+  ([CONTRIBUTING → Python sürümleri](CONTRIBUTING.md#python-sürümleri)).
 - Linux'ta seri portu **açmak** için kullanıcının seri cihazların grubunda olması gerekir
   (port **listelemek** için ayrıcalık gerekmez). Bu grup Debian, Ubuntu, Raspberry Pi OS,
   Fedora, RHEL ve openSUSE'de `dialout`, Arch, Manjaro ve EndeavourOS'ta ise `uucp`'dir (bu
@@ -589,6 +593,12 @@ düzenlemeye gerek yok.
 ---
 
 ## 🚀 Kurulum & Çalıştırma
+
+| Yol | Nerede çalışır | Ne gerekir |
+|---|---|---|
+| [Standalone binary](#standalone-binary-başka-hiçbir-şey-kurmak-gerekmez) | Windows x64; glibc ≥ 2.28 olan Linux x86_64 ve arm64 (64-bit işletim sistemli Raspberry Pi 3/4/5) | hiçbir şey |
+| [Docker](#docker) | Linux host'lar: amd64, arm64, arm/v7 (32-bit Raspberry Pi OS) | Docker |
+| Kaynaktan (aşağıda) | her işletim sistemi ve işlemci: macOS, 32-bit ARM, ARM üzerinde Windows da | pip'li Python 3.10+; paketlenmiş wheel'lerle offline |
 
 ```bash
 # Linux / macOS / Raspberry Pi (her işlemci)
