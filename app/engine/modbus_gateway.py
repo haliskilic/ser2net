@@ -250,6 +250,7 @@ class ModbusGatewayRunner:
                     subscriptions=dict.fromkeys(self._set_points, self._on_set_message),
                     accept_retained=bool(mq.apply_retained_set),
                     on_connect=self._publish_unit_states if mq.unit_status else None)
+            self.status.mqtt = self._mqtt.state
             self._mqtt.connect()
             self._report_units()
             self._poll_task = asyncio.create_task(
@@ -281,6 +282,7 @@ class ModbusGatewayRunner:
         elif self._mqtt is not None:
             self._mqtt.close()
             self._mqtt = None
+        self.status.mqtt = {}
         if self._server is not None:
             with contextlib.suppress(Exception):
                 await asyncio.wait_for(self._server.wait_closed(), timeout=5.0)

@@ -217,7 +217,14 @@ everything from a **password-protected web UI** — no CLI or hand-edited config
   and `offline` when the mapping stops or, as the Last-Will, when the broker loses the
   connection. With a blank client ID the broker can't tie a new connection to the one
   that broke, whose Will it may publish only after the new `online` (it waits up to 1.5 ×
-  the 30 s keepalive), so `online` is sent once more 50 s after each connect.
+  the 30 s keepalive), so `online` is sent once more 50 s after each connect. The
+  connection is logged as it changes (connecting, connected, refused with the broker's
+  reason, can't connect with the error — DNS, no answer, a TLS certificate — and lost; each
+  problem once until it changes), as is a subscription the broker refuses and the first
+  failed publish to a topic. The mapping's status (`mqtt` in the REST API: state, broker,
+  since, error, dropped messages) and `/metrics` carry it, and the dashboard shows
+  **⚠ MQTT: no connection to …** with the reason. A base topic with `+` or `#` (no message
+  can be published to it) keeps MQTT off for the mapping, with a log line.
   Needs `paho-mqtt` (optional; the bridge runs normally without it).
 - **Migrating from classic ser2net:** `ser2net.yaml` (4.x) and `ser2net.conf` (3.x) files
   import through Settings with a preview; options without an equivalent are listed as
@@ -367,7 +374,10 @@ The image has a `HEALTHCHECK` (`ser2net --healthcheck`). Details:
   the admin UI's connections, TLS handshakes in progress and waiting for one to end, and
   the connections refused right after accept (`ser2net_connections_refused_total`, by
   reason); for a Modbus gateway's polled units whether each answers
-  (`ser2net_modbus_unit_up`) and its failed reads (`ser2net_modbus_unit_poll_errors_total`).
+  (`ser2net_modbus_unit_up`) and its failed reads (`ser2net_modbus_unit_poll_errors_total`);
+  for a mapping that publishes to MQTT whether it is connected to its broker
+  (`ser2net_mqtt_connected`) and the messages it could not hand to it
+  (`ser2net_mqtt_messages_dropped_total`).
 
 ---
 

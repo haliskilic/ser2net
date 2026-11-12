@@ -853,5 +853,9 @@
   "retained online / offline; offline once a unit gave no reply to any of its points in 3 polls in a row. It keeps the last state while the mapping is stopped: read it together with &lt;topic&gt;/status": "retained online / offline; bir unit art arda 3 okumada noktalarının hiçbirine yanıt vermezse offline olur. Eşleme durduğunda son durumu korur: &lt;topic&gt;/status ile birlikte oku",
   "primary host ID": "primary host ID'si",
   "Sparkplug primary host ID": "Sparkplug primary host ID'si",
-  "optional: births only while this host application’s STATE says online": "isteğe bağlı: birth'ler yalnızca bu host uygulamasının STATE mesajı online derken gider"
+  "optional: births only while this host application’s STATE says online": "isteğe bağlı: birth'ler yalnızca bu host uygulamasının STATE mesajı online derken gider",
+  "the mapping’s connection to its MQTT broker; it keeps trying (see the mapping’s log)": "eşlemenin MQTT broker'ına bağlantısı; denemeyi sürdürüyor (ayrıntı eşlemenin log'unda)",
+  "MQTT: no connection to %(broker)s (%(error)s)": "MQTT: %(broker)s ile bağlantı yok (%(error)s)",
+  "MQTT publishing could not start (see the mapping’s log)": "MQTT yayını başlatılamadı (ayrıntı eşlemenin log'unda)",
+  "MQTT off: %(error)s": "MQTT kapalı: %(error)s"
 }
