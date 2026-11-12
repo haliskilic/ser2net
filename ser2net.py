@@ -13,12 +13,19 @@ Run:
     python3 ser2net.py --set-password admin   # lost the password? (also while it runs)
     python3 ser2net.py --help
 """
-from __future__ import annotations
-
+# No `from __future__ import annotations` and nothing newer than Python 3.6 syntax in this
+# file: an old python3 (RHEL 8's 3.6, RHEL 9's 3.9) gets the message below instead of a
+# SyntaxError or a TypeError. app/ is imported only after it.
 import argparse
 import contextlib
 import os
 import sys
+
+if sys.version_info < (3, 10):
+    sys.exit("ser2net needs Python 3.10 or newer; this is Python {} ({}). Run it with a "
+             "newer one (e.g. python3.11 ser2net.py; RHEL / AlmaLinux / Rocky: sudo dnf "
+             "install python3.11), or use the standalone binary or the Docker image "
+             "(README.md > Install & run).".format(sys.version.split()[0], sys.executable))
 
 # The script's own directory is on sys.path, so the `app` package imports here even
 # before the explicit sys.path setup below (and PyInstaller bundles it in frozen builds).
@@ -163,7 +170,7 @@ def print_about() -> int:
              f"Build: {'standalone executable' if FROZEN else 'source'}"]
     components = (("pyserial", "serial"), ("pyserial-asyncio-fast", "serial_asyncio_fast"),
                   ("starlette", "starlette"), ("uvicorn", "uvicorn"), ("anyio", "anyio"),
-                  ("paho-mqtt", "paho.mqtt"), ("ldap3", "ldap3"), ("pyasn1", "pyasn1"),
+                  ("psutil", "psutil"), ("paho-mqtt", "paho.mqtt"), ("ldap3", "ldap3"), ("pyasn1", "pyasn1"),
                   ("authlib", "authlib"), ("cryptography", "cryptography"))
     width = max(len(dist) for dist, _module in components)
     for dist, module in components:

@@ -20,12 +20,18 @@ against its recorded sha256 and refuses to install from a set where one differs 
 damaged or replaced file). Wheels that are not listed — e.g. ones you add for the optional
 features — are installed as they are.
 
+psutil is optional: it is the one pinned package that isn't pure Python, and
+vendor/wheels has it for Linux x86_64 and Windows x64 only. Elsewhere (ARM Linux, 32-bit
+Raspberry Pi OS included, macOS, musl, ARM or 32-bit Windows Python) the set is installed
+without it, and ser2net lists the network interfaces with the standard library instead.
+
 Usage (normally invoked automatically by ser2net.py / start.bat):
     python3 bootstrap.py            # (re)install from vendor/wheels -> ./lib, offline
     python3 bootstrap.py --online   # allow falling back to PyPI if a wheel is missing
 """
-from __future__ import annotations
-
+# No `from __future__ import annotations` and nothing newer than Python 3.6 syntax up to the
+# version check below, so an old python3 (RHEL 8's 3.6, RHEL 9's 3.9) gets that message
+# instead of a SyntaxError or a TypeError.
 import hashlib
 import importlib.util
 import json
@@ -35,6 +41,14 @@ import shutil
 import subprocess
 import sys
 import sysconfig
+import tempfile
+
+MIN_PYTHON = (3, 10)
+if sys.version_info < MIN_PYTHON:
+    sys.exit("ser2net needs Python 3.10 or newer; this is Python {} ({}). Run it with a "
+             "newer one (e.g. python3.11 ser2net.py; RHEL / AlmaLinux / Rocky: sudo dnf "
+             "install python3.11), or use the standalone binary or the Docker image "
+             "(README.md > Install & run).".format(sys.version.split()[0], sys.executable))
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 LIB_DIR = os.path.join(ROOT, "lib")
@@ -54,8 +68,13 @@ REQUIRED = [
     ("websockets", "websockets"),
     ("multipart", "python-multipart"),
     ("jinja2", "jinja2"),
-    ("psutil", "psutil"),
 ]
+
+# Installed with the rest when a wheel for this machine is at hand, else left out: psutil
+# (network interface names, addresses and up/down state for the bind-address pickers and
+# the cluster beacons) has no pure-Python wheel, and app/engine/netinfo.py and cluster.py
+# use the standard library without it.
+OPTIONAL = [("psutil", "psutil")]
 
 # Python 3.10 backports: ser2net uses these as stand-ins for the native 3.11+
 # asyncio.TaskGroup / asyncio.Runner / except* (see app/engine/bridge.py and
@@ -213,27 +232,92 @@ def _drop_old_metadata(before: dict[str, tuple[int, int]]) -> list[str]:
     return removed
 
 
-def _pip_install(online: bool) -> bool:
-    """pip install --target lib --upgrade the pinned set: pip builds it in a temporary
-    folder first and then replaces each package's folders in lib/, keeping anything else
-    there. True when it worked (then the old metadata is gone and the record written)."""
-    os.makedirs(LIB_DIR, exist_ok=True)
-    before = _dist_infos()
+NO_PIP = (
+    "this Python ({}) has no pip, which installs the bundled dependencies into ./lib "
+    "(offline, from vendor/wheels). Install it (Debian / Ubuntu / Raspberry Pi OS: sudo apt "
+    "install python3-pip; RHEL / AlmaLinux / Rocky / Fedora: sudo dnf install python3-pip), "
+    "or use the standalone binary or the Docker image")
+
+
+def _wheel_at_hand(project: str) -> bool:
+    """vendor/wheels has a wheel of `project` this Python can install (by pip's own tag
+    rules; True when that can't be told, so pip finds out)."""
+    try:
+        from pip._vendor.packaging.tags import sys_tags
+        from pip._vendor.packaging.utils import canonicalize_name, parse_wheel_filename
+
+        supported = set(sys_tags())
+        names = os.listdir(WHEELS_DIR)
+    except Exception:  # pip's internals moved, no vendor/wheels
+        return True
+    for name in names:
+        try:
+            dist, _version, _build, tags = parse_wheel_filename(name)
+        except Exception:  # not a wheel's name
+            continue
+        if canonicalize_name(dist) == project and tags & supported:
+            return True
+    return False
+
+
+def _requirements_without(projects: list[str]) -> str:
+    """requirements.txt minus the lines of `projects`, as a temporary file (its path)."""
+    keep = []
+    with open(REQ_FILE, encoding="utf-8") as fh:
+        for line in fh:
+            req = line.split("#", 1)[0].strip()
+            name = re.match(r"[A-Za-z0-9][A-Za-z0-9._-]*", req)
+            if name and re.sub(r"[-_.]+", "-", name.group(0)).lower() not in projects:
+                keep.append(req)
+    fd, path = tempfile.mkstemp(prefix="ser2net-requirements-", suffix=".txt")
+    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        fh.write("\n".join(keep) + "\n")
+    return path
+
+
+def _run_pip(online: bool, leave_out: list[str]) -> bool:
+    req = _requirements_without(leave_out) if leave_out else REQ_FILE
     cmd = [
         sys.executable, "-m", "pip", "install",
         "--target", LIB_DIR,
         "--upgrade",
-        "-r", REQ_FILE,
+        "-r", req,
     ]
     if os.path.isdir(WHEELS_DIR):
         cmd += ["--find-links", WHEELS_DIR]
     if not online:
         cmd += ["--no-index"]
+    print("[bootstrap] $", " ".join(cmd), flush=True)  # (before pip's own output)
+    try:
+        return subprocess.run(cmd).returncode == 0
+    finally:
+        if req != REQ_FILE:
+            os.remove(req)
+
+
+def _pip_install(online: bool) -> bool:
+    """pip install --target lib --upgrade the pinned set: pip builds it in a temporary
+    folder first and then replaces each package's folders in lib/, keeping anything else
+    there. The OPTIONAL packages are left out when vendor/wheels has none for this machine
+    (offline), or when the whole set can't be installed with them. True when it worked
+    (then the old metadata is gone and the record written)."""
+    if importlib.util.find_spec("pip") is None:
+        print(f"[bootstrap] ERROR: {NO_PIP.format(sys.executable)} (README.md > Install & run).",
+              file=sys.stderr)
+        return False
+    os.makedirs(LIB_DIR, exist_ok=True)
+    before = _dist_infos()
+    optional = [pip_name for _module, pip_name in OPTIONAL]
+    leave_out = [] if online else [p for p in optional if not _wheel_at_hand(p)]
 
     print("[bootstrap] installing dependencies into ./lib ...")
-    print("[bootstrap] $", " ".join(cmd), flush=True)  # (before pip's own output)
-    result = subprocess.run(cmd)
-    if result.returncode != 0:
+    ok = _run_pip(online, leave_out)
+    if not ok and not leave_out:
+        leave_out = optional
+        print(f"[bootstrap] trying again without {', '.join(leave_out)} (optional) ...",
+              flush=True)
+        ok = _run_pip(online, leave_out)
+    if not ok:
         if not online:
             print(
                 "[bootstrap] offline install failed. Either the bundled wheels in\n"
@@ -245,6 +329,12 @@ def _pip_install(online: bool) -> bool:
                 file=sys.stderr,
             )
         return False
+    if leave_out:
+        where = "" if online else " among the bundled ones"
+        print(f"[bootstrap] installed without {', '.join(leave_out)} (optional; no wheel for "
+              f"this platform{where}): the network interfaces are listed with Python's "
+              "standard library instead (some may be missing from the bind-address lists), "
+              "everything else works the same")
     for name in _drop_old_metadata(before):
         print(f"[bootstrap] removed the old version's metadata {name}")
     _write_stamp()
@@ -323,7 +413,7 @@ def refresh(online: bool = False) -> bool:
               f"vendor/wheels/SHA256SUMS: {', '.join(altered)}. {keep}")
         return False
     if importlib.util.find_spec("pip") is None:
-        _warn(f"not refreshing ./lib: this Python ({sys.executable}) has no pip. {keep}")
+        _warn(f"not refreshing ./lib: {NO_PIP.format(sys.executable)}. {keep}")
         return False
     try:
         folders = [LIB_DIR] + [os.path.join(LIB_DIR, n) for n in os.listdir(LIB_DIR)]
@@ -384,7 +474,8 @@ def main(argv: list[str]) -> int:
     """python3 bootstrap.py: (re)install the pinned set into lib/ now, whatever is there.
     Refuses while another program uses lib/ (stop ser2net first)."""
     online = "--online" in argv
-    if os.path.isdir(LIB_DIR) and (busy := lib_in_use()):
+    busy = lib_in_use() if os.path.isdir(LIB_DIR) else ""
+    if busy:
         print(f"[bootstrap] ERROR: ./lib is in use: {busy} (a running ser2net?). Stop it "
               "first.", file=sys.stderr)
         return 1

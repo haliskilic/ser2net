@@ -184,8 +184,11 @@ everything from a **password-protected web UI** — no CLI or hand-edited config
 
 ## 🧰 Requirements
 
-- **Python 3.10+** installed. Nothing else — dependencies ship in `vendor/wheels/` and
-  install to `./lib` on first run (offline).
+- **Python 3.10+** installed, with pip (Debian / Ubuntu / Raspberry Pi OS ship it apart:
+  `sudo apt install python3-pip`). Nothing else — dependencies ship in `vendor/wheels/` and
+  install to `./lib` on first run (offline), on any OS and CPU. An older `python3` (RHEL /
+  AlmaLinux / Rocky 8 and 9) is refused with a message: install a newer one
+  (`sudo dnf install python3.11`; `./start.sh` picks it up) or use the standalone binary.
 - Linux: membership in the `dialout` group to **open** serial ports (listing ports
   needs no privilege):
   ```bash
@@ -200,7 +203,7 @@ everything from a **password-protected web UI** — no CLI or hand-edited config
 ## 🚀 Install & run
 
 ```bash
-# Linux / macOS
+# Linux / macOS / Raspberry Pi (any CPU)
 python3 ser2net.py            # or: ./start.sh
 
 # Windows
@@ -218,6 +221,10 @@ run; config/logs are written to `data/` next to the binary.
 | `ser2net-windows-x64.exe` | Windows 10/11, Windows Server 2016 or newer (x64) |
 | `ser2net-linux-x64` | x86_64 Linux with glibc ≥ 2.28: RHEL / AlmaLinux / Rocky 8+, Debian 11+, Ubuntu 20.04+, Fedora, openSUSE Leap 15 (not musl/Alpine — use Docker there) |
 | `ser2net-linux-arm64` | 64-bit ARM Linux with glibc ≥ 2.28: Raspberry Pi 3/4/5 (64-bit Raspberry Pi OS 11+ or Ubuntu), ARM industrial gateways, AWS Graviton, the same distributions |
+
+Other platforms — 32-bit ARM (32-bit Raspberry Pi OS, armv7 gateways), macOS, Windows on ARM:
+run from source (`python3 ser2net.py`), which works offline there too (see *Offline install*).
+Windows 11 on ARM also runs the x64 exe (emulated).
 
 Every release also publishes `SHA256SUMS`, a CycloneDX SBOM per binary (`*.cdx.json`), the
 license texts and `ser2net-standalone.service`, the systemd unit for the Linux binaries (see
@@ -274,7 +281,14 @@ python3 ser2net.py --reconfigure
 ### Offline install (no-internet machine)
 Dependencies live in `vendor/wheels/`; `ser2net.py` installs them to `./lib` on first
 launch (`pip install --no-index`). No internet needed. The set covers Python 3.10–3.14 on
-Linux x86_64 and Windows x64; after a `requirements.txt` change, refresh it with
+every OS and CPU: everything but psutil is pure Python, and psutil (the network interface
+list) is bundled for Linux x86_64 and Windows x64. Elsewhere — ARM Linux (32- and 64-bit
+Raspberry Pi OS), macOS, Alpine/musl, Windows on ARM or a 32-bit Windows Python — the first
+launch installs the set without it and says so; the interface lists then come from Python's
+standard library, which may miss an interface (`--about` shows `psutil not installed`;
+`python3 bootstrap.py --online` adds it from PyPI where it has a wheel for the machine or a
+C compiler is there). CI runs this offline first start on Linux x86_64 and arm64, Windows,
+macOS and 32-bit ARM (armv7, emulated). After a `requirements.txt` change, refresh the set with
 `python3 tools/refresh_wheels.py` (`tests/test_vendor_wheels.py` checks it). Each wheel's
 sha256 is in `vendor/wheels/SHA256SUMS`, and the first launch refuses to install from a set
 where a listed wheel differs (CI compares every wheel with the file PyPI publishes); wheels
@@ -292,9 +306,9 @@ the old versions' metadata is removed. `lib/.ser2net-deps.json` records what `li
 installed for (the pins, the Python version, the platform), so a new Python is handled the
 same way. Upgrading from 2.8.x or older, this first start replaces what those versions left
 in `lib/` (possibly 2.7's starlette and anyio, which have published advisories).
-When that can't be done — no bundled wheels for this machine (macOS, ARM Linux: run
-`python3 bootstrap.py --online`), `lib/` not writable for the account ser2net runs as, or
-another ser2net still running from the same folder — ser2net starts with the old `lib/` and
+When that can't be done — no pip for that Python, `lib/` not writable for the account
+ser2net runs as, or another ser2net still running from the same folder — ser2net starts
+with the old `lib/` and
 says why in its log (`WARNING: … ./lib …`); when this version can't run on the old packages
 at all (2.8.1 and newer on 2.7's), the start stops with one line that says so.
 `python3 bootstrap.py` installs the set by hand (stop ser2net first, and run it as the
