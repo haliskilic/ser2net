@@ -254,9 +254,10 @@ everything from a **password-protected web UI** — no CLI or hand-edited config
   Needs `paho-mqtt` (optional; the bridge runs normally without it).
 - **Migrating from classic ser2net:** `ser2net.yaml` (4.x) and `ser2net.conf` (3.x) files
   import through Settings with a preview; options without an equivalent are listed as
-  warnings, and a connection that would be more open here (a gtlssh login or TLS client
-  certificates, TLS whose certificate is not on this host, a write-only device) comes in
-  disabled. ser2net's port locking carries over: 4.x `flock` (on by default) becomes **Lock
+  warnings, and a connection that would be more open here (a gtlssh login, TLS client
+  certificates without their `CA=` file on this host, TLS whose certificate is not on this
+  host, a write-only device) comes in disabled; `ssl(clientauth,CA=...)` with the CA file
+  here keeps checking client certificates (**Client CA certificate file**). ser2net's port locking carries over: 4.x `flock` (on by default) becomes **Lock
   the port** plus **Keep other programs out**, `uucplock` (on by default; 3.x always)
   **Don't open a port another program has locked**; one warning says what still differs
   (a mapping holds its port open from its start, and makes no lock files). Listen
