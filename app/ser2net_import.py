@@ -698,6 +698,10 @@ def _listen_address(c: _Conn, fields: list[str]) -> bool:
         return False
     c.network["port"] = port
     c.network["bind_ip"] = _bind_ip(c, host, family)
+    if c.network["bind_ip"] == "::":
+        # IPv6 only, also for UDP where IPv6 sockets take IPv4 by default (MappingConfig.
+        # from_dict reads a UDP mapping on :: without the key as an older release ran it)
+        c.network["dual_stack"] = False
     c.any_family = not family and not host.strip("[]")
     return True
 

@@ -310,6 +310,12 @@ def test_udp_wildcard_kept():
         assert not [p for p in cfg.problems() if "overlapping" in p]
     saved = AppConfig.from_dict(legacy).to_dict()["mappings"][0]["network"]
     assert "dual_stack" in saved, "saved with the key: decided once"
+    # the same for a mapping written for an older release that comes in another way (REST
+    # API, an older cluster node, an import of mappings): the key decides when it is there
+    with mock.patch.object(config_mod, "_ipv6_takes_ipv4", lambda: True):
+        assert mapping(mode="udp", bind_ip="::").network.dual_stack is True
+        assert mapping(mode="udp", bind_ip="::", dual_stack=False).network.dual_stack is False
+        assert mapping(mode="server", bind_ip="::").network.dual_stack is False
     print("UDP on :: from an older config: dual_stack where the OS made it take IPv4 too  OK")
 
 
@@ -355,7 +361,7 @@ def test_family_aware_overlaps():
     assert problems({"bind_ip": "::"}, {"bind_ip": "::1"})
     assert not problems({"bind_ip": "0.0.0.0", "dual_stack": True}, {"bind_ip": "0.0.0.0", "port": 4002})
     # UDP alike: :: takes IPv6 only on every OS now (IPV6_V6ONLY set, not the OS default)
-    assert not problems({"bind_ip": "0.0.0.0"}, {"bind_ip": "::"}, kind="udp")
+    assert not problems({"bind_ip": "0.0.0.0"}, {"bind_ip": "::", "dual_stack": False}, kind="udp")
     assert problems({"bind_ip": "0.0.0.0"}, {"bind_ip": "::", "dual_stack": True}, kind="udp")
 
     def conflict(admin=("127.0.0.1", 4001), cluster=None, **net):
@@ -372,7 +378,8 @@ def test_family_aware_overlaps():
     assert not conflict(cluster=keyed, mode="udp", bind_ip="2001:db8::5"), "no IPv4 beacons there"
     assert conflict(cluster=keyed, mode="udp", bind_ip="::1", dual_stack=True) == "", "not a wildcard"
     assert conflict(cluster=keyed, mode="udp", bind_ip="::", dual_stack=True)
-    assert not conflict(cluster=keyed, mode="udp", bind_ip="::"), ":: gets no IPv4 beacons"
+    assert not conflict(cluster=keyed, mode="udp", bind_ip="::", dual_stack=False), \
+        ":: gets no IPv4 beacons"
     print("overlaps: a TCP wildcard clashes with its own family only, a dual-stack one with "
           "both; the admin UI and discovery checks use the same rule  OK")
 
@@ -495,7 +502,7 @@ async def _listeners():
         finally:
             await r.stop()
         # UDP on :: alone: IPv6 senders only, whatever the OS default
-        r = MappingRunner(mapping(port=0, mode="udp", bind_ip="::"), logger=log)
+        r = MappingRunner(mapping(port=0, mode="udp", bind_ip="::", dual_stack=False), logger=log)
         await r.start()
         try:
             sock = r._udp_transport.get_extra_info("socket")
