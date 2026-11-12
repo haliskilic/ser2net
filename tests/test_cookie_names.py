@@ -65,7 +65,7 @@ def test_names() -> None:
     assert name(scope(scheme="https"), "ser2net_oidc", "/auth/oidc") == "__Secure-ser2net_oidc"
     assert name(scope("h:8443", scheme="https"), "ser2net_session") \
         == "__Host-ser2net_session_e7c23153"
-    # under the public URL's path (with B50's tag at 8080)
+    # under the public URL's path (at 8080 the path's tag alone, as before)
     assert name(scope(root="/ser2net"), "ser2net_session") == "ser2net_session_6a162d13"
     assert name(scope("h:8081", root="/ser2net"), "ser2net_session") \
         == "ser2net_session_3cc2eac5"
