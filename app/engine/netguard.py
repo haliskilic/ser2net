@@ -20,7 +20,8 @@ listener they reach, before they cost anything more:
     minute) while the process is within ``fd_reserve`` of its open-file limit, so clients
     can't take the files that serial ports, logs and the configuration need;
   - TLS handshakes in progress hold a socket and a 256 KiB buffer each: at most
-    TLS_HANDSHAKES_MAX at a time, TLS_HANDSHAKES_PER_IP from one address, each given
+    TLS_HANDSHAKES_MAX at a time, TLS_HANDSHAKES_PER_IP from one address (an IPv6 one
+    counted by its /64, see address_key, as the admin UI's per-address cap), each given
     TLS_HANDSHAKE_TIMEOUT_S (asyncio's default is 60 s). A connection past those waits
     for a handshake to end (first come, first served; reading paused, so it holds only
     its socket) for up to TLS_HANDSHAKE_TIMEOUT_S, at most TLS_WAITING_PER_IP from one
@@ -44,6 +45,7 @@ from __future__ import annotations
 
 import asyncio
 import errno
+import ipaddress
 import os
 import selectors
 import socket
@@ -242,14 +244,31 @@ def peer_label(transport: Any) -> str:
     return client_label(*peer_address(transport))
 
 
+def address_key(ip: str) -> str:
+    """What the per-address limits count a source under: an IPv6 address by its /64
+    network (a host, or a LAN, gets a whole /64 and can use any address in it, so one
+    client can't get past a limit by moving to the next address), an IPv4 address (also
+    written IPv4-mapped) as it is, anything else unchanged."""
+    try:
+        addr = ipaddress.ip_address(ip)
+    except ValueError:
+        return ip
+    if isinstance(addr, ipaddress.IPv6Address):
+        if addr.ipv4_mapped is not None:
+            return str(addr.ipv4_mapped)
+        return str(ipaddress.IPv6Network((int(addr) >> 64 << 64, 64)))
+    return str(addr)
+
+
 class Pool:
-    """Connections (their transports) counted in total and per source address, each up to a
-    cap (0: none). A connection whose transport is closing no longer counts."""
+    """Connections (their transports) counted in total and per source address (an IPv6 one
+    by its /64: address_key), each up to a cap (0: none). A connection whose transport is
+    closing no longer counts."""
 
     def __init__(self, total: int = 0, per_ip: int = 0) -> None:
         self.total = total
         self.per_ip = per_ip
-        self._members: dict[Any, str] = {}
+        self._members: dict[Any, str] = {}  # transport -> address_key of its source
 
     def _sweep(self) -> None:
         for t in [t for t in self._members if t.is_closing()]:
@@ -261,18 +280,21 @@ class Pool:
 
     def count(self, ip: str) -> int:
         self._sweep()
-        return sum(1 for member_ip in self._members.values() if member_ip == ip)
+        key = address_key(ip)
+        return sum(1 for member in self._members.values() if member == key)
 
     def full(self, ip: str) -> str:
         """"" when one more from ``ip`` fits, else why not."""
         if self.total and len(self) >= self.total:
             return f"{self.total} at once is the limit"
         if self.per_ip and self.count(ip) >= self.per_ip:
-            return f"{self.per_ip} at once from one address is the limit"
+            key = address_key(ip)
+            source = f"one /64 network ({key})" if key.endswith("/64") else "one address"
+            return f"{self.per_ip} at once from {source} is the limit"
         return ""
 
     def add(self, transport: Any, ip: str) -> None:
-        self._members[transport] = ip
+        self._members[transport] = address_key(ip)
 
     def discard(self, transport: Any) -> None:
         self._members.pop(transport, None)

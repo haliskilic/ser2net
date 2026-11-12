@@ -250,6 +250,29 @@ def test_labels():
           "as IPv4, a dual-stack listener as *  OK")
 
 
+def test_address_keys():
+    key = netguard.address_key
+    assert key("2001:db8:1:2:aaaa::1") == key("2001:db8:1:2:bbbb::9") == "2001:db8:1:2::/64"
+    assert key("2001:db8:1:3::1") != key("2001:db8:1:2::1")
+    assert key("fe80::1%eth0") == "fe80::/64" and key("::1") == "::/64"
+    assert key("::ffff:10.0.0.9") == key("10.0.0.9") == "10.0.0.9" and key("?") == "?"
+
+    class T:
+        def is_closing(self):
+            return False
+
+    pool = netguard.Pool(total=10, per_ip=2)
+    pool.add(T(), "2001:db8::1")
+    pool.add(T(), "2001:db8::2")  # another address of the same /64: the same source
+    assert pool.full("2001:db8::3") == "2 at once from one /64 network (2001:db8::/64) is the limit"
+    assert pool.full("2001:db8:0:1::1") == "", "another /64"
+    pool.add(T(), "::ffff:10.0.0.9")
+    pool.add(T(), "10.0.0.9")  # one IPv4 client, however its address is written
+    assert pool.full("10.0.0.9") == "2 at once from one address is the limit"
+    assert pool.count("::ffff:10.0.0.9") == 2
+    print("per-address limits: an IPv6 source by its /64, an IPv4-mapped one as IPv4  OK")
+
+
 async def _never_opens(_settings):
     await asyncio.Event().wait()
 
@@ -361,6 +384,7 @@ def main():
     test_dual_stack_setting()
     test_family_aware_overlaps()
     test_labels()
+    test_address_keys()
     test_listeners()
     print("\nPASS: IPv6 bind addresses")
 

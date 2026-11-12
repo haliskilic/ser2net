@@ -474,9 +474,10 @@ body then stops coming (the body gets that time plus a second per KiB that arriv
 whose client takes nothing of a response for that long (a console WebSocket is not
 timed), and takes at most `admin_ui.max_connections` (256) connections
 at once, `admin_ui.max_connections_per_ip` (64) from one address; its TLS handshake has the
-same limits as a mapping's. These keys are in `config.json` only (0 = no limit); behind a
-reverse proxy every user has the proxy's address, so raise the per-address limit if
-needed. When the process gets close to its open-file limit, new connections (to any
+same limits as a mapping's. An IPv6 client counts by its /64 network for these
+per-address limits (a host can use any address of its /64). These keys are in
+`config.json` only (0 = no limit); behind a reverse proxy every user has the proxy's
+address, so raise the per-address limit if needed. When the process gets close to its open-file limit, new connections (to any
 mapping or the UI) are refused with a log line, so serial ports, logs and the
 configuration keep the files they need.
 
