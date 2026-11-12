@@ -207,12 +207,11 @@ def routes(ctx: Ctx) -> list:
                   + ("" if oidc.redirect_uri.strip() else
                      " (made from the request; Settings → Single sign-on (OIDC) shows it)"))
         resp = RedirectResponse(url, status_code=303)
-        resp.set_cookie(OIDC_COOKIE,
+        auth.set_cookie(resp, request, state.config, OIDC_COOKIE,
                         auth.sign_payload(state.config.secret_key,
                                           {"s": st, "n": nonce, "r": redirect_uri, "v": verifier},
                                           ttl_seconds=600),
-                        max_age=600, httponly=True, samesite="lax",
-                        secure=state.config.admin_ui.tls_enabled, path="/auth/oidc")
+                        max_age=600, path="/auth/oidc")
         return resp
 
     def _same(given: str, expected) -> bool:
@@ -284,7 +283,7 @@ def routes(ctx: Ctx) -> list:
         resp = RedirectResponse("/", status_code=303)
         set_session(resp, request, user)
         ctx.new_csrf_token(request)
-        resp.delete_cookie(OIDC_COOKIE, path="/auth/oidc")
+        auth.delete_cookie(resp, request, state.config, OIDC_COOKIE, path="/auth/oidc")
         return resp
 
     # sign-ins not tried because too many were being checked already: logged once a minute
@@ -444,7 +443,7 @@ def routes(ctx: Ctx) -> list:
         if not ctx.is_anonymous(request):  # an open-access visitor had no session to end
             ctx.audit(request, "logout")
         resp = RedirectResponse("/login", status_code=303)
-        resp.delete_cookie(auth.SESSION_COOKIE, path="/")
+        auth.delete_cookie(resp, request, state.config, auth.SESSION_COOKIE)
         ctx.new_csrf_token(request)
         return resp
 

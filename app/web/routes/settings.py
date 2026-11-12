@@ -318,15 +318,18 @@ def routes(ctx: Ctx) -> list:
             entries = list(dict.fromkeys(split_proxy_entries(str(form.get("trusted_proxies") or ""))))
             if problem := next(filter(None, map(proxy_entry_problem, entries)), None):
                 return await settings_get(request, error=problem)
+        hsts = _checkbox(form, "proxy_hsts")
         async with state.config_lock:
-            old = list(ui.trusted_proxies)
-            ui.trusted_proxies = entries
+            old = (list(ui.trusted_proxies), ui.proxy_hsts)
+            ui.trusted_proxies, ui.proxy_hsts = entries, hsts
             try:
                 await state.asave()
             except ConfigError as e:
-                ui.trusted_proxies = old
+                ui.trusted_proxies, ui.proxy_hsts = old
                 return await settings_get(request, error=str(e))
-        changes = [f"trusted proxies {' '.join(entries) or '(none)'}"] if entries != old else []
+        changes = [what for what, changed in (
+            (f"trusted proxies {' '.join(entries) or '(none)'}", entries != old[0]),
+            (f"HSTS through the proxy {'on' if hsts else 'off'}", hsts != old[1])) if changed]
         if changes:
             state.log(f"reverse proxy settings: {'; '.join(changes)}")
         ctx.audit(request, "reverse_proxy_set", "; ".join(changes) or "unchanged")
@@ -1237,6 +1240,7 @@ def _setting_changes(old, new) -> list[str]:
     diff(_("HSTS max-age (seconds)"), o.hsts_max_age, n.hsts_max_age)
     diff(_("Trusted proxies"), " ".join(o.trusted_proxies) or "—",
          " ".join(n.trusted_proxies) or "—")
+    diff(_("HSTS through the reverse proxy"), onoff(o.proxy_hsts), onoff(n.proxy_hsts))
     for label, a, b in (("LDAP", old.ldap, new.ldap), ("OIDC", old.oidc, new.oidc)):
         diff(label, onoff(a.enabled), onoff(b.enabled))
         diff(f"{label} · {_('Default role')}", role(a.default_role), role(b.default_role))

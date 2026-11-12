@@ -5,7 +5,8 @@
     browsers forget it; a hand-edited value that isn't a whole number of seconds from 0
     to two years is put back to the default, with a load note;
   * the header is sent only with admin TLS, with the configured value, to pages and the
-    REST API, and a change applies at once;
+    REST API, and a change applies at once (behind a TLS proxy: test_secure_cookies);
+    the cookies of a TLS listener are Secure;
   * Settings -> Admin TLS sets it (checked there: whole seconds, 0 to two years), says
     what it covers, and a form without the field (an older page) keeps it; all.log and
     the audit log note a change; a backup's restore preview shows a different value.
@@ -131,6 +132,10 @@ def main():
     with srv:
         b = tls_browser(f"https://127.0.0.1:{srv.port}")
         b.login("admin", PW)
+        b.get("/lang/en?next=/settings")
+        # the cookies of a TLS listener are Secure: the browser never sends them over http://
+        made = {c.name: c.secure for c in b.jar}
+        assert made == {"ser2net_csrf": True, "ser2net_session": True, "ser2net_lang": True}, made
         for path in ("/login", "/settings"):
             st, h, _ = b.get(path)
             assert st == 200 and h.get("Strict-Transport-Security") == f"max-age={YEAR}", path
@@ -139,8 +144,8 @@ def main():
         for path in ("/", "/settings", "/api/v1/mappings"):
             st, h, _ = b.get(path)
             assert h.get("Strict-Transport-Security") == "max-age=0", (path, st)
-        print("over TLS: one year by default, the new value at once on pages and the "
-              "REST API  OK")
+        print("over TLS: Secure cookies; HSTS one year by default, the new value at once on "
+              "pages and the REST API  OK")
     print("\nPASS: HSTS max-age")
 
 
