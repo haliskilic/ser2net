@@ -730,9 +730,15 @@ içeren bir dosyaya (Docker secret) yönlendirin; ad için `SER2NET_ADMIN_USER` 
 
 ## 🗂️ Yapılandırma & durum dosyaları
 
-Tüm durum **veri dizininde** (varsayılan `data/`). Veri dizini yalnızca sahibe açık
-kilitlenir (POSIX `0700`; Windows'ta `icacls` ile sahip/SYSTEM/Administrators), böylece
-içindeki dosyalar başka kullanıcılarca okunamaz:
+Tüm durum **veri dizininde** (varsayılan `data/`; `--data-dir`, `--config` verilirse config
+dosyasının klasörü). Veri dizini yalnızca sahibe açık kilitlenir (POSIX `0700`; Windows'ta
+`icacls` ile sahip/SYSTEM/Administrators), böylece içindeki dosyalar başka kullanıcılarca
+okunamaz; Linux/macOS'ta sunucunun oluşturduğu dosyalar da yalnızca sahibine açıktır. Bu,
+ser2net'in oluşturduğu ya da içinde yalnızca kendi dosyaları (aşağıdakiler) bulunan bir klasör
+için geçerlidir: içinde başka dosyalar olan bir klasörün (`--config /etc/ser2net.json`, bir ev
+dizini) izinlerine dokunulmaz, yalnızca config dosyası (ve `backups/`, `logs/`, `traces/`)
+gizli tutulur ve başka hesaplar klasörü kullanabiliyorsa açılış log'u uyarır — ser2net'e kendi
+klasörünü verin:
 - `config.json` — admin IP, parola hash'i, tüm eşlemeler (atomik yazım).
 - `backups/` — her değişiklikten önce `config.json`'un önceki hâli (son 50). Ayarlar →
   *Yapılandırma yedekleri*'nden indirilir ya da geri yüklenir. Geri yükleme önce giriş ve

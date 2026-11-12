@@ -22,11 +22,13 @@ COPY requirements-lock.txt ./
 RUN pip install --no-cache-dir --require-hashes --only-binary=:all: -r requirements-lock.txt
 
 # ser2net runs as this unprivileged account (tools/docker-entrypoint.sh drops to it;
-# it also takes over a /data volume that an older, root-running image wrote).
+# it also takes over a /data volume that an older, root-running image wrote). /data is
+# private from the start, so a new volume is that also with a folder mounted inside it
+# (ser2net locks only a data directory that holds nothing but its own files).
 RUN groupadd --system --gid 10001 ser2net \
  && useradd --system --uid 10001 --gid ser2net --home-dir /data --no-create-home \
       --shell /usr/sbin/nologin ser2net \
- && mkdir -p /data && chown ser2net:ser2net /data
+ && mkdir -p /data && chown ser2net:ser2net /data && chmod 0700 /data
 
 # (.dockerignore lets in only what the image runs, plus the license texts)
 COPY . .

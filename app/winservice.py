@@ -995,6 +995,12 @@ def _stop_and_wait(api, svc, name: str, log: Callable[[str], None]) -> bool:
     return True
 
 
+def state_dir(data_dir: str, config: Optional[str]) -> str:
+    """Where a service with this --data-dir / --config keeps its state (all.log, backups/,
+    the instance lock): the config file's folder when --config is given."""
+    return os.path.dirname(os.path.abspath(config)) if config else data_dir
+
+
 def install(name: str, data_dir: Optional[str] = None, config: Optional[str] = None, *,
             prepare: Callable[[str], Any], default_data_dir: str, start: bool = True,
             log: Callable[[str], None] = print, frozen: Optional[bool] = None,
@@ -1033,7 +1039,7 @@ def install(name: str, data_dir: Optional[str] = None, config: Optional[str] = N
         _guard_location(frozen, allow_unsafe_location, log)  # before anything is stopped
         if svc is None:
             _check_adoptable(data_dir, config or os.path.join(data_dir, "config.json"))
-            _wait_lock_free(data_dir, 0)
+            _wait_lock_free(state_dir(data_dir, config), 0)
         return _install_steps(api, scm, svc, previous, registered, name, data_dir, config,
                               prepare, frozen, start, log)
     finally:
@@ -1047,10 +1053,11 @@ def _install_steps(api, scm, svc, previous, registered, name, data_dir, config, 
     done = SimpleNamespace(stopped=False, placed=None, backup=None, reconfigured=False,
                            created=None)
     config_path = config or os.path.join(data_dir, "config.json")
+    state = state_dir(data_dir, config)  # (the same as data_dir without --config)
     try:
         if svc:
             done.stopped = _stop_and_wait(api, svc, name, log)
-            _wait_lock_free(data_dir, 30)
+            _wait_lock_free(state, 30)
         _mkdir_admin_only(data_dir)
         loaded = prepare(config_path)
         # after prepare: loading the config may have added a grant for the installing
@@ -1075,7 +1082,7 @@ def _install_steps(api, scm, svc, previous, registered, name, data_dir, config, 
                                                 None, None, None, None, None, display_name(name)):
                 raise _fail("Updating the service configuration")
             done.reconfigured = True
-            _service_extras(api, svc, name, data_dir)
+            _service_extras(api, svc, name, state)
             log(f"service '{name}' upgraded in place\n  command: {cmd}")
             target = svc
         else:
@@ -1087,11 +1094,11 @@ def _install_steps(api, scm, svc, previous, registered, name, data_dir, config, 
             if not target:
                 raise _fail("Creating the service")
             done.created = target
-            _service_extras(api, target, name, data_dir)
+            _service_extras(api, target, name, state)
             log(f"service '{name}' installed: starts at boot, restarts {RESTART_DELAY_MS // 1000} s "
                 f"after a failure\n  command: {cmd}")
         if start:
-            _start_and_wait(api, target, name, data_dir, log)
+            _start_and_wait(api, target, name, state, log)
     except BaseException as e:
         if svc is None and done.created is not None:
             # a new service that doesn't start stays registered, as before (see all.log)

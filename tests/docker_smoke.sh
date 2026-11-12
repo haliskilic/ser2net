@@ -20,7 +20,8 @@
 # 8. the image holds what it runs and the license texts, not the tests, the offline
 #    wheels or the docs, and the app is compiled already;
 # 9. a read-only /data whose config.json needs updating still starts, with a warning;
-# 10. a host folder mounted inside /data (certificates, say) is never taken over;
+# 10. a host folder mounted inside /data (certificates, say) is never taken over, and a new
+#    volume with one is private (0700) without a warning;
 # 11. the first admin without the browser: `docker exec ... --set-password` on the running
 #    container of 1. (run as root, it writes as the /data owner) and SER2NET_ADMIN_PASSWORD_FILE;
 # 12. upgrade: a volume a v2.8.0 image left (owned by uid 10001: config.json, backups with a
@@ -289,6 +290,9 @@ wait_healthy
 docker exec s2n-smoke sh -c '[ "$(stat -c %u /data/stray)" = 10001 ]' || fail "the stray file was not taken over"
 [ "$(sudo stat -c %u "$host_dir")" = 0 ] && [ "$(sudo stat -c %u "$host_dir/key.pem")" = 0 ] \
     || fail "the host folder mounted at /data/certs changed owner"
+# ser2net leaves a folder holding other files as it is: the new volume is private already
+[ "$(docker exec s2n-smoke stat -c %a /data)" = 700 ] || fail "/data is not 0700"
+docker logs s2n-smoke 2>&1 | grep -q "WARNING: /data" && fail "a warning about /data"
 docker rm -f s2n-smoke >/dev/null
 sudo rm -rf "$host_dir"
 host_dir=""

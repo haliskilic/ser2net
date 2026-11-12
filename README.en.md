@@ -709,9 +709,14 @@ is no account at all; later starts ignore it.
 
 ## 🗂️ Configuration & state files
 
-All state lives in the **data dir** (default `data/`). The data directory is locked to
-owner-only (POSIX `0700`; Windows `icacls` owner/SYSTEM/Administrators), so the files
-inside aren't readable by other users:
+All state lives in the **data dir** (default `data/`; `--data-dir`, or with `--config` the
+config file's folder). The data directory is locked to owner-only (POSIX `0700`; Windows
+`icacls` owner/SYSTEM/Administrators), so the files inside aren't readable by other users,
+and on Linux/macOS the files the server creates are owner-only too. That applies to a folder
+ser2net made or one holding only its own files (the ones below): a folder with other files
+in it (`--config /etc/ser2net.json`, a home directory) keeps its permissions, only the
+config file (and `backups/`, `logs/`, `traces/`) is made private, and the start-up log warns
+when other accounts can use the folder — give ser2net a folder of its own:
 - `config.json` — admin IP, password hash, all mappings (atomic write).
 - `backups/` — the previous `config.json` before every change (newest 50). Download or
   restore one under Settings → *Configuration backups*. A restore first shows what changes
