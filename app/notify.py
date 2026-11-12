@@ -131,12 +131,13 @@ def mask_address(text: str) -> str:
 
 def sign_in_detail(settings, user: str, ip: str, source: str = "", reason: str = "") -> str:
     """The detail of a login_failed notification: "[LDAP |OIDC ]user '<name>' from <ip>"
-    (an account's name, or auth.UNKNOWN_USER), then ": <reason>" when there is one. With
+    (an account's name, or auth.UNKNOWN_USER; "sign-in" for one that failed before it had a
+    name, an SSO answer that doesn't match), then ": <reason>" when there is one. With
     settings.mask_personal_data the name is left out and the address is its network."""
     if settings.mask_personal_data:
         who, ip = "user (name left out)", mask_address(ip)
     else:
-        who = f"user {user!r}"
+        who = f"user {user!r}" if user else "sign-in"
     text = f"{source} {who} from {ip}" if source else f"{who} from {ip}"
     return f"{text}: {reason}" if reason else text
 

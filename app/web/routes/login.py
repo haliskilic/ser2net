@@ -123,10 +123,7 @@ def routes(ctx: Ctx) -> list:
         """An SSO sign-in that came back from the identity provider and failed: recorded
         (oidc_login_failed, with a short reason; all.log has the details) and notified
         like a failed local or LDAP sign-in."""
-        ip = client_ip(request)
-        as_user = f" as {user!r}" if user else ""
-        _record_failure(ip, user, f"OIDC sign-in from {ip}{as_user}: {reason}",
-                        "oidc_login_failed", reason)
+        _record_failure(client_ip(request), user, "OIDC", reason, "oidc_login_failed", reason)
 
     def _name_refused(request, source: str, username: str) -> str | None:
         """A sign-in through the directory (LDAP) or the identity provider (OIDC) that
