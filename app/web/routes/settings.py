@@ -552,14 +552,13 @@ def routes(ctx: Ctx) -> list:
         if problem := login_notice_problem(text) or login_notice_url_problem(url):
             return await _failed(request, "access", problem, login_notice=shown)
         text = clean_login_notice(text)
-        async with state.config_lock:
-            old = (ui.login_notice, ui.login_notice_url)
-            ui.login_notice, ui.login_notice_url = text, url
-            try:
-                await state.asave()
-            except ConfigError as e:
-                ui.login_notice, ui.login_notice_url = old
-                return await _failed(request, "access", str(e), login_notice=shown)
+        old = (ui.login_notice, ui.login_notice_url)
+        try:
+            async with state.edit_config():
+                old = (ui.login_notice, ui.login_notice_url)
+                ui.login_notice, ui.login_notice_url = text, url
+        except ConfigError as e:  # not saved: nothing changed
+            return await _failed(request, "access", str(e), login_notice=shown)
         what = (f"{len(text)} characters" if text else "none") + f", link {url or 'none'}"
         if (text, url) != old:
             state.log(f"sign-in notice set: {what}")
@@ -581,13 +580,12 @@ def routes(ctx: Ctx) -> list:
         if problem := node_name_problem(name):
             return await _failed(request, "admin-interface", problem, node={"node_name": name})
         name = name.strip()
-        async with state.config_lock:
-            old, ui.node_name = ui.node_name, name
-            try:
-                await state.asave()
-            except ConfigError as e:
-                ui.node_name = old
-                return await _failed(request, "admin-interface", str(e), node={"node_name": name})
+        old = ui.node_name
+        try:
+            async with state.edit_config():
+                old, ui.node_name = ui.node_name, name
+        except ConfigError as e:  # not saved: nothing changed
+            return await _failed(request, "admin-interface", str(e), node={"node_name": name})
         if name != old:
             state.log(f"instance name set to {name!r}" if name else
                       "instance name cleared: the host name is used")
@@ -606,13 +604,12 @@ def routes(ctx: Ctx) -> list:
             return await _failed(request, "audit-log", _("Choose which web UI requests all.log "
                                                          "records."))
         ui = state.config.admin_ui
-        async with state.config_lock:
-            old, ui.request_log = ui.request_log, mode
-            try:
-                await state.asave()
-            except ConfigError as e:
-                ui.request_log = old
-                return await _failed(request, "audit-log", str(e))
+        old = ui.request_log
+        try:
+            async with state.edit_config():
+                old, ui.request_log = ui.request_log, mode
+        except ConfigError as e:  # not saved: nothing changed
+            return await _failed(request, "audit-log", str(e))
         if mode != old:  # logged before "off" would keep this request's own line out
             state.log(f"web UI requests in all.log: {mode} (was {old})")
         ctx.audit(request, "request_log_set", mode)
@@ -642,14 +639,13 @@ def routes(ctx: Ctx) -> list:
             entries = list(dict.fromkeys(split_proxy_entries(str(form.get("trusted_proxies") or ""))))
             if problem := next(filter(None, map(proxy_entry_problem, entries)), None):
                 return await _failed(request, "reverse-proxy", problem, proxy=shown)
-        async with state.config_lock:
-            old = (ui.public_url, list(ui.trusted_proxies), ui.proxy_hsts)
-            ui.public_url, ui.trusted_proxies, ui.proxy_hsts = url, entries, hsts
-            try:
-                await state.asave()
-            except ConfigError as e:
-                ui.public_url, ui.trusted_proxies, ui.proxy_hsts = old
-                return await _failed(request, "reverse-proxy", str(e), proxy=shown)
+        old = (ui.public_url, list(ui.trusted_proxies), ui.proxy_hsts)
+        try:
+            async with state.edit_config():
+                old = (ui.public_url, list(ui.trusted_proxies), ui.proxy_hsts)
+                ui.public_url, ui.trusted_proxies, ui.proxy_hsts = url, entries, hsts
+        except ConfigError as e:  # not saved: nothing changed
+            return await _failed(request, "reverse-proxy", str(e), proxy=shown)
         changes = [what for what, changed in (
             (f"public URL {url or '(none)'}", url != old[0]),
             (f"trusted proxies {' '.join(entries) or '(none)'}", entries != old[1]),
@@ -720,20 +716,15 @@ def routes(ctx: Ctx) -> list:
         role = str(form.get("api_token_role") or "").strip().lower()
         if role not in ROLES:
             return await _failed(request, "api-token", _("Invalid role."))
-        problem = ""
-        async with state.config_lock:
-            before = state.config.api_token_role
-            if not state.config.api_token_hash:
-                problem = _("There is no REST API token to give a role: generate one.")
-            else:
+        before = state.config.api_token_role
+        try:
+            async with state.edit_config():
+                before = state.config.api_token_role
+                if not state.config.api_token_hash:
+                    raise ConfigError(_("There is no REST API token to give a role: generate one."))
                 state.config.api_token_role = role
-                try:
-                    await state.asave()
-                except ConfigError as e:
-                    state.config.api_token_role = before
-                    problem = str(e)
-        if problem:
-            return await _failed(request, "api-token", problem)
+        except ConfigError as e:  # not saved: nothing changed
+            return await _failed(request, "api-token", str(e))
         state.log(f"REST API token role changed: {before} -> {role}")
         ctx.audit(request, "api_token_role", f"{before} -> {role}")
         return _done(request, "api-token", ok=_("The REST API token’s role is now {0}; the token "
@@ -800,23 +791,19 @@ def routes(ctx: Ctx) -> list:
                 new_token=shown)
         token = auth.new_api_token()
         now = time.time()
-        async with state.config_lock:
-            tokens = state.config.api_tokens
-            if any(t.name.casefold() == name.casefold() for t in tokens):
-                return await _failed(request, "api-token", _(
-                    "There is a token named '{0}' already.").format(name), new_token=shown)
-            if len(tokens) >= API_TOKENS_MAX:
-                return await _failed(request, "api-token", _(
-                    "There are {0} tokens already, the most there can be: revoke one "
-                    "first.").format(API_TOKENS_MAX), new_token=shown)
-            new = ApiToken(id=new_api_token_id(), name=name, sha256=auth.hash_token(token),
-                           role=role, created=now, expires=now + days * 86400 if days else 0.0)
-            tokens.append(new)
-            try:
-                await state.asave()
-            except ConfigError as e:
-                tokens.remove(new)
-                return await _failed(request, "api-token", str(e), new_token=shown)
+        try:
+            async with state.edit_config():
+                tokens = state.config.api_tokens
+                if any(t.name.casefold() == name.casefold() for t in tokens):
+                    raise ConfigError(_("There is a token named '{0}' already.").format(name))
+                if len(tokens) >= API_TOKENS_MAX:
+                    raise ConfigError(_("There are {0} tokens already, the most there can be: "
+                                        "revoke one first.").format(API_TOKENS_MAX))
+                tokens.append(ApiToken(id=new_api_token_id(), name=name,
+                                       sha256=auth.hash_token(token), role=role, created=now,
+                                       expires=now + days * 86400 if days else 0.0))
+        except ConfigError as e:  # not saved: no token (this one is never shown)
+            return await _failed(request, "api-token", str(e), new_token=shown)
         state.log(f"REST API token {name!r} created (role: {role}"
                   + (f", expires in {days} days)" if days else ")"))
         ctx.audit(request, "api_token_create", f"{name}:{role}" + (f":{days}d" if days else ""))
@@ -832,19 +819,15 @@ def routes(ctx: Ctx) -> list:
         if not auth.csrf_token_matches(request, form.get("_csrf")):
             return csrf_failed()
         token_id = str(form.get("id") or "")
-        async with state.config_lock:
-            tokens = state.config.api_tokens
-            gone = next((t for t in tokens if t.id == token_id), None)
-            if gone is None:
-                return await _failed(request, "api-token", _("No such token (it may have been "
-                                                             "revoked already)."))
-            index = tokens.index(gone)
-            tokens.remove(gone)
-            try:
-                await state.asave()
-            except ConfigError as e:
-                tokens.insert(index, gone)
-                return await _failed(request, "api-token", str(e))
+        try:
+            async with state.edit_config():
+                tokens = state.config.api_tokens
+                gone = next((t for t in tokens if t.id == token_id), None)
+                if gone is None:
+                    raise ConfigError(_("No such token (it may have been revoked already)."))
+                tokens.remove(gone)
+        except ConfigError as e:  # not saved: the token still works
+            return await _failed(request, "api-token", str(e))
         state.api_token_used.pop(gone.id, None)
         state.log(f"REST API token {gone.name!r} revoked")
         ctx.audit(request, "api_token_revoke", gone.name)
@@ -1249,24 +1232,19 @@ def routes(ctx: Ctx) -> list:
         if not auth.csrf_token_matches(request, form.get("_csrf")):
             return csrf_failed()
         username = str(form.get("username") or "")
-        async with state.config_lock:  # checked under the lock: two admins at once
-            target = state.config.get_user(username)
-            if target is None:
-                return await _failed(request, "users", _("User not found."))
-            if _is_me(request, username):
-                return await _failed(request, "users", _(
-                    "To turn off your own two-factor sign-in, use “Two-factor sign-in” at the "
-                    "top (it asks for a code)."))
-            if not target.totp_on:
-                return await _failed(request, "users", _(
-                    "'{0}' doesn’t use two-factor sign-in.").format(username))
-            old = (target.totp_secret, target.pwd_version)
-            target.totp_secret, target.pwd_version = "", target.pwd_version + 1
-            try:
-                await state.asave()
-            except ConfigError as e:
-                target.totp_secret, target.pwd_version = old
-                return await _failed(request, "users", str(e))
+        try:
+            async with state.edit_config():  # checked under the lock: two admins at once
+                target = state.config.get_user(username)
+                if target is None:
+                    raise ConfigError(_("User not found."))
+                if _is_me(request, username):
+                    raise ConfigError(_("To turn off your own two-factor sign-in, use "
+                                        "“Two-factor sign-in” at the top (it asks for a code)."))
+                if not target.totp_on:
+                    raise ConfigError(_("'{0}' doesn’t use two-factor sign-in.").format(username))
+                target.totp_secret, target.pwd_version = "", target.pwd_version + 1
+        except ConfigError as e:  # not saved: nothing changed
+            return await _failed(request, "users", str(e))
         state.log(f"two-factor sign-in of {username} turned off by an admin; their sessions "
                   "were signed out")
         ctx.audit(request, "user_totp_reset", username)
