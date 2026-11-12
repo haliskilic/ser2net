@@ -7,17 +7,24 @@
     same body would reset those to their defaults (PUT stays a full replace);
   * a nested object merges (network.port alone), null resets a field to its default;
   * a patch that makes the mapping invalid, a body that is no JSON object and an unknown
-    mapping are refused and change nothing; the change is audited.
+    mapping are refused and change nothing; the change is audited;
+  * openapi.json describes every route build_api_routes registers, with the token errors
+    (401, 503; 403 for a change) and the Error schema; the mapping schemas are made from
+    the config dataclasses (every field, its default, open to fields added later).
 
 Run: python3 tests/test_rest_patch.py
 """
+import dataclasses
 import json
+import types
+import typing
 import urllib.error
 import urllib.request
 
 from _server import Server, free_port
 
-from app.web.api import merge_patch
+from app import config
+from app.web.api import API_PREFIX, build_api_routes, mapping_schemas, merge_patch, openapi_spec
 from app.web.auth import hash_password, hash_token
 
 TOKEN = "s2n_rest-patch-operator-token"
@@ -48,6 +55,79 @@ def test_merge_patch():
         assert merge_patch(target, patch) == want, (target, patch, merge_patch(target, patch))
         assert json.dumps(target) == before, "merge_patch must not change its input"
     print("merge_patch: the RFC 7396 appendix A examples  OK")
+
+
+def _refs(node):
+    if isinstance(node, dict):
+        for k, v in node.items():
+            if k == "$ref":
+                yield v
+            else:
+                yield from _refs(v)
+    elif isinstance(node, list):
+        for v in node:
+            yield from _refs(v)
+
+
+def test_spec():
+    spec = json.loads(json.dumps(openapi_spec(None)))  # JSON as served
+    assert spec["openapi"].startswith("3.0"), spec["openapi"]
+    paths = spec["paths"]
+    routes = build_api_routes(types.SimpleNamespace())  # building them reads no state
+    public = {"/health", "/openapi.json"}
+    for route in routes:
+        rel = route.path[len(API_PREFIX):]
+        assert rel in paths, f"{route.path} is not in openapi.json"
+        for method in route.methods - {"HEAD"}:
+            o = paths[rel].get(method.lower())
+            assert o is not None, f"{method} {route.path} is not in openapi.json"
+            codes = set(o["responses"])
+            if rel in public:
+                assert o["security"] == [], rel
+                continue
+            assert {"401", "503"} <= codes, (method, rel, codes)
+            assert ("403" in codes) == (method in ("POST", "PUT", "PATCH", "DELETE")), (method, rel)
+            for code, r in o["responses"].items():
+                if code[0] in "45" and code != "413":
+                    assert r["$ref"].startswith("#/components/responses/"), (method, rel, code)
+    described = {(p, m) for p, item in paths.items() for m in item if m != "parameters"}
+    registered = {(r.path[len(API_PREFIX):], m.lower()) for r in routes for m in r.methods - {"HEAD"}}
+    assert described == registered, described ^ registered
+    for target in set(_refs(spec)):
+        section, name = target.split("/")[2:]
+        assert name in spec["components"][section], f"{target} does not resolve"
+    for name in ("BadRequest", "Unauthorized", "Forbidden", "NotFound", "SetupIncomplete"):
+        schema = spec["components"]["responses"][name]["content"]["application/json"]["schema"]
+        assert schema == {"$ref": "#/components/schemas/Error"}, name
+    print(f"openapi.json: all {len(registered)} routes described, with 401/503 (403 for "
+          "changes) through the Error schema; every $ref resolves  OK")
+
+    schemas = mapping_schemas()
+    classes = {"Mapping": config.MappingConfig, "SerialSettings": config.SerialSettings,
+               "SerialAdvanced": config.SerialAdvanced, "NetworkSettings": config.NetworkSettings,
+               "MappingOptions": config.MappingOptions, "MqttSettings": config.MqttSettings,
+               "ModbusPoll": config.ModbusPoll, "ModbusPoint": config.ModbusPoint}
+    names = {cls: name for name, cls in classes.items()}
+    for name, cls in classes.items():
+        sch = schemas[name]
+        assert sch["additionalProperties"] is True and "required" not in sch, name
+        hints = typing.get_type_hints(cls)
+        for f in dataclasses.fields(cls):
+            prop = sch["properties"][f.name]
+            if dataclasses.is_dataclass(hints[f.name]):
+                assert prop == {"$ref": f"#/components/schemas/{names[hints[f.name]]}"}, prop
+            elif f.name != "id":
+                default = (f.default if f.default is not dataclasses.MISSING
+                           else f.default_factory())
+                assert prop["default"] == default, (name, f.name, prop)
+    m = schemas["Mapping"]["properties"]
+    assert m["id"]["readOnly"] and m["status"]["readOnly"], m["id"]
+    net = schemas["NetworkSettings"]["properties"]
+    assert net["bind_ip"]["default"] == "0.0.0.0" and net["port"]["default"] == 4001
+    assert net["mode"]["enum"] == list(config.NET_MODES)
+    assert schemas["SerialSettings"]["properties"]["stopbits"]["enum"] == [1, 1.5, 2]
+    print("openapi.json: the mapping schemas name every config field with its type and "
+          "default; id and status read-only; open to new fields  OK")
 
 
 def call(base, method, path, body=None, token=TOKEN, raw=None):
@@ -143,6 +223,7 @@ def test_patch():
 
 def main():
     test_merge_patch()
+    test_spec()
     test_patch()
     print("\nPASS: REST API PATCH (JSON merge patch)")
 

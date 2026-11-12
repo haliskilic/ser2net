@@ -8,10 +8,14 @@ authenticated. Every response is JSON. The OpenAPI 3.0 description is served at
 """
 from __future__ import annotations
 
+import dataclasses
+import typing
+
 from starlette.exceptions import HTTPException
 from starlette.responses import JSONResponse
 from starlette.routing import Route
 
+from .. import config
 from ..config import ROLE_RANK, ConfigError, MappingConfig, valid_mapping_id
 from .routes import ops
 from .routes.common import client_ip as _client_ip
@@ -215,14 +219,195 @@ def build_api_routes(state):
     ]
 
 
+# ---------------------------------------------------------------------------
+# OpenAPI description
+# ---------------------------------------------------------------------------
+# The config classes a mapping is made of, by their schema name in the spec
+_MAPPING_CLASSES = {
+    "Mapping": config.MappingConfig, "SerialSettings": config.SerialSettings,
+    "SerialAdvanced": config.SerialAdvanced, "NetworkSettings": config.NetworkSettings,
+    "MappingOptions": config.MappingOptions, "MqttSettings": config.MqttSettings,
+    "ModbusPoll": config.ModbusPoll, "ModbusPoint": config.ModbusPoint,
+}
+# the values a field may have (what validate() accepts)
+_ENUMS = {
+    ("MappingConfig", "kind"): config.MAPPING_KINDS,
+    ("SerialSettings", "bytesize"): config.BYTESIZES,
+    ("SerialSettings", "parity"): config.PARITIES,
+    ("SerialSettings", "stopbits"): config.STOPBITS,
+    ("SerialSettings", "flowcontrol"): config.FLOWCONTROLS,
+    ("SerialSettings", "rts_on_open"): config.LINE_STATES,
+    ("SerialSettings", "dtr_on_open"): config.LINE_STATES,
+    ("NetworkSettings", "mode"): config.NET_MODES,
+    ("NetworkSettings", "protocol"): config.PROTOCOLS,
+    ("MqttSettings", "qos"): (0, 1, 2),
+    ("MqttSettings", "payload_format"): config.MQTT_FORMATS,
+    ("ModbusPoint", "fn"): (1, 2, 3, 4),
+    ("ModbusPoint", "dtype"): config.MODBUS_DTYPES,
+}
+_NOTES = {
+    ("MappingConfig", "id"): "Assigned by the server (1-64 letters, digits or _); "
+                             "ignored in a request body.",
+    ("MappingConfig", "enabled"): "Run the mapping. Left out of a POST or PUT: true.",
+    ("MappingConfig", "serial_b"): "The second serial port of a serialbridge mapping.",
+    ("MappingConfig", "network"): "The network side of a net mapping.",
+    ("SerialSettings", "port"): "The serial device (COM3, /dev/ttyUSB0, ...); required. "
+                                "URLs (socket://, rfc2217://, ...) are refused.",
+    ("SerialSettings", "match"): "The USB identity (vid, pid, serial_number) the device is "
+                                 "found by when its name changes; {} for none.",
+    ("NetworkSettings", "bind_ip"): "The address a server or udp mapping listens on; "
+                                    "0.0.0.0 = every interface.",
+    ("NetworkSettings", "allowed_client_ips"): "The clients (IP or CIDR) that may connect; "
+                                               "empty = any client.",
+    ("NetworkSettings", "read_only"): "Clients only read: nothing they send reaches the device.",
+    ("MqttSettings", "password"): "Masked as ******** for a viewer token.",
+}
+_JSON_TYPES = {str: "string", int: "integer", float: "number", bool: "boolean"}
+
+
+def _field_schema(cls, f, hint) -> dict:
+    """The schema of one config dataclass field: a $ref for a nested config class, else
+    its JSON type with the default, the allowed values and a note where there are any."""
+    if dataclasses.is_dataclass(hint):
+        return {"$ref": f"#/components/schemas/{_schema_name(hint)}"}
+    origin = typing.get_origin(hint)
+    if origin is list:
+        (item,) = typing.get_args(hint)
+        items = ({"$ref": f"#/components/schemas/{_schema_name(item)}"}
+                 if dataclasses.is_dataclass(item) else {"type": _JSON_TYPES.get(item, "string")})
+        out: dict = {"type": "array", "items": items}
+    elif origin is dict or hint is dict:
+        out = {"type": "object", "additionalProperties": True}
+    else:
+        out = {"type": _JSON_TYPES.get(hint, "string")}
+    if f.default is not dataclasses.MISSING:
+        out["default"] = f.default
+    elif f.default_factory is not dataclasses.MISSING:
+        out["default"] = f.default_factory()
+    if (cls.__name__, f.name) in _ENUMS:
+        out["enum"] = list(_ENUMS[cls.__name__, f.name])
+    if (cls.__name__, f.name) in _NOTES:
+        out["description"] = _NOTES[cls.__name__, f.name]
+    return out
+
+
+def _schema_name(cls) -> str:
+    return next(name for name, c in _MAPPING_CLASSES.items() if c is cls)
+
+
+def mapping_schemas() -> dict:
+    """The schemas of a mapping and its parts, made from the config dataclasses, so the
+    spec names every field with its type and default. Open (additionalProperties): a
+    field added later must not break a client generated from an older spec."""
+    out = {}
+    for name, cls in _MAPPING_CLASSES.items():
+        hints = typing.get_type_hints(cls)
+        props = {f.name: _field_schema(cls, f, hints[f.name]) for f in dataclasses.fields(cls)
+                 if not (cls is config.MappingConfig and f.name == "id")}  # id: below
+        if cls is config.MappingConfig:
+            props["id"] = {"type": "string", "readOnly": True,
+                           "description": _NOTES["MappingConfig", "id"]}
+            props["status"] = {"allOf": [{"$ref": "#/components/schemas/MappingStatus"}],
+                               "readOnly": True, "nullable": True,
+                               "description": "Live state (null: the mapping has no runner)."}
+        out[name] = {"type": "object", "properties": props, "additionalProperties": True}
+    out["Mapping"]["description"] = (
+        "A serial<->network (kind net) or serial<->serial (kind serialbridge) mapping. In a "
+        "POST or PUT, every field left out gets the default shown here (PUT replaces the "
+        "whole mapping); PATCH changes only the fields it names.")
+    return out
+
+
+def _json(schema_ref: str, description: str) -> dict:
+    return {"description": description, "content": {"application/json": {
+        "schema": {"$ref": f"#/components/schemas/{schema_ref}"}}}}
+
+
 def openapi_spec(admin) -> dict:
-    """Hand-written OpenAPI 3.0 description of the REST API (Starlette has no
-    auto-generation). Kept deliberately compact: mappings are an open object so
-    the spec doesn't have to mirror every serial/network field."""
-    mapping_obj = {"type": "object", "description": "A serial<->network mapping (see config model)."}
-    error_obj = {"type": "object", "properties": {"error": {"type": "string"},
-                                                  "detail": {"type": "string"}}}
+    """The OpenAPI 3.0 description of the REST API, written by hand (Starlette has no
+    auto-generation) except for the mapping schemas (mapping_schemas). Every route in
+    build_api_routes is in it (tests/test_rest_patch.py checks)."""
+    schemas = mapping_schemas()
+    schemas.update({
+        "MappingStatus": {"type": "object", "additionalProperties": True, "properties": {
+            "state": {"type": "string",
+                      "description": "stopped, running, reconnecting, device-missing or error"},
+            "device": {"type": "string"},
+            "client_count": {"type": "integer"},
+            "clients": {"type": "array", "items": {"type": "object", "properties": {
+                "peer": {"type": "string"},
+                "duration": {"type": "string", "description": "connected for (text)"},
+                "priority": {"type": "boolean"}}}},
+            "bytes_in": {"type": "integer", "description": "read from the serial device"},
+            "bytes_out": {"type": "integer", "description": "written to the serial device"},
+            "bytes_dropped": {"type": "integer"},
+            "reconnects": {"type": "integer"},
+            "dropped_clients": {"type": "integer"},
+            "queue_overflows": {"type": "integer"},
+            "last_error": {"type": "string"}}},
+        "MappingList": {"type": "object", "properties": {
+            "mappings": {"type": "array", "items": {"$ref": "#/components/schemas/Mapping"}}}},
+        "StatusMap": {"type": "object", "properties": {"mappings": {
+            "type": "object", "description": "mapping id -> its live state",
+            "additionalProperties": {"$ref": "#/components/schemas/MappingStatus"}}}},
+        "PortList": {"type": "object", "properties": {"ports": {
+            "type": "array", "items": {"type": "object", "additionalProperties": True}}}},
+        "Health": {"type": "object", "properties": {"status": {"type": "string"},
+                                                    "mappings": {"type": "integer"}}},
+        "ActionResult": {"type": "object", "properties": {
+            "id": {"type": "string"}, "action": {"type": "string"},
+            "status": {"allOf": [{"$ref": "#/components/schemas/MappingStatus"}],
+                       "nullable": True}}},
+        "Deleted": {"type": "object", "properties": {"deleted": {"type": "string"}}},
+        "MergePatch": {"type": "object", "additionalProperties": True, "description": (
+            "An RFC 7396 JSON merge patch on a Mapping: an object merges into the stored "
+            "one, a list or a value replaces it, null resets the field to its default.")},
+        "Error": {"type": "object", "required": ["error"], "properties": {
+            "error": {"type": "string", "description": "a machine-readable code"},
+            "detail": {"type": "string", "description": "what is wrong (English)"}}},
+    })
+    responses = {
+        "BadRequest": _json("Error", "The request is not valid: a body that is not a JSON "
+                                     "object (invalid_json), a mapping that is not valid "
+                                     "(validation), an unknown action (unknown_action)."),
+        "Unauthorized": _json("Error", "No token, a wrong one (unauthorized), or no API token "
+                                       "configured (api_token_not_configured)."),
+        "Forbidden": _json("Error", "The token's role may only read (forbidden)."),
+        "NotFound": _json("Error", "No mapping has this id (not_found)."),
+        "TooLarge": {"description": "The request body is larger than the server accepts.",
+                     "content": {"text/plain": {"schema": {"type": "string"}}}},
+        "SetupIncomplete": _json("Error", "The first-run setup is not done yet "
+                                          "(setup_incomplete)."),
+    }
+
+    def ref(name: str) -> dict:
+        return {"$ref": f"#/components/responses/{name}"}
+
+    def op(summary: str, ok: tuple, *errors: str, write: bool = False, body=None,
+           description: str = "") -> dict:
+        """One operation: its 2xx answer, the errors it can give, and the token errors
+        every authenticated call can (403 for a call that changes something)."""
+        resp = {ok[0]: _json(ok[1], ok[2])}
+        for name in errors:
+            code = {"BadRequest": "400", "NotFound": "404", "TooLarge": "413"}[name]
+            resp[code] = ref(name)
+        resp["401"] = ref("Unauthorized")
+        if write:
+            resp["403"] = ref("Forbidden")
+        resp["503"] = ref("SetupIncomplete")
+        out = {"summary": summary, "security": bearer, "responses": resp}
+        if description:
+            out["description"] = description
+        if body is not None:
+            out["requestBody"] = body
+        return out
+
+    def mapping_body(schema: str = "Mapping", types=("application/json",)) -> dict:
+        return {"required": True, "content": {
+            t: {"schema": {"$ref": f"#/components/schemas/{schema}"}} for t in types}}
+
     bearer: list[dict[str, list[str]]] = [{"bearerAuth": []}]
+    mid = {"name": "mid", "in": "path", "required": True, "schema": {"type": "string"}}
     return {
         "openapi": "3.0.3",
         "info": {
@@ -230,65 +415,65 @@ def openapi_spec(admin) -> dict:
             "version": "1.0.0",
             "description": "Manage serial<->network mappings, status and ports. "
                            "Authenticate with `Authorization: Bearer <token>` "
-                           "(generate the token in Settings).",
+                           "(generate the token in Settings). A token with the viewer role "
+                           "may only read; operator and admin tokens may also change. "
+                           "Messages are in English.",
         },
         "servers": [{"url": API_PREFIX}],
         "components": {
             "securitySchemes": {
                 "bearerAuth": {"type": "http", "scheme": "bearer"},
             },
-            "schemas": {"Mapping": mapping_obj, "Error": error_obj},
+            "schemas": schemas,
+            "responses": responses,
         },
         "security": bearer,
         "paths": {
             "/health": {"get": {"summary": "Liveness probe (no auth)", "security": [],
-                                "responses": {"200": {"description": "ok"}}}},
-            "/status": {"get": {"summary": "Live status of all mappings", "security": bearer,
-                                "responses": {"200": {"description": "status map"}}}},
-            "/ports": {"get": {"summary": "Detected serial ports", "security": bearer,
-                               "responses": {"200": {"description": "port list"}}}},
+                                "responses": {"200": _json("Health", "ok")}}},
+            "/openapi.json": {"get": {"summary": "This description (no auth)", "security": [],
+                                      "responses": {"200": {
+                                          "description": "the OpenAPI 3.0 document",
+                                          "content": {"application/json": {
+                                              "schema": {"type": "object"}}}}}}},
+            "/status": {"get": op("Live status of all mappings", ("200", "StatusMap", "status map"))},
+            "/ports": {"get": op("Detected serial ports", ("200", "PortList", "port list"))},
             "/mappings": {
-                "get": {"summary": "List mappings (config + status)", "security": bearer,
-                        "responses": {"200": {"description": "mappings"}}},
-                "post": {"summary": "Create a mapping", "security": bearer,
-                         "requestBody": {"required": True, "content": {"application/json": {
-                             "schema": {"$ref": "#/components/schemas/Mapping"}}}},
-                         "responses": {"201": {"description": "created"},
-                                       "400": {"description": "validation error"}}},
+                "get": op("List mappings (config + status)", ("200", "MappingList", "mappings")),
+                "post": op("Create a mapping", ("201", "Mapping", "created"), "BadRequest",
+                           "TooLarge", write=True, body=mapping_body(),
+                           description="Fields left out get their defaults; the server "
+                                       "assigns the id."),
             },
             "/mappings/{mid}": {
-                "parameters": [{"name": "mid", "in": "path", "required": True,
-                                "schema": {"type": "string"}}],
-                "get": {"summary": "Get a mapping", "security": bearer,
-                        "responses": {"200": {"description": "mapping"},
-                                      "404": {"description": "not found"}}},
-                "put": {"summary": "Replace a mapping", "security": bearer,
-                        "requestBody": {"required": True, "content": {"application/json": {
-                            "schema": {"$ref": "#/components/schemas/Mapping"}}}},
-                        "responses": {"200": {"description": "updated"},
-                                      "400": {"description": "validation error"},
-                                      "404": {"description": "not found"}}},
-                "patch": {"summary": "Change some fields of a mapping (JSON merge patch, RFC 7396)",
-                          "security": bearer,
-                          "requestBody": {"required": True, "content": {
-                              "application/merge-patch+json": {"schema": {"type": "object"}},
-                              "application/json": {"schema": {"type": "object"}}}},
-                          "responses": {"200": {"description": "updated"},
-                                        "400": {"description": "validation error"},
-                                        "404": {"description": "not found"}}},
-                "delete": {"summary": "Delete a mapping", "security": bearer,
-                           "responses": {"200": {"description": "deleted"},
-                                         "404": {"description": "not found"}}},
+                "parameters": [mid],
+                "get": op("Get a mapping", ("200", "Mapping", "mapping"), "NotFound"),
+                "put": op("Replace a mapping", ("200", "Mapping", "updated"), "BadRequest",
+                          "NotFound", "TooLarge", write=True, body=mapping_body(),
+                          description="Replaces the whole mapping: every field the body "
+                                      "leaves out gets its default (listen on 0.0.0.0, no "
+                                      "allow-list, not read-only, enabled, TLS/MQTT/trace "
+                                      "off, no USB match, kind net). GET it first and send "
+                                      "it all back changed, or use PATCH."),
+                "patch": op("Change some fields of a mapping (JSON merge patch, RFC 7396)",
+                            ("200", "Mapping", "updated"), "BadRequest", "NotFound",
+                            "TooLarge", write=True,
+                            body=mapping_body("MergePatch", ("application/merge-patch+json",
+                                                             "application/json")),
+                            description="Only the fields the body names change; null resets "
+                                        "one to its default. A patch that makes the mapping "
+                                        "invalid changes nothing."),
+                "delete": op("Delete a mapping", ("200", "Deleted", "deleted"), "NotFound",
+                             write=True),
             },
             "/mappings/{mid}/{action}": {
                 "parameters": [
-                    {"name": "mid", "in": "path", "required": True, "schema": {"type": "string"}},
+                    mid,
                     {"name": "action", "in": "path", "required": True,
                      "schema": {"type": "string", "enum": ["start", "stop", "restart"]}},
                 ],
-                "post": {"summary": "Start/stop/restart a mapping", "security": bearer,
-                         "responses": {"200": {"description": "action applied"},
-                                       "404": {"description": "not found"}}},
+                "post": op("Start/stop/restart a mapping", ("200", "ActionResult", "action applied"),
+                           "BadRequest", "NotFound", write=True),
             },
         },
     }
