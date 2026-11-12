@@ -9,7 +9,8 @@ network bytes appended to it. Checks:
   * write() only queues: a slow disk can't stall the caller, and what can't be
     written is reported in the trace instead of silently missing;
   * rotation keeps at most trace_keep old files of about trace_max_mb each, and never cuts
-    a file in place (a download still reading it gets all of it, also with keep=0);
+    a file in place (a download still reading it gets all of it, also with keep=0); the
+    rotated files past trace_keep (it was lowered) are deleted when the trace starts;
   * a file that can't be opened or written pauses the trace instead of ending its writer
     thread: the status says why, nothing is queued meanwhile, the writer tries again,
     and the trace then says how many bytes are missing; a removed traces folder is made
@@ -148,6 +149,30 @@ async def test_tracer_format_and_rotation(tmp):
     assert not os.path.exists(path0 + ".1")
     assert os.path.getsize(path0) < 11_000
     print("tracer: keep=0 starts the file over (bounded size)  OK")
+
+
+async def test_tracer_prunes_past_keep(tmp):
+    """trace_keep lowered from 6 to 2: the trace's rotated files 3..6 go when it starts
+    (logged); other names that only look alike stay."""
+    path = os.path.join(tmp, "k.log")
+    names = ["k.log", "k.log.1", "k.log.2", "k.log.3", "k.log.6", "k.log.old", "k.log.4x",
+             "k.log.\u0663", "kk.log.5", "other-k.log.5"]
+    for n in names:
+        with open(os.path.join(tmp, n), "wb") as fh:
+            fh.write(b"x")
+    logs = []
+    t = Tracer(path, _Opts(keep=2), log=logs.append)
+    await asyncio.sleep(0)
+    await t.aclose()
+    left = sorted(os.listdir(tmp))
+    assert left == sorted(set(names) - {"k.log.3", "k.log.6"}), left
+    assert any(ln == f"trace: deleted 2 rotated file(s) of {path} past the 2 kept"
+               for ln in logs), logs
+    logs.clear()
+    t = Tracer(path, _Opts(keep=2), log=logs.append)
+    await t.aclose()
+    assert not any("rotated file(s)" in ln for ln in logs), logs
+    print("tracer: rotated files past a lowered trace_keep deleted at start (logged)  OK")
 
 
 class _SlowTracer(Tracer):
@@ -595,6 +620,8 @@ async def main():
         for sub in ("d", "e", "f"):
             os.makedirs(os.path.join(tmp, sub))
         await test_tracer_format_and_rotation(os.path.join(tmp, "a"))
+        os.makedirs(os.path.join(tmp, "k"))
+        await test_tracer_prunes_past_keep(os.path.join(tmp, "k"))
         await test_tracer_never_blocks(os.path.join(tmp, "b"))
         await test_keep0_never_cuts_in_place(os.path.join(tmp, "d"))
         await test_tracer_survives_failures(os.path.join(tmp, "e"))
