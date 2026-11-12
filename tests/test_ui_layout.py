@@ -6,9 +6,9 @@ row buttons (Start/Stop/Restart/Edit/Log/Monitor/Copy/Delete) ended up outside i
 and the whole page scrolled sideways. This drives a real browser (Playwright +
 Chromium) against two real nodes — A shows B through a manual cluster peer — whose
 mappings use such values, at desktop, half-screen, tablet and phone widths, and
-checks the dashboard, the log / console / edit views, the settings page (users with row
-buttons, a backup's restore preview) — in English and again in Turkish, whose texts are
-longer:
+checks the dashboard, the log / console / edit views, a Modbus gateway's points editor
+(fields per point, a test read's answer), the settings page (users with row buttons, a
+backup's restore preview) — in English and again in Turkish, whose texts are longer:
 
   * the page never scrolls sideways and no table needs horizontal scrolling
     (wide windows: the table fits; narrow ones: its rows become cards);
@@ -143,6 +143,26 @@ def demo_mappings(prefix, raw_port):
     ]
 
 
+MODBUS_NAME = "Enerji analizörü — Hat 3 (Modbus RTU)"
+
+
+def modbus_mapping(port):
+    """A Modbus gateway with points of every kind the points editor shows fields for."""
+    return {"name": MODBUS_NAME, "enabled": False,
+            "serial": {"port": "/dev/ttyUSB7", "baudrate": 9600},
+            "network": {"mode": "server", "protocol": "modbus", "bind_ip": "127.0.0.1",
+                        "port": port},
+            "mqtt": {"enabled": True, "host": LONG_HOST, "base_topic": "fabrika/hat3/enerji"},
+            "modbus_poll": {"block_reads": True, "block_gap": 4, "points": [
+                {"name": "Gerilim_L1_" + LONG_NAME, "unit": 1, "fn": 3, "address": 0,
+                 "dtype": "float32", "word_order": "CDAB", "scale": 0.1},
+                {"name": "Etiket", "unit": 1, "fn": 3, "address": 20, "dtype": "string",
+                 "length": 8},
+                {"name": "Alarm", "unit": 1, "fn": 3, "address": 30, "dtype": "bool", "bit": 3},
+                {"name": "Ayar", "unit": 2, "fn": 3, "address": 10, "dtype": "int64",
+                 "writable": True, "min": 0, "max": 100, "allowed": [0, 50, 100]}]}}
+
+
 def start_node(cfg, backup=False):
     tmp = tempfile.mkdtemp(prefix="ser2net_ui_")
     path = os.path.join(tmp, "config.json")
@@ -188,7 +208,7 @@ def main():
     node_a = {"admin_ui": {"bind_ip": "127.0.0.1", "port": ui_a}, "users": users + others,
               "cluster": {"enabled": True, "key": key, "discovery_port": free_port(),
                           "peers": [f"127.0.0.1:{ui_b}"]},
-              "mappings": demo_mappings("", raw_a)}
+              "mappings": demo_mappings("", raw_a) + [modbus_mapping(free_port())]}
     nodes = [start_node(node_a, backup=True), start_node(node_b)]
     clients, problems, browser_errors = [], [], []
     base = f"http://127.0.0.1:{ui_a}"
@@ -232,8 +252,8 @@ def main():
                     "() => (document.querySelector('#cluster') || {}).textContent?.includes('B-short')",
                     timeout=20000)
 
-            def open_view(button):
-                row = page.locator("#mappings tr", has_text=LONG_NAME).first
+            def open_view(button, name=LONG_NAME):
+                row = page.locator("#mappings tr", has_text=name).first
                 row.get_by_role("button", name=button, exact=True).click()
                 page.wait_for_selector("#form-panel .form-head")
                 page.wait_for_timeout(300)
@@ -250,6 +270,35 @@ def main():
                         dashboard()
                         open_view(TR[view] if lang == "tr" else view)
                         check(f"{lang} {view.lower()} view @{w}")
+                    dashboard()  # the points editor's fields, and a test read's answer
+                    open_view(TR["Edit"] if lang == "tr" else "Edit", MODBUS_NAME)
+                    page.click("#form-panel [data-points-mode]")
+                    page.wait_for_selector("#form-panel .point-row")
+                    if page.locator("#form-panel .point-row").count() != 4:
+                        problems.append(f"{lang} points editor @{w}: not one box per point")
+                    page.click("#form-panel [hx-post$='/modbus-read']")
+                    page.wait_for_selector("#modbus-read .banner")
+                    check(f"{lang} points editor @{w}")
+                    if lang == "en" and w == 1024:  # an edit rewrites the JSON, keeps the rest
+                        row = page.locator("#form-panel .point-row").nth(3)
+                        row.locator('[data-k="word_order"]').select_option("CDAB")
+                        row.locator('[data-k="address"]').fill("12")
+                        alarm = page.locator("#form-panel .point-row").nth(2)
+                        alarm.locator('[data-k="dtype"]').select_option("uint16")  # no bit now
+                        page.click("#form-panel [data-points-add]")
+                        box = '#form-panel textarea[name="modbus_points"]'
+                        pts = json.loads(page.input_value(box))
+                        if "bit" in pts[2] or pts[2]["dtype"] != "uint16":
+                            problems.append(f"points editor: a key that no longer fits kept: {pts[2]}")
+                        want = {"name": "Ayar", "unit": 2, "fn": 3, "address": 12, "dtype": "int64",
+                                "writable": True, "min": 0, "max": 100, "allowed": [0, 50, 100],
+                                "word_order": "CDAB", "scale": 1}
+                        if pts[3] != want or len(pts) != 5 or pts[1].get("length") != 8:
+                            problems.append(f"points editor: the JSON is not as edited: {pts}")
+                        page.click("#form-panel [data-points-mode]")
+                        if not page.locator(box).is_visible():
+                            problems.append("points editor: the JSON box is not shown again")
+                        print("points editor: fields rewrite the JSON, other keys kept")
                     page.goto(f"{base}/settings")
                     page.wait_for_selector("section.panel")
                     check(f"{lang} settings @{w}")

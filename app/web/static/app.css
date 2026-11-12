@@ -138,7 +138,9 @@ input[type=checkbox] { width: auto; margin: 0; }
    must win over the display rules above; otherwise a hidden .grid2/.grid3 block
    would stay visible (e.g. Remote host/port showing while mode = server). */
 [hidden] { display: none !important; }
-fieldset { border: 1px solid var(--border); border-radius: 8px; padding: 14px 16px 2px; margin: 0 0 16px; }
+fieldset { border: 1px solid var(--border); border-radius: 8px; padding: 14px 16px 2px; margin: 0 0 16px;
+  min-width: 0; }  /* (a fieldset is min-content wide by default: long text would widen it) */
+label > .muted { overflow-wrap: anywhere; }  /* e.g. the points JSON hint: no spaces in it */
 legend { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .5px; padding: 0 6px; }
 .custom-input { margin-top: 6px; }
 .form-head {
@@ -223,3 +225,15 @@ legend { color: var(--muted); font-size: 11px; text-transform: uppercase; letter
 .auth-wrap .lang-switch { position: absolute; top: 12px; right: 16px; }
 .or-line { text-align: center; margin: .8rem 0; }
 .token-box { word-break: break-all; margin-top: .4rem; }
+/* the Modbus points editor (static/points.js): a wrapping box of fields per point, over the
+   points JSON box of the mapping form */
+.points-editor { display: block; margin: -4px 0 12px; }
+.points-editor .banner, .points-rows { display: block; margin-top: 8px; }
+.point-row { display: flex; flex-wrap: wrap; gap: 0 10px; border: 1px solid var(--border);
+  border-radius: 7px; padding: 8px 10px 0; margin-bottom: 8px; }
+.point-row label { flex: 1 1 6.5rem; min-width: 0; margin-bottom: 8px; }
+.point-row label.wide { flex: 2 1 12rem; }
+.point-row label.chk { flex: 0 0 auto; align-self: flex-end; margin-bottom: 16px; }
+.point-actions { flex: 1 1 100%; display: flex; flex-wrap: wrap; gap: 6px 10px;
+  align-items: center; justify-content: flex-end; margin-bottom: 8px; min-width: 0; }
+.point-actions .muted { overflow-wrap: anywhere; }
