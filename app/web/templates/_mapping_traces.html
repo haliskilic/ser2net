@@ -2,7 +2,7 @@
   <h3 id="panel-title" tabindex="-1">{{ _("Traces — %(name)s", name=mapping_name|softbreak) }}</h3>
   <div class="actions">
     {% if files %}<button class="btn sm danger" id="traces-delete-all" hx-delete="{{ base }}/api/mappings/{{ mid }}/traces" hx-target="#form-panel" hx-swap="innerHTML"
-            hx-confirm="{{ _('Delete all %(n)s trace file(s) of “%(name)s”?', n=files|length, name=mapping_name) }}">{{ _("Delete all") }}</button>{% endif %}
+            hx-confirm="{{ ngettext('Delete the %(num)s trace file of “%(name)s”?', 'Delete all %(num)s trace files of “%(name)s”?', files|length, name=mapping_name) }}">{{ _("Delete all") }}</button>{% endif %}
     <button class="btn sm" id="traces-refresh" hx-get="{{ base }}/api/mappings/{{ mid }}/traces" hx-target="#form-panel" hx-swap="innerHTML">{{ _("↻ Refresh") }}</button>
     <button type="button" class="btn sm" id="traces-close" data-cancel>{{ _("Close") }}</button>
   </div>

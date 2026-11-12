@@ -1156,7 +1156,8 @@ def routes(ctx: Ctx) -> list:
                          _("Saved: trace files are kept until they are deleted in a mapping’s "
                            "Trace panel."))
             if gone:
-                parts.append(_("Deleted now: {0} trace file(s).").format(gone))
+                parts.append(ngettext("Deleted now: {0} trace file.", "Deleted now: {0} trace files.",
+                                      gone).format(gone))
         if "log_max_age_days" in wanted:
             days = wanted["log_max_age_days"]
             if days != before["log_max_age_days"]:
@@ -1172,7 +1173,8 @@ def routes(ctx: Ctx) -> list:
                          _("Logs, the audit log and the configuration backups are kept within "
                            "their size and count limits."))
             if gone:
-                parts.append(_("Deleted now: {0} log file(s) and backup(s).").format(gone))
+                parts.append(ngettext("Deleted now: {0} log file or backup.",
+                                      "Deleted now: {0} log files and backups.", gone).format(gone))
         return await settings_get(request, ok=" ".join(parts) or _("Saved."))
 
     async def settings_users_signout(request):

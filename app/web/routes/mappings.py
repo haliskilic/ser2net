@@ -308,7 +308,8 @@ def routes(ctx: Ctx) -> list:
                 f"{m.name}: {len(deleted)} file(s): {', '.join(deleted)}"
             state.log(f"trace file(s) deleted: {detail}")
             ctx.audit(request, "trace_delete", detail)
-        ok = _("Deleted {0} trace file(s).").format(len(deleted)) if deleted else ""
+        ok = ngettext("Deleted {0} trace file.", "Deleted {0} trace files.",
+                      len(deleted)).format(len(deleted)) if deleted else ""
         if ok and m.options.trace_both and f"{m.id}-{m.options.trace_both}" in deleted:
             ok += " " + _("Tracing is still on: new traffic begins a new file.")
         error = "; ".join(_("Could not delete {0}: {1}").format(n, why) for n, why in failed)
