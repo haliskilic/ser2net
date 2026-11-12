@@ -1560,5 +1560,10 @@
   "Moving from the classic ser2net (stop its service first; ports below 1024; what works differently): <span class=\"mono\">docs/MIGRATING-FROM-SER2NET.md</span>.": "Klasik ser2net'ten geçiş (önce onun servisini durdurun; 1024 altı portlar; neyin farklı çalıştığı): <span class=\"mono\">docs/MIGRATING-FROM-SER2NET.md</span>.",
   "points publish to &lt;topic&gt;/&lt;point&gt;; status at &lt;topic&gt;/status": "noktalar &lt;topic&gt;/&lt;nokta&gt;'ya yayınlanır; durum &lt;topic&gt;/status altında",
   "required, but Sparkplug B doesn’t use it: its topics are spBv1.0/&lt;group ID&gt;/…": "gerekli, ama Sparkplug B onu kullanmaz: onun topic'leri spBv1.0/&lt;grup ID&gt;/…",
-  "Every topic, payload and write, and the Sparkplug B model: <span class=\"mono\">docs/MODBUS-MQTT.md</span>.": "Bütün topic'ler, payload'lar ve yazmalar, Sparkplug B modeli: <span class=\"mono\">docs/MODBUS-MQTT.md</span>."
+  "Every topic, payload and write, and the Sparkplug B model: <span class=\"mono\">docs/MODBUS-MQTT.md</span>.": "Bütün topic'ler, payload'lar ve yazmalar, Sparkplug B modeli: <span class=\"mono\">docs/MODBUS-MQTT.md</span>.",
+  "AGPL-3.0 or a commercial licence": "AGPL-3.0 ya da ticari lisans",
+  "Source code": "Kaynak kodu",
+  "Licences": "Lisanslar",
+  "ser2net %(version)s is licensed under the GNU AGPL-3.0 or a separate commercial licence. The components it ships keep their own licences, listed below.": "ser2net %(version)s, GNU AGPL-3.0 ya da ayrı bir ticari lisansla lisanslanır. İçinde gelen bileşenler kendi lisanslarını korur; aşağıda listelenir.",
+  "Source code:": "Kaynak kodu:"
 }

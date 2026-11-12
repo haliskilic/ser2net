@@ -2638,8 +2638,8 @@ def _normalize_node_name(admin: "AdminUI", notes: list[str]) -> None:
 
 # The first path segments of the UI's own pages: a public URL's path can't start with one,
 # or a page asked for without the path would be taken for one under it (app/web/proxy.py).
-RESERVED_PATHS = frozenset({"api", "auth", "favicon.ico", "healthz", "lang", "login", "logout",
-                            "metrics", "settings", "setup", "static"})
+RESERVED_PATHS = frozenset({"api", "auth", "favicon.ico", "healthz", "lang", "licenses",
+                            "login", "logout", "metrics", "settings", "setup", "static"})
 _URL_PATH_SEGMENT = re.compile(r"[A-Za-z0-9._~-]+")
 _HOST_NAME = re.compile(r"(?!-)[a-z0-9_-]{1,63}(?<!-)(\.(?!-)[a-z0-9_-]{1,63}(?<!-))*\.?")
 

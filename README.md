@@ -1999,6 +1999,14 @@ binary'deki tam metinler: `ser2net --licenses`. LGPL lisanslı ldap3 binary'de k
 dosyaları olarak durur; `SER2NET_LIB_OVERRIDE=<klasör>` ile başka bir sürümü yüklenebilir.
 Güvenlik açığı bildirimi: [SECURITY.md](SECURITY.md).
 
+Web arayüzünün her sayfası lisansla ve bir **Kaynak kodu** bağlantısıyla biter (giriş
+yapılmışsa sürümle ve **Lisanslar** sayfasıyla da: bu kopyanın taşıdığı lisans metinleri —
+LICENSE, NOTICE, ticari lisans ve üçüncü taraf bildirimleri, bir binary'de ise onun
+`THIRD-PARTY-LICENSES.txt`'i). Başkalarının ağ üzerinden kullandığı değiştirilmiş bir sürüm
+onlara kendi kaynak kodunu sunmalıdır (AGPL-3.0 13. madde): bağlantıyı `SER2NET_SOURCE_URL`
+ile ona yöneltin (`https://git.example.com/bizim-ser2net`; http(s) adresi olmayan bir değer
+kullanılmaz, açılışta uyarı verilir).
+
 Katkılar memnuniyetle karşılanır! İlk pull request'inde tek seferlik bir [Katkıcı Lisans Sözleşmesi (CLA)](https://gist.github.com/haliskilic/7a7fdcd355f54d1db6943959d7b76823) imzalaman istenir; katkının telif hakkı sende kalır.
 
 Telif © 2026 Halis KILIÇ.

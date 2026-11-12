@@ -170,6 +170,7 @@ ROUTES = {
     # ---- routes/system.py ----
     ("GET", "/lang/{code}"): (PUBLIC, NONE),
     ("GET", "/healthz"): (PUBLIC, NONE),
+    ("GET", "/licenses"): (VIEWER, NONE),  # the licence texts name the bundled versions
     ("GET", "/metrics"): (VIEWER, NONE),
     ("GET", "/api/ports.json"): (VIEWER, NONE),
     ("GET", "/api/ports/select"): (OPERATOR, NONE),
