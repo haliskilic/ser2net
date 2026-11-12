@@ -5,7 +5,8 @@ passes only when every job it needs passed. A job added to ci.yml but not to ci-
 needs would not gate a merge, so this test fails until it is listed there (test-next,
 the newest Python, is the one job left out on purpose; it must be continue-on-error).
 Until branch protection requires ci-ok instead, it also asks for the 14 check names it
-requires today: a renamed or removed one would block every pull request.
+requires today: a renamed or removed one would block every pull request. And every push
+to main gets a run of its own (no shared concurrency group that drops waiting runs).
 
 Run: python3 tests/test_ci_gate.py   (stdlib only)
 """
@@ -67,7 +68,21 @@ def test_required_check_names_kept():
     print("the 14 check names main requires today still exist  OK")
 
 
+def test_every_main_push_gets_a_run():
+    # GitHub keeps one waiting run per concurrency group and cancels the one before it, so
+    # a group shared by all main pushes (ci-refs/heads/main) skipped commits of a quick
+    # series of merges. Only a pull request's runs share a group (and cancel each other).
+    ci = _read("ci.yml")
+    block = ci.split("\nconcurrency:\n", 1)[1].split("\n\n", 1)[0]
+    group = re.search(r"(?m)^  group: (.*)$", block).group(1)
+    assert group == "ci-${{ github.event.pull_request.number || github.run_id }}", group
+    assert re.search(r"(?m)^  cancel-in-progress: \$\{\{ github.event_name == "
+                     r"'pull_request' \}\}$", block), block
+    print("pull requests share a concurrency group; every other run has its own  OK")
+
+
 if __name__ == "__main__":
     test_ci_ok_needs_every_job()
     test_required_check_names_kept()
+    test_every_main_push_gets_a_run()
     print("\nPASS: CI merge gate")

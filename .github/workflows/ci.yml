@@ -12,8 +12,10 @@ permissions:
   contents: read
 
 concurrency:
-  group: ci-${{ github.event.pull_request.number || github.ref }}
-  # a new commit on a PR supersedes the running check; every main commit is tested
+  # A new commit on a PR supersedes the running check. Every other run (each push to main,
+  # a manual run) has a group of its own: GitHub keeps only one waiting run per group, so
+  # a shared main group dropped the middle commits of a quick series of merges.
+  group: ci-${{ github.event.pull_request.number || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
