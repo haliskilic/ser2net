@@ -11,7 +11,7 @@ import asyncio
 import contextlib
 from typing import Any, Callable, Optional, Protocol
 
-from ..config import AppConfig, MappingConfig
+from ..config import AppConfig, MappingConfig, mqtt_start_warnings, mqtt_warnings
 from . import serial_io
 from .bridge import MappingRunner, RunnerStatus
 
@@ -104,9 +104,11 @@ class Supervisor:
     # ---------------- bulk ----------------
     async def start_all(self, config: AppConfig) -> None:
         self._order = [m.id for m in config.mappings]
-        for m in config.mappings:
+        # (in one pass: each against those started before it)
+        notes = mqtt_start_warnings(config.mappings)
+        for m, mqtt_notes in zip(config.mappings, notes, strict=True):
             if m.enabled:
-                await self.apply_mapping(m)
+                await self.apply_mapping(m, mqtt_notes)
             else:
                 self._ensure_stopped_placeholder(m)
 
@@ -129,8 +131,10 @@ class Supervisor:
             if mapping.id not in self._order:
                 self._order.append(mapping.id)
 
-    async def apply_mapping(self, mapping: MappingConfig) -> tuple[bool, str]:
-        """Create/replace and (if enabled) start the runner for a mapping."""
+    async def apply_mapping(self, mapping: MappingConfig,
+                            mqtt_notes: Optional[list[str]] = None) -> tuple[bool, str]:
+        """Create/replace and (if enabled) start the runner for a mapping. ``mqtt_notes``:
+        its mqtt_warnings, when the caller has them already (start_all)."""
         async with self._lock:
             old = self._runners.pop(mapping.id, None)
         if old is not None:
@@ -147,6 +151,14 @@ class Supervisor:
         if not mapping.enabled:
             runner.status.state = "stopped"
             return True, "disabled"
+        # what it shares over MQTT with the other enabled mappings (which the edits refuse
+        # or warn about), and its own MQTT topics the edits refuse: said at each start
+        if mqtt_notes is None:
+            mqtt_notes = mqtt_warnings(mapping, [
+                r.mapping for mid, r in list(self._runners.items())
+                if mid != mapping.id and isinstance(getattr(r, "mapping", None), MappingConfig)])
+        for line in mqtt_notes:
+            self._logger_factory(mapping)(f"warning: {line}")
         try:
             # a stored URL port fails the start once, instead of retrying it forever
             for side in mapping.serial_sides():

@@ -2,7 +2,7 @@
 validate + persist + apply, without any HTTP concerns."""
 from __future__ import annotations
 
-from ...config import ConfigError, MappingConfig, valid_mapping_id
+from ...config import ConfigError, MappingConfig, check_mqtt_clashes, valid_mapping_id
 from ...engine import portlist
 from ...i18n import _
 from .forms import _checkbox, _mapping_from_form, _preserve_unmanaged_fields
@@ -68,6 +68,11 @@ async def save_mapping_from_form(state, form) -> tuple[bool, str]:
             existing = state.config.get_mapping(mapping.id)
             if existing is None:  # deleted while this request was being checked
                 return False, _gone()
+        try:  # (against the mappings as they are now, under the lock)
+            check_mqtt_clashes(mapping, state.config.mappings)
+        except ConfigError as e:
+            return False, str(e)
+        if posted_id:
             state.config.mappings[state.config.mappings.index(existing)] = mapping
         else:
             state.config.mappings.append(mapping)

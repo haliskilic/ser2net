@@ -703,12 +703,13 @@ def routes(ctx: Ctx) -> list:
         """Show what importing `plan` would change; nothing changes until it is applied."""
         current = state.config.mappings
         rows = importer.plan_rows(current, plan.mappings, mode)
-        candidate, _touched = importer.apply_import(current, plan.mappings, mode)
+        candidate, touched = importer.apply_import(current, plan.mappings, mode)
         problem = None
         try:
             dataclasses.replace(state.config, mappings=candidate).validate_for_save()
         except ConfigError as e:
             problem = str(e)
+        problem = problem or importer.mqtt_clash(candidate, touched)
         preview = {"token": _pending_put(_who(request), plan), "mode": mode, "rows": rows,
                    "source": plan.source, "warnings": plan.warnings, "problem": problem,
                    "count": len(plan.mappings)}
@@ -736,6 +737,8 @@ def routes(ctx: Ctx) -> list:
         async with state.config_lock:
             old = state.config.mappings
             new_maps, touched = importer.apply_import(old, plan.mappings, mode)
+            if problem := importer.mqtt_clash(new_maps, touched):
+                return await settings_get(request, error=_("Import rejected: {0}").format(problem))
             state.config.mappings = new_maps
             try:
                 await state.asave()

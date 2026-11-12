@@ -28,6 +28,7 @@ import unicodedata
 import uuid
 from dataclasses import dataclass, field, asdict
 from typing import Any, Optional
+from . import i18n
 from .i18n import _
 
 # ---------------------------------------------------------------------------
@@ -844,8 +845,8 @@ class MappingConfig:
         can't have '+', '#' or the null character, and a point can't be published where the
         mapping already publishes or takes something else: its status (<base_topic>/status),
         a unit's status (unit<N>/status, with unit_status on) or another point's command or
-        result topic. A stored mapping that breaks them keeps loading and running
-        (validate() leaves them alone). Raises ConfigError."""
+        result topic. A stored mapping that breaks them keeps loading and running; start-up
+        and each start of it log a warning (mqtt_warnings). Raises ConfigError."""
         if not (self.kind == "net" and self.network.protocol == "modbus"):
             return
         for p in self.modbus_poll.points:
@@ -917,9 +918,10 @@ class MappingConfig:
 
 
 # ---------------------------------------------------------------------------
-# MQTT: the topics a plain-format mapping uses on its broker. Checked where a mapping
-# is created or changed (validate_input), never by validate(): a stored config keeps
-# loading and running.
+# MQTT: the topics and identity a mapping uses on its broker, and clashes between
+# mappings. Checked where a mapping is created or changed (check_mqtt_clashes) and
+# warned about at start-up and at each start (mqtt_warnings); never by validate(): a
+# stored config with a clash keeps loading and running.
 # ---------------------------------------------------------------------------
 def _plain_mqtt(m: MappingConfig) -> bool:
     """The mapping publishes plain MQTT topics under its base topic (serial lines, or
@@ -968,6 +970,229 @@ def _topic_use(use: str, of: Any) -> str:
     if use == "result":
         return _("the topic of the answers to point {0}'s commands").format(repr(of))
     return _("the topic of point {0}").format(repr(of))
+
+
+def sparkplug_identity(m: MappingConfig) -> tuple[str, str]:
+    """The Sparkplug B group and edge node ID a mapping's node uses (as
+    engine/sparkplug_node: a blank node ID is made from the mapping's name)."""
+    from .engine.sparkplug import sanitize_id
+    mq = m.mqtt
+    return (str(mq.sparkplug_group_id or "").strip() or "ser2net",
+            str(mq.sparkplug_node_id or "").strip() or sanitize_id(str(m.name)))
+
+
+@dataclass
+class _MqttUse:
+    """What a mapping that runs does on its broker (see _mqtt_use)."""
+    broker: str              # host:port (the host in lower case)
+    client_id: str           # "" = the client library makes one up
+    node: str                # Sparkplug B: "<group>/<edge node>"; plain: ""
+    commands: set[str]       # plain: the topics it takes writes from (<point>/set)
+    published: set[str]      # plain: the topics it publishes to
+
+
+def _mqtt_use(m: MappingConfig) -> Optional[_MqttUse]:
+    """None when the mapping starts no MQTT client (not a network mapping, MQTT off, a
+    Modbus gateway without points, a plain base topic with a wildcard: see
+    engine/mqtt_pub)."""
+    mq = m.mqtt
+    if m.kind != "net" or not mq.enabled:
+        return None
+    if m.network.protocol == "modbus" and not m.modbus_poll.points:
+        return None
+    broker = f"{str(mq.host).strip().lower()}:{mq.port}"
+    client_id = mq.client_id if isinstance(mq.client_id, str) else ""
+    if not _plain_mqtt(m):
+        return _MqttUse(broker, client_id, "/".join(sparkplug_identity(m)), set(), set())
+    if any(c in str(mq.base_topic) for c in "+#"):
+        return None
+    topics = _mqtt_topics(m)
+    return _MqttUse(broker, client_id, "",
+                    {t for t, use, _of in topics if use == "set"},
+                    {t for t, use, _of in topics if use != "set"})
+
+
+@dataclass(frozen=True)
+class MqttClash:
+    """Two enabled mappings that get in each other's way on one MQTT broker: kind
+    "client_id" (the same client ID: the broker keeps one connection per ID),
+    "sparkplug" (the same Sparkplug B edge node), "command" (a topic one of them takes
+    writes from that the other uses too) — refused where a mapping is created or changed
+    — or "shared" (both publish to a topic, such as one base topic's status: only
+    warned about, since it can be meant)."""
+    kind: str
+    other: str    # the other mapping's name
+    broker: str
+    what: str     # the client ID, "<group>/<edge node>" or the topic
+
+    @property
+    def refused(self) -> bool:
+        return self.kind != "shared"
+
+    def text(self) -> str:
+        if self.kind == "client_id":
+            return _("Mapping '{0}' already connects to the MQTT broker {1} with the client ID "
+                     "{2}. A broker keeps one connection per client ID, so the two mappings "
+                     "would keep disconnecting each other: leave the client ID blank "
+                     "(automatic) or use another one.").format(
+                         self.other, self.broker, repr(self.what))
+        if self.kind == "sparkplug":
+            return _("Mapping '{0}' is already the Sparkplug B edge node {1} (group/edge node "
+                     "ID) on the MQTT broker {2}. Two edge nodes can't share it: a host takes "
+                     "them for one and sends its commands to both. Set another edge node ID "
+                     "(a blank one is made from the mapping's name).").format(
+                         self.other, repr(self.what), self.broker)
+        if self.kind == "command":
+            return _("Mapping '{0}' also uses the MQTT topic {1} on the broker {2}, and one of "
+                     "the two takes writes from it (a point's /set): one MQTT command would be "
+                     "written by both, or the data of one taken as a command by the other. "
+                     "Give one of them another base topic.").format(
+                         self.other, repr(self.what), self.broker)
+        # only logged (never refused, so never shown in the UI)
+        return (f"mapping '{self.other}' publishes to the MQTT topic {self.what!r} on the "
+                f"broker {self.broker} too, so the messages of the two mix there (a shared "
+                ".../status shows the state of whichever connected last)")
+
+
+class _MqttIndex:
+    """The MQTT identity and topics of some mappings, by broker, to find what another
+    mapping would share with them."""
+
+    def __init__(self) -> None:
+        # (broker, client ID / "<group>/<node>" / topic) -> the mappings with it
+        self._ids: dict[tuple[str, str], list[MappingConfig]] = {}
+        self._nodes: dict[tuple[str, str], list[MappingConfig]] = {}
+        self._commands: dict[tuple[str, str], list[MappingConfig]] = {}
+        self._published: dict[tuple[str, str], list[MappingConfig]] = {}
+
+    def add(self, m: MappingConfig, use: _MqttUse) -> None:
+        b = use.broker
+        if use.client_id:
+            self._ids.setdefault((b, use.client_id), []).append(m)
+        if use.node:
+            self._nodes.setdefault((b, use.node), []).append(m)
+        for t in use.commands:
+            self._commands.setdefault((b, t), []).append(m)
+        for t in use.published:
+            self._published.setdefault((b, t), []).append(m)
+
+    def clashes(self, use: _MqttUse) -> list[MqttClash]:
+        """What a mapping with ``use`` shares with these: one clash per other mapping, the
+        most serious one; of the clashes only warned about ("shared"), just the first,
+        when there is nothing worse (mappings that share a topic on purpose would
+        otherwise say so to each other over and over)."""
+        b = use.broker
+        found: dict[str, MqttClash] = {}
+
+        def note(kind: str, others: list[MappingConfig], what: str) -> None:
+            for other in others:
+                if other.id not in found:
+                    found[other.id] = MqttClash(kind, str(other.name), b, what)
+
+        if use.client_id:
+            note("client_id", self._ids.get((b, use.client_id), []), use.client_id)
+        if use.node:
+            note("sparkplug", self._nodes.get((b, use.node), []), use.node)
+        for t in sorted(use.commands):
+            note("command", self._commands.get((b, t), []) + self._published.get((b, t), []), t)
+        for t in sorted(use.published):
+            note("command", self._commands.get((b, t), []), t)
+        if not found:  # a shared base topic shows as its status topic
+            topic = min((t for t in use.published if (b, t) in self._published),
+                        key=lambda t: (not t.endswith("/status"), t), default=None)
+            if topic is not None:
+                note("shared", self._published[(b, topic)][:1], topic)
+        return list(found.values())
+
+
+def mqtt_clashes(mapping: MappingConfig, mappings) -> list[MqttClash]:
+    """What ``mapping`` would share on its MQTT broker with the other enabled ones of
+    ``mappings`` (itself, by id, left out) while both run; nothing when it is disabled."""
+    if not mapping.enabled or (use := _mqtt_use(mapping)) is None:
+        return []
+    index = _MqttIndex()
+    for m in mappings:
+        if m.id == mapping.id or not m.enabled:
+            continue
+        try:
+            other = _mqtt_use(m)
+        except Exception:  # a hand-edited value of the wrong type: nothing to compare
+            continue
+        if other is not None and other.broker == use.broker:
+            index.add(m, other)
+    return index.clashes(use)
+
+
+def check_mqtt_clashes(mapping: MappingConfig, mappings) -> None:
+    """An edit's rule (the mapping form, also a cluster node's save of its own mapping;
+    the REST API; an import): an enabled mapping can't share its MQTT client ID, its
+    Sparkplug B edge node or a command topic with another enabled mapping on the same
+    broker. Raises ConfigError. Not in validate(): a stored config with such a clash keeps
+    loading and running (with a warning, see mqtt_warnings); only an edit has to fix it."""
+    for clash in mqtt_clashes(mapping, mappings):
+        if clash.refused:
+            raise ConfigError(clash.text())
+
+
+@contextlib.contextmanager
+def _in_english():
+    """Messages built meanwhile are in English (log lines, whatever the request's
+    language)."""
+    token = i18n.set_language(i18n.DEFAULT)
+    try:
+        yield
+    finally:
+        i18n.reset(token)
+
+
+def _topic_warnings(m: MappingConfig) -> list[str]:
+    if m.kind == "net" and m.mqtt.enabled and _plain_mqtt(m):
+        try:
+            m.check_mqtt_topics()
+        except ConfigError as e:
+            return [f"MQTT: {e}"]
+    return []
+
+
+def mqtt_warnings(mapping: MappingConfig, mappings) -> list[str]:
+    """In English, for the log: what the edits refuse in ``mapping``'s MQTT topics (see
+    check_mqtt_topics; a wildcard base topic is logged by the MQTT client itself), and
+    what it shares on its broker with the other enabled ones of ``mappings``. Empty when
+    it is disabled; never raises."""
+    if not mapping.enabled:
+        return []
+    with _in_english():
+        try:
+            return _topic_warnings(mapping) + [f"MQTT: {c.text()}"
+                                               for c in mqtt_clashes(mapping, mappings)]
+        except Exception:  # a hand-edited value of the wrong type: validate() reports it
+            return []
+
+
+def mqtt_start_warnings(mappings: list[MappingConfig]) -> list[list[str]]:
+    """mqtt_warnings for each of ``mappings``, in order, against the enabled ones before
+    it, in one pass (a clash is said once, by the later mapping of the two): for the
+    start-up's load notes and starting them all. In English; never raises."""
+    out: list[list[str]] = []
+    index = _MqttIndex()
+    with _in_english():
+        for m in mappings:
+            lines: list[str] = []
+            if m.enabled:
+                try:
+                    lines = _topic_warnings(m)
+                    if (use := _mqtt_use(m)) is not None:
+                        lines += [f"MQTT: {c.text()}" for c in index.clashes(use)]
+                        index.add(m, use)
+                except Exception:  # a hand-edited value of the wrong type: validate() says
+                    lines = []
+            out.append(lines)
+    return out
+
+
+def _mqtt_load_notes(mappings: list[MappingConfig]) -> list[str]:
+    return [f"mapping '{m.name}': {line}" for m, lines in
+            zip(mappings, mqtt_start_warnings(mappings), strict=True) for line in lines]
 
 
 # ---------------------------------------------------------------------------
@@ -1511,6 +1736,8 @@ class AppConfig:
                         f"mapping '{m.name}': its serial port {side.port!r} is a URL, not a "
                         "device; URL ports are no longer opened, so the mapping does not start "
                         "until a serial device is set")
+        # MQTT clashes the edits refuse now (or warn about): kept, and said at start-up
+        cfg.load_notes += _mqtt_load_notes(cfg.mappings)
         return cfg
 
     def to_dict(self) -> dict[str, Any]:

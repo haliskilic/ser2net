@@ -893,5 +893,9 @@
   "the status topic of unit {0}": "unit {0} için durum topic'i",
   "the command topic of point {0}": "{0} noktasının komut topic'i",
   "the topic of the answers to point {0}'s commands": "{0} noktasına gelen komutların yanıt topic'i",
-  "the topic of point {0}": "{0} noktasının topic'i"
+  "the topic of point {0}": "{0} noktasının topic'i",
+  "Mapping '{0}' already connects to the MQTT broker {1} with the client ID {2}. A broker keeps one connection per client ID, so the two mappings would keep disconnecting each other: leave the client ID blank (automatic) or use another one.": "'{0}' eşlemesi {1} MQTT broker'ına zaten {2} client ID'siyle bağlanıyor. Broker her client ID için tek bir bağlantı tutar, bu yüzden iki eşleme birbirinin bağlantısını sürekli düşürür: client ID'yi boş bırak (otomatik) ya da başka bir ID kullan.",
+  "Mapping '{0}' is already the Sparkplug B edge node {1} (group/edge node ID) on the MQTT broker {2}. Two edge nodes can't share it: a host takes them for one and sends its commands to both. Set another edge node ID (a blank one is made from the mapping's name).": "'{0}' eşlemesi {2} MQTT broker'ında zaten {1} Sparkplug B edge düğümü (grup/edge düğüm ID'si). İki edge düğümü aynı kimliği paylaşamaz: host onları tek düğüm sanar ve komutlarını ikisine de gönderir. Başka bir edge düğüm ID'si gir (boş bırakılırsa eşlemenin adından türetilir).",
+  "Mapping '{0}' also uses the MQTT topic {1} on the broker {2}, and one of the two takes writes from it (a point's /set): one MQTT command would be written by both, or the data of one taken as a command by the other. Give one of them another base topic.": "'{0}' eşlemesi de {2} broker'ında {1} MQTT topic'ini kullanıyor ve ikisinden biri bu topic'ten yazma komutu alıyor (bir noktanın /set'i): tek bir MQTT komutu iki eşlemece de yazılır ya da birinin verisi diğerince komut sayılır. Birine başka bir ana topic ver.",
+  "Mapping '{0}': {1}": "'{0}' eşlemesi: {1}"
 }

@@ -12,8 +12,9 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
+from typing import Optional
 
-from .config import ConfigError, MappingConfig, _new_id
+from .config import ConfigError, MappingConfig, _new_id, check_mqtt_clashes
 from .i18n import _
 from .ser2net_import import looks_yaml, parse_ser2net_config
 
@@ -129,6 +130,19 @@ def apply_import(current: list[MappingConfig], incoming: list[MappingConfig],
             result.append(m)
         touched.append(m)
     return result, touched
+
+
+def mqtt_clash(mappings: list[MappingConfig], touched: list[MappingConfig]) -> Optional[str]:
+    """Why an import that leaves ``mappings`` (adding or changing ``touched``) can't be
+    applied over MQTT (see config.check_mqtt_clashes): a mapping it brings shares its MQTT
+    client ID, Sparkplug B edge node or a command topic with another enabled mapping on
+    the same broker. None when it doesn't."""
+    for m in touched:
+        try:
+            check_mqtt_clashes(m, mappings)
+        except ConfigError as e:
+            return _("Mapping '{0}': {1}").format(m.name, e)
+    return None
 
 
 def plan_rows(current: list[MappingConfig], incoming: list[MappingConfig],

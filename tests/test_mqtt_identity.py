@@ -1,20 +1,42 @@
-"""A mapping's MQTT topics are ones a message can be published to, and its points don't
-land on topics the mapping uses for something else.
+"""MQTT topics, client IDs and Sparkplug B edge nodes stay apart where they must.
 
   * an edit (validate_input) refuses '+', '#' or the null character in a plain base topic
     or point name, and a point published where the mapping already publishes or takes
     something else (its status, a unit's status, another point's /set or its result); '/'
-    stays legal, Sparkplug B metric names are not topics; validate() takes them all.
-Cross-platform, no sockets.
+    stays legal, Sparkplug B metric names are not topics; validate() takes them all;
+  * between enabled mappings on one broker, a shared explicit client ID, Sparkplug edge
+    node or command (/set) topic is refused (check_mqtt_clashes), shared publish topics
+    only warned about; other brokers, disabled mappings and mappings that start no MQTT
+    client don't count;
+  * a stored clash loads with a load note (in English) and is logged in the mapping's log
+    at each start, and validate() / save keep passing;
+  * end to end: the form, a cluster node's save, the REST API and an import refuse a
+    clash, and a stored one is logged at boot.
+Cross-platform (the server part binds 127.0.0.1 only).
 
 Run: python3 tests/test_mqtt_identity.py
 """
-import _server  # noqa: F401  (puts the repository on sys.path)
+import asyncio
+import json
+import os
+import shutil
+import tempfile
+import urllib.error
+import urllib.parse
+import urllib.request
 
-from app.config import AppConfig, ConfigError, MappingConfig
+from _server import Browser, Server, free_port
+
+from app import i18n
+from app.config import (AppConfig, ConfigError, ConfigStore, MappingConfig, check_mqtt_clashes,
+                        mqtt_clashes, mqtt_warnings, sparkplug_identity)
+from app.web.auth import hash_password, hash_token
 
 PUMP = {"name": "pump", "fn": 1, "dtype": "bool", "writable": True}
 TEMP = {"name": "temp", "fn": 3, "address": 1}
+PW = "mqtt-identity-pass-1"
+TOKEN = "s2n_mqtt-identity-token"
+KEY = "mqtt-identity-cluster-key"
 
 
 def gw(name, base="plant/line3", points=None, enabled=True, port=5020, mid=None, **mqtt):
@@ -43,6 +65,10 @@ def refused(m, *words):
         assert all(w in str(e) for w in words), (str(e), words)
         return str(e)
     raise AssertionError(f"accepted: {m.mqtt.base_topic!r} {m.modbus_poll.points}")
+
+
+def kinds(m, others):
+    return [(c.kind, c.other) for c in mqtt_clashes(m, others)]
 
 
 def test_topic_rules():
@@ -83,9 +109,275 @@ def test_topic_rules():
     print("MQTT off: not checked; validate() still takes stored ones  OK")
 
 
+def test_clashes():
+    a = gw("A", client_id="gw-1")
+    b = lines("B", "other", client_id="gw-1", host=" BROKER.lan ")
+    assert kinds(b, [a]) == [("client_id", "A")], kinds(b, [a])
+    clash = mqtt_clashes(b, [a])[0]
+    assert clash.refused and clash.broker == "broker.lan:1883", clash
+    try:
+        check_mqtt_clashes(b, [a])
+        raise AssertionError("a shared client ID was accepted")
+    except ConfigError as e:
+        assert "'A'" in str(e) and "'gw-1'" in str(e) and "client ID" in str(e), e
+    other_port = lines("B", "other", client_id="gw-1")
+    other_port.mqtt.port = 1884
+    assert kinds(other_port, [a]) == []
+    assert kinds(lines("B", "other", client_id="gw-1", host="broker2.lan"), [a]) == []
+    assert kinds(lines("B", "other"), [gw("A2")]) == [], "blank client IDs never clash"
+    assert kinds(b, [gw("A", client_id="gw-1", enabled=False)]) == []
+    b.enabled = False
+    assert kinds(b, [a]) == [], "a disabled mapping clashes with nothing"
+    assert kinds(a, [a]) == [], "an edit is not compared with its own stored version"
+    print("client ID: the same one on the same broker (host in any case) refused; another "
+          "broker or port, blank IDs, disabled mappings, the mapping itself fine  OK")
+
+    sp1 = gw("plc 1", "x", payload_format="sparkplug_b")
+    sp2 = gw("plc/1", "y", payload_format="sparkplug_b")
+    assert sparkplug_identity(sp1) == sparkplug_identity(sp2) == ("ser2net", "plc_1")
+    assert kinds(sp2, [sp1]) == [("sparkplug", "plc 1")]
+    assert "'ser2net/plc_1'" in mqtt_clashes(sp2, [sp1])[0].text()
+    assert kinds(gw("n", "z", payload_format="sparkplug_b", sparkplug_node_id="plc_1"),
+                 [sp1]) == [("sparkplug", "plc 1")]
+    assert kinds(gw("plc/1", "y", payload_format="sparkplug_b", sparkplug_group_id="g2"),
+                 [sp1]) == []
+    assert kinds(gw("S", "plant/line3", payload_format="sparkplug_b"), [a]) == [], \
+        "Sparkplug B uses no base topic"
+    print("Sparkplug B: the same group/edge node (also made from names) refused; another "
+          "group fine; no topic clash with plain mappings  OK")
+
+    same_base = gw("B2", "plant/line3/")
+    assert kinds(same_base, [a]) == [("command", "A")]
+    assert mqtt_clashes(same_base, [a])[0].what == "plant/line3/pump/set"
+    on_its_set = gw("D", "plant", [dict(TEMP, name="line3/pump/set")])  # data onto A's /set
+    assert kinds(on_its_set, [a]) == [("command", "A")]
+    a4 = gw("A4", "plant/line4", [dict(TEMP, name="mode/set")])
+    e = gw("E", "plant/line4", [dict(PUMP, name="mode")])  # subscribes to A4's data
+    assert kinds(e, [a4]) == [("command", "A4")] and kinds(a4, [e]) == [("command", "E")]
+    try:
+        check_mqtt_clashes(same_base, [a])
+        raise AssertionError("a shared /set topic was accepted")
+    except ConfigError as err:
+        assert "'plant/line3/pump/set'" in str(err) and "takes writes" in str(err), err
+    print("command topics: a /set shared, or used by the other for its data, refused  OK")
+
+    reader = gw("C", "plant/line3", [TEMP])
+    shared = mqtt_clashes(reader, [a])
+    assert [(c.kind, c.what, c.refused) for c in shared] == [
+        ("shared", "plant/line3/status", False)], shared
+    check_mqtt_clashes(reader, [a])
+    assert kinds(lines("L2", "scan/"), [lines("L1", "scan")]) == [("shared", "L1")]
+    assert kinds(gw("N", points=[], client_id="gw-1"), [a]) == [], "no points: no client"
+    assert kinds(lines("W", "plant/#", client_id="gw-1"), [a]) == [], "wildcard: MQTT off"
+    both = gw("B3", client_id="gw-1")
+    assert kinds(both, [a]) == [("client_id", "A")], "one clash per pair, the worst"
+    print("shared publish topics only warned about; mappings without an MQTT client "
+          "don't count  OK")
+
+
+def stored_config():
+    return [gw("A", mid="aaaaaaaaaaa1", port=5020),
+            gw("B", "plant/line3/", mid="aaaaaaaaaaa2", port=5021),
+            gw("C", "plant/line3", [TEMP], mid="aaaaaaaaaaa3", port=5022),
+            gw("S", "plant/s", [dict(TEMP, name="status")], mid="aaaaaaaaaaa4", port=5023),
+            gw("Off", mid="aaaaaaaaaaa5", port=5024, enabled=False)]
+
+
+def test_stored_clashes():
+    raw = {"mappings": [m.to_dict() for m in stored_config()]}
+    token = i18n.set_language("tr")  # a backup restored by a Turkish page: still English
+    try:
+        cfg = AppConfig.from_dict(json.loads(json.dumps(raw)))
+        warnings = mqtt_warnings(cfg.mappings[1], cfg.mappings)
+    finally:
+        i18n.reset(token)
+    notes = [n for n in cfg.load_notes if "MQTT" in n]
+    assert len(notes) == 3, notes
+    assert notes[0].startswith("mapping 'B': MQTT: Mapping 'A' also uses the MQTT topic "
+                               "'plant/line3/pump/set' on the broker broker.lan:1883"), notes
+    assert notes[1].startswith("mapping 'C': MQTT: mapping 'A' publishes to the MQTT topic "
+                               "'plant/line3/status'"), notes
+    assert notes[2].startswith("mapping 'S': MQTT: Point 'status'"), notes
+    assert warnings == [notes[0].split(": ", 1)[1]], warnings
+    cfg.validate()
+    tmp = tempfile.mkdtemp(prefix="s2n_mqttid_")
+    store = ConfigStore(os.path.join(tmp, "config.json"))
+    store.save(cfg)
+    again = store.load()
+    assert [n for n in again.load_notes if "MQTT" in n] == notes
+    assert [m.mqtt.base_topic for m in again.mappings] == [m.mqtt.base_topic
+                                                           for m in cfg.mappings]
+    shutil.rmtree(tmp, ignore_errors=True)
+    junk = gw("J")
+    junk.modbus_poll = None
+    assert mqtt_warnings(junk, cfg.mappings) == []
+    print("stored clashes: kept, one load note per pair in English, validate()/save pass, "
+          "nothing raises on junk  OK")
+
+    from app.engine import supervisor as sup
+    from app.engine.bridge import RunnerStatus
+
+    class Stub:
+        def __init__(self, mapping, logger, *_args):
+            self.mapping, self.status = mapping, RunnerStatus()
+
+        async def start(self):
+            self.status.state = "running"
+
+        async def stop(self):
+            self.status.state = "stopped"
+
+    log = []
+    real = sup._build_runner
+    sup._build_runner = Stub
+    try:
+        s = sup.Supervisor(logger=log.append)
+        cfg = AppConfig(mappings=stored_config())
+
+        async def go():
+            await s.start_all(cfg)
+            warned = [line for line in log if "warning: MQTT" in line]
+            assert [w.split(":", 1)[0] for w in warned] == ["[B] warning", "[C] warning",
+                                                            "[S] warning"], warned
+            assert warned[0].startswith("[B] warning: MQTT: Mapping 'A' also uses the MQTT "
+                                        "topic 'plant/line3/pump/set'"), warned
+            log.clear()
+            off = cfg.mappings[4]
+            off.enabled = True
+            await s.apply_mapping(off)  # Start on the dashboard: A, B (and C) run
+            assert [line.split(": MQTT: ")[1][:13] for line in log] == ["Mapping 'A' a",
+                                                                         "Mapping 'B' a"], log
+            log.clear()
+            cfg.mappings[0].enabled = cfg.mappings[1].enabled = off.enabled = False
+            await s.stop_mapping(cfg.mappings[0].id)
+            await s.restart_mapping(cfg.mappings[2])  # C alone now: nothing to say
+            assert not [line for line in log if "warning" in line], log
+        asyncio.run(go())
+    finally:
+        sup._build_runner = real
+    print("start: each start of a mapping that clashes with a running one logs a warning "
+          "in its log  OK")
+
+
+def boot_config(ports, broker):
+    users = [{"username": "admin", "password_hash": hash_password(PW), "role": "admin",
+              "pwd_version": 1}]
+    mq = {"enabled": True, "host": "127.0.0.1", "port": broker}
+    a = gw("A", mid="aaaaaaaaaaa1", port=ports[0], client_id="gw-a").to_dict()
+    b = gw("B", "plant/line3/", mid="aaaaaaaaaaa2", port=ports[1]).to_dict()  # a stored clash
+    for m in (a, b):
+        m["mqtt"].update(mq)
+    return {"users": users, "api_token_hash": hash_token(TOKEN), "api_token_role": "admin",
+            "cluster": {"enabled": True, "key": KEY, "discovery_port": free_port()},
+            "mappings": [a, b]}
+
+
+def test_server():
+    broker = free_port()  # nothing listens there: the clients keep trying, that's all
+
+    def form(name, base, points, port, **extra):
+        return {"name": name, "kind": "net", "enabled": "on",
+                "serial_port": f"/dev/ser2net-test-{name}", "serial_baudrate": "9600",
+                "network_mode": "server", "network_protocol": "modbus",
+                "network_bind_ip": "127.0.0.1", "network_port": str(port),
+                "mqtt_enabled": "on", "mqtt_host": "127.0.0.1", "mqtt_port": str(broker),
+                "mqtt_base_topic": base, "mqtt_payload_format": "plain",
+                "modbus_points": json.dumps(points), **extra}
+
+    def api(method, path, body):
+        req = urllib.request.Request(srv.base + path, method=method,
+                                     data=json.dumps(body).encode(),
+                                     headers={"Authorization": f"Bearer {TOKEN}",
+                                              "Content-Type": "application/json"})
+        try:
+            r = urllib.request.urlopen(req, timeout=10)
+            return r.status, json.loads(r.read() or b"{}")
+        except urllib.error.HTTPError as e:
+            return e.code, json.loads(e.read() or b"{}")
+
+    def names():
+        return [m["name"] for m in srv.saved_config()["mappings"]]
+
+    with Server(boot_config([free_port(), free_port()], broker)) as srv:
+        log = srv.output()
+        assert ("mapping 'B': MQTT: Mapping 'A' also uses the MQTT topic 'plant/line3/pump/set'"
+                in log), log[-3000:]
+        assert "[B] warning: MQTT: Mapping 'A' also uses the MQTT topic" in log, log[-3000:]
+        assert names() == ["A", "B"]
+        print("boot: a stored clash loads, with a load note and a warning in the mapping's "
+              "log  OK")
+
+        b = Browser(srv.base)
+        b.login("admin", PW)
+        st, _, body = b.post("/api/mappings/save", form("C", "plant/line3", [PUMP], free_port()))
+        assert st == 400 and "takes writes from it" in body, (st, body[:500])
+        st, _, body = b.post("/api/mappings/save", form("C", "plant/c", [dict(TEMP, name="status")],
+                                                        free_port()))
+        assert st == 400 and "Rename the point" in body, (st, body[:500])
+        assert names() == ["A", "B"]
+        st, _, body = b.post("/api/mappings/save", form("C", "plant/line5", [PUMP], free_port()))
+        assert st == 200 and names() == ["A", "B", "C"], (st, body[:300])
+        stored_b = srv.saved_config()["mappings"][1]
+        edit = form("B renamed", "plant/line3/", [PUMP, TEMP], stored_b["network"]["port"],
+                    id=stored_b["id"])
+        st, _, body = b.post("/api/mappings/save", edit)
+        assert st == 400 and "takes writes from it" in body, "an edit must fix the clash"
+        edit.pop("enabled")
+        st, _, _ = b.post("/api/mappings/save", edit)
+        assert st == 200 and names()[1] == "B renamed", "disabling it is an edit that fixes it"
+        print("form: a /set topic shared with an enabled mapping and a reserved point name "
+              "refused; another base topic, or the clashing one disabled, saved  OK")
+
+        req = urllib.request.Request(
+            srv.base + "/api/cluster/mapping-save", method="POST",
+            data=urllib.parse.urlencode(form("P", "plant/line3", [PUMP], free_port())).encode(),
+            headers={"X-Cluster-Key": KEY, "Content-Type": "application/x-www-form-urlencoded"})
+        try:
+            urllib.request.urlopen(req, timeout=10)
+            raise AssertionError("a cluster node saved a clashing mapping")
+        except urllib.error.HTTPError as e:
+            assert e.code == 400 and "takes writes from it" in e.read().decode(), e.code
+        print("cluster: the node a mapping is saved on refuses a clash  OK")
+
+        raw = {"name": "R", "serial": {"port": "/dev/ser2net-test-R"},
+               "network": {"bind_ip": "127.0.0.1", "port": free_port()},
+               "mqtt": {"enabled": True, "host": "127.0.0.1", "port": broker,
+                        "base_topic": "r", "client_id": "gw-a"}}
+        st, out = api("POST", "/api/v1/mappings", raw)
+        assert st == 400 and "client ID" in out.get("detail", ""), (st, out)
+        raw["mqtt"]["client_id"] = "gw-r"
+        st, out = api("POST", "/api/v1/mappings", raw)
+        assert st == 201, (st, out)
+        raw["mqtt"]["client_id"] = "gw-a"
+        st, out = api("PUT", f"/api/v1/mappings/{out['id']}", raw)
+        assert st == 400 and "'gw-a'" in out.get("detail", ""), (st, out)
+        bad = dict(raw, name="R2", mqtt=dict(raw["mqtt"], base_topic="r/#", client_id=""))
+        st, out = api("POST", "/api/v1/mappings", bad)
+        assert st == 400 and "base topic" in out.get("detail", ""), (st, out)
+        print("REST API: a shared client ID and a wildcard base topic refused (POST, PUT)  OK")
+
+        export = json.dumps({"mappings": [gw("D", "plant/line3", [PUMP], port=free_port())
+                                          .to_dict() | {"mqtt": {"enabled": True,
+                                                                 "host": "127.0.0.1",
+                                                                 "port": broker,
+                                                                 "base_topic": "plant/line3"}}]})
+        st, _, page = b.post("/settings/config/import", {"step": "preview", "mode": "merge"},
+                             files={"file": ("m.json", export.encode())})
+        assert st == 200 and "be applied" in page and "takes writes from it" in page, page[:500]
+        token = page.split('name="token" value="', 1)[1].split('"', 1)[0]
+        before = names()
+        st, _, page = b.post("/settings/config/import/apply", {"token": token, "mode": "merge"})
+        assert "Import rejected" in page and "takes writes from it" in page, page[:500]
+        assert names() == before
+        print("import: the preview shows the clash and applying it is refused  OK")
+
+
 def main():
     test_topic_rules()
-    print("\nPASS: MQTT topics a message can be published to, none taken twice")
+    test_clashes()
+    test_stored_clashes()
+    test_server()
+    print("\nPASS: MQTT topics, client IDs and Sparkplug B edge nodes stay apart")
 
 
 if __name__ == "__main__":
