@@ -6,7 +6,8 @@ ser2net-standalone.service for the binary, and any other one added later):
   entry without '-' that is missing stops the start (status 226/NAMESPACE, again every
   3 s), so an ExecStartPre=+ line makes it, or it is the unit's StateDirectory=; and the
   --data-dir it runs with is writable;
-- the service runs as the unprivileged ser2net user with NoNewPrivileges;
+- the service runs as the unprivileged ser2net user with NoNewPrivileges and no
+  capability; CAP_NET_BIND_SERVICE (ports below 1024) is there to uncomment;
 - netlink is allowed, which lists the network interfaces (the bind-IP pickers, the cluster's
   directed broadcasts), and ProcSubset=pid stays;
 - a system call the filter denies fails with EPERM instead of killing the process;
@@ -99,8 +100,15 @@ def test_unprivileged():
         assert one(unit, "User") == "ser2net", name
         assert one(unit, "NoNewPrivileges") == "true", name
         assert not values(unit, "AmbientCapabilities"), f"{name}: no capability by default"
+        # ports below 1024: offered, commented out (README: Ports below 1024)
+        with open(path, encoding="utf-8") as fh:
+            text = fh.read()
+        for line in ("#AmbientCapabilities=CAP_NET_BIND_SERVICE",
+                     "#CapabilityBoundingSet=CAP_NET_BIND_SERVICE"):
+            assert re.search(rf"(?m)^{line}$", text), f"{name}: {line}"
         assert one(unit, "Restart") == "on-failure", name
-        print(f"{name}: user ser2net, NoNewPrivileges, no capabilities  OK")
+        print(f"{name}: user ser2net, NoNewPrivileges, no capabilities (the one for ports "
+              "below 1024 offered, commented out)  OK")
 
 
 def test_interfaces_readable():

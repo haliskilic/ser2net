@@ -646,6 +646,22 @@ is no account at all; later starts ignore it.
     Security). Run such commands as the `ser2net` user (`sudo -u ser2net …`), never as
     plain root, which would leave files the service can't read. Logs:
     `journalctl -u ser2net` and `all.log` in the data directory.
+- **Ports below 1024** (Modbus/TCP's 502, the web UI on 80 or 443): Linux lets only root,
+  or a process with the `CAP_NET_BIND_SERVICE` capability, listen on them, and both units
+  run ser2net as an unprivileged user. A mapping on such a port then fails with a hint on
+  the dashboard, and an admin UI port below 1024 gets a start-up warning (the web UI can't
+  start). To allow them, give the service that one capability with
+  `sudo systemctl edit ser2net`, then `sudo systemctl restart ser2net`:
+  ```ini
+  [Service]
+  AmbientCapabilities=CAP_NET_BIND_SERVICE
+  CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+  ```
+  It works with the units' `NoNewPrivileges=true`; whoever may edit mappings can then
+  listen on any free port below 1024. `setcap cap_net_bind_service=+ep` on python3 does not
+  help (`NoNewPrivileges` ignores file capabilities) and would give that right to every
+  Python program on the machine. Or use port 1024 or above. Docker on the host network:
+  `SER2NET_LOW_PORTS=1` ([`docs/DOCKER.md`](docs/DOCKER.md#ports-and-networking)).
 - **Windows:** nothing else needed. From an elevated ("Run as administrator") prompt:
   ```bat
   ser2net-windows-x64.exe --install-service

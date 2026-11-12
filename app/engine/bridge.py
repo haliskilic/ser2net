@@ -296,6 +296,9 @@ class RunnerStatus:
     dropped_clients: int = 0   # clients dropped because their output queue overflowed
     queue_overflows: int = 0   # total serial->net chunks lost to queue overflow
     last_error: str = ""
+    # why the system refused the listener's port and what to do (engine/bindhint.py:
+    # "privileged_port", "excluded_port"), shown with an "error" state; "" otherwise
+    hint: str = ""
     # the serial devices open now, for the Ports page's "in use" (both ports of a
     # serial<->serial bridge, whose `device` reads "A <-> B"); not part of as_dict()
     devices: tuple[str, ...] = ()
@@ -328,6 +331,7 @@ class RunnerStatus:
             "dropped_clients": self.dropped_clients,
             "queue_overflows": self.queue_overflows,
             "last_error": self.last_error,
+            "hint": self.hint,
         }
 
 

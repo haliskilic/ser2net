@@ -32,7 +32,7 @@ else:  # pragma: no cover - exercised only on Python 3.10
 
 from . import accounts, console, datalock, i18n, standalone
 from .config import ConfigError, ConfigStore
-from .engine import netguard
+from .engine import bindhint, netguard
 from .state import AppState, write_audit_record
 from .web import httpguard
 from .web.server import build_app
@@ -341,7 +341,8 @@ async def _serve(store: ConfigStore, config, loop_note: str = "") -> int:
     state.log(f"ser2net starting — admin UI on {scheme}://{admin.bind_ip}:{admin.port}")
     for note in standalone.notes + config.load_notes + ([loop_note] if loop_note else []):
         state.log(note)
-    for line in (netguard.raise_fd_limit(), netguard.fd_budget_warning(config)):
+    for line in (netguard.raise_fd_limit(), netguard.fd_budget_warning(config),
+                 bindhint.admin_port_note(admin.port)):
         if line:
             state.log(line)
     _log_loop_errors(asyncio.get_running_loop(), state.log)
