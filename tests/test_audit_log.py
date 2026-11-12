@@ -9,7 +9,9 @@ Checks:
     export with formula-looking cells neutralised;
   * the search finds Turkish names whatever their letter case or accents ('istanbul'
     finds 'İSTANBUL', 'dairesi' 'DAİRESİ'), and the dashboard rows carry the same folded
-    text for the browser's filter.
+    text for the browser's filter;
+  * the CSV for Excel (?excel=1) is UTF-16 with a BOM and tabs, the default CSV keeps
+    its bytes (UTF-8, no BOM, commas).
 
 Run: python3 tests/test_audit_log.py
 """
@@ -103,7 +105,25 @@ def main():
         acts = {r[3]: r for r in rows[1:]}
         assert set(acts) >= {"login", "login_failed", "mapping_save"}, acts.keys()
         assert acts["mapping_save"][4].startswith("'="), "formula cell not neutralised"
+        st, h, raw = admin.get("/settings/audit.csv?user=op1", raw=True)
+        assert not raw.startswith(b"\xef\xbb\xbf") and raw.decode("utf-8") == body, \
+            "the default file stays UTF-8 without a BOM, comma-separated (scripts read it)"
         print("UI: admin-only page with search / filters, CSV export (formula cells defused)  OK")
+
+        # the file for Excel: UTF-16 with a BOM, tab-separated, the same rows; the page
+        # links it with the page's filters
+        st, _, page = admin.get("/settings/audit?user=op1")
+        assert 'href="/settings/audit.csv?user=op1&amp;excel=1"' in page, page[:2000]
+        assert 'href="/settings/audit.csv?excel=1"' in admin.get("/settings/audit")[2]
+        st, h, raw = admin.get("/settings/audit.csv?user=op1&excel=1", raw=True)
+        assert st == 200 and raw.startswith(b"\xff\xfe"), raw[:20]
+        assert "charset=utf-16" in h.get("Content-Type", "") and \
+            "ser2net-audit-excel.csv" in h.get("Content-Disposition", ""), dict(h)
+        text = raw.decode("utf-16")
+        assert list(csv.reader(io.StringIO(text), delimiter="\t")) == rows, "the same rows"
+        assert "KAZAN DAİRESİ İSTANBUL" in text and "\t" in text and "," not in text.split("\r\n")[0]
+        print("Excel file: UTF-16 + BOM, tab-separated, the same rows (Turkish letters kept), "
+              "linked with the filters  OK")
     print("\nPASS: audit log (users, injection-safe, viewer, CSV)")
 
 
