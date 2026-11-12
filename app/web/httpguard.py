@@ -309,8 +309,8 @@ async def listen(host: str, port: int, backlog: int) -> list[socket.socket]:
                 if e.errno == errno.EADDRNOTAVAIL and len(infos) > 1:
                     sockets.pop().close()  # e.g. "localhost" -> ::1 without IPv6
                     continue
-                raise OSError(e.errno, f"cannot listen on {address[0]} port {address[1]}: "
-                                       f"{e.strerror or e}") from None
+                where = f"{str(address[0])} port {str(address[1])}"
+                raise OSError(e.errno, f"cannot listen on {where}: {e.strerror or e}") from None
         if not sockets:
             raise OSError(f"cannot listen on {host or '*'} port {port}: none of its addresses "
                           "is on this machine")
