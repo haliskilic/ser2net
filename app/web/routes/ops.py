@@ -58,7 +58,8 @@ async def save_mapping_from_form(state, form) -> tuple[bool, str]:
         mapping.validate_input()
     except (ValueError, ConfigError) as e:
         return False, str(e)
-    if conflict := state.config.own_port_conflict(mapping):  # the admin UI's port, ...
+    if conflict := (state.config.own_port_conflict(mapping)  # the admin UI's port, ...
+                    or state.config.serial_conflict(mapping)):  # a port another one uses
         return False, conflict
     # Hold the lock only to mutate + persist config; release it BEFORE the
     # (potentially slow) supervisor call so other admin requests aren't blocked
@@ -84,7 +85,9 @@ async def save_mapping_from_form(state, form) -> tuple[bool, str]:
 async def apply_action(state, mid, action) -> tuple[bool, str]:
     """Start/stop/restart a local mapping by id. Returns (ok, name-or-error).
     Shared by the UI action endpoint, the cluster remote-control endpoint and the
-    REST API."""
+    REST API. Raises ConfigError (and changes nothing) when the mapping can't be
+    started: it would share a serial port with a running one, config.json can't be
+    saved."""
     async with state.config_lock:
         m = state.config.get_mapping(mid)
         if not m:
@@ -92,6 +95,8 @@ async def apply_action(state, mid, action) -> tuple[bool, str]:
         was = m.enabled
         m.enabled = action != "stop"
         try:
+            if m.enabled and not was and (clash := state.config.serial_conflict(m)):
+                raise ConfigError(clash)
             await state.asave()
         except Exception:  # not saved, so nothing changed (e.g. starting it shares a serial port)
             m.enabled = was

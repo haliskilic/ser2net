@@ -36,7 +36,8 @@ from dataclasses import dataclass, field
 from typing import Any, Optional
 
 from .config import (
-    MAX_TIMER_S, ConfigError, MappingConfig, _ip_overlaps, trace_file_name, url_port,
+    MAX_TIMER_S, ConfigError, MappingConfig, _ip_overlaps, canonical_device, trace_file_name,
+    url_port,
 )
 from .i18n import _
 
@@ -1682,13 +1683,14 @@ def _assemble(conns: list[_Conn], warnings: list[str], budget: _Budget) -> list[
         used.add(c.name)
         if c.name != base:
             warn(_("{0}: renamed to '{1}' (the name is used twice)").format(c.label, c.name))
-        if c.enabled and c.device in owner:
+        key = canonical_device(c.device)  # (com3 and COM3 are one port)
+        if c.enabled and key in owner:
             c.enabled = False
             warn(_("{0}: imported disabled: {1} is also used by '{2}', and a serial port can be "
                    "open in only one active mapping here")
-                 .format(c.label, c.device, owner[c.device]))
+                 .format(c.label, c.device, owner[key]))
         elif c.enabled:
-            owner[c.device] = c.name
+            owner[key] = c.name
     return [c.to_dict() for c in kept]
 
 

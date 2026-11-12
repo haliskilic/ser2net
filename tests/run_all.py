@@ -87,6 +87,7 @@ PORTABLE = [
     "test_i18n.py",
     "test_mapping_ids.py",
     "test_serial_url_ports.py",
+    "test_serial_port_names.py",
     "test_cluster_peer_save.py",
     "test_access_policy.py",
     "test_traffic_counters.py",

@@ -259,7 +259,10 @@ def routes(ctx: Ctx) -> list:
         mid, action = form.get("mapping_id", ""), form.get("action", "")
         if action not in ("start", "stop", "restart"):
             return _peer_json(a, {"error": "bad_action"}, 400)
-        ok, name = await ops.apply_action(state, mid, action)
+        try:
+            ok, name = await ops.apply_action(state, mid, action)
+        except ConfigError as e:  # it can't be started (a serial port in use, ...)
+            return _peer_json(a, {"error": str(e)}, 400)
         if not ok:
             return _peer_json(a, {"error": name}, 404)
         ip = client_ip(request)

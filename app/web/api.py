@@ -61,7 +61,8 @@ def build_api_routes(state):
             mapping.validate_input()
         except (ValueError, ConfigError) as e:
             return JSONResponse({"error": "validation", "detail": str(e)}, status_code=400)
-        if conflict := state.config.own_port_conflict(mapping):  # the admin UI's port, ...
+        if conflict := (state.config.own_port_conflict(mapping)  # the admin UI's port, ...
+                        or state.config.serial_conflict(mapping)):  # a port another one uses
             return JSONResponse({"error": "validation", "detail": conflict}, status_code=400)
         async with state.config_lock:
             state.config.mappings.append(mapping)
@@ -95,7 +96,8 @@ def build_api_routes(state):
             mapping.validate_input()
         except (ValueError, ConfigError) as e:
             return JSONResponse({"error": "validation", "detail": str(e)}, status_code=400)
-        if conflict := state.config.own_port_conflict(mapping):  # the admin UI's port, ...
+        if conflict := (state.config.own_port_conflict(mapping)  # the admin UI's port, ...
+                        or state.config.serial_conflict(mapping)):  # a port another one uses
             return JSONResponse({"error": "validation", "detail": conflict}, status_code=400)
         async with state.config_lock:
             existing = state.config.get_mapping(mid)
@@ -127,7 +129,10 @@ def build_api_routes(state):
         action = request.path_params["action"]
         if action not in ("start", "stop", "restart"):
             return JSONResponse({"error": "unknown_action"}, status_code=400)
-        ok, name = await ops.apply_action(state, mid, action)
+        try:
+            ok, name = await ops.apply_action(state, mid, action)
+        except ConfigError as e:  # it can't be started (a serial port in use, ...)
+            return JSONResponse({"error": "validation", "detail": str(e)}, status_code=400)
         if not ok:
             return JSONResponse({"error": "not_found"}, status_code=404)
         state.log(f"api: mapping {action}: {name}")
@@ -225,6 +230,8 @@ def openapi_spec(admin) -> dict:
                 ],
                 "post": {"summary": "Start/stop/restart a mapping", "security": bearer,
                          "responses": {"200": {"description": "action applied"},
+                                       "400": {"description": "it can't be started (e.g. "
+                                                              "its serial port is in use)"},
                                        "404": {"description": "not found"}}},
             },
         },
