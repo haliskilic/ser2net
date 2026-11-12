@@ -54,7 +54,7 @@ document.addEventListener("click", function (e) {
   var pick = b.closest(".port-pick"), prefix = b.getAttribute("data-port-rescan");
   var field = pick ? pick.querySelector('[name="' + prefix + 'port"]') : null;
   if (!pick) return;
-  htmx.ajax("GET", "/api/ports/select?prefix=" + encodeURIComponent(prefix) +
+  htmx.ajax("GET", basePath() + "/api/ports/select?prefix=" + encodeURIComponent(prefix) +
             "&selected=" + encodeURIComponent(field ? field.value : ""),
             {target: pick, swap: "outerHTML"});
 });
