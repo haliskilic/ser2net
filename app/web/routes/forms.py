@@ -276,6 +276,67 @@ def _mapping_from_form(form) -> dict:
     return _build_mapping_dict(form, strict=True)
 
 
+def apply_usb_match(mapping: MappingConfig, form, ports: list, existing=None,
+                    strict: bool = True) -> None:
+    """Set each serial side's stable USB identity (serial.match) from the form's
+    "find this device by its USB identity" box: the selected port's VID/PID (+ serial
+    number when it has one), so the engine re-finds the adapter after COMx / ttyUSBx
+    renumbering. A device that is not plugged in right now keeps its stored identity.
+    Raises ValueError when the box is set for a port without a USB identity (not strict:
+    that side keeps its stored identity instead)."""
+    for prefix, settings, old in (("serial_", mapping.serial, existing.serial if existing else None),
+                                  ("serial_b_", mapping.serial_b, existing.serial_b if existing else None)):
+        if f"{prefix}usb_match_shown" not in form or (prefix == "serial_b_" and mapping.kind != "serialbridge"):
+            continue
+        if not _checkbox(form, prefix + "usb_match"):
+            settings.match = {}
+            continue
+        port = portlist.find(ports, settings.port)
+        if port is not None and port.get("vid") and port.get("pid"):
+            settings.match = {k: port[k] for k in ("vid", "pid", "serial_number") if port.get(k)}
+        elif port is None and old is not None and old.match:
+            settings.match = dict(old.match)  # unplugged now: keep what it was bound to
+        elif strict:
+            raise ValueError(_("{0} has no USB identity (VID/PID) to find it by; untick “Find "
+                               "this device by its USB identity”.").format(settings.port or _("This port")))
+        else:
+            settings.match = dict(old.match) if old is not None else {}
+
+
+def mapping_from_form(form, existing, ports: list) -> MappingConfig:
+    """The mapping a submitted mapping form describes: parsed (a value it can't read
+    raises ValueError / TypeError ...), with the stored values of `existing` (None: a new
+    mapping) kept for what the form doesn't post (_preserve_unmanaged_fields) and the USB
+    identity set from the form (apply_usb_match, with this node's `ports`). The save of
+    the local UI and of a cluster remote edit."""
+    mapping = MappingConfig.from_dict(_mapping_from_form(form))
+    _preserve_unmanaged_fields(mapping, existing, form)
+    apply_usb_match(mapping, form, ports, existing)
+    return mapping
+
+
+def mapping_for_rerender(form, existing, ports: list) -> MappingConfig:
+    """The mapping to show again in a form that came back with an error (local or a
+    cluster peer's): what was submitted, read leniently, with what a save would keep —
+    the stored values for fields the form didn't post, the USB identity — so saving the
+    form shown again never silently resets them. Never raises."""
+    try:
+        mapping = MappingConfig.from_dict(_build_mapping_dict(form, strict=False))
+        _preserve_unmanaged_fields(mapping, existing, form)
+        apply_usb_match(mapping, form, ports, existing, strict=False)
+    except Exception:
+        mapping = MappingConfig(name=form.get("name", ""))
+    return mapping
+
+
+def form_context(mapping: MappingConfig, ports: list, ips: list, *, is_new: bool,
+                 error=None, remote=None) -> dict:
+    """What _mapping_form.html is rendered with (every place that shows the form)."""
+    return {"mapping": mapping, "is_new": is_new,
+            "modbus_points_json": _modbus_points_json(mapping),
+            "ports": portlist.visible(ports), "ips": ips, "error": error, "remote": remote}
+
+
 def _preserve_unmanaged_fields(new_map, existing, form=None) -> None:
     """Carry over config fields the mapping form does not expose, so editing an
     existing mapping never silently discards them: the stable-id `match` (when the
@@ -295,7 +356,7 @@ def _preserve_unmanaged_fields(new_map, existing, form=None) -> None:
                             getattr(getattr(existing, section), attr))
     for prefix, cur, old in (("serial_", new_map.serial, existing.serial),
                              ("serial_b_", new_map.serial_b, existing.serial_b)):
-        # the USB-identity binding is in the form now (ops.apply_usb_match); a form
+        # the USB-identity binding is in the form now (apply_usb_match); a form
         # without it (an older cluster peer's) keeps the stored one
         if form is None or f"{prefix}usb_match_shown" not in form:
             cur.match = old.match
@@ -312,16 +373,8 @@ def _preserve_unmanaged_fields(new_map, existing, form=None) -> None:
 
 def _form_error(render, request, state, form, message: str):
     """Re-render the mapping form with the submitted values and an error banner."""
-    try:
-        mapping = MappingConfig.from_dict(_build_mapping_dict(form, strict=False))
-        # keep stored values for fields this form didn't post (else the re-rendered,
-        # hidden inputs would carry defaults into the next save)
-        _preserve_unmanaged_fields(mapping, state.config.get_mapping(mapping.id), form)
-    except Exception:
-        mapping = MappingConfig(name=form.get("name", ""))
-    is_new = not form.get("id")
+    ports = state.ports.get()
+    mapping = mapping_for_rerender(form, state.config.get_mapping(form.get("id") or ""), ports)
     return render(request, "_mapping_form.html", status_code=400,
-                  mapping=mapping, is_new=is_new,
-                  modbus_points_json=_modbus_points_json(mapping),
-                  ports=portlist.visible(state.ports.get()), ips=netinfo.list_ip_candidates(),
-                  error=message)
+                  **form_context(mapping, ports, netinfo.list_ip_candidates(),
+                                 is_new=not form.get("id"), error=message))
