@@ -52,7 +52,8 @@ everything from a **password-protected web UI** — no CLI or hand-edited config
 ## ✨ Features
 
 - **Transports:** TCP **server** (listen), TCP **client** (connect-out), **UDP**, and
-  **serial↔serial** bridging; optional per-mapping **TLS** for TCP bridges. UDP sends the
+  **serial↔serial** bridging; optional per-mapping **TLS** for TCP bridges (client
+  certificates, server checks by CA file or fingerprint: see Security). UDP sends the
   device's output to the sender of the last datagram from an allowed IP, or always to a
   fixed **reply address** (IP + port); a **peer timeout** forgets a sender that went quiet.
   Datagrams wait for the serial port in a queue of at most 64 KiB: what a sender faster
@@ -481,6 +482,26 @@ bound without TLS. For LAN deployments, use TLS (`admin_ui.tls_*`) and per-mappi
 (`::ffff:192.168.1.0/120`) matches the IPv4 addresses it maps. A mapping's serial port is a
 device path or COM name only; pyserial URL handlers (`socket://`, `rfc2217://`, `spy://`,
 `loop://`, ...) are not accepted as a port.
+
+**Per-mapping TLS:** a TLS listener (TCP server, Modbus gateway) presents its certificate and
+key; with a **Client CA certificate file** (`network.tls_client_ca`) it takes only clients
+whose certificate chains to a certificate in that file (mutual TLS, as stunnel `verify` or
+Modbus/TCP Security clients expect) and logs each client's certificate subject; the
+allow-list is still checked first. A connect-out link logs the SHA-256 fingerprint of the
+server's certificate at every connect and checks it with a **CA certificate file**
+(`network.tls_ca`: the certificate must chain to it and name the remote host) and/or a
+**server certificate fingerprint** (`network.tls_fingerprint`; list the new one too before
+a certificate change); its certificate and key are optional and presented to a server that
+asks for a client certificate. **Without a CA file or a fingerprint, connect-out TLS only
+encrypts:** anyone on the network path can pose as the server. A CA file is PEM (one or more
+certificates) or DER, and any certificate in it is trusted, a self-signed server's own one
+too. An encrypted key needs its password (**TLS key password**, `network.tls_key_password`;
+`admin_ui.tls_key_password` for the admin UI, under Settings → Admin TLS): ser2net never
+asks for one on the console, and without it the mapping, or the start for the admin UI's
+key, fails with an error that says so. The form and the REST API load a mapping's files when
+it is saved, never show the stored key password (a viewer API token gets it masked) and
+refuse a key that is the admin UI's own. Where certificates can't be managed, a VPN
+(WireGuard) or an stunnel in front of an untrusted network is the alternative.
 
 **Connection limits:** on a TLS mapping, a host not in `allowed_client_ips` is closed before
 the TLS handshake; a handshake must be over within 15 s, and at most 32 run at once from one
