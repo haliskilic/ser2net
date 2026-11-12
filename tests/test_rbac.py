@@ -19,10 +19,10 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-from _server import server_log, show_log_on_failure
+from _server import free_port, server_log, show_log_on_failure
 
 ROOT = os.path.join(os.path.dirname(__file__), "..")
-UI = 8096
+UI = free_port()
 BASE = f"http://127.0.0.1:{UI}"
 
 
@@ -35,14 +35,6 @@ def wait_port(port, timeout=15):
                 return True
         time.sleep(0.2)
     return False
-
-
-def free_port():
-    s = socket.socket()
-    s.bind(("127.0.0.1", 0))
-    p = s.getsockname()[1]
-    s.close()
-    return p
 
 
 class Session:

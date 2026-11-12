@@ -46,6 +46,12 @@ and `tests/test_release_pipeline.py` fail on a tag reference.
 machine whose firewall matters. The standalone executable checks need a build
 (`SER2NET_STANDALONE_BIN=dist/ser2net python tests/test_standalone.py`).
 
+A test that starts a server uses `tests/_server.py` (`Server`, or `server_log` for the
+output: a file, never an unread pipe) and listens on `free_port()` / `free_udp_port()` or
+port 0, never on a fixed port: in the ephemeral range an earlier test's closed connection
+can still hold it. `tests/test_harness.py` fails on a fixed listening port unless a
+`# fixed port: <why>` comment explains it, and on a test file `tests/run_all.py` doesn't list.
+
 ### Rules that keep upgrades painless
 - **Old `config.json` files must keep working.** Every new setting has a default; never
   add a validation rule that rejects a configuration an earlier release accepted —
@@ -176,6 +182,13 @@ Dependabot günceller, tag ile verilen bir referansta zizmor ve
 `tests/test_dead_peer.py` iptables ile loopback trafiği kestiği için
 `SER2NET_BLACKHOLE_TESTS=1` ile yalnızca silinebilir bir ağ ad alanında (network namespace)
 ya da sanal makinede çalıştırın.
+
+Sunucu başlatan bir test `tests/_server.py`'yi kullanır (`Server` ya da çıktı için
+`server_log`: okunmayan bir pipe değil, bir dosya) ve sabit bir portu değil,
+`free_port()` / `free_udp_port()` ya da 0 portunu dinler: geçici port aralığındaki bir port,
+önceki bir testin kapanmış bağlantısında hâlâ tutuluyor olabilir. `tests/test_harness.py`,
+`# fixed port: <neden>` yorumuyla açıklanmayan sabit bir dinleme portunda ve
+`tests/run_all.py`'nin listelemediği bir test dosyasında başarısız olur.
 
 ### Yükseltmeleri sorunsuz tutan kurallar
 - **Eski `config.json` dosyaları çalışmaya devam etmeli.** Her yeni ayarın varsayılanı

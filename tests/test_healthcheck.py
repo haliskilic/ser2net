@@ -26,6 +26,7 @@ def main():
     d = tempfile.mkdtemp(prefix="s2n_hc_")
     cfg = os.path.join(d, "config.json")
     with open(cfg, "w") as fh:
+        # fixed port: only the address the check would probe is computed here
         json.dump({"admin_ui": {"bind_ip": "0.0.0.0", "port": 8123}}, fh)
     assert healthcheck.target(cfg) == "http://127.0.0.1:8123/healthz"
     with open(cfg, "w") as fh:

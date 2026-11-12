@@ -8,7 +8,9 @@ Checked:
     taskkill /T), so nothing is left holding ports, devices or the output pipes;
   * _server.Server cleans up (the process, its temp folder) when its start fails, and
     show_log_on_failure prints the server's log only while a test fails;
-  * no test starts the server with its output on a pipe it never reads.
+  * no test starts the server with its output on a pipe it never reads;
+  * no test listens on a fixed port in 1024-65535 (free_port() / free_udp_port() / port 0
+    instead), unless a "# fixed port: <why>" comment says why (fixed_ports below).
 
 Run: python3 tests/test_harness.py
 """
@@ -16,6 +18,7 @@ import ast
 import contextlib
 import io
 import os
+import re
 import tempfile
 import time
 
@@ -143,9 +146,169 @@ def test_no_unread_server_pipes():
     print("no test starts the server with its output on an unread pipe  OK")
 
 
+# What makes a test function one that listens: it starts mappings, a server or a process
+# (which may listen) itself.
+_STARTS = re.compile(r"\b(apply_mapping|Server|Popen|create_subprocess_exec|start_server|"
+                     r"create_datagram_endpoint|start_all)\(|\.start\(|ser2net\.py")
+# where a port number is given: a mapping's network / the admin UI / the cluster's discovery,
+# a function parameter or keyword named like a port, a variable named PORT / UI / ..._PORT
+_PORT_KEYS = {"port", "network_port", "discovery_port", "SER2NET_PORT"}
+_NETWORK_KEYS = {"mode", "protocol", "bind_ip", "max_connections", "tls", "kick_old_user",
+                 "udp_peer_host", "require_login"}
+_PORT_NAME = re.compile(r"(?i)(^|_)(port|ui)(_|$)|port$|^ui")
+_LISTEN = re.compile(r"(?:TCP|UDP)\d?-LISTEN:(\d+)")
+
+
+def _number(node):
+    """The port number a literal (or str(literal), or literal + i) gives, if in 1024-65535."""
+    if isinstance(node, ast.Constant) and not isinstance(node.value, bool):
+        v = node.value
+        n = v if isinstance(v, int) else int(v) if isinstance(v, str) and v.isdigit() else None
+        return n if n is not None and 1024 <= n <= 65535 else None
+    if isinstance(node, ast.BinOp):
+        return _number(node.left) or _number(node.right)
+    if (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+            and node.func.id == "str" and node.args):
+        return _number(node.args[0])
+    return None
+
+
+def fixed_ports(path: str) -> list[str]:
+    """Fixed port numbers a test listens on, as "file:line: what": in a function that starts
+    something (or one whose result such a function uses, a config builder), or at module
+    level in a file that starts something. Exempt: a "# fixed port: <why>" comment on the
+    line, on the statement it is in, or in the comment lines right above that statement."""
+    with open(path, encoding="utf-8") as fh:
+        src = fh.read()
+    if not _STARTS.search(src):
+        return []
+    tree, lines = ast.parse(src), src.splitlines()
+    parent = {c: n for n in ast.walk(tree) for c in ast.iter_child_nodes(n)}
+    defs = {n.name: n for n in ast.walk(tree)
+            if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))}
+    params = {name: [a.arg for a in f.args.posonlyargs + f.args.args] for name, f in defs.items()}
+    direct = {name for name, f in defs.items() if _STARTS.search(ast.get_source_segment(src, f))}
+    starting = set(direct)
+    while True:  # ... and what calls those
+        more = {name for name, f in defs.items() if name not in starting and any(
+            isinstance(c, ast.Call) and getattr(c.func, "id", None) in starting
+            for c in ast.walk(f))}
+        if not more:
+            break
+        starting |= more
+    feeding = {c.func.id for name in direct for c in ast.walk(defs[name])
+               if isinstance(c, ast.Call) and getattr(c.func, "id", None) in defs
+               and not isinstance(parent.get(c), ast.Expr)}
+    constants = {n.targets[0].id: n for n in ast.walk(tree) if isinstance(n, ast.Assign)
+                 and len(n.targets) == 1 and isinstance(n.targets[0], ast.Name)
+                 and _number(n.value)}
+    hits = []
+
+    def port_given(value, what):
+        if _number(value):
+            hits.append((value, f"{what} {_number(value)}"))
+        for n in ast.walk(value):  # a constant used as the port: report its assignment
+            if isinstance(n, ast.Name) and n.id in constants:
+                hits.append((constants[n.id], f"{n.id} = {_number(constants[n.id].value)}"))
+
+    for n in ast.walk(tree):
+        if isinstance(n, ast.Assign):
+            for t in n.targets:
+                if isinstance(t, ast.Name) and _PORT_NAME.search(t.id) and _number(n.value):
+                    hits.append((n, f"{t.id} = {_number(n.value)}"))
+        elif isinstance(n, ast.Dict):
+            keys = {k.value for k in n.keys if isinstance(k, ast.Constant)}
+            outer = parent.get(n)
+            network = bool(keys & _NETWORK_KEYS) or (isinstance(outer, ast.Dict) and any(
+                v is n and isinstance(k, ast.Constant) and k.value in ("network", "admin_ui")
+                for k, v in zip(outer.keys, outer.values)))
+            for k, v in zip(n.keys, n.values):
+                if (isinstance(k, ast.Constant) and k.value in _PORT_KEYS
+                        and (network or k.value != "port")):
+                    port_given(v, f"{k.value!r}:")
+        elif isinstance(n, ast.Call):
+            for kw in n.keywords:
+                if kw.arg in _PORT_KEYS:
+                    port_given(kw.value, f"{kw.arg}=")
+            names = params.get(getattr(n.func, "id", None), [])
+            for name, arg in zip(names, n.args):
+                if "port" in name.lower():
+                    port_given(arg, f"{n.func.id}({name}=)")
+        elif isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            args = n.args.posonlyargs + n.args.args
+            for a, d in zip(args[len(args) - len(n.args.defaults):], n.args.defaults):
+                if "port" in a.arg.lower() and _number(d):
+                    hits.append((d, f"def {n.name}({a.arg}={_number(d)})"))
+        elif isinstance(n, ast.Constant) and isinstance(n.value, str):
+            for m in _LISTEN.finditer(n.value):
+                if 1024 <= int(m.group(1)) <= 65535:
+                    hits.append((n, m.group(0)))
+
+    def listens(node):
+        func = None
+        while node in parent:
+            node = parent[node]
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                func = node  # the outermost one
+        return func is None or func.name in starting or func.name in feeding
+
+    def explained(node):
+        stmt = node
+        while not isinstance(stmt, ast.stmt) and stmt in parent:
+            stmt = parent[stmt]
+        first = getattr(stmt, "lineno", node.lineno)
+        span = lines[first - 1:node.lineno]
+        i = first - 2
+        while i >= 0 and lines[i].lstrip().startswith("#"):
+            span.append(lines[i])
+            i -= 1
+        return any("# fixed port:" in ln for ln in span)
+
+    name = os.path.basename(path)
+    return sorted({f"{name}:{node.lineno}: {what}" for node, what in hits
+                   if listens(node) and not explained(node)})
+
+
+def test_no_fixed_listening_ports():
+    """A fixed port in the ephemeral range (Linux 32768-60999, Windows 49152-65535) can still
+    be held by an earlier test's closed client socket (TIME_WAIT): the bind then fails, even
+    with SO_REUSEADDR; below it, another program may hold it (a database on 8086, say)."""
+    found = [hit for name in sorted(os.listdir(HERE)) if name.endswith(".py")
+             for hit in fixed_ports(os.path.join(HERE, name))]
+    assert not found, ("a test listens on a fixed port; use _server.free_port() / "
+                       "free_udp_port() or port 0, or explain it with a '# fixed port: <why>' "
+                       "comment:\n  " + "\n  ".join(found))
+    # the check finds what it is meant to find
+    d = tempfile.mkdtemp(prefix="s2n_harness_")
+    sample = os.path.join(d, "test_sample.py")
+    with open(sample, "w", encoding="utf-8") as fh:
+        fh.write('PORT = 47101\n'
+                 'UI = 8085  # fixed port: the stub below only prints it\n'
+                 'def start(dev, port):\n'
+                 '    return sup.apply_mapping({"network": {"bind_ip": "127.0.0.1", "port": port}})\n'
+                 'def config(n):\n'
+                 '    return {"network": {"mode": "server", "port": 4000 + n}}\n'
+                 'def test_a():\n'
+                 '    start("/dev/x", 47303)\n'
+                 '    start("/dev/y", PORT)\n'
+                 '    Server(config(1))\n'
+                 '    # fixed port: a stub peer reports it, nothing listens there\n'
+                 '    peer = {"network": {"mode": "server",\n'
+                 '                        "port": 4555}}\n'
+                 'def test_b():\n'
+                 '    return {"network": {"mode": "server", "port": 5000}}  # only validated\n')
+    got = fixed_ports(sample)
+    os.remove(sample)
+    os.rmdir(d)
+    assert got == ["test_sample.py:1: PORT = 47101", "test_sample.py:6: 'port': 4000",
+                   "test_sample.py:8: start(port=) 47303"], got
+    print("no test listens on a fixed port without saying why (free_port / port 0)  OK")
+
+
 if __name__ == "__main__":
     test_every_test_is_registered()
     test_timeout_kills_what_the_test_started()
     test_server_cleans_up_a_failed_start()
     test_no_unread_server_pipes()
+    test_no_fixed_listening_ports()
     print("\nPASS: the test harness (run_all, shared helpers)")

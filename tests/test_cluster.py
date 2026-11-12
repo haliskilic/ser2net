@@ -611,6 +611,7 @@ def _old_peer(key, peer_id, seen):
     import http.server
     import threading
 
+    # fixed port: the stub only reports this mapping (disabled), nothing listens on it
     mapping = {"id": peer_id, "name": "OLD1", "enabled": False, "kind": "net",
                "serial": {"port": "/dev/ttyOLD", "baudrate": 9600},
                "network": {"mode": "server", "protocol": "raw", "bind_ip": "127.0.0.1",
@@ -712,6 +713,7 @@ def test_edit_on_a_peer_with_its_own_id():
         assert '<input type="hidden" name="id" value="my-port&amp;x">' in html, html[:1500]
         assert "/dev/ttyOLD" in html
 
+        # fixed port: the stub peer's mapping, saved by the stub (nothing listens on it)
         edit = {"_csrf": csrf(), "host": "127.0.0.1", "port": str(stub_port),
                 "id": peer_id, "name": "OLD1", "enabled": "on", "kind": "net",
                 "serial_port": "/dev/ttyEDITED", "serial_baudrate": "19200",

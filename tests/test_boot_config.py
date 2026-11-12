@@ -47,6 +47,8 @@ from app.config import AdminUI, AppConfig, ConfigError, ConfigStore, MappingConf
 from app.web.auth import hash_password, hash_token
 
 FIXTURE = os.path.join(os.path.dirname(__file__), "fixtures", "config-2.7.1.json")
+# fixed port: the config code reads it; nothing here listens on it (the one service start
+# with it stops at a broken config.json first)
 CONTAINER = {"SER2NET_BIND_IP": "0.0.0.0", "SER2NET_PORT": "8080"}
 
 
