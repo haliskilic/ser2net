@@ -4,7 +4,6 @@ high-priority-client kick behavior. Uses loopback source IPs (127.0.0.1 vs
 """
 import asyncio
 import os
-import re
 import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "lib"))
@@ -12,20 +11,9 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from app.config import MappingConfig
 from app.engine.supervisor import Supervisor
+from _socat import pty_pair as socat
 
 PORT = 47101
-
-
-async def socat():
-    p = await asyncio.create_subprocess_exec(
-        "socat", "-d", "-d", "pty,raw,echo=0", "pty,raw,echo=0",
-        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
-    devs = []
-    while len(devs) < 2:
-        m = re.search(rb"PTY is (\S+)", await p.stderr.readline())
-        if m:
-            devs.append(m.group(1).decode())
-    return p, devs[0], devs[1]
 
 
 async def connect(local_ip):
