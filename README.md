@@ -50,6 +50,15 @@ düzenlemeye gerek yok.
 - Uzak baud/parity değişimi gereken cihazlar için RFC2217
 - İki seri portu birbirine köprüleme (serial↔serial)
 
+**Rehberler** (`docs/` altında, İngilizce): [Docker](docs/DOCKER.md) ·
+[Windows](docs/WINDOWS.md) · [Linux seri portları](docs/LINUX-SERIAL.md) ·
+[reverse proxy](docs/REVERSE-PROXY.md) ·
+[MQTT, Modbus noktaları ve Sparkplug B](docs/MODBUS-MQTT.md) ·
+[LDAP / AD ve OIDC ile giriş](docs/SSO.md) ·
+[klasik ser2net'ten geçiş](docs/MIGRATING-FROM-SER2NET.md) ·
+[istemcide sanal COM port](docs/VIRTUAL-COM.md) · [gizlilik](docs/PRIVACY.md) ·
+[kod imzalama](docs/SIGNING.md).
+
 ---
 
 ## ✨ Özellikler
@@ -226,11 +235,15 @@ düzenlemeye gerek yok.
   ile yanıtlar (birçok master ağ geçidinin arkasındaki cihazı 255 ya da 0 ile adresler).
   Retry eklenmez: yanıt vermeyi kesen bir birim döngü başına bir kez okunur (yukarıya
   bakın). v2.8 bir düğüm (ya da oradan yapılan bir küme düzenlemesi) veya sürüm düşürme
-  `word_order`, `bit`, `length`, blok okuma ve birim yönlendirme ayarlarını atar; o
-  sürümlerde yeni tiplerin okunması hata verir.
+  `word_order`, `bit`, `length`, `"poll": false` (yalnızca yazılan nokta orada yeniden
+  okunur), blok okuma ve birim yönlendirme ayarlarını atar; o sürümlerde yeni tiplerin
+  okunması hata verir. Bütün topic'ler, payload'lar, yazmalar ve Sparkplug B metrikleri
+  tablolar halinde, bir REST API örneğiyle (İngilizce):
+  [`docs/MODBUS-MQTT.md`](docs/MODBUS-MQTT.md).
 - **Client-side sanal COM:** uzaktaki portu yerel `COMx`/`tty` olarak göstermek için
-  reçeteler (pyserial `rfc2217://`, Linux `socat`, Windows com0com+com2tcp / HW VSP3) —
-  bkz. [`docs/VIRTUAL-COM.md`](docs/VIRTUAL-COM.md).
+  reçeteler (pyserial `rfc2217://`; Linux'ta rfc2217 eşlemesi için ttynvt, raw eşleme için
+  `socat`; Windows'ta com0com + hub4com'un `com2tcp-rfc2217.bat`'ı, HW VSP3) — bkz.
+  [`docs/VIRTUAL-COM.md`](docs/VIRTUAL-COM.md).
 - **Tam seri yapılandırma:** baud (custom dahil), data bit, parity, stop bit, akış
   kontrolü (none/RTS-CTS/XON-XOFF/DSR-DTR), açılışta RTS/DTR, port kilitleme ve RS-485
   donanım auto-RTS (Linux `TIOCSRS485`: aç + TX öncesi/sonrası gecikme + TX'te RTS seviyesi).
@@ -271,7 +284,7 @@ düzenlemeye gerek yok.
   adı üretici, model ve seri numarasından oluşur; bu yüzden kendi seri numarası olmayan
   özdeş adaptörler (CH340, çoğu PL2303, hepsi aynı numarayı taşıyan klonlar) tek bir adı
   paylaşır, udev onu birine verir ve hangisine verdiği reboot ya da yeniden takmayla
-  değişebilir: Portlar sayfası böyle adaptörleri işaretler (`aynı USB kimliği`,
+  değişebilir: *Algılanan seri portlar* listesi böyle adaptörleri işaretler (`aynı USB kimliği`,
   `by-id benzersiz değil`), form da bunu söyler; bunları USB soketine göre bağlayın.
   Eşleme formunda Cihaz'ın yanındaki ↻ formu kapatmadan portları yeniden listeler, **Başka
   bir cihaz yolu…** ise listede olmayan bir yolu alır (bir kartın `/dev/ttymxc1` gibi
@@ -410,10 +423,11 @@ düzenlemeye gerek yok.
 - **LDAP / Active Directory auth (opsiyonel):** kullanıcılar dizine bind ederek doğrulanır;
   LDAP grup üyeliği role eşlenir. Yerel hesaplarla birlikte çalışır; `ldap3` gerektirir.
   LDAPS / StartTLS'te sunucunun sertifikası denetlenir (sistemin CA'ları ya da kendi CA
-  dosyanız).
+  dosyanız). Active Directory ve OpenLDAP kurulumu (İngilizce): [`docs/SSO.md`](docs/SSO.md).
 - **OIDC tek-oturum (SSO, opsiyonel):** Keycloak/Entra ID/Google/Okta ile PKCE'li
   authorization-code akışı; id_token doğrulanır (imza/iss/aud/exp/nonce), claim→rol eşlenir.
-  `authlib` gerektirir.
+  `authlib` gerektirir. Keycloak, Entra ID ve Google ayarları, `all.log`'da nelere
+  bakılacağı (İngilizce): [`docs/SSO.md`](docs/SSO.md).
 - **REST API:** otomasyon için JSON API (`/api/v1`) — eşleme CRUD, başlat/durdur/yeniden,
   durum ve portlar; **bearer-token** kimlik doğrulama (rol seçilebilir — `viewer`
   salt-okunur); OpenAPI 3.0 (`/api/v1/openapi.json`). Token, Ayarlar'dan üretilir.
@@ -534,7 +548,8 @@ düzenlemeye gerek yok.
   seçilmemişse tarayıcının dili ya da admin'in **Ayarlar → Web arayüzü erişimi**'nde seçtiği
   varsayılan dil.
   Bildirimler varsayılan dille gider; log'lar, audit log ve REST API İngilizce kalır.
-- **Tamamen offline:** tüm bağımlılıklar wheel olarak birlikte gelir; internet gerekmez.
+- **Tamamen offline:** gerekli bağımlılıklar wheel olarak birlikte gelir, internet gerekmez
+  (isteğe bağlı olanlar için *Offline kurulum*'a bakın; standalone binary hepsini içerir).
 
 ---
 
@@ -554,8 +569,11 @@ düzenlemeye gerek yok.
   ```bash
   sudo usermod -aG "$(stat -L -c %G /dev/ttyUSB0)" "$USER"   # ardından oturumu kapatıp aç
   ```
+  Açılmayan bir port, kaybolan bir cihaz, Raspberry Pi UART'ı:
+  [`docs/LINUX-SERIAL.md`](docs/LINUX-SERIAL.md) (İngilizce).
 - Windows'ta COM portları için ek yetki gerekmez.
-- (Opsiyonel) TLS self-signed üretimi için `openssl`.
+- (Opsiyonel) self-signed yönetim sertifikası üretmek için `cryptography`
+  (`requirements-optional.txt`); yoksa varsa `openssl` komutu kullanılır.
 
 ---
 
@@ -714,6 +732,25 @@ olarak yazdığı dosyalar klasörün sahibine verilir; yükseltmede elle bir ş
 yapar ([`docs/REVERSE-PROXY.md`](docs/REVERSE-PROXY.md)). Ayrıntılar:
 [`docs/DOCKER.md`](docs/DOCKER.md).
 
+### Klasik ser2net'ten geçiş
+Klasik `ser2net` servisinden (dağıtımın paketi) mi geliyorsunuz? Onun
+`/etc/ser2net/ser2net.yaml` ya da `/etc/ser2net.conf` dosyasını **Ayarlar → Eşlemeleri
+dışa / içe aktar** bölümünden içe aktarın: önizleme her bağlantıyı dönüşeceği eşleme olarak,
+hangilerinin devre dışı geldiğini ve nedenini, neyin farklı çalıştığını gösterir. Eşlemeleri
+başlatmadan önce:
+- aynı portları ve cihazları tutan klasik servisi durdurup devre dışı bırakın
+  (`sudo systemctl disable --now ser2net`); onun unit'inin adı da `ser2net.service`, bu
+  yüzden paketini kaldırın ya da bunu `ser2net@.service` örneği olarak çalıştırın;
+- 1024 altındaki portlar için servise `CAP_NET_BIND_SERVICE` yetkisini verin ya da portları
+  yukarı taşıyın (klasik servis çoğunlukla root olarak çalışırdı; Servis olarak çalıştırma
+  altında *1024 altı portlar*);
+- TLS / istemci sertifikası satırlarını ve devre dışı gelenleri kontrol edin.
+
+Bir eşleme seri cihazını açık tutar: açılış dizgesi (openstr) her istemci için değil, port
+açıldığında bir kez gönderilir ve oturumlar arasında başka programlar cihazı kullanamaz.
+Adımlar, farklar ve seçenek tablosu (İngilizce):
+[`docs/MIGRATING-FROM-SER2NET.md`](docs/MIGRATING-FROM-SER2NET.md).
+
 ---
 
 ## 🖥️ Kullanım
@@ -792,8 +829,9 @@ Programların hepsi kilit kullanmadıkça hiçbir şey diğer programları bir s
 tutmaz; çekirdek konsolu, oturum açma istemi (login prompt) ve ModemManager da bir portu
 sormadan kullanır. ser2net bu durumda portun baytlarını onlarla paylaşır (araya karışan
 karakterler, Modbus timeout'ları), oturum açma istemi de her yeniden başladığında portu
-kapatır (hang-up). Portlar sayfası böyle portları işaretler (**çekirdek konsolu**, **oturum
-açma istemi**, **ModemManager**, ser2net'in açamayacağı bir port için de **erişim yok**);
+kapatır (hang-up). Panodaki *Algılanan seri portlar* listesi böyle portları işaretler
+(**çekirdek konsolu**, **oturum açma istemi**, **ModemManager**, ser2net'in açamayacağı bir
+port için de **erişim yok**);
 böyle bir portu açık tutan eşleme de bunu durumunun altında söyler (kapatılıp hemen yeniden
 açılan port da orada sayılır).
 - **Çekirdek konsolu, oturum açma istemi** (Raspberry Pi'nin GPIO UART'ı, bir VM'nin seri
@@ -809,6 +847,18 @@ açılan port da orada sayılır).
 - **Permission denied:** pano cihazın ait olduğu grubu ve neyin eksik olduğunu söyler (bkz.
   Gereklilikler); **meşgul port:** portu bu ser2net'in hangi eşlemesinin açık tuttuğunu ya da
   başka bir programın ne tür bir kilit tuttuğunu söyler.
+
+**Linux seri port sorun giderme** ([`docs/LINUX-SERIAL.md`](docs/LINUX-SERIAL.md), İngilizce):
+panoda görünen mesajlardan nedene giden bir tablo (`[Errno 13] Permission denied`: grup;
+`[Errno 16] Device or resource busy` ya da TIOCEXCL: ModemManager, klasik ser2net ya da
+brltty portu tutuyor; `Could not exclusively lock port`: başka bir ser2net ya da picocom /
+tio; `device missing` / `[Errno 2]`: cihaz yok ya da adı değişti), seri grubunun
+bulunması (`stat -L -c %G /dev/ttyUSB0`, systemd'de `SupplementaryGroups=`, Docker'da
+sayısal GID), udev kuralları, kararlı cihaz adları (`/dev/serial/by-id`, `by-path`, USB
+kimliği), portu kimin tuttuğu (`fuser`, `lsof`, `LCK..` dosyaları), ModemManager, brltty
+(Ubuntu'da CH340 adaptörlerini kapar) ve Raspberry Pi UART'ları (`/dev/serial0`; Pi 3/4'ün
+mini UART'ı parity desteklemez, Modbus RTU 8E1 için `dtoverlay=disable-bt` ile PL011
+gerekir).
 
 ---
 
