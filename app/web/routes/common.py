@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from starlette.datastructures import ImmutableMultiDict
 from starlette.responses import PlainTextResponse
 
 from ...config import ROLE_RANK
@@ -14,6 +15,7 @@ from ...i18n import _
 from .. import auth
 
 if TYPE_CHECKING:
+    from starlette.requests import Request
     from starlette.templating import Jinja2Templates
 
     from ...state import AppState
@@ -29,6 +31,15 @@ def client_ip(request) -> str:
     if ip.startswith("::ffff:") and "." in ip:
         ip = ip[len("::ffff:"):]
     return ip
+
+
+async def read_form(request: Request) -> ImmutableMultiDict[str, str]:
+    """The fields of a posted form, all text. None of these forms takes a file: one in
+    the body is refused (400) while it is read, instead of reaching a handler that
+    expects a string where an upload turns up. (The mappings import, which takes one
+    file, reads its form itself.)"""
+    form = await request.form(max_files=0)
+    return ImmutableMultiDict([(k, v) for k, v in form.multi_items() if isinstance(v, str)])
 
 
 def current_user(request):
