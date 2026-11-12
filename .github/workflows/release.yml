@@ -198,9 +198,17 @@ jobs:
           ARCH: ${{ matrix.arch }}
         run: |
           docker pull "$REF"
-          got=$(docker image inspect -f '{{.Architecture}}' "$REF")
-          if [ "$ARCH" = arm/v7 ]; then got="$got/$(docker image inspect -f '{{.Variant}}' "$REF")"; fi
-          test "$got" = "$ARCH"
+          if [ "$ARCH" = arm/v7 ]; then
+            # inspect describes the host's platform of a multi-platform index (containerd
+            # store), so the emulated leg asks the image itself which machine it runs as
+            got=$(docker run --rm --entrypoint uname "$REF" -m)
+            want=armv7l
+          else
+            got=$(docker image inspect -f '{{.Architecture}}' "$REF")
+            want=$ARCH
+          fi
+          echo "pulled image: $got"
+          test "$got" = "$want" || { echo "::error::the pulled image is $got, not $want"; exit 1; }
       - run: tests/docker_smoke.sh "$REF"
 
   # Names and checks the release files, attests them and hands them on as one artifact.

@@ -1,6 +1,6 @@
 # ser2net — Roadmap
 
-> Current release: **v2.8.1**. CI is green across Linux + Windows × Python 3.10–3.13.
+> Current release: **v2.9.0**. CI is green across Linux + Windows × Python 3.10–3.14.
 
 ## Shipped
 
@@ -199,6 +199,31 @@
   and an OpenSSL 3.5 build; one instance per data directory; Docker starts despite a rejected
   setting and keeps mounted folders' owners; the standalone executables have the Turkish UI
   again and survive temp cleaners.
+
+### v2.9.0 — the rest of the 2.8.0 review (issues [#48](https://github.com/haliskilic/ser2net/issues/48)–[#90](https://github.com/haliskilic/ser2net/issues/90), PRs [#91](https://github.com/haliskilic/ser2net/pull/91)–[#98](https://github.com/haliskilic/ser2net/pull/98))
+- **Serial and network (#91):** ser2net's own serial classes (paced Windows writes), listeners
+  that bind before the device opens and retry, the configured adapter among identical USB
+  adapters, IPv4 + IPv6 listeners, per-mapping TLS checks (CA, pins, client certificates, key
+  passwords), telnet BREAK, UDP targets, MQTT for serial mappings.
+- **Web security and proxies (#92):** stronger password hashes and per-name sign-in limits,
+  cross-site refusals and a renewed CSRF token, trusted proxies and a public URL (serving under
+  a path), several instances on one host, privacy controls and `docs/PRIVACY.md`.
+- **API, audit and clock (#93):** named API tokens, two-factor sign-in, `PATCH` and a REST
+  import, a complete one-line audit log, clock-step-proof durations and UTC offsets.
+- **Web UI (#94):** visible errors and results, Settings post/redirect/get, console limits and
+  reconnects, a live table that sends only changes, Turkish-aware text, an accurate classic
+  import.
+- **Config and storage (#95):** typed configuration, one-at-a-time all-or-nothing mapping
+  changes, trace deletion, a storage budget and retention, `/metrics` and new notifications,
+  an event loop watchdog, reloading `config.json` and admin TLS without a restart.
+- **Modbus and MQTT (#96):** length-framed RTU replies, Sparkplug B unit health, a sturdier MQTT
+  client with TLS files, bounded in-order writes, unique MQTT identities, typed Modbus points
+  with more data types and an editor.
+- **CI, releases, distribution (#97):** one `ci-ok` gate, SHA-pinned actions, gated and
+  attested releases, SBOM licence ids, systemd units that start on a fresh install, an install
+  script, offline installs on ARM and macOS, a `linux/arm/v7` image.
+- **Docs (#98):** the READMEs and guides checked against the code, guides for MQTT / Modbus /
+  Sparkplug B, moving from the classic ser2net, SSO and Linux serial ports.
 
 ---
 
