@@ -224,7 +224,11 @@ everything from a **password-protected web UI** — no CLI or hand-edited config
   failed publish to a topic. The mapping's status (`mqtt` in the REST API: state, broker,
   since, error, dropped messages) and `/metrics` carry it, and the dashboard shows
   **⚠ MQTT: no connection to …** with the reason. A base topic with `+` or `#` (no message
-  can be published to it) keeps MQTT off for the mapping, with a log line.
+  can be published to it) keeps MQTT off for the mapping, with a log line. While the
+  broker is away, QoS 0 messages are lost (counted as dropped); at QoS 1/2 up to 10 000
+  messages per mapping wait and go out after the reconnect — beyond that the newest are
+  dropped (counted, logged once per outage) — and polled Modbus values keep only the
+  latest value of each point instead (no burst of stale readings after an outage).
   Needs `paho-mqtt` (optional; the bridge runs normally without it).
 - **Migrating from classic ser2net:** `ser2net.yaml` (4.x) and `ser2net.conf` (3.x) files
   import through Settings with a preview; options without an equivalent are listed as

@@ -37,7 +37,11 @@ KEEPALIVE_S = 30
 # after the next connection's birth. With a blank client ID (the broker tells connections
 # apart by nothing else) the birth is sent once more this long after each connect.
 STALE_WILL_S = 1.5 * KEEPALIVE_S + 5
-_NO_CONN = 4  # paho's MQTT_ERR_NO_CONN: a QoS 0 message with no connection is dropped
+# QoS 1/2 messages paho keeps while the broker is away (about 2 KB each), per mapping;
+# beyond that it refuses new ones (MQTT_ERR_QUEUE_SIZE) until the broker takes the backlog
+MAX_QUEUED_MESSAGES = 10000
+_NO_CONN = 4      # paho's MQTT_ERR_NO_CONN: a QoS 0 message with no connection is dropped
+_QUEUE_SIZE = 15  # paho's MQTT_ERR_QUEUE_SIZE
 
 
 class MqttPublisher:
@@ -64,7 +68,12 @@ class MqttPublisher:
     waiting up to 2 minutes between attempts) or off (publishing could not start:
     paho-mqtt missing, a base topic with a wildcard); "broker" host:port; "since" (unix
     time of the last change); "dropped": messages not handed to the broker (published at
-    QoS 0 while it was away, or refused by paho)."""
+    QoS 0 while it was away, or refused by paho: its queue full, an invalid topic).
+
+    QoS 1/2 while the broker is away: paho queues messages, at most MAX_QUEUED_MESSAGES
+    (newer ones are dropped beyond that, logged once per outage), and sends them after the
+    next connect; polled values (publish_value) instead keep only the latest one per
+    topic, sent after the next connect: no burst of stale readings, none newer lost."""
 
     def __init__(self, settings, logger=None, client=None, *, will=None,
                  birth: bool = True, on_connect: Optional[Callable[[], None]] = None,
@@ -96,6 +105,8 @@ class MqttPublisher:
         self._refused = False            # paho's thread: the CONNACK refused the connection
         self._sub_mids: dict[int, str] = {}  # this session's SUBSCRIBEs waiting for a SUBACK
         self._bad_topics: set[str] = set()   # topics whose publish failed (logged once)
+        self._queue_full = False         # paho's queue overflowed (logged) since the connect
+        self._held: dict[str, bytes] = {}    # QoS 1/2 polled values while not connected
         self._paho: Any = None           # the paho client module (texts of paho 1.x codes)
 
     def connect(self) -> bool:
@@ -127,6 +138,8 @@ class MqttPublisher:
             if self._s.tls:
                 with contextlib.suppress(Exception):
                     self._client.tls_set()
+            with contextlib.suppress(Exception):  # (paho takes it only while unconnected)
+                self._client.max_queued_messages_set(MAX_QUEUED_MESSAGES)
         with contextlib.suppress(RuntimeError):
             self._loop = asyncio.get_running_loop()
         # register the Last-Will (retained offline) before connecting
@@ -163,8 +176,16 @@ class MqttPublisher:
                 self._bad_topics.add(topic)
                 self._log(f"MQTT: can't publish to {shown(topic, 120)}: {e}")
             return
-        if getattr(info, "rc", 0) == _NO_CONN and not qos:  # (QoS 1/2: queued by paho)
+        rc = getattr(info, "rc", 0)
+        if rc == _NO_CONN and not qos:  # (QoS 1/2: queued by paho)
             self.state["dropped"] += 1
+        elif rc == _QUEUE_SIZE:
+            self.state["dropped"] += 1
+            if not self._queue_full:
+                self._queue_full = True
+                self._log(f"MQTT: {MAX_QUEUED_MESSAGES} QoS {qos} messages are waiting for "
+                          f"{self._broker}, the most kept; newer ones are dropped until it "
+                          "takes them")
 
     def _set_state(self, link: str, error: str = "") -> None:
         if link != self.state["state"]:
@@ -286,6 +307,7 @@ class MqttPublisher:
         self._sessions += 1
         self._set_state("connected")
         self._said = None
+        self._queue_full = False
         self._log(f"MQTT: connected to {self._broker}")
         if self._birth:
             self._publish(self._status_topic, b"online", retain=True)
@@ -305,6 +327,9 @@ class MqttPublisher:
                 self._on_connect_cb()
             except Exception as e:
                 self._log(f"MQTT on-connect handler failed: {e}")
+        held, self._held = self._held, {}
+        for topic, payload in held.items():
+            self._publish(topic, payload)
 
     def handle_disconnect(self, reason: str, failed: bool, refused: bool = False) -> None:
         """The connection ended (on the event loop): ``failed`` — not because it was asked
@@ -355,10 +380,16 @@ class MqttPublisher:
                 self._log(f"MQTT message on {topic}: {e}")
 
     def publish_value(self, subtopic: str, payload: bytes) -> None:
-        """Publish a payload to <base_topic>/<subtopic> (used by Modbus register polling)."""
+        """Publish a payload to <base_topic>/<subtopic> (used by Modbus register polling).
+        At QoS 1/2 while not connected, only the latest value per topic is kept."""
         if not self._connected:
             return
-        self._publish(self._data_topic + "/" + subtopic, payload)
+        topic = self._data_topic + "/" + subtopic
+        if self._s.qos and self.state["state"] != "connected":
+            self._held.pop(topic, None)  # (in the order they were last read)
+            self._held[topic] = payload
+            return
+        self._publish(topic, payload)
 
     def feed(self, data: bytes) -> None:
         """Buffer serial bytes and publish each complete (newline-delimited) line."""

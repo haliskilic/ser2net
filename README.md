@@ -228,8 +228,13 @@ düzenlemeye gerek yok.
   loglanır. Eşlemenin durumu (REST API'de `mqtt`: durum, broker, ne zamandan beri, hata,
   teslim edilemeyen mesajlar) ve `/metrics` bunu taşır; pano nedeniyle birlikte
   **⚠ MQTT: … ile bağlantı yok** gösterir. `+` ya da `#` içeren bir base topic (hiçbir mesaj
-  ona yayınlanamaz) eşlemenin MQTT'sini kapalı tutar ve loglanır. `paho-mqtt` gerektirir
-  (opsiyonel; yoksa köprü normal çalışır).
+  ona yayınlanamaz) eşlemenin MQTT'sini kapalı tutar ve loglanır. Broker'a
+  ulaşılamadığı sürece QoS 0 mesajlar kaybolur (teslim edilemeyen olarak sayılır); QoS
+  1/2'de eşleme başına en çok 10 000 mesaj bekler ve yeniden bağlanınca gönderilir — bunun
+  ötesinde en yeniler atılır (sayılır, kesinti başına bir kez loglanır) — periyodik okunan
+  Modbus değerlerinde ise her noktanın yalnızca son değeri tutulur (kesintiden sonra eski
+  okumalar art arda gönderilmez). `paho-mqtt` gerektirir (opsiyonel; yoksa köprü normal
+  çalışır).
 - **Klasik ser2net'ten geçiş:** `ser2net.yaml` (4.x) ve `ser2net.conf` (3.x) dosyaları
   Ayarlar → içe aktarma ile önizlemeli olarak alınır; karşılığı olmayan seçenekler uyarı
   olarak gösterilir, burada daha açık hale gelecek bir bağlantı (gtlssh girişi ya da TLS
