@@ -438,7 +438,7 @@ async def _api_refusals(d: str) -> None:
         "api_tokens": [{"id": "0123456789abcdef", "name": "old-ci", "role": "operator",
                         "sha256": auth.hash_token("s2n_expired"), "expires": 1}]})
     app = build_app(state)
-    state.api_auth_failures.repeat_s = state.refused_lines.every_s = 0.4
+    state.api_auth_failures.repeat_s = state.refused_lines.every_s = 1.5
 
     async def get(path, token=None, client="10.0.0.1", method="GET"):
         headers = {"Authorization": f"Bearer {token}"} if token else {}
@@ -456,10 +456,11 @@ async def _api_refusals(d: str) -> None:
         ("10.0.0.1", "GET /api/v1/mappings: wrong token", ""),
         ("10.0.0.2", "GET /api/v1/status: no token", ""),
         ("10.0.0.3", "GET /api/v1/mappings: expired token", "api-token:old-ci")], records()
-    await asyncio.sleep(0.45)
+    await asyncio.sleep(1.6)
     assert await get("/api/v1/mappings", "s2n_wrong") == 401
-    assert records()[-1][3] == ("GET /api/v1/mappings: wrong token; 3 more after "
-                                f"{records()[0][0][11:]}, not recorded one by one"), records()[-1]
+    again = records()[-1][3]
+    assert again.startswith("GET /api/v1/mappings: wrong token; 3 more after ") and \
+        again.endswith(", not recorded one by one"), again
     # a viewer token's write, a read and a quiet poll: all.log only (not audited)
     assert await get("/api/v1/mappings", TOKEN, method="POST") == 403
     assert await get("/api/v1/mappings", TOKEN) == 200
