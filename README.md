@@ -676,6 +676,13 @@ kimlik ver* kopyalardan birine yeni bir ID ve oturum anahtarı verir (o düğüm
 herkesin oturumu kapanır).
 
 **Oturum süresi:** Ayarlar → *Web arayüzü erişimi* → *Oturum süresi (dakika)* (varsayılan 8 saat).
+Oturum sona erdiğinde pano eski durumları göstermeye devam etmek yerine bunu söyler (sayfayı
+yeniden yüklemez, açık bir form değişikliklerini korur; kaydedilmemiş değişiklik varken
+bağlantı girişi yeni sekmede açar) ve yeniden giriş yapınca bulunduğunuz sayfaya dönülür.
+Bir işlemin ne yaptığı ya da neden başarısız olduğu (sunucunun verdiği nedenle) pencerenin
+altında görünür; yenilemeleri başarısız olan panel *güncel değil* diye işaretlenir. Eşleme
+formu kaydedilmemiş değişiklikleri atmadan önce sorar. Konsolda **Shift+Tab** klavye odağını
+konsoldan çıkarır (Tab cihaza gider).
 **İçe aktarma:** önce önizleme gösterilir; *birleştir* (aynı adlı eşlemeleri güncelle,
 yenileri ekle) ya da *hepsini değiştir* seçilir.
 

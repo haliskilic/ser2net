@@ -657,6 +657,13 @@ the fleet view and Settings → LAN cluster; there, *Give this node a new identi
 them a new id and session key (everyone signed in to it is signed out).
 
 **Session lifetime:** Settings → *Web UI access* → *Session lifetime* (default 8 hours).
+When a session ends, the dashboard says so instead of going on showing old states (it
+doesn't reload, so an open form keeps its changes; with unsaved changes the link signs in
+in a new tab), and signing in again leads back to the page you were on. What an action did,
+or why it failed (with the server's reason), appears at the bottom of the window; a panel
+whose refreshes fail is marked *not up to date*. The mapping form asks before unsaved
+changes are thrown away. In the console, **Shift+Tab** moves the keyboard focus out (Tab
+goes to the device).
 **Import:** shows a preview first; choose *merge* (update mappings with the same name, add
 the new ones) or *replace all*.
 
