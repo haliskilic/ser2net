@@ -284,6 +284,26 @@ their wheels too: `pip download -r requirements-optional.txt -d vendor/wheels`, 
 `pip install --no-index --find-links vendor/wheels -r requirements-optional.txt`. (The
 standalone binary already bundles them.)
 
+### Upgrading a source install
+Update the files (`git pull`, or unpack the new source over the old one) and restart
+ser2net. When the new version pins other dependency versions, its first start installs
+them into `lib/`, offline and once (a few seconds); packages you added to `lib/` stay, and
+the old versions' metadata is removed. `lib/.ser2net-deps.json` records what `lib/` was
+installed for (the pins, the Python version, the platform), so a new Python is handled the
+same way. Upgrading from 2.8.x or older, this first start replaces what those versions left
+in `lib/` (possibly 2.7's starlette and anyio, which have published advisories).
+When that can't be done — no bundled wheels for this machine (macOS, ARM Linux: run
+`python3 bootstrap.py --online`), `lib/` not writable for the account ser2net runs as, or
+another ser2net still running from the same folder — ser2net starts with the old `lib/` and
+says so in its log (`WARNING: not refreshing ./lib: …`); when this version can't run on the
+old packages at all (2.8.1 and newer on 2.7's), the start stops with one line that says so.
+`python3 bootstrap.py` installs the
+set by hand (stop ser2net first, and run it as the account ser2net runs as, e.g.
+`sudo -u ser2net python3 /opt/ser2net/bootstrap.py`); with `--no-bootstrap` that is the way
+after every upgrade, and the start-up log warns while `lib/` is out of date. The one-off
+commands (`--set-password`, `--sign-out-all`, `--about`, `--install-service`), which may run
+beside a running ser2net, leave `lib/` as it is and only warn.
+
 ### Docker
 ```bash
 docker compose up -d        # edit `devices:` and `ports:` in docker-compose.yml first
