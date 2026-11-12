@@ -680,6 +680,8 @@ async def udp_socket(net: NetworkSettings) -> socket.socket:
     try:
         if family == socket.AF_INET6 and hasattr(socket, "IPPROTO_IPV6"):
             sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0 if both else 1)
+        if net.udp_broadcast is True:  # (udp_targets: a broadcast address)
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
         sock.bind(address)
         sock.setblocking(False)
     except OSError as e:

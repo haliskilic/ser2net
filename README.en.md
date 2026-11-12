@@ -56,6 +56,10 @@ everything from a **password-protected web UI** — no CLI or hand-edited config
   certificates, server checks by CA file or fingerprint: see Security). UDP sends the
   device's output to the sender of the last datagram from an allowed IP, or always to a
   fixed **reply address** (IP + port); a **peer timeout** forgets a sender that went quiet.
+  **Also send the device's output to** lists more destinations (`udp_targets`, `IP:port`)
+  that always get it, whoever sends and before anyone has: an NMEA 0183 feed to UDP 10110
+  on a LAN's broadcast address (with **Allow broadcast**, `udp_broadcast`), a multicast
+  group, several hosts.
   Datagrams wait for the serial port in a queue of at most 64 KiB: what a sender faster
   than the line sends beyond that is dropped, counted and logged.
 - **Protocols:** `raw`, `telnet` (8-bit clean), `rfc2217` (remote live changes to

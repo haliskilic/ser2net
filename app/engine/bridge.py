@@ -63,6 +63,7 @@ else:  # pragma: no cover - exercised only on Python 3.10
 from .. import i18n
 from ..config import (
     MappingConfig, canonical_ip, host_port, mapping_file, udp_peer_address, udp_peer_timeout,
+    udp_targets,
 )
 from . import netguard, portdiag, serial_io, sockopts, tls
 from .netguard import LogEvery as _LogEvery
@@ -1262,7 +1263,8 @@ class MappingRunner:
 # a bounded queue that _UdpBridge.run() writes to the port. One peer gets the device's
 # output: the reply address when one is set (udp_peer_host / udp_peer_port), otherwise
 # the sender of the last allowed datagram (forgotten after udp_peer_timeout_s without a
-# datagram from it, when that is set).
+# datagram from it, when that is set). The targets (udp_targets, a _UdpTarget each in
+# _clients) get it too, always; a peer that is one of them is not sent it twice.
 # ---------------------------------------------------------------------------
 def _udp_label(addr) -> str:
     """ip:port of a datagram's sender (an IPv4 one of a socket for both families as IPv4)."""
@@ -1290,6 +1292,13 @@ class _UdpPeer:
         pass
 
 
+class _UdpTarget(_UdpPeer):
+    """A UDP target (udp_targets): always gets the device's output; listed as a client."""
+
+    def feed_from_serial(self, data: bytes) -> None:
+        self.bridge.send_target(self, data)
+
+
 class _UdpBridge(asyncio.DatagramProtocol):
     """A UDP mapping's socket side. Every datagram is checked against the allow-list; an
     allowed one makes its sender the peer (unless there is a reply address) and waits in a
@@ -1300,10 +1309,12 @@ class _UdpBridge(asyncio.DatagramProtocol):
         self.runner = runner
         net = runner.mapping.network
         self.reply_to = udp_peer_address(net)  # ValueError: a malformed stored one
+        self.targets = udp_targets(net)        # (the same)
         # the peer timeout is for a sender that was learned, not for the reply address
         self.timeout = 0.0 if self.reply_to else udp_peer_timeout(net)
         self.transport: Optional[asyncio.DatagramTransport] = None
         self.peer: Optional[_UdpPeer] = None
+        self._target_addrs: set = set()  # where the targets are sent (as the socket needs)
         self._queue: list[bytes] = []
         self._queued = 0  # bytes waiting: queued, or being written by run()
         self._wake = asyncio.Event()
@@ -1314,29 +1325,48 @@ class _UdpBridge(asyncio.DatagramProtocol):
     def describe(self) -> str:
         """Where the device's output goes (for the start-up log line)."""
         if self.reply_to:
-            return f"device output to {_udp_label(self.reply_to)}"
-        if self.timeout:
-            return (f"device output to the last sender (forgotten after "
-                    f"{fmt_duration(self.timeout)} without a datagram from it)")
-        return "device output to the last sender"
+            out = f"device output to {_udp_label(self.reply_to)}"
+        elif self.timeout:
+            out = (f"device output to the last sender (forgotten after "
+                   f"{fmt_duration(self.timeout)} without a datagram from it)")
+        else:
+            out = "device output to the last sender"
+        if self.targets:
+            out += " and to " + ", ".join(_udp_label(t) for t in self.targets)
+        return out
 
     # ---- asyncio.DatagramProtocol ----
     def connection_made(self, transport) -> None:
         self.transport = transport
-        if self.reply_to is not None:
-            host, port = self.reply_to
-            sock = transport.get_extra_info("socket")
-            if (sock is not None and sock.family == socket.AF_INET6
-                    and ipaddress.ip_address(host).version == 4):
+        sock = transport.get_extra_info("socket")
+        v6 = sock is not None and sock.family == socket.AF_INET6
+
+        def sent_to(addr):
+            host, port = addr
+            if v6 and ipaddress.ip_address(host).version == 4:
                 host = f"::ffff:{host}"  # an IPv4 peer of a socket bound to an IPv6 address
-            self._set_peer((host, port), _udp_label(self.reply_to))
+            return host, port
+
+        r = self.runner
+        for target in self.targets:
+            addr = sent_to(target)
+            if addr not in self._target_addrs:
+                self._target_addrs.add(addr)
+                r._clients.add(_UdpTarget(self, addr, _udp_label(target)))
+        r._refresh_clients()
+        if self.reply_to is not None:
+            self._set_peer(sent_to(self.reply_to), _udp_label(self.reply_to))
 
     def connection_lost(self, exc) -> None:
         self.transport = None
 
     def error_received(self, exc: Exception) -> None:
         # e.g. the peer's port is closed (ICMP port unreachable) or there is no route to it
-        self._error_log(f"udp error: {exc}")
+        hint = ""
+        if (getattr(exc, "errno", None) == errno.EACCES
+                and self.runner.mapping.network.udp_broadcast is not True):
+            hint = " (to send to a broadcast address, allow broadcast: udp_broadcast)"
+        self._error_log(f"udp error: {exc}{hint}")
 
     def datagram_received(self, data: bytes, addr) -> None:
         r = self.runner
@@ -1400,11 +1430,24 @@ class _UdpBridge(asyncio.DatagramProtocol):
         return True
 
     def send(self, peer: _UdpPeer, data: bytes) -> None:
-        """The device's output, to the peer (nothing once it has expired)."""
-        if self.transport is None or peer is not self.peer or self._expired():
+        """The device's output, to the peer (nothing once it has expired, or when it is one
+        of the targets, which get it anyway)."""
+        if (self.transport is None or peer is not self.peer or self._expired()
+                or tuple(peer.addr[:2]) in self._target_addrs):
             return
         with contextlib.suppress(Exception):  # a failed send reaches error_received
             self.transport.sendto(data, peer.addr)
+
+    def send_target(self, target: _UdpTarget, data: bytes) -> None:
+        """The device's output, to a target."""
+        if self.transport is None:
+            return
+        try:
+            self.transport.sendto(data, target.addr)
+        except OSError as e:  # (a synchronous refusal, e.g. EACCES: a broadcast address)
+            self.error_received(e)
+        except Exception:
+            pass
 
     # ---- network -> serial ----
     async def run(self) -> None:

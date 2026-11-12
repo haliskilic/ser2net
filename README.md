@@ -59,8 +59,12 @@ düzenlemeye gerek yok.
   (istemci sertifikaları, CA dosyası ya da parmak iziyle sunucu denetimi: bkz. Güvenlik). UDP,
   cihazın çıktısını izinli bir IP'den gelen son datagram'ın göndericisine ya da her zaman
   sabit bir **yanıt adresine** (IP + port) gönderir; **karşı uç zaman aşımı** sessiz kalan
-  göndericiyi unutturur. Datagram'lar seri portu en fazla 64 KiB'lık bir kuyrukta bekler:
-  hattan hızlı gönderen birinin bunu aşan datagram'ları atılır, sayılır ve loglanır.
+  göndericiyi unutturur. **Cihazın çıktısını ayrıca şuraya gönder** çıktıyı her zaman (kimse
+  göndermeden önce de, kim gönderirse göndersin) alan başka hedefleri listeler
+  (`udp_targets`, `IP:port`): bir yerel ağın yayın adresinde UDP 10110'a NMEA 0183 akışı
+  (**Broadcast'e izin ver** ile, `udp_broadcast`), bir multicast grubu, birkaç makine.
+  Datagram'lar seri portu en fazla 64 KiB'lık bir kuyrukta bekler: hattan hızlı gönderen
+  birinin bunu aşan datagram'ları atılır, sayılır ve loglanır.
 - **Protokoller:** `raw`, `telnet` (8-bit temiz), `rfc2217` (uzaktan canlı
   baud/parity/databit/stopbit/akış kontrolü değişimi), `modbus` (RTU↔TCP gateway). Portun
   yerine getiremediği bir RFC 2217 isteği (bozuk ya da ayrılmış bir değer veya seri portun
