@@ -107,6 +107,7 @@ PORTABLE = [
     "test_supervisor_turns.py",
     "test_config_edits.py",
     "test_start_idempotent.py",
+    "test_mapping_form_roundtrip.py",  # every setting survives an unchanged form save
 ]
 
 # Data-path tests that need socat-backed PTYs (Linux). Best-effort: skipped if the

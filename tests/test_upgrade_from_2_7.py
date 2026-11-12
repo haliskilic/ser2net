@@ -10,15 +10,21 @@ absolute POSIX and Windows paths). This test:
     defaults;
   * boots the real server on it the Docker/headless way (SER2NET_BIND_IP re-saves the
     config): the old passwords and API token work, the trace move is logged, and the
-    untouched 2.7.1 file is kept in data/backups/.
+    untouched 2.7.1 file is kept in data/backups/;
+  * saves every mapping unchanged through the web form (posted as a browser posts it,
+    tests/_formsubmit.py): nothing changes — PLC-1 keeps its MQTT client id and its USB
+    identity, also when the form first came back with an error.
 
 Run: python3 tests/test_upgrade_from_2_7.py
 """
 import copy
 import json
 import os
+import re
+import urllib.parse
 import urllib.request
 
+from _formsubmit import browser_post
 from _server import Browser, Server, free_port
 
 from app.config import AppConfig, ConfigStore
@@ -67,6 +73,45 @@ def test_roundtrip(original):
     print("load + validate + save: every 2.7.1 value kept (only the 2 trace paths -> names)  OK")
 
 
+def post_form(b, path, fields):
+    """POST a form as htmx does (the CSRF token in its header)."""
+    req = urllib.request.Request(b.base + path, data=urllib.parse.urlencode(fields).encode(),
+                                 method="POST", headers={
+                                     "Content-Type": "application/x-www-form-urlencoded",
+                                     "X-CSRF-Token": b.csrf(), "HX-Request": "true"})
+    st, headers, body = b._open(req)
+    return st, headers, body.decode("utf-8", "replace")
+
+
+def test_form_saves(srv):
+    b = Browser(srv.base)
+    b.login("admin", "old-admin-pass-1")
+    before = srv.saved_config()["mappings"]
+    for m in before:
+        st, _h, page = b.get(f"/api/mappings/{m['id']}/form")
+        assert st == 200, (m["name"], st)
+        st, _h, _body = post_form(b, "/api/mappings/save", browser_post(page))
+        assert st == 200, (m["name"], st, _body[:500])
+    after = srv.saved_config()["mappings"]
+    assert after == before, [(a["name"], a, b_) for a, b_ in zip(before, after, strict=True)
+                             if a != b_][:1]
+    assert after[0]["mqtt"]["client_id"] == "s2n-plc1"
+    # a save that comes back with an error, then is saved as shown again
+    st, _h, page = b.get(f"/api/mappings/{before[0]['id']}/form")
+    fields = [(k, "10.0.0.300" if k == "network_bind_ip_custom" else
+               "custom" if k == "network_bind_ip" else v) for k, v in browser_post(page)]
+    st, _h, again = post_form(b, "/api/mappings/save", fields)
+    assert st == 400 and "Invalid bind IP" in again, (st, again[:500])
+    assert re.search(r'name="serial_usb_match" checked', again), "the USB box came back unticked"
+    fields = [(k, before[0]["network"]["bind_ip"] if k == "network_bind_ip_custom" else v)
+              for k, v in browser_post(again)]
+    st, _h, _body = post_form(b, "/api/mappings/save", fields)
+    assert st == 200, (st, _body[:500])
+    assert srv.saved_config()["mappings"] == before, "the save after an error changed PLC-1"
+    print("web form: every 2.7.1 mapping saved unchanged keeps every setting (PLC-1's MQTT "
+          "client id, its USB identity also after an error)  OK")
+
+
 def main():
     with open(FIXTURE, encoding="utf-8") as fh:
         original = json.load(fh)
@@ -102,6 +147,7 @@ def main():
         assert saved["users"][3]["source"] == "ldap" and saved["users"][4]["source"] == "oidc"
         print("old passwords (admin/operator/viewer) and the API token work; ids, match, "
               "Modbus points, LDAP/OIDC users intact  OK")
+        test_form_saves(srv)
     print("\nPASS: upgrade from a v2.7.1 config")
 
 
