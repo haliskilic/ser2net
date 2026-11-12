@@ -541,6 +541,15 @@ clocks of this server and of the provider synchronised (NTP); when a token is re
 times, all.log says how many seconds this server's clock is behind or ahead of the
 provider's.
 
+**SSO redirect URI:** **Settings → Single sign-on (OIDC)** shows the redirect URI to register
+at the provider: the *Redirect URI* you set or, while it is blank, the one made from the
+page's request (`X-Forwarded-Proto` or the request's scheme, `X-Forwarded-Host` or `Host`,
+then `/auth/oidc/callback`; `Forwarded` and `X-Forwarded-Port` are not read, so the address
+working installs registered stays the same). When it is http:// for a host other than
+loopback, or differs from the browser's address (a reverse proxy in between changed the
+address), the page warns and shows the value for the browser's address: enter that as
+*Redirect URI*. Every SSO sign-in start writes the redirect URI it sends to all.log.
+
 **LDAP over TLS (LDAPS / StartTLS):** the directory server's certificate is checked. It
 must come from a CA the system trusts (Linux / Docker: its CA bundle; Windows: its
 certificate store, where a domain member usually has the AD CA already) and name the host

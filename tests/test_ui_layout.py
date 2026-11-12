@@ -16,7 +16,10 @@ longer:
     and never overlap; no cell's content overflows the cell;
   * the browser reports no errors (e.g. a Content-Security-Policy violation);
   * the cluster panel isn't refreshed while the tab is hidden (each refresh makes the
-    node ask every peer) and is refreshed as soon as the tab is shown again.
+    node ask every peer) and is refreshed as soon as the tab is shown again;
+  * Settings → Single sign-on: when the request reached the server with another address
+    than the browser's (a reverse proxy's X-Forwarded-Host), the redirect URI for the
+    browser's address is shown too, and not otherwise.
 
 Opt-in: needs `pip install playwright && python -m playwright install chromium`.
 Skipped when Playwright or its browser is missing, unless SER2NET_UI_TESTS=1 (the
@@ -256,6 +259,21 @@ def main():
                     page.goto(f"{base}/settings?restore=config-20260101T000000Z.json#backups")
                     page.wait_for_selector("#backups h3")
                     check(f"{lang} restore preview @{w}")
+
+            # Settings → SSO: the redirect URI for this browser's address, shown only when
+            # the one made from the request differs (here: a proxy's X-Forwarded-Host)
+            page.set_viewport_size({"width": 390, "height": 900})
+            page.goto(f"{base}/settings")
+            if not page.locator("#oidc-redirect-mismatch").is_hidden():
+                problems.append("SSO redirect hint shown although the addresses match")
+            page.set_extra_http_headers({"X-Forwarded-Host": "s2n.example.com"})
+            page.goto(f"{base}/settings")
+            hint = page.locator("#oidc-redirect-mismatch")
+            if not hint.is_visible() or hint.locator("[data-browser-uri]").text_content() != \
+                    f"{base}/auth/oidc/callback":
+                problems.append("SSO redirect hint missing behind a proxy that changed the address")
+            check("tr settings, SSO redirect hint @390")
+            page.set_extra_http_headers({})
 
             # the cluster panel polls every 5 s: not from a hidden tab, and at once when
             # the tab is shown again

@@ -231,8 +231,12 @@
 
 <section class="panel panel-narrow">
   <div class="panel-head"><h2>{{ _("Single sign-on (OIDC)") }}</h2></div>
-  <p class="muted mb-sm">{{ _('OpenID Connect SSO (Keycloak, Entra ID, Google, Okta…). A claim maps to a ser2net role. Redirect URI: <span class="mono">&lt;this-url&gt;/auth/oidc/callback</span>. Needs <span class="mono">authlib</span> (optional).') }}</p>
+  <p class="muted mb-sm">{{ _('OpenID Connect SSO (Keycloak, Entra ID, Google, Okta…). A claim maps to a ser2net role. Needs <span class="mono">authlib</span> (optional).') }}</p>
   {% if oidc_problem %}{{ package_problem(oidc_problem, _("Single sign-on (OIDC)")) }}{% endif %}
+  <p class="mb-sm" id="oidc-redirect" data-uri="{{ oidc_redirect_uri }}"{% if oidc_redirect_auto %} data-auto{% endif %}>{{ _("Redirect URI to register at the identity provider:") }} <span class="mono">{{ oidc_redirect_uri }}</span>
+    <span class="muted">({% if oidc_redirect_auto %}{{ _("Redirect URI below is blank, so it is made from the address in this page’s request") }}{% else %}{{ _("as set below") }}{% endif %})</span></p>
+  {% if oidc_redirect_auto and oidc_redirect_http %}<div class="banner warn">{{ _("This redirect URI starts with http://: most identity providers accept http:// only for localhost. Use HTTPS (Admin TLS, or a reverse proxy with TLS) and register the https:// address.") }}</div>{% endif %}
+  <div class="banner warn" id="oidc-redirect-mismatch" hidden>{{ _('This browser has the page at another address, for which the redirect URI is <span class="mono" data-browser-uri></span>: a reverse proxy in between changed the address ser2net sees. If users sign in at this browser’s address, enter that value as Redirect URI below and register it at the identity provider.') }}</div>
   {% for w in group_warnings.oidc %}{{ group_warning(w) }}{% endfor %}
   <form method="post" action="/settings/oidc" class="authform">
     <input type="hidden" name="_csrf" value="{{ request.state.csrf_token }}">

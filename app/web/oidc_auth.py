@@ -61,6 +61,36 @@ def _loopback(host: str) -> bool:
         return False
 
 
+CALLBACK_PATH = "/auth/oidc/callback"
+
+
+def redirect_uri(settings, request) -> str:
+    """The redirect URI a sign-in sends to the identity provider, which must have it
+    registered: oidc.redirect_uri when set, else made from the request as it has been
+    since v2.3 - X-Forwarded-Proto or the request's scheme, X-Forwarded-Host or Host,
+    and CALLBACK_PATH. Forwarded and X-Forwarded-Port are not read: a working install
+    with a blank redirect_uri has this value registered, and reading them would change it.
+    Settings shows the value for its own request (redirect_uri_is_plain_http)."""
+    configured = settings.redirect_uri.strip()
+    if configured:
+        return configured
+    scheme = request.headers.get("x-forwarded-proto") or request.url.scheme
+    host = (request.headers.get("x-forwarded-host") or request.headers.get("host")
+            or request.url.netloc)
+    return f"{scheme}://{host}{CALLBACK_PATH}"
+
+
+def redirect_uri_is_plain_http(uri: str) -> bool:
+    """`uri` is an http:// address of another host than this machine's loopback: most
+    identity providers (Entra ID, Google, Okta) refuse to register such a redirect URI."""
+    try:
+        parts = urllib.parse.urlsplit(uri)
+        host = parts.hostname or ""
+    except ValueError:
+        return False
+    return parts.scheme.lower() == "http" and not _loopback(host)
+
+
 def secure_url(url, what: str) -> str:
     """`url` if it is https://, or http:// to a loopback address (127.0.0.0/8, ::1,
     localhost: nothing leaves this machine — a provider on the same host). Raises

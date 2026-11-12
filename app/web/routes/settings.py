@@ -25,7 +25,7 @@ from ...config import (
 )
 from ...engine.cluster import KEY_OVERLAP_S, key_bytes
 from ...i18n import _
-from .. import auth, ldap_auth, selfsigned
+from .. import auth, ldap_auth, oidc_auth, selfsigned
 from .common import Ctx, csrf_failed
 from .forms import (
     _checkbox, _ldap_from_form, _oidc_from_form, _password_problem, _username_problem,
@@ -69,6 +69,8 @@ def routes(ctx: Ctx) -> list:
         me = current_user(request)
         backups = state.store.backups() if me is not None and me.role == "admin" else []
         ldap_problem, oidc_problem = await asyncio.to_thread(_package_problems)
+        # the redirect URI a sign-in started from this page's address would send
+        oidc_redirect = oidc_auth.redirect_uri(state.config.oidc, request)
         return render(request, "settings.html", ok=ok, error=error,
                       import_preview=import_preview, restore_preview=restore_preview,
                       backups=backups,
@@ -83,6 +85,9 @@ def routes(ctx: Ctx) -> list:
                       ldap=state.config.ldap, ldap_problem=ldap_problem,
                       ldap_tls_problem=state.ldap_tls_problem,
                       oidc=state.config.oidc, oidc_problem=oidc_problem,
+                      oidc_redirect_uri=oidc_redirect,
+                      oidc_redirect_auto=not state.config.oidc.redirect_uri.strip(),
+                      oidc_redirect_http=oidc_auth.redirect_uri_is_plain_http(oidc_redirect),
                       group_warnings={src: [w for (s, _k), w in sorted(state.group_warnings.items())
                                             if s == src] for src in ("ldap", "oidc")},
                       **_cluster_view(),
