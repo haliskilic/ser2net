@@ -8,6 +8,8 @@ minutes after its boot, a clock set back by hand) must not change:
   * a node's uptime in the fleet view (/api/cluster/local's uptime_s);
   * the order of a mapping's clients (the oldest one is kicked to make room, listed
     first) and their connection times (status, REST connected_s);
+  * how long a serial port or a connect-out link was down ("back after ..."), while the
+    line about it still names the wall-clock time it started failing;
   * the OIDC discovery document's cache.
 Each test moves the wall clock of the module it checks (tests/_clock.py); the system
 clock is never changed.
@@ -32,7 +34,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from _clock import WallClock                                     # noqa: E402
 
 from app.config import AppConfig, ClusterSettings, ConfigStore   # noqa: E402
-from app.engine import access, bridge, cluster                   # noqa: E402
+from app.engine import access, bridge, cluster, serial_link      # noqa: E402
 from app.engine.cluster import (LEGACY_SEEN_S, NOTE_TTL, PEER_TTL,  # noqa: E402
                                 ClusterDiscovery, _sign, key_header)
 from app.state import AppState                                   # noqa: E402
@@ -140,6 +142,21 @@ def test_clients():
           "by the monotonic clock  OK")
 
 
+def test_down_time():
+    lines: list[str] = []
+    with WallClock.patch(serial_link) as clock:
+        log = serial_link.FailureLog(lines.append, "connect-out failed", every=0)
+        log.failed("refused")
+        started = time.time()
+        clock.shift = 2 * DAY     # NTP moves the clock two days forward meanwhile
+        log.failed("refused")
+        assert "since " + time.strftime("%Y-%m-%d %H:%M", time.localtime(started)) in lines[-1], \
+            lines
+        back = log.recovered()
+    assert back in (" (back after 0s)", " (back after 1s)"), back
+    print("down time: 'back after' by the monotonic clock; 'since' is the wall-clock time  OK")
+
+
 async def _get(app, path: str) -> tuple[int, str]:
     scope = {"type": "http", "asgi": {"version": "3.0", "spec_version": "2.4"},
              "http_version": "1.1", "method": "GET", "scheme": "http", "path": path,
@@ -221,6 +238,7 @@ def test_discovery_cache():
 def main():
     test_cluster_ages()
     test_clients()
+    test_down_time()
     test_uptime()
     test_discovery_cache()
     print("\nPASS: ages and the order of clients don't follow wall clock steps")
