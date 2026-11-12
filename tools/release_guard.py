@@ -64,7 +64,7 @@ def check_sboms(paths: list[str], min_openssl: str) -> int:
               + lines, file=sys.stderr)
         return 1
     cpython, openssl = next(iter(pairs))
-    if _series(openssl)[:len(want)] < want:
+    if _series(openssl or "")[:len(want)] < want:  # (None returned above)
         print(f"release guard: OpenSSL {openssl} is older than the minimum supported "
               f"{min_openssl} series", file=sys.stderr)
         return 1
