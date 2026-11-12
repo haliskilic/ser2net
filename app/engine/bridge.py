@@ -26,6 +26,13 @@ always to a configured reply address.
 Traffic counters (RunnerStatus) count at the device, once: bytes_in what was read from
 it, bytes_out what was handed to it, bytes_dropped what the network sent for it that
 was not written (the port was not open, or the UDP queue was full).
+
+What a telnet / RFC 2217 client sends is carried out in order (ProtocolSession.
+from_network_parts): its data, a serial BREAK it asks for (IAC BRK) and the commands that
+act on the port (RFC 2217 SET-* / PURGE-DATA), each after the data before it was written
+and, for a BREAK or a setting, has left the port (at most SETTLE_MAX_S). A BREAK holds the
+line in the break condition for BREAK_S without blocking the event loop (pyserial's
+send_break() sleeps in the calling thread); a read-only mapping sends none.
 """
 from __future__ import annotations
 
@@ -61,9 +68,9 @@ from . import netguard, portdiag, serial_io, sockopts, tls
 from .netguard import LogEvery as _LogEvery
 from .access import AccessPolicy, server_ssl
 from .protocols import make_session
-from .protocols.base import ProtocolError, ProtocolSession
+from .protocols.base import BREAK, ProtocolError, ProtocolSession
 from .serial_link import (
-    Backoff, FailureLog, NoteLog, SerialLink, close_stream, explain, fmt_duration,
+    Backoff, FailureLog, NoteLog, SerialLink, close_stream, explain, fmt_duration, sent_within,
 )
 
 if TYPE_CHECKING:
@@ -86,6 +93,14 @@ UDP_BACKLOG_MAX = 64 * 1024
 # long; a peer that keeps the connection up but reads nothing is then cut off, instead of
 # holding one of the mapping's connection slots for as long as TCP takes to give up
 TCP_CLOSE_TIMEOUT_S = 5.0
+# a serial BREAK (telnet IAC BRK, the web console): the line is held in the break condition
+# this long, as pyserial's send_break() and most terminal programs do
+BREAK_S = 0.25
+# before a BREAK or an RFC 2217 setting change, the data the client sent ahead of it gets
+# up to this long to leave the port (its line time, twice, plus 0.2 s): a port that holds
+# its output (flow control, a driver that never reports an empty queue) delays the command
+# no more than this, since an RFC 2217 client waits about 3 s for its answer
+SETTLE_MAX_S = 2.0
 # errno/winerror values for "the peer stopped answering" (keepalive or retransmission
 # timeout): ETIMEDOUT, plus on Windows WSAETIMEDOUT, WSAENETRESET and the overlapped-I/O
 # ERROR_SEM_TIMEOUT.
@@ -417,6 +432,7 @@ class _ClientConn:
         self._last_activity = time.monotonic()
         self._closing = False
         self.close_reason = ""  # why the session ended (first cause wins; for the log)
+        self._unsettled = 0  # bytes written to the port since its last BREAK / setting change
 
     @property
     def closing(self) -> bool:
@@ -483,7 +499,8 @@ class _ClientConn:
             return
         self._session = make_session(m.network.protocol, ser,
                                      poll_interval=m.options.rfc2217_poll_modem_interval_s,
-                                     read_only=m.network.read_only, log=self._protocol_log)
+                                     read_only=m.network.read_only, log=self._protocol_log,
+                                     signature=m.options.rfc2217_signature)
 
         # initial bytes: protocol negotiation, then banner
         init = bytearray(self._session.initial_net_bytes())
@@ -521,9 +538,33 @@ class _ClientConn:
         finally:
             self._closing = True
             await _close_client(self.writer)
+            self._release_break()
+
+    def _release_break(self) -> None:
+        """An RFC 2217 client that set BREAK on (SET-CONTROL) and left without turning it
+        off: turn it off, so the line is not held in the break condition for whoever
+        comes next."""
+        left_on = getattr(self._session, "break_left_on", None)
+        ser = self.runner.serial_instance
+        if left_on is None or not left_on() or ser is None:
+            return
+        try:
+            ser.break_condition = False
+        except Exception as e:
+            self.runner._log(f"serial BREAK left on by {self.peer} not turned off: "
+                             f"{type(e).__name__}: {e}")
+            return
+        self.runner._log(f"serial BREAK turned off: {self.peer} left it on")
+
+    def _send_net(self, ctrl: bytes) -> None:
+        """Control bytes for the client (telnet / RFC 2217 replies)."""
+        if ctrl:
+            with contextlib.suppress(asyncio.QueueFull):
+                self._out.put_nowait(ctrl)
 
     async def _pump_net_to_serial(self) -> None:
         m = self.runner.mapping
+        runner = self.runner
         session = self._session
         assert session is not None  # the pumps start after run() created it
         while not self._closing:
@@ -531,14 +572,26 @@ class _ClientConn:
             if not data:
                 break  # client closed
             self._last_activity = time.monotonic()
-            serial_bound = session.from_network(data)
-            ctrl = session.take_net_out()
-            if ctrl:
-                with contextlib.suppress(asyncio.QueueFull):
-                    self._out.put_nowait(ctrl)
+            parts = session.from_network_parts(data)
+            self._send_net(session.take_net_out())
             written = False
-            if serial_bound and not m.network.read_only:
-                written = await self.runner.serial_write(serial_bound)
+            # in order: the data for the port, a BREAK, the commands that act on the port
+            # (each after what came before it; see the module docstring)
+            for part in parts:
+                if isinstance(part, bytes):
+                    if not m.network.read_only and await runner.serial_write(part):
+                        written = True
+                        self._unsettled += len(part)
+                    continue
+                if part is BREAK or part.settle:
+                    if self._unsettled:
+                        await runner.serial_settled(self._unsettled)
+                        self._unsettled = 0
+                if part is BREAK:
+                    await runner.send_break(f"client {self.peer}")
+                else:
+                    part.apply()
+                    self._send_net(session.take_net_out())
             if not written:
                 # Nothing reached the port (read-only, only telnet/RFC 2217 commands, or
                 # the port is not open), so no serial drain() paces this client: let the
@@ -629,6 +682,8 @@ class MappingRunner:
         self._bridge_backoff: Optional[Backoff] = None  # a serial<->serial bridge's retries
         self._access = AccessPolicy(mapping.network)
         self._drop_log = _LogEvery(self._log)  # data for the device that was not written
+        self._break_lock = asyncio.Lock()      # one serial BREAK at a time
+        self._break_log = _LogEvery(self._log)
         co = mapping.options.closeon
         self._closeon = co.encode("utf-8", "replace") if co else b""
         self._closeon_tail = b""  # rolling carry-over so matches across reads aren't missed
@@ -801,6 +856,44 @@ class MappingRunner:
         w.write(data)
         self.status.bytes_out += len(data)
         await w.drain()
+        return True
+
+    async def serial_settled(self, written: int) -> None:
+        """Wait until the port has sent what it holds (``written``: the bytes a client
+        wrote since its last BREAK / setting change), at most their line time twice plus
+        0.2 s and never more than SETTLE_MAX_S."""
+        w = self._link.writer
+        if w is None or w.is_closing():
+            return
+        baud = getattr(self._link.serial, "baudrate", 0) or self.mapping.serial.baudrate
+        line_time = written * 11 / max(1, int(baud))  # (a start, 8 data, parity, stop bit)
+        await sent_within(w, min(SETTLE_MAX_S, 0.2 + 2 * line_time))
+
+    async def send_break(self, who: str) -> bool:
+        """Send a serial BREAK (a telnet client's IAC BRK, the web console; ``who`` for the
+        log): the line is held in the break condition for BREAK_S, on the event loop's
+        timer. One at a time; False when none was sent (a read-only mapping, the port not
+        open, a port that can't). Logged at most once a minute, with a count."""
+        if self.mapping.network.read_only:
+            self._break_log(f"serial BREAK from {who} not sent: the mapping is read-only")
+            return False
+        async with self._break_lock:
+            ser = self._link.serial
+            if ser is None or self._stop.is_set():
+                self._break_log(f"serial BREAK from {who} not sent: the serial port is not "
+                                "open")
+                return False
+            try:
+                ser.break_condition = True
+            except Exception as e:  # (a stand-in or a port without break control)
+                self._break_log(f"serial BREAK from {who} not sent: {type(e).__name__}: {e}")
+                return False
+            try:
+                await asyncio.sleep(BREAK_S)
+            finally:
+                with contextlib.suppress(Exception):
+                    ser.break_condition = False
+        self._break_log(f"serial BREAK sent ({who})")
         return True
 
     def _serial_changed(self, serial) -> None:

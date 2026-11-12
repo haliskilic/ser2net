@@ -11,7 +11,9 @@ dicts plus warnings. Checks:
     clientauth, TLS files missing here, dtls, wronly/rawlp, no-con-to-acc), with every
     reason; TLS is kept when its files are here; a read-only trace is not imported;
   * connectors: serialdev/sdev options (9600n81, rtscts, xonxoff, dtr=, nobreak, ...),
-    Windows //./COMn, network/IPMI connectors skipped;
+    Windows //./COMn, network/IPMI connectors skipped; nobreak / hangup-when-done are kept
+    with a warning that they have no effect here;
+  * an RFC 2217 connection's signature (4.x option, 3.x SIGNATURE) -> rfc2217_signature;
   * options: kickolduser, max-connections, banner escapes, openstr/closestr/closeon,
     trace-both, timeout, enable: off, remaddr -> allowed IPs, unsupported -> one warning;
   * the default remaddr only for a connection without addresses of its own (4.x / 3.x);
@@ -144,9 +146,12 @@ connection: &rfc
   connector: serialdev,/dev/ttyUSB2,9600n81
   options:
     max-connections: 3
+    signature: Line \p
 connection: &rfcoff
   accepter: telnet(rfc2217=false),tcp,2003
   connector: serialdev,/dev/ttyUSB3
+  options:
+    signature: not sent without RFC 2217
 connection: &udp
   accepter: udp,2004
   connector: serialdev,/dev/ttyUSB4
@@ -192,7 +197,9 @@ def test_accepters():
     assert net["tel"]["protocol"] == "telnet" and net["tel"]["bind_ip"] == "0.0.0.0"
     assert net["rfc"]["protocol"] == "rfc2217" and net["rfc"]["bind_ip"] == "192.168.1.5"
     assert net["rfc"]["max_connections"] == 1 and has(warns, "rfc:", "single client")
+    assert maps["rfc"]["options"]["rfc2217_signature"] == "Line 2002"
     assert net["rfcoff"]["protocol"] == "telnet"
+    assert "rfc2217_signature" not in maps["rfcoff"]["options"] and not has(warns, "rfcoff:")
     assert (net["udp"]["mode"], net["udp"]["protocol"], net["udp"]["port"]) == ("udp", "raw", 2004)
     assert net["udptel"]["protocol"] == "raw" and has(warns, "udptel:", "telnet over UDP")
     # the IPv6 loopback stays the IPv6 loopback (any spelling of it), with nothing to say
@@ -438,6 +445,9 @@ def test_connectors():
     assert a["advanced"] == {"nobreak": True, "hangup_when_done": True, "tiocexcl": True,
                              "respect_uucp_locks": True}, a
     assert a["exclusive"] is True, "ser2net's flock (with TIOCEXCL) is on by default"
+    for flag in ("hangup-when-done", "nobreak"):
+        assert has(warns, "a:", f"{flag} is kept in the mapping but has no effect here"), warns
+    assert not has(warns, "b:", "no effect here")
     assert (b["port"], b["stopbits"], b["flowcontrol"]) == ("/dev/ttyUSB1", 2, "xonxoff"), b
     assert (b["dtr_on_open"], b["rts_on_open"]) == ("off", "on"), b
     assert maps["c"]["serial"]["baudrate"] == 19200 and has(warns, "c:", "rs485=10:20")
@@ -784,7 +794,7 @@ CONF3 = "\n".join([
     "",
     "2000:raw:600:/dev/ttyS0:9600 NONE 1STOPBIT 8DATABITS XONXOFF LOCAL -RTSCTS b1",
     "127.0.0.1,2001:telnet:0:/dev/ttyS1:115200 EVEN 7DATABITS 2STOPBITS RTSCTS remctl \\",
-    "    kickolduser max-connections=2",
+    "    kickolduser max-connections=2 sig1",
     "DEFAULT:speed:19200",
     "ipv4,udp,2002:raw:30:/dev/ttyS2:4800 tb=t1 hexdump",
     "2003:rawlp:0:/dev/lp0:",
@@ -807,6 +817,7 @@ def test_v3():
     m1 = maps["ser2net-2001"]  # continued line
     assert m1["network"]["bind_ip"] == "127.0.0.1" and m1["network"]["protocol"] == "rfc2217"
     assert m1["network"]["max_connections"] == 1 and m1["network"]["kick_old_user"] is True
+    assert m1["options"]["rfc2217_signature"] == "ser2net port 1"  # SIGNATURE sig1 (RFC2217)
     assert (m1["serial"]["parity"], m1["serial"]["bytesize"], m1["serial"]["stopbits"],
             m1["serial"]["flowcontrol"]) == ("E", 7, 2, "rtscts")
     u = maps["ser2net-udp-2002"]
@@ -824,6 +835,8 @@ def test_v3():
     assert off["serial"]["advanced"] == {"hangup_when_done": True, "nobreak": True,
                                          "respect_uucp_locks": True}  # 3.x: UUCP locks only
     assert off["network"]["max_connections"] == 3
+    assert has(warns, "ser2net-2004", "HANGUP_WHEN_DONE is kept", "no effect here")
+    assert has(warns, "ser2net-2004", "NOBREAK is kept", "no effect here")
     t5 = maps["ser2net-2005"]
     assert t5["network"]["protocol"] == "telnet" and t5["serial"]["parity"] == "O"
     assert has(warns, "ser2net-2005", "unknown option 'bogus'")
@@ -834,11 +847,13 @@ def test_v3():
     assert has(warns, "ser2net-2007", "rs485")
     assert m7["enabled"] is False and has(warns, "ser2net-2007", "/dev/ttyS0", "ser2net-2000")
     assert has(warns, "line 24", "TCP port 2000 is already used")
-    for what in ("CONTROLPORT", "LED rx", "SIGNATURE sig1"):
+    for what in ("CONTROLPORT", "LED rx"):
         assert has(warns, what, "not imported"), what
+    assert not has(warns, "SIGNATURE"), "a SIGNATURE is imported where an RFC2217 port uses it"
+    assert "rfc2217_signature" not in maps["ser2net-2005"]["options"]  # (telnet: not sent)
     assert has(warns, "line 25", "not a ser2net.conf line")
     print("ser2net.conf (3.x): every state, BANNER/TRACEFILE/OPENSTR/CLOSESTR/CLOSEON/DEVICE/"
-          "DEFAULT, continuation; CONTROLPORT/LED/SIGNATURE warned  OK")
+          "SIGNATURE/DEFAULT, continuation; CONTROLPORT/LED warned  OK")
 
 
 LOCKS = r"""

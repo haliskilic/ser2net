@@ -396,7 +396,6 @@
   "Revoke": "İptal et",
   "RFC2217 allows a single client here: max-connections set to 1": "burada RFC2217 tek istemciye izin verir: max-connections 1 yapıldı",
   "RFC2217 requires a TCP (server/client) connection, not UDP.": "RFC2217 UDP ile değil, TCP (sunucu/istemci) bağlantısıyla çalışır.",
-  "RFC2217 signatures": "RFC2217 imzaları",
   "RFC2217 supports a single connection (clients share one serial port's settings). Set Max connections = 1.": "RFC2217 tek bağlantıyı destekler (istemciler aynı seri portun ayarlarını paylaşır). En fazla bağlantıyı 1 yapın.",
   "Role": "Rol",
   "Role for visitors without login": "Girişsiz ziyaretçilerin rolü",
@@ -935,5 +934,10 @@
   "the ssl layer names none (CA=)": "ssl katmanı hiçbirini belirtmiyor (CA=)",
   "'{0}' is not a file on this host": "'{0}' bu makinede bir dosya değil",
   "Mapping #{0} ({1}): its TLS files are not where the file says; the files of that name in this data directory's tls folder are used.": "Eşleme #{0} ({1}): TLS dosyaları dosyada yazan yerde değil; bu veri klasörünün tls klasöründeki aynı adlı dosyalar kullanılıyor.",
-  "TLS files the backup names in another data directory are used from this one's tls folder.": "Yedeğin başka bir veri klasöründe gösterdiği TLS dosyaları bu veri klasörünün tls klasöründen kullanılıyor."
+  "TLS files the backup names in another data directory are used from this one's tls folder.": "Yedeğin başka bir veri klasöründe gösterdiği TLS dosyaları bu veri klasörünün tls klasöründen kullanılıyor.",
+  "The RFC 2217 signature must be text of at most {0} characters, without control characters.": "RFC 2217 imzası en fazla {0} karakterlik, kontrol karakteri içermeyen bir metin olmalı.",
+  "RFC 2217 signature": "RFC 2217 imzası",
+  "the answer to a client that asks for the server’s signature · blank = ser2net": "sunucunun imzasını soran istemciye verilen yanıt · boş = ser2net",
+  "the RFC 2217 signature is not imported: here it is text of at most {0} characters, without control characters": "RFC 2217 imzası içe aktarılmadı: burada en fazla {0} karakterlik, kontrol karakteri içermeyen bir metin olmalı",
+  "{0} is kept in the mapping but has no effect here: the serial port stays open between connections": "{0} eşlemede saklanıyor ama burada etkisi yok: seri port bağlantılar arasında açık kalıyor"
 }

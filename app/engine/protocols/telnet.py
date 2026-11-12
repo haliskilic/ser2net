@@ -2,9 +2,14 @@
 
 We proactively negotiate 8-bit-clean BINARY (RFC 856) in both directions plus
 SGA (RFC 858) so the link carries arbitrary bytes. Unknown options are refused
-with WONT/DONT. A simplified, loop-safe negotiation state machine (we pre-mark
-our requested states so the peer's acknowledgements don't trigger replies) keeps
-this from oscillating, per RFC 854's loop-avoidance guidance.
+with WONT/DONT, every time they are asked for (RFC 1143). A simplified, loop-safe
+negotiation state machine (we pre-mark our requested states so the peer's
+acknowledgements don't trigger replies) keeps this from oscillating, per RFC 854's
+loop-avoidance guidance.
+
+IAC BRK (a telnet client's "send break": PuTTY's Special Command > Break, telnet's
+``send brk``) becomes a serial BREAK at its place in the data (from_network_parts: BREAK);
+the bridge sends it unless the mapping is read-only.
 
 This is the shared IAC handling that distinguishes 'telnet' from 'raw'. RFC2217
 goes further and is handled by pyserial's PortManager (see rfc2217.py).
@@ -16,7 +21,8 @@ on its length. A subnegotiation longer than MAX_SUBNEGOTIATION ends the session.
 """
 from __future__ import annotations
 
-from .base import MAX_SUBNEGOTIATION, ProtocolSession, data_run_end, subnegotiation_too_long
+from .base import (BREAK, MAX_SUBNEGOTIATION, ProtocolSession, data_run_end,
+                   subnegotiation_too_long)
 
 IAC = 255
 DONT = 254
@@ -24,6 +30,7 @@ DO = 253
 WONT = 252
 WILL = 251
 SB = 250
+BRK = 243
 SE = 240
 
 OPT_BINARY = 0
@@ -70,9 +77,11 @@ class TelnetSession(ProtocolSession):
         return data
 
     # ----- network -> serial: strip IAC, handle negotiation -----
-    def from_network(self, data: bytes) -> bytes:
+    def from_network_parts(self, data: bytes) -> list:
         if self._state == "data" and 0xFF not in data:
-            return data  # no command in this chunk: it all goes to the port as it is
+            # no command in this chunk: it all goes to the port as it is
+            return [data] if data else []
+        parts: list = []
         out = bytearray()
         i, n = 0, len(data)
         while i < n:
@@ -112,6 +121,11 @@ class TelnetSession(ProtocolSession):
                         self._state = "sb"
                         self._sb_len = 0
                     else:
+                        if byte == BRK:  # a serial BREAK, after the data before it
+                            if out:
+                                parts.append(bytes(out))
+                                out.clear()
+                            parts.append(BREAK)
                         self._state = "data"  # NOP and other 2-byte commands: ignore
                 elif st == "opt":
                     self._negotiate(self._cmd, byte)
@@ -124,15 +138,20 @@ class TelnetSession(ProtocolSession):
                         self._sb_len += 2
                         if self._sb_len > MAX_SUBNEGOTIATION:
                             raise subnegotiation_too_long()
-        return bytes(out)
+        if out:
+            parts.append(bytes(out))
+        return parts
 
     def _negotiate(self, cmd: int, opt: int) -> None:
+        # An option we don't support is refused each time the peer asks for it (RFC 1143:
+        # a DO / WILL is a request to change the state, so it is always answered), one
+        # reply per request; a DONT / WONT for an option that is off needs no answer.
         if cmd == DO:
             if opt in SUPPORTED:
                 if not self._local.get(opt):
                     self._local[opt] = True
                     self._send(IAC, WILL, opt)
-            elif self._local.get(opt) is not False:
+            else:
                 self._local[opt] = False
                 self._send(IAC, WONT, opt)
         elif cmd == DONT:
@@ -144,7 +163,7 @@ class TelnetSession(ProtocolSession):
                 if not self._remote.get(opt):
                     self._remote[opt] = True
                     self._send(IAC, DO, opt)
-            elif self._remote.get(opt) is not False:
+            else:
                 self._remote[opt] = False
                 self._send(IAC, DONT, opt)
         elif cmd == WONT:
