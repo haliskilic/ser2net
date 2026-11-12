@@ -335,9 +335,13 @@ class Client(Browser):
 
 
 def gated(path, st, h, body) -> bool:
-    """The session gate: sign in first."""
+    """The session gate: sign in first (a client that is not a browser asking for what
+    monitoring reads gets 401, not the sign-in page)."""
     if path.startswith("/api/"):
         return st == 401 and json.loads(body) == {"error": "unauthorized"}
+    if path in web_server.MONITORING_PATHS:
+        return st == 401 and body.startswith("unauthorized: sign in to the web UI") and \
+            h.get("WWW-Authenticate", "").startswith("Bearer")
     return st == 303 and h.get("Location") == "/login"
 
 
