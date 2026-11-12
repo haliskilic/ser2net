@@ -5,6 +5,9 @@ Checks:
     sign-ins and failed sign-ins are recorded, REST API / cluster calls say so;
   * control characters in a field (a mapping name with a newline) can't create an
     extra, forged record;
+  * the same holds for all.log / stdout and a mapping's own log: a message is one line
+    (control characters become spaces, terminal escapes included), a traceback after it
+    stays as it is;
   * Settings -> Audit log (admin only): search, action/user filters, paging, CSV
     export with formula-looking cells neutralised.
 
@@ -12,12 +15,14 @@ Run: python3 tests/test_audit_log.py
 """
 import csv
 import io
+import logging
 import os
+import shutil
 import tempfile
 
 from _server import Browser, Server, free_port
 
-from app.config import AppConfig, ConfigStore
+from app.config import AppConfig, ConfigStore, MappingConfig
 from app.state import AppState
 from app.web.auth import hash_password
 
@@ -43,8 +48,50 @@ def test_records_and_injection():
     print("records: user column appended (2.7 lines still parse), newline can't forge a record  OK")
 
 
+def _close_loggers():
+    # AppState's FileHandlers keep the logs open (Windows can't remove the folder then)
+    for name in list(logging.root.manager.loggerDict):
+        if name == "ser2net" or name.startswith("ser2net."):
+            lg = logging.getLogger(name)
+            for h in list(lg.handlers):
+                h.close()
+                lg.removeHandler(h)
+
+
+def test_log_lines():
+    d = tempfile.mkdtemp(prefix="s2n_logline_")
+    try:
+        st = AppState(ConfigStore(os.path.join(d, "config.json")), AppConfig())
+        forged = "2026-11-04 00:00:00 login: admin (admin, local) from 6.6.6.6"
+        st.log(f"saved\r\n{forged}\x1b[2J\u2028\x85\x9b31m\tend")
+        log = st.make_mapping_logger(MappingConfig(id="m1", name="PLC\n1"))
+        log(f"point 'x\u2029y' failed\n{forged}")
+        try:
+            raise RuntimeError("boom")
+        except RuntimeError:
+            logging.getLogger("ser2net").exception("fatal\nerror")
+        with open(st.log_path, encoding="utf-8") as fh:
+            lines = fh.read().split("\n")
+        assert not any(ln.startswith(forged[:19]) for ln in lines), "a forged line got in"
+        assert any(ln.endswith(f"saved  {forged} [2J   31m end") for ln in lines), lines
+        assert any(ln.endswith(f"[PLC 1] point 'x y' failed {forged}") for ln in lines), lines
+        assert not any("\x1b" in ln or "\x9b" in ln or "\u2028" in ln for ln in lines)
+        assert any(ln.endswith(" fatal error") for ln in lines), lines
+        assert "Traceback (most recent call last):" in lines and "RuntimeError: boom" in lines
+        with open(st.mapping_log_path("m1"), encoding="utf-8") as fh:
+            own = fh.read().split("\n")
+        assert len(own) == 2 and own[0].endswith(f" point 'x y' failed {forged}"), own
+        assert st.read_mapping_log("m1") == own[:1]
+        print("all.log / stdout / mapping log: one line per message (no forged line, no "
+              "terminal escape); a traceback stays below its line  OK")
+    finally:
+        _close_loggers()
+        shutil.rmtree(d, ignore_errors=True)
+
+
 def main():
     test_records_and_injection()
+    test_log_lines()
     users = [{"username": "admin", "password_hash": hash_password(PW), "role": "admin", "pwd_version": 1},
              {"username": "op1", "password_hash": hash_password(PW), "role": "operator", "pwd_version": 1}]
     with Server({"users": users}) as srv:
