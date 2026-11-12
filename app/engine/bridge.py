@@ -1099,10 +1099,10 @@ class MappingRunner:
                     else:
                         st.open_failures += 1
                         st.state = "device-missing" if portdiag.missing(e) else "reconnecting"
-                    if failures.failed(st.last_error):
-                        hint = None if was_open else await asyncio.to_thread(
-                            explain, e, sides[first])
-                        st.hint = portdiag.Note("side", ("AB"[first], hint)) if hint else None
+                    failures.failed(st.last_error)
+                    hint = None if was_open else await asyncio.to_thread(
+                        explain, e, sides[first])
+                    st.hint = portdiag.Note("side", ("AB"[first], hint)) if hint else None
             finally:
                 self.status.warnings = ()
                 await asyncio.gather(*(close_stream(port[1], self._log)

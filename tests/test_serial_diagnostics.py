@@ -370,6 +370,45 @@ async def _until(check, timeout=10.0):
         await asyncio.sleep(0.02)
 
 
+async def _hint_follows_the_cause():
+    from app.engine import serial_link
+    status = RunnerStatus()
+    stop = asyncio.Event()
+    logs = []
+    link = SerialLink(SerialSettings(port="/dev/ttyUSB0"), status, stop, logs.append)
+    answers = [portdiag.Note("group", ("/dev/ttyUSB0", "dialout", 20, "svc")),
+               portdiag.Note("restart", ("svc", "dialout"))]
+
+    async def denied(settings):
+        raise _denied("/dev/ttyUSB0")
+
+    def explain(e, device):
+        return answers[0] if len(answers) == 1 else answers.pop(0)
+
+    def fast(self):
+        self.attempt += 1
+        return 0.02
+
+    with mock.patch.object(serial_io, "open_serial", denied), \
+            mock.patch.object(portdiag, "explain", explain), \
+            mock.patch.object(serial_link.Backoff, "pause", fast):
+        task = asyncio.ensure_future(link.run(link.hold_open))
+        try:
+            await _until(lambda: status.hint is not None and status.hint.kind == "restart")
+        finally:
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+    assert sum(m.startswith("serial error:") for m in logs) == 1, logs
+    assert status.last_error.endswith("Permission denied: '/dev/ttyUSB0'"), status
+
+
+def test_hint_follows_the_cause():
+    asyncio.run(_hint_follows_the_cause())
+    print("hint: worked out again at each failed open (the same error, a new cause: a user "
+          "just added to the group needs a restart), the error logged once  OK")
+
+
 def test_port_in_use_hints():
     if os.name != "posix":
         print("SKIP (part): the PTY checks of a port in use are POSIX only")
@@ -732,6 +771,7 @@ if __name__ == "__main__":
     test_status_and_log()
     test_dashboard_shows_warnings()
     test_no_access_hints()
+    test_hint_follows_the_cause()
     test_port_in_use_hints()
     test_windows_in_use_hint()
     test_port_warnings()
