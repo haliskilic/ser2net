@@ -43,6 +43,7 @@ Run: python3 tests/test_route_access.py
 """
 from __future__ import annotations
 
+import asyncio
 import http.client
 import http.cookiejar
 import json
@@ -90,6 +91,7 @@ ROUTES = {
     ("POST", "/settings/login-notice"): (ADMIN, FORM),
     ("POST", "/settings/sessions/revoke-all"): (ADMIN, FORM),
     ("POST", "/settings/api-token"): (ADMIN, FORM),
+    ("POST", "/settings/api-token/role"): (ADMIN, FORM),
     ("POST", "/settings/api-token/revoke"): (ADMIN, FORM),
     ("POST", "/settings/api-tokens"): (ADMIN, FORM),
     ("POST", "/settings/api-tokens/revoke"): (ADMIN, FORM),
@@ -169,7 +171,7 @@ ROUTES = {
     ("MOUNT", "/static"): (PUBLIC, NONE),
 }
 
-# what the handler of an "account" route answers an open-access visitor (200, no change)
+# what the handler of an "account" route answers an open-access visitor (400, no change)
 ACCOUNT_REFUSALS = {
     "/settings/password": "Sign in to change your password.",
     "/settings/sessions/signout-others": "Sign in to manage your sessions.",
@@ -277,6 +279,7 @@ def test_traffic_feed():
     net = MappingConfig.from_dict({"name": "net", "kind": "net"})
     read_only = MappingConfig.from_dict({"name": "ro", "kind": "net", "network": {"read_only": True}})
     bridge = MappingConfig.from_dict({"name": "pair", "kind": "serialbridge"})
+    gateway = MappingConfig.from_dict({"name": "gw", "kind": "net", "network": {"protocol": "modbus"}})
     viewer, operator, admin = (User(username=r, role=r) for r in ("viewer", "operator", "admin"))
     visitors = [User(username="(no login)", role=r, source="anonymous") for r in ("viewer", "operator")]
     for u in (viewer, visitors[0]):
@@ -285,11 +288,13 @@ def test_traffic_feed():
     for u in (operator, admin, visitors[1]):
         assert sees_to_device(u, net) and console_interactive(u, net), u
         assert not console_interactive(u, read_only) and not console_interactive(u, bridge), u
+        assert not console_interactive(u, gateway), "a Modbus gateway only watches its bus"
 
     def fed(mon):
         mon.feed_traffic(TO_DEVICE, b"typed-secret")
         mon.feed_traffic(FROM_DEVICE, b"Password: ")
-        return [mon.queue.get_nowait()[::2] for _ in range(mon.queue.qsize())]
+        mon.close()
+        return [item[::2] for item in asyncio.run(mon.take())[0]]
 
     assert fed(_TrafficMonitor(to_device=False)) == [(FROM_DEVICE, b"Password: ")]
     assert fed(_TrafficMonitor(to_device=True)) == [(TO_DEVICE, b"typed-secret"),
@@ -358,16 +363,22 @@ class Client(Browser):
         return st, h, raw.decode("utf-8", "replace")
 
 
+def to_login(h) -> bool:
+    """A redirect to the sign-in page (a page request carries ?next=: where it leads back)."""
+    loc = h.get("Location") or ""
+    return loc == "/login" or loc.startswith("/login?next=")
+
+
 def gated(path, st, h, body) -> bool:
     """The session gate: sign in first."""
     if path.startswith("/api/"):
         return st == 401 and json.loads(body) == {"error": "unauthorized"}
-    return st == 303 and h.get("Location") == "/login"
+    return st == 303 and to_login(h)
 
 
 def passed(st, h, body) -> bool:
     """Got past every access check (whatever the handler answers then)."""
-    return not (st == 401 or (st == 303 and h.get("Location") == "/login")
+    return not (st == 401 or (st == 303 and to_login(h))
                 or (st == 403 and body.strip() in DENIALS) or st >= 500)
 
 
@@ -403,7 +414,7 @@ def check_session_route(who: Client, method: str, path: str, access: str, csrf: 
         elif want == "peer":
             ok = st == 403 and body.strip() == PEER_DENIED
         elif want == "account":
-            ok = st == 200 and ACCOUNT_REFUSALS[path] in body
+            ok = st == 400 and ACCOUNT_REFUSALS[path] in body
         else:
             ok = st == 403 and body.strip() == ROLE_DENIED.format(want)
     if want != "allowed":
@@ -558,7 +569,9 @@ def _live(srv) -> None:
                 assert st not in (401, 403) and st < 500, f"{method} {probe} -> {st} {text[:80]}"
 
     check_token(VIEWER_TOKEN, may_write=False)
-    st, _, page = admin.send("POST", "/settings/api-token", fields={"api_token_role": "operator"})
+    st, h, _ = admin.send("POST", "/settings/api-token", fields={"api_token_role": "operator"})
+    assert st == 303 and h.get("Location") == "/settings#api-token", st   # the page shows it
+    page = admin.get("/settings")[2]
     check_token(re.search(r"s2n_[A-Za-z0-9_\-]+", page).group(0), may_write=True)
     print("REST API: no / a wrong token or a session cookie -> 401, a viewer token can't write, "
           "an operator token can  OK")
@@ -575,15 +588,15 @@ def _live(srv) -> None:
 
     # ---- open access: visitors without a session get a role ----
     for role, rank in (("viewer", 1), ("operator", 2)):
-        st, _, page = admin.send("POST", "/settings/access", fields={"anonymous_role": role})
-        assert st == 200 and "Open access enabled" in page, st
+        st, _, _ = admin.send("POST", "/settings/access", fields={"anonymous_role": role})
+        assert st == 303 and "Open access enabled" in admin.get("/settings")[2], st
         visitor = Client(base, f"open-access visitor ({role})", rank, False)
         for route in routes:
             check_session_route(visitor, *route)
         check_websockets(srv, visitor, accepted=True)
     st, _, _ = admin.send("POST", "/settings/access", fields={"require_login": "on",
                                                              "anonymous_role": "viewer"})
-    assert st == 200 and srv.saved_config()["admin_ui"]["require_login"] is True
+    assert st == 303 and srv.saved_config()["admin_ui"]["require_login"] is True
     check_websockets(srv, Client(base, "no session (login required again)"), accepted=False)
     print(f"open access: visitors as viewer and as operator over all {len(routes)} routes; no "
           "peer actions, no account pages, nothing above their role  OK")

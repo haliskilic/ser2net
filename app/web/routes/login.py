@@ -18,7 +18,7 @@ from ...engine import netguard, netinfo
 from ...i18n import _
 from .. import auth, ldap_auth, oidc_auth, proxy
 from . import totp
-from .common import Ctx, csrf_failed
+from .common import Ctx, csrf_failed, local_path
 from .forms import _password_problem, _username_problem
 
 OIDC_COOKIE = "ser2net_oidc"
@@ -32,8 +32,16 @@ def routes(ctx: Ctx) -> list:
     state, render, client_ip, set_session = ctx.state, ctx.render, ctx.client_ip, ctx.set_session
 
     async def login_get(request):
+        # ?next=: the page to go back to (GuardMiddleware sends a page request without a
+        # session here with it; the dashboard's "session ended" link too)
         return render(request, "login.html", error=None,
-                      oidc_enabled=state.config.oidc.enabled)
+                      oidc_enabled=state.config.oidc.enabled,
+                      next=local_path(request.query_params.get("next"), ""))
+
+    def _typed(form) -> str:
+        """The user name a refused sign-in form had, to fill it in again: a retry that
+        re-types only the password must not go to 'admin' (the field's default)."""
+        return str(form.get("username") or "").strip()[:auth.LOGIN_NAME_MAX]
 
     # ---------------- LDAP / OIDC groups -> role ----------------
     # (source, user name) whose sessions a refused sign-in already ended, so that more
@@ -166,12 +174,13 @@ def routes(ctx: Ctx) -> list:
         return _("Your user name from the directory or the identity provider can’t be used "
                  "here; an admin can see why in all.log.")
 
-    def _refusal_page(request, source: str, message: str | None):
+    def _refusal_page(request, source: str, message: str | None, username: str = "",
+                      nxt: str = ""):
         if source == "oidc":
             return render(request, "login.html", status_code=403, error=None, oidc_enabled=True,
                           oidc_error=message)
         return render(request, "login.html", status_code=403, error=message,
-                      oidc_enabled=state.config.oidc.enabled)
+                      oidc_enabled=state.config.oidc.enabled, username=username, next=nxt)
 
     async def _save_external(source: str, username: str, role: str) -> User | None:
         """The saved shadow account of an LDAP/OIDC user who signed in; None when a local
@@ -218,10 +227,12 @@ def routes(ctx: Ctx) -> list:
                   + ("" if oidc.redirect_uri.strip() else
                      " (made from the request; Settings → Single sign-on (OIDC) shows it)"))
         resp = RedirectResponse(url, status_code=303)
+        # "x": the page to go back to after the sign-in (?next=, as for a password sign-in)
+        payload = {"s": st, "n": nonce, "r": redirect_uri, "v": verifier}
+        if nxt := local_path(request.query_params.get("next"), ""):
+            payload["x"] = nxt
         auth.set_cookie(resp, request, state.config, OIDC_COOKIE,
-                        auth.sign_payload(state.config.secret_key,
-                                          {"s": st, "n": nonce, "r": redirect_uri, "v": verifier},
-                                          ttl_seconds=600),
+                        auth.sign_payload(state.config.secret_key, payload, ttl_seconds=600),
                         max_age=600, path="/auth/oidc")
         return resp
 
@@ -299,7 +310,8 @@ def routes(ctx: Ctx) -> list:
         refused.discard(_person("oidc", username))
         state.log(f"login: {user.username} ({role}, oidc) from {client_ip(request)}")
         ctx.audit(request, "oidc_login", user.username, user=user.username)
-        resp = proxy.redirect(request, "/")
+        # a state cookie from before 2.9 has no "x": the dashboard
+        resp = proxy.redirect(request, local_path(data.get("x")))
         set_session(resp, request, user)
         ctx.new_csrf_token(request)
         auth.delete_cookie(resp, request, state.config, OIDC_COOKIE, path="/auth/oidc")
@@ -345,38 +357,41 @@ def routes(ctx: Ctx) -> list:
                 return
         state.log(f"the password hash of {user.username!r} was renewed with today's scrypt cost")
 
-    def _too_many(request):
+    def _too_many(request, typed: str, nxt: str):
         return render(request, "login.html", status_code=429,
                       error=_("Too many attempts. Wait a few minutes and try again."),
-                      oidc_enabled=state.config.oidc.enabled)
+                      oidc_enabled=state.config.oidc.enabled, username=typed, next=nxt)
 
-    def _login_failed(request, ip: str, username: str):
+    def _login_failed(request, ip: str, username: str, typed: str, nxt: str):
         """Log, record and notify a failed sign-in (login_post counted it already); the
-        sign-in page again. A name that is no account's is recorded as
-        auth.UNKNOWN_USER: what was typed may well be a password."""
+        sign-in page again, with the name typed (`typed`) and the page to go back to
+        (`nxt`). A name that is no account's is recorded as auth.UNKNOWN_USER: what was
+        typed may well be a password."""
         label = username if _is_account_name(username) else auth.UNKNOWN_USER
         state.log(f"failed login for {label!r} from {ip}")
         _record_failure(ip, label)
         _note_name_paused(label, username)
         return render(request, "login.html", status_code=401,
                       error=_("Invalid username or password."),
-                      oidc_enabled=state.config.oidc.enabled)
+                      oidc_enabled=state.config.oidc.enabled, username=typed, next=nxt)
 
     async def login_post(request):
         ip = client_ip(request)
         form = await request.form(**FORM_LIMITS)
         if not auth.csrf_token_matches(request, form.get("_csrf")):
             return csrf_failed()
+        typed = _typed(form)
+        nxt = local_path(form.get("next"), "")   # the page to go back to (login_get)
         if state.rate_limiter.blocked(ip):
-            return _too_many(request)
+            return _too_many(request, typed, nxt)
         # username defaults to "admin" so single-user (password-only) logins keep working
         username = (form.get("username") or "admin").strip() or "admin"
         password = form.get("password", "")
         if len(username) > auth.LOGIN_NAME_MAX:  # no account has such a name: not tried
             state.rate_limiter.record_failure(ip)
-            return _login_failed(request, ip, username)
+            return _login_failed(request, ip, username, typed, nxt)
         if state.name_limiter.blocked(username):  # from any address: that name only
-            return _too_many(request)
+            return _too_many(request, typed, nxt)
         user = state.config.get_user(username)
         local = user is not None and user.source == "local"
         directory = not local and state.config.ldap.enabled
@@ -408,13 +423,14 @@ def routes(ctx: Ctx) -> list:
             if groups is not None:
                 state.ldap_tls_problem = None   # the connection to the directory works
                 if refusal := _name_refused(request, "ldap", username):
-                    return _refusal_page(request, "ldap", refusal)
+                    return _refusal_page(request, "ldap", refusal, typed, nxt)
                 role = _directory_role("ldap", username, groups, state.config.ldap)
                 if role:
                     authed = await _save_external("ldap", username, role)
                     if authed is None:   # a local account got the name meanwhile
                         return _refusal_page(request, "ldap",
-                                             _name_refused(request, "ldap", username))
+                                             _name_refused(request, "ldap", username), typed,
+                                             nxt)
                     refused.discard(_person("ldap", username))
                 else:
                     await _end_refused_sessions("ldap", username)
@@ -431,11 +447,11 @@ def routes(ctx: Ctx) -> list:
                 await _renew_hash(authed, password)
             state.log(f"login: {authed.username} ({authed.role}, {authed.source}) from {ip}")
             ctx.audit(request, "login", f"{authed.role}, {authed.source}", user=authed.username)
-            resp = proxy.redirect(request, "/")
+            resp = proxy.redirect(request, nxt or "/")
             set_session(resp, request, authed)
             ctx.new_csrf_token(request)
             return resp
-        return _login_failed(request, ip, username)
+        return _login_failed(request, ip, username, typed, nxt)
 
     async def _sign_out_everywhere(username: str) -> None:
         """A logout the revocation list has no room for: end all of the account's
@@ -476,11 +492,13 @@ def routes(ctx: Ctx) -> list:
     # machine's (auth.claims_own_host, the DNS-rebinding guard). Through another name
     # (a reverse proxy, Docker's host name) the page asks for the one-time code that
     # AppState.prepare_first_run wrote to setup-code.txt. No redirect: every path leads here.
-    def setup_page(request, status_code=200, error=None):
+    def setup_page(request, status_code=200, error=None, username=""):
+        # username: the admin name a refused form had (accounts can't be renamed, so one
+        # that silently fell back to "admin" would stay so)
         return render(request, "setup.html", status_code=status_code, error=error,
                       ips=netinfo.list_ip_candidates(), admin=state.config.admin_ui,
                       locked=state.setup_locked, need_code=not auth.claims_own_host(request.headers),
-                      host=auth.foreign_host(request.headers))
+                      host=auth.foreign_host(request.headers), username=username)
 
     async def setup_get(request):
         trusted = auth.claims_own_host(request.headers) and not state.setup_locked
@@ -493,22 +511,23 @@ def routes(ctx: Ctx) -> list:
         if state.setup_locked:
             return setup_page(request, status_code=403)
         ip = client_ip(request)
+        typed = _typed(form)
         if not auth.claims_own_host(request.headers):
             if state.rate_limiter.blocked(ip):
                 return setup_page(request, 429, _("Too many attempts. Wait a few minutes and try "
-                                                  "again."))
+                                                  "again."), typed)
             if not state.setup_code_ok(form.get("setup_code") or ""):
                 state.rate_limiter.record_failure(ip)
                 state.log(f"first-run setup refused: wrong setup code from {ip} "
                           f"(host {auth.foreign_host(request.headers)!r})")
                 return setup_page(request, 403, _("That setup code is not right. It is in "
-                                                  "setup-code.txt in ser2net’s data folder."))
+                                                  "setup-code.txt in ser2net’s data folder."), typed)
         username = (form.get("username") or "admin").strip() or "admin"
         pw = form.get("password", "")
         pw2 = form.get("password2", "")
         err = _username_problem(username) or _password_problem(pw, pw2)
         if err:
-            return setup_page(request, 400, err)
+            return setup_page(request, 400, err, typed)
         pw_hash = await state.password_work.run(auth.hash_password, pw)
         async with state.config_lock:
             # checked again here: another setup request may have finished while this one
@@ -521,7 +540,7 @@ def routes(ctx: Ctx) -> list:
                     await state.asave()
                 except ConfigError as e:
                     state.config.users = []
-                    return setup_page(request, 400, str(e))
+                    return setup_page(request, 400, str(e), typed)
         if claimed:
             state.log(f"first-run setup from {ip} ignored: the admin account exists already")
             return proxy.redirect(request, "/login")

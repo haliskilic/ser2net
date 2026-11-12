@@ -74,19 +74,26 @@ class _Unbuildable:
     def __init__(self, error: Exception):
         self.error = f"its settings can't be used: {error}"
         self.status = RunnerStatus(state="stopped")
+        self._viewers: set = set()  # consoles and hex views: closed when it is replaced
 
     async def start(self) -> None:
         raise RuntimeError(self.error)
 
     async def stop(self) -> None:
-        pass
+        for mon in list(self._viewers):
+            mon.close()
+        self._viewers.clear()
 
-    # the console attaches to any runner: there is nothing to watch or write to here
+    # the console and the hex view attach to any runner: there is nothing to watch or
+    # write to here
     def add_monitor(self, mon) -> None:
-        pass
+        self._viewers.add(mon)
 
     def discard_monitor(self, mon) -> None:
-        pass
+        self._viewers.discard(mon)
+
+    add_traffic_monitor = add_monitor
+    discard_traffic_monitor = discard_monitor
 
     async def serial_write(self, data: bytes) -> None:
         pass
@@ -179,7 +186,8 @@ class Supervisor:
             with contextlib.suppress(Exception):
                 await old.stop()
 
-        runner = _build_runner(mapping, self._logger_factory(mapping), self.trace_dir)
+        log = self._logger_factory(mapping)
+        runner = _build_runner(mapping, log, self.trace_dir)
         if mapping.id not in self._order:
             self._order.append(mapping.id)
         async with self._lock:
@@ -197,12 +205,13 @@ class Supervisor:
         except Exception as e:
             runner.status.state = "error"
             runner.status.last_error = str(e)
+            # all.log ("[name] ...") and the mapping's own log
             if isinstance(e, BindError):
-                self.log(f"[{mapping.name}] start failed: {e} — trying again until the "
-                         f"address can be used (every {BIND_RETRY_MAX_S:g} s at most)")
+                log(f"start failed: {e} — trying again until the address can be used "
+                    f"(every {BIND_RETRY_MAX_S:g} s at most)")
                 self._retry_later(mapping, runner, str(e))
             else:
-                self.log(f"[{mapping.name}] start failed: {e}")
+                log(f"start failed: {e}")
             return False, str(e)
 
     def _retry_later(self, mapping: MappingConfig, runner: Runner, error: str) -> None:

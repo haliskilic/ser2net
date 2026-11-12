@@ -6,6 +6,8 @@
   <meta name="csrf-token" content="{{ request.state.csrf_token }}">
   <meta name="ser2net-base" content="{{ base }}">
   <title>{% block title %}ser2net{% endblock %}</title>
+  {# not deferred: the saved theme is set before the first paint (no dark flash) #}
+  <script src="{{ base }}/static/theme.js?v={{ asset_version }}"></script>
   <link rel="stylesheet" href="{{ base }}/static/xterm.css?v={{ asset_version }}">
   <link rel="stylesheet" href="{{ base }}/static/app.css?v={{ asset_version }}">
   <link rel="icon" href="data:,">
@@ -20,6 +22,14 @@
 <body data-server-time="{{ server_now() }}" data-i18n="{{ {
   'disconnected': _('console disconnected'),
   'selected': _('{0} selected'),
+  'selected_hidden': _('{0} selected ({1} more hidden by the filter: left out)'),
+  'bulk_start': [_('Start {0} mapping?'), _('Start {0} mappings?')],
+  'bulk_stop': [_('Stop {0} mapping? It stays stopped until it is started again.'),
+                _('Stop {0} mappings? They stay stopped until they are started again.')],
+  'bulk_restart': [_('Restart {0} mapping?'), _('Restart {0} mappings?')],
+  'bulk_clients': [_('{0} connected client will be disconnected.'), _('{0} connected clients will be disconnected.')],
+  'bulk_hidden': [_('{0} selected mapping hidden by the filter is left out.'),
+                  _('{0} selected mappings hidden by the filter are left out.')],
   'shown': _('{0} of {1} shown'),
   'hex_header': _('time          direction   offset  bytes                                            text'),
   'hex_zone': _('times in this browser’s time zone: {0}'),
@@ -32,6 +42,35 @@
   'minutes': _('{0} min'),
   'hours': _('{0} h'),
   'days': _('{0} days'),
+  'dismiss': _('Dismiss'),
+  'stale': _('not up to date'),
+  'failed': _('That did not work (HTTP {0}).'),
+  'server_error': _('Something went wrong on the server (HTTP {0}).'),
+  'offline': _('The server can’t be reached: this page is not up to date. It updates again as soon as the server answers.'),
+  'session_ended': _('Your session has ended: this page is not up to date, and changes can’t be saved until you sign in again.'),
+  'sign_in': _('Sign in'),
+  'terminal_input': _('Terminal input'),
+  'discard_changes': _('Discard the unsaved changes in the open form?'),
+  'sign_in_tab': _('Sign in in a new tab (keeps the open form)'),
+  'no_match': _('No mapping matches the search or the state filter.'),
+  'show_all': _('Show all'),
+  'connected': _('connected %(duration)s', duration='{0}'),
+  'dur_hm': _('{0}h {1}m'),
+  'dur_ms': _('{0}m {1}s'),
+  'dur_s': _('{0}s'),
+  'priority': _('priority'),
+  'copied': _('Copied to the clipboard.'),
+  'copy_by_hand': _('Selected: press Ctrl+C (⌘C on a Mac) to copy it.'),
+  'dropped': [_('{0} byte left out: this browser did not keep up'), _('{0} bytes left out: this browser did not keep up')],
+  'ws_not_running': _('the mapping is not running: its traffic shows here once it is started'),
+  'ws_reconnected': _('connected again'),
+  'ws_reconnecting': _('the mapping stopped or restarted: connecting again'),
+  'ws_refused': _('could not connect (signed out, or a reverse proxy changed the Host / Origin header)'),
+  'ws_busy': _('too many consoles and hex views are open: close one, then try again'),
+  'ws_stopped': _('the mapping stopped or restarted'),
+  'ws_access': _('closed: signed out, or your access changed'),
+  'ws_slow': _('closed: this browser took nothing for too long'),
+  'ws_gone': _('the mapping no longer exists'),
 } | tojson | forceescape }}">
   {% block body %}{% endblock %}
 </body>

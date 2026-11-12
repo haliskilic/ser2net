@@ -6,7 +6,8 @@ Users migrating from it bring /etc/ser2net/ser2net.yaml (ser2net 4.x) or
 `*(name)` references inside strings, which is not standard YAML (and PyYAML is not a
 dependency anyway); 3.x has its own colon-separated line format. So this module
 carries a small reader for the YAML subset ser2net configs use plus a 3.x line
-parser, and turns every ser2net connection into a dict for MappingConfig.from_dict.
+parser, and turns every ser2net connection into a dict for MappingConfig.from_dict
+(each warning about one is a Note that knows its mapping: the preview shows it there).
 
 What has no equivalent here (LEDs, rotators, mDNS, chardelay, ...) is reported as a
 warning that names the connection. A connection that would be more open here than in
@@ -584,16 +585,22 @@ class _Conn:
     remctl: bool = False                                         # 3.x RFC2217 flag
     flock: bool = True       # gensio serialdev flock (flock + TIOCEXCL), on by default
     uucplock: bool = True    # gensio serialdev uucplock (UUCP lock files), on by default
+    devname: str = ""                # 3.x: the device as the port line names it (\o)
     dropped: dict[str, None] = field(default_factory=dict)       # options with no equivalent
     notes: list[str] = field(default_factory=list)
     skipped: list[str] = field(default_factory=list)             # why it is not imported
     noted: set[str] = field(default_factory=set)                 # = set(notes)
+    flagged: set[str] = field(default_factory=set)               # notes about its protection
 
-    def note(self, msg: str) -> None:
+    def note(self, msg: str, security: bool = False) -> None:
+        """`security`: the note says the mapping is held disabled or has lost a limit on
+        its clients (Note.security)."""
         if msg not in self.noted:
             self.budget.spend(len(self.label) + len(msg))  # the warning it becomes
             self.noted.add(msg)
             self.notes.append(msg)
+        if security:
+            self.flagged.add(msg)
 
     def hold(self, why: str) -> None:
         """Import the connection disabled: as it is here it would be more open than in
@@ -632,6 +639,15 @@ _FALSE = ("false", "no", "off", "0")
 def _bool(value: str) -> Optional[bool]:
     v = value.strip().lower()
     return True if v in _TRUE else False if v in _FALSE else None
+
+
+_CONTROL = re.compile(r"[\x00-\x1f\x7f]")
+
+
+def _shown(value: str) -> str:
+    """A value as a warning shows it: control characters (a CR/LF in a banner) escaped."""
+    return _CONTROL.sub(lambda m: {"\r": "\\r", "\n": "\\n", "\t": "\\t"}.get(
+        m.group(), f"\\x{ord(m.group()):02x}"), value)
 
 
 def _split_gensio(spec: str) -> list[str]:
@@ -730,8 +746,11 @@ _OTHER_TERMINALS = ("unix", "unixdgram", "stdio", "pty", "file", "echo", "dummy"
                     "ssl", "certauth", "mux")
 
 
-def _accepter(c: _Conn, spec: str, ssl_defaults: Optional[dict[str, str]] = None) -> bool:
-    """The listening side: telnet / telnet(rfc2217) over tcp|udp,[host,]port."""
+def _accepter(c: _Conn, spec: str, ssl_defaults: Optional[dict[str, str]] = None,
+              rfc2217: Optional[bool] = None) -> bool:
+    """The listening side: telnet / telnet(rfc2217) over tcp|udp,[host,]port. `rfc2217`:
+    the file's telnet default for it (None: not set), for a telnet layer that doesn't
+    say."""
     layers = _split_gensio(spec)
     for idx, part in enumerate(layers):
         name, opts = _layer(part)
@@ -743,8 +762,11 @@ def _accepter(c: _Conn, spec: str, ssl_defaults: Optional[dict[str, str]] = None
                 c.note(_("SCTP is not supported here: the mapping listens on TCP instead"))
             return _listen_address(c, layers[idx + 1:])
         if low == "telnet":
-            rfc = any(o.split("=", 1)[0].strip().lower() == "rfc2217"
-                      and _bool(o.split("=", 1)[1] if "=" in o else "true") for o in opts)
+            rfc = rfc2217
+            for o in opts:
+                key, eq, value = o.partition("=")
+                if key.strip().lower() == "rfc2217":
+                    rfc = bool(_bool(value)) if eq else True
             c.network["protocol"] = "rfc2217" if rfc else "telnet"
         elif low == "ssl":
             c.ssl = _ssl_layer(opts, ssl_defaults or {})  # resolved in _tls()
@@ -826,6 +848,24 @@ def _tls(c: _Conn) -> None:
 
 
 _SPEED = re.compile(r"(?:speed=)?(\d+)([NEOMS])?([5-8])?([12])?", re.I)
+_PARITY_WORDS = {"NONE": "N", "EVEN": "E", "ODD": "O", "MARK": "M", "SPACE": "S"}
+
+
+def _serial_word(c: _Conn, tok: str) -> bool:
+    """The serial framing written as words (gensio still takes them, ser2net 3.x wrote
+    them so): 1STOPBIT / 2STOPBITS / 5DATABITS..8DATABITS in any case, the parity words
+    NONE EVEN ODD MARK SPACE in capitals (gensio compares those exactly). False if `tok`
+    is none of them."""
+    word = tok.upper()
+    if word in ("1STOPBIT", "2STOPBITS"):
+        c.serial["stopbits"] = int(word[0])
+    elif re.fullmatch(r"[5-8]DATABITS", word):
+        c.serial["bytesize"] = int(word[0])
+    elif tok in _PARITY_WORDS:
+        c.serial["parity"] = _PARITY_WORDS[tok]
+    else:
+        return False
+    return True
 
 
 def _windows_device(device: str) -> str:
@@ -873,6 +913,12 @@ def _serial_option(c: _Conn, tok: str) -> None:
         if m.group(4):
             c.serial["stopbits"] = int(m.group(4))
         return
+    if _serial_word(c, tok):
+        return
+    if tok.upper() in _PARITY_WORDS:
+        c.note(_("serial option '{0}': ser2net 4.x takes the parity words in capitals only "
+                 "({1}), so it did not accept this one; not imported").format(tok, tok.upper()))
+        return
     name, eq, value = tok.partition("=")
     low = name.lower()
     flag: Optional[bool] = True
@@ -898,11 +944,11 @@ def _serial_option(c: _Conn, tok: str) -> None:
     elif low == "nobreak":
         c.advanced["nobreak"] = bool(flag)
     elif low in ("dtr", "rts"):
-        state = (value or "on").strip().lower() if flag else "off"
-        if state in ("on", "off"):
-            c.serial[f"{low}_on_open"] = state
-        else:
+        on = _bool(value or "on") if flag else False  # gensio reads it as a boolean
+        if on is None:
             c.note(_("serial option '{0}' is not on/off, ignored").format(tok))
+        else:
+            c.serial[f"{low}_on_open"] = "on" if on else "off"
     elif low == "rs485":
         if value.strip().lower() not in ("", "off"):
             c.note(_("{0} is not imported: set RS-485 in the mapping's serial settings")
@@ -935,24 +981,39 @@ _ESCAPE = re.compile(r"\\(x[0-9a-fA-F]{1,2}|[0-7]{1,3}|.)", re.S)
 _GONE = ""  # marks a dropped escape until it is removed
 
 
-def _convert(c: _Conn, text: str, kind: str, what: str) -> str:
+def _convert(c: _Conn, text: str, kind: str, what: str,
+             high: Optional[list[str]] = None) -> str:
     """ser2net escapes -> this program. kind 'banner' keeps the escapes the banner
     renderer knows (\\d \\p \\N \\I \\r \\n); 'bytes' (openstr/closestr/closeon, sent
-    as they are) and 'file' (a trace file name) get plain text."""
+    as they are) and 'file' (a trace file name) get plain text. `high` gets the escapes
+    that stand for a byte of 0x80 or more: ser2net sent that byte, a string here is sent
+    as UTF-8 (two bytes for it)."""
     dropped: list[str] = []
     fixed: list[str] = []
+
+    def byte(n: int, e: str) -> str:
+        if n >= 0x80 and high is not None:
+            high.append("\\" + e)
+        return chr(n)
 
     def escape(m: re.Match[str]) -> str:
         e = m.group(1)
         ch = e[0]
         if ch == "x" and len(e) > 1:
-            return chr(int(e[1:], 16))
+            return byte(int(e[1:], 16), e)
         if ch in "01234567":
-            return chr(int(e, 8) & 0xFF)
+            return byte(int(e, 8) & 0xFF, e)
+        if ch == "\\" and kind == "banner":
+            return "\\\\"  # a backslash, written so the banner renderer keeps it
         if ch in _C_ESCAPES:
             return _C_ESCAPES[ch]
         if ch in "rn":
             return "\\" + ch if kind == "banner" else ("\r" if ch == "r" else "\n")
+        if ch == "o" and not c.v3:  # ser2net 4.3 and later: the connection's name
+            return "\\N" if kind == "banner" else c.name
+        if ch == "o" and c.devname != c.device:  # 3.x: the DEVICE alias as the port names it
+            name = c.devname.rsplit("/", 1)[-1] if kind == "file" else c.devname
+            return name.replace("\\", "\\\\") if kind == "banner" else name
         if ch in "do":
             if kind == "banner":
                 return "\\d"
@@ -992,6 +1053,9 @@ def _convert(c: _Conn, text: str, kind: str, what: str) -> str:
     if fixed:
         c.note(_("{0}: {1} (serial parameters) is written as the fixed text {2}")
                .format(what, "/".join(dict.fromkeys(fixed)), c.serial_text()))
+        if "\\s" in fixed and not c.v3:
+            c.note(_("{0}: \\s stood for the serial parameters in ser2net 3.x and 4.0; ser2net "
+                     "4.1 and later print a plain 's' instead").format(what))
     if dropped:
         parts = " ".join(dict.fromkeys(dropped))
         c.note(_("{0}: {1} in the file name left out (one trace file per mapping here, rotated "
@@ -1035,7 +1099,7 @@ def _option(c: _Conn, key: str, value: str) -> None:
     elif (m := _TRACE_MOD.fullmatch(k)) is not None:
         b = _flag(c, key, value)
         if b is not None:
-            c.trace_mods[(m.group(1) or "all", m.group(2))] = b
+            _trace_mod(c, m.group(1) or "all", m.group(2), b)
     elif k == "remaddr":
         _remaddr(c, value)
     elif k == "no-acc-to-con":  # clients' data is not passed to the device = read-only
@@ -1053,6 +1117,14 @@ def _option(c: _Conn, key: str, value: str) -> None:
         pass  # batching of serial reads; data is forwarded as it arrives here
     else:
         c.drop(key)
+
+
+def _trace_mod(c: _Conn, direction: str, mod: str, on: bool) -> None:
+    """trace-hexdump / trace-timestamp (direction 'all') or one trace file's own, read in
+    the order of the file as ser2net reads them: the general one sets every trace file
+    (over a file's own one before it), a file's own one only that file."""
+    for d in ("both", "read", "write") if direction == "all" else (direction,):
+        c.trace_mods[(d, mod)] = on
 
 
 def _idle_timeout(c: _Conn, value: str) -> None:
@@ -1090,7 +1162,7 @@ def _remaddr(c: _Conn, value: str) -> None:
             continue
         if len(fields) > 1 and fields[1] != "0":
             c.note(_("remaddr {0}: only the client address is checked here, not its port")
-                   .format(entry))
+                   .format(entry), security=True)
         if host not in allowed:
             allowed.append(host)
 
@@ -1129,8 +1201,11 @@ def _finish(c: _Conn) -> None:
         net["max_connections"] = 1
     for key in ("banner", "openstr", "closestr", "closeon"):
         if key in c.strings:
+            high: list[str] = []
             c.options[key] = _convert(c, c.strings[key], "banner" if key == "banner" else "bytes",
-                                      key)
+                                      key, high)
+            if high:
+                _high_bytes(c, key, " ".join(dict.fromkeys(high)))
     if "signature" in c.strings and net["protocol"] == "rfc2217":  # (only RFC 2217 sends it)
         sig = _convert(c, c.strings["signature"], "bytes", "signature")
         if len(sig) > RFC2217_SIGNATURE_MAX or re.search(r"[\x00-\x1f\x7f]", sig):
@@ -1169,7 +1244,7 @@ def _finish(c: _Conn) -> None:
             if other != kind:
                 c.note(_("{0} is not imported: one trace file per mapping").format(labels[other]))
         for mod in ("hexdump", "timestamp"):
-            b = c.trace_mods.get((kind, mod), c.trace_mods.get(("all", mod)))
+            b = c.trace_mods.get((kind, mod))
             if b is not None:
                 c.options[f"trace_{mod}"] = b
     _tls(c)
@@ -1179,14 +1254,61 @@ def _finish(c: _Conn) -> None:
     if c.holds:
         c.enabled = False
         for why in c.holds:
-            c.note(why)
+            c.note(why, security=True)
     if c.dropped:
         c.note(_("not imported (no equivalent here): {0}").format(", ".join(c.dropped)))
 
 
+def _high_bytes(c: _Conn, key: str, escapes: str) -> None:
+    """An escape for a byte of 0x80 or more: a string here is sent as UTF-8, so that byte
+    goes out as two. The device would get other bytes from an open or close string: the
+    mapping comes in disabled; a close-on string then never matches (or a banner shows
+    otherwise): a note."""
+    if key in ("openstr", "closestr"):
+        c.hold(_("{0}: {1} is a byte of 0x80 or more, which would be sent here as two bytes "
+                 "(strings are sent as UTF-8): the mapping is imported disabled rather than "
+                 "sending the device other bytes; change the string, then enable it")
+               .format(key, escapes))
+    elif key == "closeon":
+        c.note(_("closeon: {0} is a byte of 0x80 or more, which is matched here as two bytes "
+                 "(strings are sent as UTF-8), so this close-on string won't match what the "
+                 "device sends; change it on the mapping").format(escapes))
+    else:
+        c.note(_("banner: {0} is a byte of 0x80 or more, which is sent here as two bytes "
+                 "(strings are sent as UTF-8)").format(escapes))
+
+
+class Note(str):
+    """A warning of the import, as parse_ser2net_config returns them (a str). `mapping`: the
+    index of the mapping it is about in the list returned with it (None: about the file,
+    or about a connection that is not imported); `detail`: the text without the name of
+    the connection in front; `security`: it says why the mapping comes in disabled (it
+    would be more open here than in ser2net) or which limit on its clients is lost."""
+    mapping: Optional[int] = None
+    detail: str = ""
+    security: bool = False
+    conn: Optional[_Conn] = None  # until the mappings are known (_point_notes)
+
+
+def _note(c: _Conn, detail: str, security: bool = False) -> Note:
+    n = Note(f"{c.label}: {detail}")
+    n.detail, n.security, n.conn = detail, security, c
+    return n
+
+
+def _point_notes(warnings: list[str], kept: list[_Conn]) -> None:
+    """Point each connection's note at its mapping (Note.mapping), by position in `kept`."""
+    index = {id(c): i for i, c in enumerate(kept)}
+    for w in warnings:
+        if isinstance(w, Note) and w.conn is not None:
+            w.mapping, w.conn = index.get(id(w.conn)), None
+
+
 def _notes(c: _Conn, imported: bool) -> list[str]:
     """A connection's warnings; for a skipped one only why it was skipped."""
-    return [f"{c.label}: {n}" for n in (c.notes if imported else c.skipped)]
+    if not imported:
+        return [f"{c.label}: {n}" for n in c.skipped]
+    return [_note(c, n, n in c.flagged) for n in c.notes]
 
 
 # ---------------------------------------------------------------------------
@@ -1201,20 +1323,33 @@ _SERIAL_DEFAULTS = {"speed", "nobreak", "rtscts", "xonxoff", "local", "hangup-wh
                     "dtr", "rts", "custspeed", "rs485", "uucplock", "flock", "wronly"}
 _OPTION_DEFAULTS = {"kickolduser", "max-connections", "remaddr", "telnet-brk-on-sync",
                     "chardelay", "trace-hexdump", "trace-timestamp", "trace-both-hexdump",
-                    "trace-both-timestamp", "signature"}
+                    "trace-both-timestamp", "signature", "banner", "openstr", "closestr",
+                    "closeon"}
+# (sent as they are: their spaces and line breaks too; the RFC 2217 signature is stripped)
+_STRING_OPTIONS = ("banner", "openstr", "closestr", "closeon")
+_SSL_DEFAULTS = {"key", "cert", "ca", "clientauth"}
+# the gensio class that reads each default used here (it reads the base value, set
+# without a class, too)
+_DEFAULT_CLASS = {**dict.fromkeys(_SERIAL_DEFAULTS, "serialdev"),
+                  **dict.fromkeys(_OPTION_DEFAULTS, "ser2net"),
+                  **dict.fromkeys(_SSL_DEFAULTS, "ssl"), "rfc2217": "telnet"}
 
 
-_REFERENCE = {act: re.compile("[" + re.escape(act) + "$]") for act in ("*", "=", "*=")}
-_MAX_DOLLAR_REF = 64  # $(name) is looked up only for a name this short
+def _gensio_class(cls: str) -> str:
+    c = cls.strip().lower()
+    return "serialdev" if c == "sdev" else c
+
+
+_REFERENCE = {act: re.compile("[" + re.escape(act) + "]") for act in ("*", "=", "*=")}
 
 
 def _substitute(s: str, aliases: dict[str, str], act: str, note: Callable[[str], None],
                 what: str) -> str:
     """ser2net's references inside strings: *(name) in version 1 files, =(name) in
     version 2 ('**' / '*(*' for the literal characters); *{file} / ={file} (a file on
-    the ser2net host) cannot be read here. $(name) is replaced too for a known name.
-    One pass over s (each bracket is searched for once); a value that grows past
-    _MAX_VALUE refuses the file."""
+    the ser2net host) cannot be read here. Nothing else is replaced ($(name) neither, as
+    in ser2net). One pass over s (each bracket is searched for once); a value that grows
+    past _MAX_VALUE refuses the file."""
     out: list[str] = []
     grown, i = 0, 0
     found = {")": -1, "}": -1}  # where that bracket was found last (len(s): none is left)
@@ -1228,13 +1363,12 @@ def _substitute(s: str, aliases: dict[str, str], act: str, note: Callable[[str],
             out.append(s[i:m.start()])
             i = m.start()
         ch, nxt = s[i], s[i + 1:i + 2]
-        ours = ch in act
-        if ours and nxt == ch:
+        if nxt == ch:
             out.append(ch)
             i += 2
             continue
-        if (ours and nxt in ("(", "{")) or (ch == "$" and nxt == "("):
-            if ours and s[i + 2:i + 3] == ch:
+        if nxt in ("(", "{"):
+            if s[i + 2:i + 3] == ch:
                 out.append(ch + nxt)
                 i += 3
                 continue
@@ -1243,7 +1377,7 @@ def _substitute(s: str, aliases: dict[str, str], act: str, note: Callable[[str],
                 at = s.find(closing, i + 2)
                 found[closing] = len(s) if at < 0 else at
             close = found[closing]
-            if close < len(s) and (ours or close - i - 2 <= _MAX_DOLLAR_REF):
+            if close < len(s):
                 ref = s[i + 2:close]
                 if nxt == "{":
                     note(_("{0}{{{1}}} (a file on the ser2net host) is left out")
@@ -1257,11 +1391,11 @@ def _substitute(s: str, aliases: dict[str, str], act: str, note: Callable[[str],
                     out.append(aliases[ref])
                     i = close + 1
                     continue
-                if ours:  # the name runs to the first ')', as ser2net reads it
-                    note(_("unknown reference {0}({1}) left as it is").format(ch, ref))
-                    out.append(s[i:close + 1])
-                    i = close + 1
-                    continue
+                # the name runs to the first ')', as ser2net reads it
+                note(_("unknown reference {0}({1}) left as it is").format(ch, ref))
+                out.append(s[i:close + 1])
+                i = close + 1
+                continue
         out.append(ch)
         i += 1
     return "".join(out)
@@ -1275,9 +1409,14 @@ class _Yaml:
         self.warnings: list[str] = []
         self.conns: list[_Conn] = []
         self.connections = 0                 # connection entries read (MAX_CONNECTIONS)
+        self.defaults: dict[tuple[str, str], str] = {}  # (name, class) -> value, so far
+        # what each gensio class gets from them for the connections from here on
         self.serial_defaults: dict[str, str] = {}
         self.option_defaults: dict[str, str] = {}
         self.ssl_defaults: dict[str, str] = {}   # key / cert / ca / clientauth of the ssl layer
+        self.telnet_defaults: dict[str, str] = {}  # rfc2217 of the telnet layer
+        self._views = {"serialdev": self.serial_defaults, "ser2net": self.option_defaults,
+                       "ssl": self.ssl_defaults, "telnet": self.telnet_defaults}
 
     def text(self, node: Any, note: Callable[[str], None], what: str) -> str:
         if isinstance(node, (_YMap, list)):
@@ -1320,10 +1459,12 @@ class _Yaml:
                     self.default(name, self.gtext(body.get("value", ""), f"default {name}"),
                                  self.gtext(body.get("class", ""), f"default {name}"))
         elif k == "delete_default" and isinstance(value, _YMap):
-            self.delete_default(self.gtext(value.get("name", ""), "delete_default"))
+            self.delete_default(*(self.gtext(value.get(f, ""), "delete_default")
+                                  for f in ("name", "class")))
         elif k == "delete_defaults" and isinstance(value, _YMap):
-            for name, _v, _a in value.entries:
-                self.delete_default(name)
+            for name, classes, _a in value.entries:  # <name>: [<class>, ...]
+                for cls in classes if isinstance(classes, list) else [classes]:
+                    self.delete_default(name, self.gtext(cls, f"delete_defaults {name}"))
         elif k in ("rotator", "rotators"):
             names = ([anchor] if k == "rotator" else
                      [n for n, _v, _a in value.entries] if isinstance(value, _YMap) else [])
@@ -1341,24 +1482,54 @@ class _Yaml:
             self.warnings.append(_("unknown top-level entry '{0}' ignored").format(key))
 
     def default(self, name: str, value: str, cls: str) -> None:
-        n, cls = name.strip().lower(), cls.strip().lower()
-        if n in ("key", "cert", "ca", "clientauth") and cls in ("", "ssl"):
-            self.ssl_defaults[n] = value.strip()  # for the accepters' ssl layers
+        """A default, for the connections after it (ser2net sets each connection up as it
+        reads it). gensio keeps a value per class besides the base value (set without a
+        class), and a class's own value wins over the base value whatever their order."""
+        n, cls = name.strip().lower(), _gensio_class(cls)
+        if not n:
             return
-        if not n or cls not in ("", "serialdev", "sdev", "ser2net"):
-            return  # a default for another gensio (ipmisol, certauth, ...) does not apply
-        if n in _SERIAL_DEFAULTS and cls != "ser2net":
-            self.serial_defaults[n] = value.strip()
-        elif n in _OPTION_DEFAULTS and cls in ("", "ser2net"):
-            self.option_defaults[n] = value.strip()
-        else:
-            self.warnings.append(_("default {0}: {1} is not imported (no equivalent here)")
-                                 .format(name, value))
+        reader = _DEFAULT_CLASS.get(n)
+        if reader is None or cls not in ("", reader):
+            if cls in ("", "serialdev", "ser2net"):  # (another gensio's: does not apply here)
+                self.warnings.append(_("default {0}: {1} is not imported (no equivalent here)")
+                                     .format(name, _shown(value)))
+            self.defaults[(n, cls)] = value.strip()  # (for a delete_default of it)
+            return
+        if reader == "telnet" and _bool(value) is None:
+            self.warnings.append(_("{0}: '{1}' is not true/false, ignored")
+                                 .format(f"default {name}", _shown(value)))
+            return
+        # (a banner or open string as it is: its spaces and line breaks are sent)
+        self.defaults[(n, cls)] = value if n in _STRING_OPTIONS else value.strip()
+        self._resolve(n)
 
-    def delete_default(self, name: str) -> None:
-        self.serial_defaults.pop(name.strip().lower(), None)
-        self.option_defaults.pop(name.strip().lower(), None)
-        self.ssl_defaults.pop(name.strip().lower(), None)
+    def _resolve(self, n: str) -> None:
+        """What the connections from here on get for default `n`: the value of the class
+        that reads it, else the base value."""
+        cls = _DEFAULT_CLASS[n]
+        value = self.defaults.get((n, cls), self.defaults.get((n, "")))
+        if value is None:
+            self._views[cls].pop(n, None)
+        else:
+            self._views[cls][n] = value
+
+    def delete_default(self, name: str, cls: str) -> None:
+        """The value set for a class goes, so that class gets the base value again. ser2net
+        refuses a file whose delete_default gives no class (a base value can't be
+        deleted) or names a value that is not set: reported here, nothing deleted."""
+        n, cls = name.strip().lower(), _gensio_class(cls)
+        if not n:
+            return
+        if not cls:
+            self.warnings.append(_("delete_default {0}: no class is given, and ser2net refuses "
+                                   "such a file (a default set without a class can't be "
+                                   "deleted); nothing is deleted").format(name))
+        elif self.defaults.pop((n, cls), None) is None:
+            self.warnings.append(_("delete_default {0}: no default of class {1} is set, and "
+                                   "ser2net refuses such a file; nothing is deleted")
+                                 .format(name, cls))
+        elif n in _DEFAULT_CLASS:
+            self._resolve(n)
 
     def connection(self, name: str, body: Any) -> None:
         self.connections += 1
@@ -1374,7 +1545,8 @@ class _Yaml:
             connector = self.text(body.get("connector", ""), c.note, "connector").strip()
             if not accepter or not connector:
                 c.skip(_("it needs both an accepter and a connector"))
-            elif _accepter(c, accepter, self.ssl_defaults):
+            elif _accepter(c, accepter, self.ssl_defaults,
+                           _bool(self.telnet_defaults.get("rfc2217", ""))):
                 if not name:
                     c.name = c.label = f"ser2net-{c.network['port']}"
                 defaults = [f"{k}={v}" for k, v in self.serial_defaults.items()]
@@ -1390,6 +1562,8 @@ class _Yaml:
         b = _bool(enable)
         if b is None:
             c.note(_("enable '{0}' is not on/off: imported disabled").format(enable))
+        elif not b:
+            c.note(_("imported disabled: the file turns it off (enable: off)"))
         c.enabled = bool(b)
         for k, v in self.option_defaults.items():
             if k != "remaddr":  # see below
@@ -1437,8 +1611,7 @@ def _from_yaml(text: str, label: str, budget: _Budget) -> tuple[list[_Conn], lis
 _V3_STATE = re.compile(r":(rawlp|raw|telnet|off):")
 _V3_DIRECTIVE = re.compile(r"(BANNER|SIGNATURE|OPENSTR|CLOSESTR|CLOSEON|DEVICE|TRACEFILE|"
                            r"CONTROLPORT|RS485CONF|DEFAULT|ROTATOR|LED):")
-_V3_PARITY = {"NONE": "N", "EVEN": "E", "ODD": "O", "MARK": "M", "SPACE": "S",
-              "none": "N", "even": "E", "odd": "O", "mark": "M", "space": "S"}
+_V3_PARITY = {**_PARITY_WORDS, **{k.lower(): v for k, v in _PARITY_WORDS.items()}}
 _V3_TRACE = {"tr": "read", "tw": "write", "tb": "both"}
 _V3_IGNORED_DEFAULTS = ("local", "chardelay", "telnet_brk_on_sync")
 
@@ -1512,9 +1685,11 @@ class _V3:
         state = m.group(1)
         timeout, _sep, rest = line[m.end():].partition(":")
         device, _sep, options = rest.partition(":")
-        device = self.devices.get(device.strip(), device.strip())
+        written = device.strip()
+        device = self.devices.get(written, written)
         self.budget.spend(len(device))  # a DEVICE: name repeats its path
-        c = _Conn(name="", label=_("line {0}").format(n), budget=self.budget, v3=True)
+        c = _Conn(name="", label=_("line {0}").format(n), budget=self.budget, v3=True,
+                  devname=written)
         fields = []
         for f in line[: m.start()].split(","):
             if f.strip().lower() == "udp":
@@ -1540,6 +1715,8 @@ class _V3:
     def settings(self, c: _Conn, state: str, timeout: str, device: str, options: str) -> None:
         c.device = device
         c.enabled = state != "off"
+        if not c.enabled:
+            c.note(_("imported disabled: the file turns it off (state off)"))
         c.network["protocol"] = "telnet" if state == "telnet" else "raw"
         if state == "rawlp":  # a printer port: ser2net opens it write-only
             _write_only(c, "rawlp")
@@ -1598,11 +1775,9 @@ class _V3:
         base, on = tok.lstrip("-"), not tok.startswith("-")
         if tok.isdigit():
             c.serial["baudrate"] = int(tok)
-        elif tok in ("1STOPBIT", "2STOPBITS"):
-            c.serial["stopbits"] = int(tok[0])
-        elif re.fullmatch(r"[5-8]DATABITS", tok):
-            c.serial["bytesize"] = int(tok[0])
-        elif tok in _V3_PARITY:
+        elif _serial_word(c, tok):
+            pass
+        elif tok in _V3_PARITY:  # (in small letters too)
             c.serial["parity"] = _V3_PARITY[tok]
         elif base in ("XONXOFF", "RTSCTS"):
             setattr(c, base.lower(), on)
@@ -1626,7 +1801,7 @@ class _V3:
             elif base == "kickolduser":
                 c.network["kick_old_user"] = on
             elif mod is not None:
-                c.trace_mods[(_V3_TRACE.get(mod.group(1) or "", "all"), mod.group(2))] = on
+                _trace_mod(c, _V3_TRACE.get(mod.group(1) or "", "all"), mod.group(2), on)
             elif base == "telnet_brk_on_sync":
                 if on:
                     _option(c, "telnet-brk-on-sync", "true")
@@ -1677,6 +1852,9 @@ def _assemble(conns: list[_Conn], warnings: list[str], budget: _Budget) -> list[
     def warn(msg: str) -> None:
         budget.spend(len(msg))
         warnings.append(msg)
+
+    def warn_for(c: _Conn, msg: str) -> None:  # "<label>: ..." about one that is imported
+        warn(_note(c, msg.removeprefix(f"{c.label}: ")))
     kept: list[_Conn] = []
     listening: dict[tuple[str, int], dict[str, str]] = {}  # (tcp|udp, port) -> bind IP -> name
     for c in conns:
@@ -1708,11 +1886,11 @@ def _assemble(conns: list[_Conn], warnings: list[str], budget: _Budget) -> list[
         tried[base] = k
         used.add(c.name)
         if c.name != base:
-            warn(_("{0}: renamed to '{1}' (the name is used twice)").format(c.label, c.name))
+            warn_for(c, _("{0}: renamed to '{1}' (the name is used twice)").format(c.label, c.name))
         key = canonical_device(c.device)  # (com3 and COM3 are one port)
         if c.enabled and key in owner:
             c.enabled = False
-            warn(_("{0}: imported disabled: {1} is also used by '{2}', and a serial port can be "
+            warn_for(c, _("{0}: imported disabled: {1} is also used by '{2}', and a serial port can be "
                    "open in only one active mapping here")
                  .format(c.label, c.device, owner[key]))
         elif c.enabled:
@@ -1757,6 +1935,7 @@ def parse_ser2net_config(text: str, filename: str = "") -> tuple[list[dict], lis
         conns, warnings = _from_v3(lines, budget)
     kept = _assemble(conns, warnings, budget)
     mappings = [c.to_dict() for c in kept]
+    _point_notes(warnings, kept)
     if len(warnings) > _MAX_WARNINGS:
         more = len(warnings) - _MAX_WARNINGS
         del warnings[_MAX_WARNINGS:]

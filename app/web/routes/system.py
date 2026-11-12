@@ -8,7 +8,7 @@ from ... import i18n
 from ...engine import netguard, portlist
 from ...i18n import _
 from .. import auth, proxy
-from .common import Ctx
+from .common import Ctx, local_path, unchanged_or
 
 # the serial sides of a mapping form (GET /api/ports/select?prefix=)
 _PORT_FIELDS = ("serial_", "serial_b_")
@@ -44,19 +44,19 @@ def routes(ctx: Ctx) -> list:
         ports = await state.ports.current()
         show_all = request.query_params.get("all") == "1"
         shown = portlist.visible(ports, show_all)
-        return render(request, "_ports_table.html", ports=shown, show_all=show_all,
-                      hidden=len(ports) - len(portlist.visible(ports)),
-                      in_use=portlist.used(shown, state.supervisor.devices_in_use()))
+        # refreshed every 5 s: 204 while the ports are what the browser shows already
+        # (rendered off the event loop: see Ctx.arender)
+        return unchanged_or(request, await ctx.arender(
+            request, "_ports_table.html", ports=shown, show_all=show_all,
+            hidden=len(ports) - len(portlist.visible(ports)),
+            in_use=portlist.used(shown, state.supervisor.devices_in_use())))
 
     async def set_language(request):
         """/lang/tr?next=/settings: remember the visitor's UI language (a cookie), then
         go back. Only a local path is followed (no open redirect), under the path prefix
         the request came under (`next` is the page's path without it)."""
         code = request.path_params["code"]
-        nxt = request.query_params.get("next") or "/"
-        if not nxt.startswith("/") or nxt.startswith("//") or "\\" in nxt:
-            nxt = "/"
-        resp = proxy.redirect(request, nxt)
+        resp = proxy.redirect(request, local_path(request.query_params.get("next")))
         if code in i18n.LANGUAGES:
             auth.set_cookie(resp, request, state.config, i18n.COOKIE, code, max_age=365 * 86400)
         return resp

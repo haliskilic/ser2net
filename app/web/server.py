@@ -12,6 +12,7 @@ from __future__ import annotations
 import os
 import re
 import time
+import urllib.parse
 
 from markupsafe import Markup, escape
 from starlette.applications import Starlette
@@ -24,9 +25,12 @@ from starlette.templating import Jinja2Templates
 from .. import clock, i18n
 from ..config import ROLE_RANK, node_name
 from ..engine import netguard
+from ..explain import explain
+from ..textfold import search_key
 from . import auth, proxy
 from .routes import build_routes
-from .routes.common import client_ip
+from .routes.common import bytesize, client_ip, domid, duration, since
+from .routes.forms import in_text_box
 
 TEMPLATES_DIR = os.path.join(os.path.dirname(__file__), "templates")
 STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
@@ -57,6 +61,8 @@ MAX_BODY_BYTES = 2 * 1024 * 1024
 # the audit trail (the user actions that drive them ARE logged).
 QUIET_PATHS = {"/api/status", "/api/cluster/status", "/api/cluster/local",
                "/api/ports/table", "/api/ports.json", "/healthz", "/favicon.ico"}
+# ... and an open log panel's, every 5 s
+QUIET_PATTERN = re.compile(r"/api/mappings/[^/]+/log")
 # The REST API's counterpart: what monitoring polls. Every other /api/v1 request (any
 # change, a read of the mappings — they hold the MQTT passwords — and any refusal) is.
 API_QUIET_PATHS = {"/api/v1/health", "/api/v1/status", "/api/v1/ports", "/api/v1/metrics",
@@ -65,18 +71,30 @@ API_QUIET_PATHS = {"/api/v1/health", "/api/v1/status", "/api/v1/ports", "/api/v1
 
 def logs_request(mode: str, method: str, path: str, status: int) -> bool:
     """Whether a web UI request gets its "HTTP ..." line in all.log (admin_ui.request_log):
-    "all" every request but the static files and the automatic refreshes (QUIET_PATHS);
-    "changes" only those that change something (not GET / HEAD / OPTIONS) and the refused
-    or failed ones (400 and up); "off" none."""
+    "all" every request but the static files and the automatic refreshes (QUIET_PATHS,
+    QUIET_PATTERN); "changes" only those that change something (not GET / HEAD / OPTIONS)
+    and the refused or failed ones (400 and up); "off" none."""
     if path.startswith("/static") or mode == "off":
         return False
     if mode == "changes":
         return method not in auth.SAFE_METHODS or status >= 400
-    return not (method == "GET" and path in QUIET_PATHS)
+    return not (method == "GET" and (path in QUIET_PATHS or QUIET_PATTERN.fullmatch(path)))
 
 
 def _wants_json(request) -> bool:
     return proxy.route_path(request).startswith("/api")
+
+
+def _login_url(request) -> str:
+    """The sign-in page for a page request without a session, as proxy.redirect takes it
+    (a path under the base path): with ?next= (where the sign-in leads back to: the page's
+    path without the base path, then also given to proxy.redirect) for a page other than
+    the dashboard; a POST (a form whose session ended) goes back to the dashboard."""
+    path = proxy.route_path(request)
+    if request.method != "GET" or path == "/":
+        return "/login"
+    here = path + ("?" + request.url.query if request.url.query else "")
+    return "/login?next=" + urllib.parse.quote(here, safe="")
 
 
 class GuardMiddleware(BaseHTTPMiddleware):
@@ -210,7 +228,7 @@ class GuardMiddleware(BaseHTTPMiddleware):
                 if user is None:
                     if _wants_json(request):
                         return JSONResponse({"error": "unauthorized"}, status_code=401)
-                    return proxy.redirect(request, "/login")
+                    return proxy.redirect(request, _login_url(request))
                 request.state.user = user  # available to handlers for role checks
         return None
 
@@ -348,6 +366,15 @@ def make_templates() -> Jinja2Templates:
     templates.env.filters["softbreak"] = softbreak
     from ..engine.portlist import choice as port_choice
     templates.env.globals["port_choice"] = port_choice
+    templates.env.filters["domid"] = domid
+    templates.env.filters["bytesize"] = bytesize
+    templates.env.filters["duration"] = duration   # seconds, in the page's language
+    templates.env.filters["since"] = since         # a Unix time until now, as duration
+    # what a raw OS / network error means, in the page's language (None: show it as it is)
+    templates.env.filters["explain"] = explain
+    # data-search of the dashboard rows: app.js folds what is typed the same way
+    templates.env.filters["searchkey"] = search_key
+    templates.env.filters["in_text_box"] = in_text_box   # a value as a text box sends it
     # _("...") in every template, translated for the request's language (app/i18n.py);
     # newstyle: _("Hello %(name)s", name=x) formats and escapes x
     templates.env.add_extension("jinja2.ext.i18n")

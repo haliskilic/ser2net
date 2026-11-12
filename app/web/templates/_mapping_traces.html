@@ -1,12 +1,12 @@
 <div class="form-head">
-  <h3>{{ _("Traces — %(name)s", name=mapping_name|softbreak) }}</h3>
+  <h3 id="panel-title" tabindex="-1">{{ _("Traces — %(name)s", name=mapping_name|softbreak) }}</h3>
   <div class="actions">
-    <button class="btn sm" hx-get="{{ base }}/api/mappings/{{ mid }}/traces" hx-target="#form-panel" hx-swap="innerHTML">{{ _("↻ Refresh") }}</button>
-    <button type="button" class="btn sm" data-cancel>{{ _("Close") }}</button>
+    <button class="btn sm" id="traces-refresh" hx-get="{{ base }}/api/mappings/{{ mid }}/traces" hx-target="#form-panel" hx-swap="innerHTML">{{ _("↻ Refresh") }}</button>
+    <button type="button" class="btn sm" id="traces-close" data-cancel>{{ _("Close") }}</button>
   </div>
 </div>
 {% if tracing %}
-<p class="muted mb-sm">{{ _('Recording to <span class="mono">traces/%(file)s</span> in the data folder (%(mb)s MB per file, %(keep)s older file(s) kept).', file=current|softbreak, mb=max_mb, keep=keep) }}{% if hexdump %} {{ _("Hex dump.") }}{% endif %}</p>
+<p class="muted mb-sm">{{ ngettext('Recording to <span class="mono">traces/%(file)s</span> in the data folder (%(mb)s MB per file, %(num)s older file kept).', 'Recording to <span class="mono">traces/%(file)s</span> in the data folder (%(mb)s MB per file, %(num)s older files kept).', keep, file=current|softbreak, mb=max_mb) }}{% if hexdump %} {{ _("Hex dump.") }}{% endif %}</p>
 {% else %}
 <p class="muted mb-sm">{{ _("Tracing is off for this mapping (set a trace file name in its options). Files recorded earlier are listed below.") }}</p>
 {% endif %}
