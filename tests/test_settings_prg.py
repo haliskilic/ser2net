@@ -160,7 +160,8 @@ def main():
                                      headers={"Authorization": f"Bearer {token}"})
         assert urllib.request.urlopen(req, timeout=10).status == 200
         st, h, page = admin.get("/settings")
-        assert "s2n_" not in page and h.get("Cache-Control") is None, "shown only once"
+        # (every page is no-store since 2.9: GuardMiddleware._security_headers)
+        assert "s2n_" not in page, "shown only once"
         # the flash belongs to the user: someone else signing in in that browser sees nothing
         shared = Browser(srv.base)
         shared.login("admin", PW)
