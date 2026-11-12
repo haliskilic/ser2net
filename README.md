@@ -961,10 +961,12 @@ Her kurulumun kendine ait olması gerekenler:
   `--install-service`) önerdiği portu dener; başka bir program (başka bir kurulum) onu
   kullanıyorsa bunu söyler ve ilk boş portu önerir; elle yazdığınız seçim yine kabul
   edilir. Terminalsiz bir ilk açılış (servis, container) portunu korur ve uyarıyı log'a
-  yazar. Seçici olmadan: `SER2NET_BIND_IP` + `SER2NET_PORT`.
+  yazar. Portu dolu olan arayüz eşlemelerini yine başlatır ve port boşalana kadar dener.
+  Seçici olmadan: `SER2NET_BIND_IP` + `SER2NET_PORT`.
 - **eşleme portları ve seri cihazlar:** bir TCP/UDP portu ve bir seri cihaz tek bir
   kuruluma aittir. Portunu ya da cihazını başka bir program tutarken kaydedilen eşleme
-  saklanır ve arayüz neden başlamadığını söyler.
+  saklanır ve arayüz neden başlamadığını söyler; yeniden denenir ve portu boşalınca
+  başlar.
 - **ad:** **Ayarlar → Yönetim arayüzü → Bu kurulumun adı** (ya da `SER2NET_NODE_NAME`) —
   bildirimler, tarayıcı sekmesi, üst bar ve filo görünümü hangi kurulum olduğunu söyler.
 - içe aktarılan, MQTT'ye yayın yapan eşlemelerin kendi **id**'leri olmalı: ayarlanmış bir
