@@ -293,11 +293,16 @@ def _expected(kind: str) -> str:
 
 
 def _shown(value: Any, limit: int = 60) -> str:
-    """A value as JSON writes it, cut to `limit` characters, for messages."""
+    """A value as JSON writes it, cut to `limit` characters, for messages (escaped where
+    it holds text UTF-8 can't carry, an unpaired surrogate: the message must reach a page,
+    a JSON answer and the log)."""
     try:
         text = json.dumps(value, ensure_ascii=False)
+        text.encode("utf-8")
+    except UnicodeEncodeError:
+        text = json.dumps(value)
     except (TypeError, ValueError):
-        text = repr(value)
+        text = repr(value).encode("utf-8", "backslashreplace").decode("utf-8")
     return text if len(text) <= limit else text[:limit - 1] + "…"
 
 

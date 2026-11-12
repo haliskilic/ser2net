@@ -187,6 +187,18 @@ def test_edits_refuse_what_cannot_be_read():
     assert cases[2][0].modbus_poll.interval_s == 5.0
     assert cases[3][0].enabled is True, "a value that is no true/false keeps its old meaning"
     assert cases[4][0].mqtt.port == 1883 and cases[5][0].serial.port == ""
+    # a refused value with text UTF-8 can't carry (an unpaired surrogate: only a JSON escape
+    # makes one) is quoted escaped, so the message reaches the page, the REST answer and the
+    # log
+    for m in (MappingConfig.from_dict({"name": "m", "serial": {"port": ["COM\ud800"]}}),
+              gateway(modbus_poll={"points": [dict(POINT, unit="\udc80")]})):
+        try:
+            m.validate_input()
+            raise AssertionError("an edit took a value it can't read")
+        except ConfigError as e:
+            message = str(e)
+        message.encode("utf-8")
+        assert "is not" in message and "\\ud" in message, message
     print("edits refuse values that can't be read, naming the setting's path  OK")
 
 
