@@ -403,7 +403,7 @@ def routes(ctx: Ctx) -> list:
             return render(request, "login.html", status_code=429,
                           error=_("Too many sign-ins at the same time. Try again in a "
                                   "moment."),
-                          oidc_enabled=state.config.oidc.enabled)
+                          oidc_enabled=state.config.oidc.enabled, username=typed, next=nxt)
         # counted as failed before the password is checked, in the same step as the checks
         # above (no await between them): concurrent attempts can't all get past the limits
         # while the first ones are still being checked. A sign-in that works resets them.
@@ -439,7 +439,7 @@ def routes(ctx: Ctx) -> list:
         if authed is not None and authed.totp_on:  # the password alone is not enough
             if local and auth.needs_rehash(authed.password_hash):
                 await _renew_hash(authed, password)
-            return totp.challenge(ctx, request, authed)
+            return totp.challenge(ctx, request, authed, nxt)
         if authed is not None:   # under its account's name (LDAP: in any letter case)
             state.rate_limiter.reset(ip)
             state.name_limiter.reset(authed.username)

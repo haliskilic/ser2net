@@ -25,6 +25,9 @@ Checks:
     peer endpoints stay public; '/' is served exactly as before (cookie names, links);
   * under the path too: the two-factor code step (its cookie under the path, the session
     after the code) and the Location of a mapping made through the REST API;
+  * the page a sign-in leads back to (?next=): a page asked for without a session sends
+    to the sign-in page with its path under the base path left out, and the sign-in -
+    through the two-factor code step too - goes back to it under the base path;
   * no template, redirect or app.js address is written root-relative any more.
 
 Calls the web app in this process (no socket).
@@ -174,18 +177,23 @@ def test_origins_and_sso() -> None:
             assert ws == {"type": "websocket.close", "code": 1008, "reason": ""}, ws
             a.call("GET", "/auth/oidc/login", headers={"Host": "127.0.0.1:8080"})
             # the setting (saved once as it is: the restore preview below has a backup)
-            st, _, _ = a.call("POST", "/settings/proxy", fields={"_csrf": CSRF, "public_url": ""},
+            st, h, _ = a.call("POST", "/settings/proxy", fields={"_csrf": CSRF, "public_url": ""},
                               headers={"Cookie": jar})
-            assert st == 200 and os.path.exists(a.state.store.path)
+            assert st == 303 and header(h, "location") == "/settings#reverse-proxy", (st, h)
+            assert os.path.exists(a.state.store.path)
             for bad, why in (("https://s2n.example.com/login", "/login: that is a page"),
                              ("s2n.example.com", "http:// or https://")):
                 st, _, page = a.call("POST", "/settings/proxy", fields={"_csrf": CSRF,
                                                                         "public_url": bad},
                                      headers={"Cookie": jar})
-                assert st == 200 and why in page and a.state.config.admin_ui.public_url == "", bad
-            st, _, page = a.call("POST", "/settings/proxy",
-                                 fields={"_csrf": CSRF, "public_url": "HTTPS://S2N.example.com/"},
-                                 headers={"Cookie": jar})
+                assert st == 400 and why in page and a.state.config.admin_ui.public_url == "", bad
+                assert f'name="public_url" value="{bad}"' in page, "the form keeps what was sent"
+            a.call("GET", "/settings", headers={"Cookie": jar})   # (the first save's message)
+            st, _, _ = a.call("POST", "/settings/proxy",
+                              fields={"_csrf": CSRF, "public_url": "HTTPS://S2N.example.com/"},
+                              headers={"Cookie": jar})
+            assert st == 303, st
+            st, _, page = a.call("GET", "/settings", headers={"Cookie": jar})
             assert st == 200 and "Reverse proxy settings saved." in page
             assert a.state.config.admin_ui.public_url == "https://s2n.example.com"
             assert a.state.store.load().admin_ui.public_url == "https://s2n.example.com"
@@ -197,9 +205,10 @@ def test_origins_and_sso() -> None:
             # now a page of the public URL is this UI's own
             st, _, _ = a.call("POST", "/settings/access", fields=form,
                               headers={**rewritten, "Cookie": jar})
-            assert st == 200, st
+            assert st == 303, st   # done: back to the page
             ws = a.websocket("/api/mappings/m1/console", headers={**rewritten, "Cookie": jar})
-            assert ws["code"] == 1011, ws   # past the origin check and the session: no runner
+            # past the origin check and the session: accepted (then closed 4004: no runner)
+            assert ws["type"] == "websocket.accept", ws
             for other in ("http://s2n.example.com", "https://s2n.example.com:8443",
                           "https://evil.example"):
                 st, _, _ = a.call("POST", "/settings/access", fields=form,
@@ -224,7 +233,7 @@ def test_origins_and_sso() -> None:
                 assert "Set by <span class=\"mono\">SER2NET_PUBLIC_URL</span>" in page
                 st, _, _ = a.call("POST", "/settings/proxy", fields={"_csrf": CSRF},
                                   headers={"Cookie": jar})
-                assert st == 200 and a.state.config.admin_ui.public_url == "https://s2n.example.com"
+                assert st == 303 and a.state.config.admin_ui.public_url == "https://s2n.example.com"
         finally:
             del os.environ["SER2NET_PUBLIC_URL"]
     finally:
@@ -312,10 +321,10 @@ def _base_path(a: App) -> None:
                                "Host": "127.0.0.1:8080"})
     assert st == 200, st
     st, h, _ = a.call("GET", "/ser2net/settings", headers={"Cookie": "ser2net_session=x"})
-    assert st == 303 and header(h, "location") == "/ser2net/login"
+    assert st == 303 and header(h, "location") == "/ser2net/login?next=%2Fsettings", h
     # WebSockets: the path's own session cookie
     ws = a.websocket("/ser2net/api/mappings/m1/console", headers={"Cookie": jar})
-    assert ws["code"] == 1011, ws
+    assert ws["type"] == "websocket.accept", ws
     ws = a.websocket("/ser2net/api/mappings/m1/console",
                      headers={"Cookie": "ser2net_session=" + session[0]})
     assert ws["code"] == 1008, ws
@@ -380,6 +389,42 @@ def test_base_path_totp_and_rest() -> None:
     print("under the public URL's path: the two-factor code step and a REST Location  OK")
 
 
+def test_next_through_base_path_and_code_step() -> None:
+    secret = totp.new_secret()
+    cfg = _cfg(public_url=PUBLIC)
+    cfg["users"].append({"username": "twofa", "password_hash": auth.hash_password(PW),
+                         "role": "operator", "pwd_version": 1, "totp_secret": secret})
+    with App(cfg) as a:
+        st, h, _ = a.call("GET", "/ser2net/settings/audit?q=x")
+        assert st == 303 and header(h, "location") == \
+            "/ser2net/login?next=%2Fsettings%2Faudit%3Fq%3Dx", (st, h)
+        csrf = f"ser2net_csrf{TAG}={CSRF}"
+        st, _, page = a.call("GET", "/ser2net/login?next=%2Fsettings%2Faudit%3Fq%3Dx",
+                             headers={"Cookie": csrf})
+        assert 'name="next" value="/settings/audit?q=x"' in page, page[:2000]
+        # the password alone: straight back to the page (proxy.redirect: under the path)
+        st, h, _ = a.call("POST", "/ser2net/login", headers={"Cookie": csrf},
+                          fields={"username": "admin", "password": PW, "_csrf": CSRF,
+                                  "next": "/settings/audit?q=x"})
+        assert st == 303 and header(h, "location") == "/ser2net/settings/audit?q=x", (st, h)
+        # password, then the code: the pending cookie carries the page to the code step
+        st, h, _ = a.call("POST", "/ser2net/login", headers={"Cookie": csrf},
+                          fields={"username": "twofa", "password": PW, "_csrf": CSRF,
+                                  "next": "/settings/audit?q=x"})
+        assert st == 303 and header(h, "location") == "/ser2net/auth/totp", (st, h)
+        jar = f"{csrf}; ser2net_2fa{TAG}={cookies(h)[f'ser2net_2fa{TAG}'][0]}"
+        st, h, _ = a.call("POST", "/ser2net/auth/totp", headers={"Cookie": jar},
+                          fields={"code": totp.code_at(secret, time.time()), "_csrf": CSRF})
+        assert st == 303 and header(h, "location") == "/ser2net/settings/audit?q=x", (st, h)
+        # another site's address is never followed (local_path), here neither
+        st, h, _ = a.call("POST", "/ser2net/login", headers={"Cookie": csrf},
+                          fields={"username": "admin", "password": PW, "_csrf": CSRF,
+                                  "next": "//evil.example/x"})
+        assert st == 303 and header(h, "location") == "/ser2net/", (st, h)
+    print("?next= under the public URL's path: the guard leaves the path out, the sign-in "
+          "and the two-factor code step lead back under it  OK")
+
+
 def test_no_root_relative_addresses() -> None:
     """Every address in a template goes under the request's path prefix ({{ base }})."""
     names = r'\b(?:href|src|action|formaction|hx-(?:get|post|put|patch|delete)|data-ws(?:-hex)?)'
@@ -414,6 +459,7 @@ def main() -> None:
     test_origins_and_sso()
     test_base_path()
     test_base_path_totp_and_rest()
+    test_next_through_base_path_and_code_step()
     test_no_root_relative_addresses()
     print("\nPASS: public URL and path")
 

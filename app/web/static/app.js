@@ -923,7 +923,7 @@ var feedback = (function () {
     var here = path + location.search;
     feedback.show("session", "error",
                   tr("session_ended", "Your session has ended: this page is not up to date, and changes can’t be saved until you sign in again."),
-                  { href: base + "/login" + (here !== "/" ? "?next=" + encodeURIComponent(here) : ""),
+                  { href: basePath() + "/login" + (here !== "/" ? "?next=" + encodeURIComponent(here) : ""),
                     // with unsaved changes open here: sign in in another tab, then save here
                     text: keep ? tr("sign_in_tab", "Sign in in a new tab (keeps the open form)")
                                : tr("sign_in", "Sign in"),
