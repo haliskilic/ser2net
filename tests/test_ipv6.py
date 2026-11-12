@@ -9,16 +9,22 @@ Run: python3 tests/test_ipv6.py
 """
 import asyncio
 import builtins
+import ipaddress
+import json
+import os
 import socket
 import sys
+import tempfile
+import urllib.request
+from types import SimpleNamespace
 from unittest import mock
 
-from _server import ROOT  # noqa: F401  (puts the app on sys.path)
+from _server import Browser, Server
 
 from app import config as config_mod
-from app import console
+from app import console, healthcheck, runtime
 from app.config import (
-    AppConfig, ConfigError, MappingConfig, NetworkSettings, _ip_overlaps, bind_ip_problem,
+    AdminUI, AppConfig, ConfigError, MappingConfig, NetworkSettings, _ip_overlaps, bind_ip_problem,
     canonical_ip, host_port,
 )
 from app.engine import netguard, netinfo, serial_io
@@ -81,18 +87,177 @@ def test_console_custom_ip():
             pass
         else:
             raise AssertionError(bad)
-    answers = iter(["c", "ff02::1", "c", "::1", "8090"])
+    chosen, said = _console("c", "ff02::1", "c", "::1", "8090")
+    assert chosen == ("::1", 8090), chosen
+    assert any("multicast/reserved" in line for line in said), said
+    assert any("http://[::1]:8090" in line for line in said), said
+    print("console: a custom admin UI address may be :: or ::1, multicast is refused  OK")
+
+
+def _console(*answers, current=None, tty=True):
+    feed = iter(answers)
     said = []
     real = builtins.input, sys.stdin, builtins.print
-    builtins.input = lambda _prompt="": next(answers)
-    sys.stdin = _Terminal()
+    builtins.input = lambda _prompt="": next(feed)
+    sys.stdin = _Terminal() if tty else SimpleNamespace(isatty=lambda: False)
     builtins.print = lambda *a, **k: said.append(" ".join(map(str, a)))
     try:
-        assert console.choose_admin_bind() == ("::1", 8090)
+        return console.choose_admin_bind(current), said
     finally:
         builtins.input, sys.stdin, builtins.print = real
-    assert any("multicast/reserved" in line for line in said), said
-    print("console: a custom admin UI address may be :: or ::1, multicast is refused  OK")
+
+
+def _addr(family, address):
+    return SimpleNamespace(family=family, address=address)
+
+
+class _Psutil:
+    """psutil's view of eth0 (up) and eth1 (down)."""
+
+    @staticmethod
+    def net_if_stats():
+        return {"eth0": SimpleNamespace(isup=True), "eth1": SimpleNamespace(isup=False),
+                "lo": SimpleNamespace(isup=True)}
+
+    @staticmethod
+    def net_if_addrs():
+        v4, v6 = socket.AF_INET, socket.AF_INET6
+        return {"lo": [_addr(v4, "127.0.0.1"), _addr(v6, "::1")],
+                "eth0": [_addr(v4, "10.0.0.5"), _addr(v6, "2001:db8::5"),
+                         _addr(v6, "2001:db8::abcd:1234"), _addr(v6, "fe80::1%eth0"),
+                         _addr(v6, "fd00::5"), _addr(v6, "::ffff:10.0.0.5")],
+                "eth1": [_addr(v4, "10.0.1.5"), _addr(v6, "2001:db8:1::5")]}
+
+
+def test_pickers():
+    d = tempfile.mkdtemp(prefix="s2n_v6_")
+    flags = os.path.join(d, "if_inet6")
+    with open(flags, "w") as fh:  # 2001:db8::abcd:1234 is a temporary (privacy) address
+        for ip, flag in (("2001:db8::5", "80"), ("2001:db8::abcd:1234", "01")):
+            fh.write(f"{int(ipaddress.IPv6Address(ip)):032x} 02 40 00 {flag}     eth0\n")
+    with mock.patch.object(netinfo, "psutil", _Psutil), \
+            mock.patch.object(netinfo, "_IF_INET6", flags), \
+            mock.patch.object(netinfo, "primary_lan_ip",
+                              lambda family=socket.AF_INET: {socket.AF_INET: "10.0.0.5"}.get(family)):
+        with mock.patch.object(netinfo, "ipv6_available", lambda: True):
+            items = netinfo.list_ip_candidates()
+        with mock.patch.object(netinfo, "ipv6_available", lambda: False):
+            v4only = [i["value"] for i in netinfo.list_ip_candidates()]
+        assert v4only == ["0.0.0.0", "127.0.0.1", "10.0.0.5"], v4only
+        values = [i["value"] for i in items]
+        assert values == ["0.0.0.0", "*", "::", "127.0.0.1", "::1", "10.0.0.5", "2001:db8::5",
+                          "fd00::5"], values
+        labels = {i["value"]: i["label"] for i in items}
+        assert labels["*"] == "All interfaces (IPv4 + IPv6)" and "(primary)" in labels["10.0.0.5"]
+        assert labels["0.0.0.0"] == "All IPv4 interfaces (0.0.0.0)"
+        assert labels["2001:db8::5"] == "eth0 — 2001:db8::5"
+
+        # the console: the "*" entry is the admin UI's "" (every interface, both families)
+        with mock.patch.object(netinfo, "ipv6_available", lambda: True):
+            (ip, port), _said = _console(str(values.index("*") + 1), "8091")
+        assert (ip, port) == ("", 8091)
+    # without a terminal a configured "" is kept, as any other address
+    (ip, _port), _said = _console(current=AdminUI(bind_ip=""), tty=False)
+    assert ip == "", ip
+    (ip, _port), _said = _console(current=AdminUI(), tty=False)
+    assert ip == "127.0.0.1", ip
+    print("pickers: every interface for IPv4, IPv6 or both, both loopbacks, LAN IPv6 addresses "
+          "(not link-local or temporary); IPv4 only without IPv6  OK")
+
+
+class _Req:
+    class state:
+        csrf_token = "t"
+        user = None
+
+
+def test_mapping_form():
+    from app.web.routes.forms import _build_mapping_dict, _preserve_unmanaged_fields
+    from app.web.server import make_templates
+
+    base = {"name": "f", "serial_port": "/dev/ttyS0", "network_mode": "server",
+            "network_port": "4001"}
+
+    def parsed(existing=None, **form):
+        form = dict(base, **form)
+        m = MappingConfig.from_dict(_build_mapping_dict(form, strict=True))
+        _preserve_unmanaged_fields(m, existing, form)
+        return m.network
+
+    shown = {"network_dual_stack_shown": "1"}
+    net = parsed(network_bind_ip="*", **shown)
+    assert (net.bind_ip, net.dual_stack, net.both_families) == ("0.0.0.0", True, True)
+    assert parsed(network_bind_ip="::", **shown).dual_stack is False
+    assert parsed(network_bind_ip="custom", network_bind_ip_custom="::1", **shown).bind_ip == "::1"
+    # an older node's form has no such field: the stored choice stays with a wildcard
+    stored = mapping(name="f", bind_ip="0.0.0.0", dual_stack=True)
+    assert parsed(stored, network_bind_ip="0.0.0.0").both_families
+    assert parsed(stored, network_bind_ip="10.0.0.5").dual_stack is False
+    assert parsed(mapping(name="f"), network_bind_ip="*").both_families, "this node's * entry"
+    assert parsed(stored, network_bind_ip="0.0.0.0", **shown).dual_stack is False, "unpicked"
+
+    ips = [{"value": "0.0.0.0", "label": "v4"}, {"value": "*", "label": "both"},
+           {"value": "::", "label": "v6"}]
+    tpl = make_templates().env.get_template("_mapping_form.html")
+
+    def selected(m):
+        html = tpl.render(request=_Req, mapping=m, is_new=False, modbus_points_json="",
+                          ports=[], ips=ips, error=None, links={})
+        assert 'name="network_dual_stack_shown"' in html
+        assert "0.0.0.0 takes IPv4 clients only, :: IPv6 clients only" in html
+        return [v for v, _ in __import__("re").findall(
+            r'<option value="([^"]*)" (selected)', html)]
+
+    assert "*" in selected(stored) and "0.0.0.0" not in selected(stored)
+    assert "::" in selected(mapping(name="f", bind_ip="::"))
+    print("mapping form: “All interfaces (IPv4 + IPv6)” is 0.0.0.0 + dual_stack; an older "
+          "node's form keeps the stored choice  OK")
+
+
+def test_env_and_healthcheck():
+    keep = {k: os.environ.pop(k, None) for k in ("SER2NET_BIND_IP", "SER2NET_PORT")}
+    try:
+        os.environ["SER2NET_BIND_IP"] = "*"
+        admin = AdminUI()
+        assert runtime._env_bind_override(admin) is True and admin.bind_ip == ""
+        d = tempfile.mkdtemp(prefix="s2n_v6hc_")
+        cfg = os.path.join(d, "config.json")
+        with open(cfg, "w") as fh:
+            json.dump({"admin_ui": {"bind_ip": "", "port": 8124}}, fh)
+        assert healthcheck.target(cfg) == "http://127.0.0.1:8124/healthz"
+        del os.environ["SER2NET_BIND_IP"]
+        assert healthcheck.target(cfg) == "http://127.0.0.1:8124/healthz", "'' too"
+        os.environ["SER2NET_BIND_IP"] = "**"
+        try:
+            runtime._env_bind_override(AdminUI())
+        except ConfigError as e:
+            assert "or * (every interface, IPv4 and IPv6)" in str(e), e
+        else:
+            raise AssertionError("** accepted")
+    finally:
+        for k, v in keep.items():
+            os.environ.pop(k, None)
+            if v is not None:
+                os.environ[k] = v
+    print("SER2NET_BIND_IP=*: every interface, IPv4 and IPv6; the healthcheck probes 127.0.0.1  OK")
+
+
+def test_admin_ui_every_interface():
+    if not ipv6_loopback():
+        print("SKIP (part): no IPv6 loopback here: the admin UI on both families not tried")
+        return
+    srv = Server()
+    srv.env["SER2NET_BIND_IP"] = "*"
+    with srv:
+        for host in ("127.0.0.1", "[::1]"):
+            with urllib.request.urlopen(f"http://{host}:{srv.port}/healthz", timeout=10) as r:
+                assert r.read().strip() == b"ok", host
+        assert f"admin UI on http://*:{srv.port}" in srv.output(), srv.output()[-2000:]
+        assert srv.saved_config()["admin_ui"]["bind_ip"] == ""
+        b = Browser(srv.base)
+        _st, _h, page = b.get("/setup")
+        assert f"*:{srv.port}" in page, page[-3000:]
+    print("admin UI on every interface (SER2NET_BIND_IP=*): answers on 127.0.0.1 and ::1  OK")
 
 
 def test_written_canonically():
@@ -384,6 +549,10 @@ def main():
     test_dual_stack_setting()
     test_family_aware_overlaps()
     test_labels()
+    test_pickers()
+    test_mapping_form()
+    test_env_and_healthcheck()
+    test_admin_ui_every_interface()
     test_address_keys()
     test_listeners()
     print("\nPASS: IPv6 bind addresses")

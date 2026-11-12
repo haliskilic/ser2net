@@ -48,17 +48,23 @@ def _env_bind_override(admin, notes: list[str] | None = None) -> bool:
     port). Returns True if a bind IP was provided. Env wins on every start, so a
     container's compose/run config stays the source of truth across restarts.
 
-    Raises ConfigError for a SER2NET_BIND_IP that is not an IP address or a
+    SER2NET_BIND_IP=* is every interface, IPv4 and IPv6 (admin_ui.bind_ip "", as the
+    console's "All interfaces (IPv4 + IPv6)"); 0.0.0.0 is IPv4 only, :: IPv6 only.
+
+    Raises ConfigError for a SER2NET_BIND_IP that is not an IP address or * or a
     SER2NET_PORT outside 1-65535 (the UI could not start on either). A SER2NET_PORT
     that is not a number is ignored, as it always was, with a warning in `notes`."""
     ip = (os.environ.get("SER2NET_BIND_IP") or "").strip()
     if not ip:
         return False
-    try:
-        ipaddress.ip_address(ip)
-    except ValueError:
-        raise ConfigError(f"SER2NET_BIND_IP must be an IP address (e.g. 0.0.0.0), "
-                          f"not {ip!r}") from None
+    if ip == "*":
+        ip = ""
+    else:
+        try:
+            ipaddress.ip_address(ip)
+        except ValueError:
+            raise ConfigError(f"SER2NET_BIND_IP must be an IP address (e.g. 0.0.0.0) or * "
+                              f"(every interface, IPv4 and IPv6), not {ip!r}") from None
     port = (os.environ.get("SER2NET_PORT") or "").strip()
     number = None
     if port:

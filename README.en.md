@@ -137,7 +137,17 @@ everything from a **password-protected web UI** — no CLI or hand-edited config
   `/dev/ttymxc1`, an adapter not plugged in yet, a `\\.\` name on Windows); a configured
   link such as `/dev/serial0` is shown with the device it leads to
   (`/dev/serial0 → /dev/ttyS0`) and counts as that port in use. **IP picker** from the
-  machine's own addresses (localhost / LAN / 0.0.0.0) or custom.
+  machine's own addresses (every interface, localhost, the LAN addresses of both families)
+  or custom.
+- **IPv4 and IPv6:** a mapping on `0.0.0.0` takes IPv4 clients only, one on `::` IPv6
+  clients only (TCP and UDP, on Linux and Windows alike); **All interfaces (IPv4 + IPv6)**
+  takes both (`"bind_ip": "0.0.0.0", "dual_stack": true` in `config.json` and the REST
+  API; a release before 2.9 reads it as `0.0.0.0`). As each of `0.0.0.0` and `::` is one
+  family, a mapping on one and another on the other can share a port. `::1` (IPv6
+  localhost) is a bind IP like `127.0.0.1`. IPv6 addresses are written in brackets next
+  to a port (`[::1]:4001`). A UDP mapping on `::` from an older release on Linux took
+  IPv4 datagrams too: it comes up with `dual_stack` on, so it still does (the start-up log
+  says so once).
 - **Find a device by its USB identity:** tick the box in the mapping form and the adapter
   is bound by VID:PID (+ serial number), so re-plugging it as `ttyUSB1` or under another
   COM number still opens the right device. Identical adapters without a serial number of
@@ -328,8 +338,9 @@ Linux (in an old-glibc container, so the result runs on older distributions too)
 `docker run --rm -v "$PWD:/src" -w /src almalinux:8 bash tools/build_standalone_linux.sh`.
 
 On first run:
-1. The **console** asks which local IP the admin UI binds to (machine IPs or custom)
-   and a port (default 8080). Headless/service default is the safe **127.0.0.1**.
+1. The **console** asks which local IP the admin UI binds to (machine IPs, every
+   interface for IPv4, IPv6 or both, or custom) and a port (default 8080).
+   Headless/service default is the safe **127.0.0.1**.
 2. Open the printed URL; **set the admin password** on the first screen. Open it by the
    machine's IP address or `localhost`: reached through another host name (a reverse
    proxy, the Docker host's name) the setup page also asks for the one-time code in
@@ -363,7 +374,8 @@ limits).
 Published image (amd64 + arm64, every release): `docker pull ghcr.io/haliskilic/ser2net:latest`
 (or `:2.8`, `:2.8.1`); `docker-compose.yml` uses it.
 Inside the container the UI binds to `0.0.0.0` (set via `SER2NET_BIND_IP` /
-`SER2NET_PORT` — the interactive picker can't run headless). Publish each mapping's port
+`SER2NET_PORT` — the interactive picker can't run headless; `SER2NET_BIND_IP=*` is every
+interface, IPv4 and IPv6). Publish each mapping's port
 too (a new mapping gets 4001), or use the host network. A serial device's group is taken
 from the device itself, so `--group-add` isn't needed for the usual device names. The
 process runs as the

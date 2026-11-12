@@ -158,6 +158,9 @@ _OPTIONAL_FORM_FIELDS = {
     # UDP only: where the device's output goes
     "network_udp_peer_timeout_s": ("network", ("udp_peer_host", "udp_peer_port",
                                                "udp_peer_timeout_s")),
+    # the bind IP choice "All interfaces (IPv4 + IPv6)": an older node's form doesn't
+    # offer it (_preserve_unmanaged_fields keeps it only while the bind IP is a wildcard)
+    "network_dual_stack_shown": ("network", ("dual_stack",)),
     # checkboxes (absent when unticked) an older node's form doesn't have; a section with a
     # dot is a section of a section
     "serial_port_lock_shown": ("serial.advanced", ("tiocexcl", "respect_uucp_locks")),
@@ -175,10 +178,11 @@ def _build_mapping_dict(form, strict: bool) -> dict:
     bind = form.get("network_bind_ip", "0.0.0.0")
     if bind == "custom":
         bind = form.get("network_bind_ip_custom", "").strip()
+    both = bind == netinfo.BOTH_FAMILIES  # every interface, IPv4 and IPv6
     network = {
         "mode": form.get("network_mode", "server"),
         "protocol": form.get("network_protocol", "raw"),
-        "bind_ip": bind or "0.0.0.0",
+        "bind_ip": "0.0.0.0" if both else bind or "0.0.0.0",
         "port": _num(form, "network_port", 4001, strict=strict),
         "remote_host": form.get("network_remote_host", "").strip(),
         "remote_port": (_num(form, "network_remote_port", 0, strict=strict)
@@ -199,6 +203,8 @@ def _build_mapping_dict(form, strict: bool) -> dict:
             keepalive_interval_s=_num(form, "network_keepalive_interval_s", 10, strict=strict),
             keepalive_count=_num(form, "network_keepalive_count", 3, strict=strict),
         )
+    if "network_dual_stack_shown" in form:
+        network["dual_stack"] = both
     if "network_connect_timeout_s" in form:
         network["connect_timeout_s"] = _num(form, "network_connect_timeout_s", 10.0,
                                             strict=strict, cast=float)
@@ -303,6 +309,14 @@ def _preserve_unmanaged_fields(new_map, existing, form=None) -> None:
                 for attr in attrs:
                     setattr(_section(new_map, section), attr,
                             getattr(_section(existing, section), attr))
+        net = new_map.network
+        if "network_dual_stack_shown" not in form:
+            # an older node's form (which may list this node's choices all the same): the
+            # stored setting stays while the bind IP is a wildcard
+            if form.get("network_bind_ip") == netinfo.BOTH_FAMILIES:
+                net.dual_stack = True
+            elif not net.both_families:
+                net.dual_stack = False
     for prefix, cur, old in (("serial_", new_map.serial, existing.serial),
                              ("serial_b_", new_map.serial_b, existing.serial_b)):
         # the USB-identity binding is in the form now (ops.apply_usb_match); a form
