@@ -720,6 +720,41 @@ içeren bir dosyaya (Docker secret) yönlendirin; ad için `SER2NET_ADMIN_USER` 
   güvenmeden önce seri zamanlamayı (ör. Modbus RTU) onunla deneyin. Kullanılan loop açılış
   log'unda yazar.
 
+### Saat senkronizasyonu
+
+ser2net her tarihi sistem saatinden alır ve saati hiçbir zaman ayarlamaz (systemd unit'i
+bunu yasaklar: `ProtectClock=true`). Yanlış bir saat `all.log`, `audit.log`, trace'ler ve
+yedek adlarına yanlış zaman yazar; 15 günlük log kırpmasında ve en yeni 50 yedeğin
+budanmasında yanlış satırların ya da yedeklerin kalmasına veya silinmesine yol açabilir;
+tarih kontrollerini de bozar: oturumlar, iki adımlı giriş kodları, SSO ve TLS sertifikaları
+(MQTT, SMTP, webhook'lar, SSO ve saat yanlışken üretilmiş bir self-signed sertifika). Bir
+şeyin ne kadar süredir çalıştığı (uptime, bağlantı süreleri, cluster'ın eş listesi) hiçbir
+saat atlamasından etkilenmeyen bir saatle ölçülür.
+
+- **Linux:** `systemd-timesyncd` ya da `chrony` çalışsın ve makinenin ulaşabildiği bir NTP
+  sunucusuna baksın; internete kapalı bir tesis ağında yerel bir sunucuya (bir router, bir
+  domain controller, bir GPS zaman sunucusu): `/etc/systemd/timesyncd.conf` içinde
+  `NTP=10.0.0.1` ya da `/etc/chrony/chrony.conf` içinde `server 10.0.0.1 iburst`. Saatin
+  senkron olup olmadığını `timedatectl` gösterir.
+- **Raspberry Pi ve RTC'si olmayan diğer kartlar** (Pi 3/4; Pi 5'in RTC'si pil ister): NTP
+  yanıt verene kadar saat geçmişte bir zamandan başlar. `fake-hwclock` (Raspberry Pi OS'ta
+  kurulu gelir) açılışta en azından son kaydedilen zamanı geri getirir; bir RTC modülü
+  gerçek zamanı korur.
+- **Windows:** Windows Time hizmeti: `w32tm /config /manualpeerlist:10.0.0.1
+  /syncfromflags:manual /update`, ardından `w32tm /resync`; kaynağını `w32tm /query /status`
+  gösterir. Domain üyesi bir makine zamanını domain controller'lardan alır.
+- **Docker:** container host'un saatini kullanır: host'u senkron tutun. (Saat dilimi
+  ayrıdır: `TZ`, bkz. [`docs/DOCKER.md`](docs/DOCKER.md).)
+- **Açılışta saati beklemek:** systemd unit'i ağı bekler, saat senkronunu beklemez; NTP
+  sunucusu olmayan bir ağda ser2net aksi hâlde hiç başlamazdı. Yine de beklemek için
+  `systemd-time-wait-sync.service`'i etkinleştirin ve `systemctl edit ser2net` ile
+  `After=time-sync.target` ve `Wants=time-sync.target` ekleyin.
+- **ser2net neyi kontrol eder:** saat en yeni yapılandırma yedeğinden, `config.json`'un son
+  değişikliğinden ya da bu sürümün yapıldığı tarihten gerideyse açılış log'una bir WARNING
+  yazılır. Ayarlar → *Yönetim arayüzü* sunucunun saatini (UTC ve saat dilimiyle yerel saat),
+  admin'ler için aynı uyarıyı ve bu tarayıcının saati sunucununkinden 2 dakikadan fazla
+  farklıysa bir not gösterir.
+
 ---
 
 ## 🗂️ Yapılandırma & durum dosyaları

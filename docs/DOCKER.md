@@ -125,6 +125,11 @@ docker run -d --name ser2net --restart unless-stopped \
   container's output, which Docker keeps without a limit by default: cap it with
   `--log-opt max-size=10m --log-opt max-file=3` (compose: `logging:`), or for every
   container in `/etc/docker/daemon.json`.
+- **Clock.** A container has no clock of its own: it uses the host's. Keep the host's
+  clock synchronised (NTP; README, *Time synchronisation*): ser2net never sets it, and a
+  wrong clock puts wrong times in logs and backups and makes sign-ins and certificate
+  checks fail. The start-up log warns when the clock reads earlier than the newest
+  configuration backup.
 - **Time zone.** The container runs in UTC unless `TZ` is set, so its log, audit and trace
   times are UTC, while the live hex view shows its times in the browser's zone. Log and audit
   lines say so with their offset (`2026-11-06 12:00:00+00:00`), trace lines don't. For the

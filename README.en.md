@@ -700,6 +700,40 @@ is no account at all; later starts ignore it.
   to the proactor loop, which has no such limit; it is new, so test serial timing (e.g.
   Modbus RTU) with it before relying on it. The start-up log names the loop in use.
 
+### Time synchronisation
+
+ser2net takes every date from the system clock and never sets it (the systemd unit
+forbids it: `ProtectClock=true`). A wrong clock puts wrong times in `all.log`, `audit.log`,
+traces and backup names, can make the 15-day log trim and the newest-50 backup pruning
+keep or drop the wrong ones, and makes date checks fail: sign-in sessions, two-factor
+codes, SSO, and TLS certificates (MQTT, SMTP, webhooks, SSO, and a self-signed certificate
+made while the clock was wrong). How long something has been running (uptime, connection
+times, the cluster's peer list) is measured with a clock that no clock step changes.
+
+- **Linux:** keep `systemd-timesyncd` or `chrony` running, pointed at an NTP server the
+  machine can reach; on an offline plant network a local one (a router, a domain
+  controller, a GPS time server): `NTP=10.0.0.1` in `/etc/systemd/timesyncd.conf`, or
+  `server 10.0.0.1 iburst` in `/etc/chrony/chrony.conf`. `timedatectl` shows whether the
+  clock is synchronised.
+- **Raspberry Pi and other boards without an RTC** (Pi 3/4; the Pi 5's RTC needs its
+  battery): until NTP answers, the clock starts in the past. `fake-hwclock` (installed on
+  Raspberry Pi OS) at least brings back the last saved time at boot; an RTC module keeps
+  the real one.
+- **Windows:** the Windows Time service: `w32tm /config /manualpeerlist:10.0.0.1
+  /syncfromflags:manual /update`, then `w32tm /resync`; `w32tm /query /status` shows its
+  source. A domain member takes its time from the domain controllers.
+- **Docker:** a container uses the host's clock: synchronise the host. (Its time zone is
+  separate: `TZ`, see [`docs/DOCKER.md`](docs/DOCKER.md).)
+- **Waiting for the clock at boot:** the systemd unit waits for the network, not for time
+  sync, because on a network without an NTP server ser2net would then never start. To
+  wait anyway, enable `systemd-time-wait-sync.service` and add `After=time-sync.target`
+  and `Wants=time-sync.target` with `systemctl edit ser2net`.
+- **What ser2net checks:** the start-up log has a WARNING when the clock reads earlier
+  than the newest configuration backup, the last change to `config.json` or the making of
+  this version. Settings → *Admin interface* shows the server's time (UTC, and local with
+  its zone), the same warning for admins, and a note when this browser's clock and the
+  server's differ by more than 2 minutes.
+
 ---
 
 ## 🗂️ Configuration & state files

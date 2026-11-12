@@ -16,7 +16,10 @@ longer:
     and never overlap; no cell's content overflows the cell;
   * the browser reports no errors (e.g. a Content-Security-Policy violation);
   * the cluster panel isn't refreshed while the tab is hidden (each refresh makes the
-    node ask every peer) and is refreshed as soon as the tab is shown again.
+    node ask every peer) and is refreshed as soon as the tab is shown again;
+  * Settings notes a browser clock 10 minutes off the server's (Playwright's fake clock in
+    a context of its own; the machine's clock is not touched), inside its panel, and
+    shows no note while the clocks agree.
 
 Opt-in: needs `pip install playwright && python -m playwright install chromium`.
 Skipped when Playwright or its browser is missing, unless SER2NET_UI_TESTS=1 (the
@@ -283,6 +286,27 @@ def main():
             if not polls:
                 problems.append("showing the tab again did not refresh the cluster panel")
             print("cluster panel: no refresh while the tab is hidden, one when shown")
+
+            page.goto(f"{base}/settings")
+            page.wait_for_selector("section.panel")
+            if page.locator("[data-clock-skew]").is_visible():
+                problems.append("the clock note shows while the browser's and the server's agree")
+            skewed = browser.new_context()
+            skewed.add_cookies(page.context.cookies())
+            skewed.clock.install(time=time.time() + 600)
+            other = skewed.new_page()
+            other.on("pageerror", lambda e: browser_errors.append(str(e)))
+            for w in (1024, 390):
+                other.set_viewport_size({"width": w, "height": 900})
+                other.goto(f"{base}/settings")
+                other.wait_for_selector("[data-clock-skew]:not([hidden])", timeout=10000)
+                bad = other.evaluate(CHECK_JS)
+                problems.extend(f"clock note @{w}: {b}" for b in bad)
+            note = other.locator("[data-clock-skew]").inner_text()
+            if "10" not in note:
+                problems.append(f"the clock note doesn't say 10 minutes: {note!r}")
+            print(f"settings: a browser clock 10 min ahead is noted: {note[:60]}…")
+            skewed.close()
             browser.close()
 
         assert not problems, "layout problems:\n  " + "\n  ".join(problems)

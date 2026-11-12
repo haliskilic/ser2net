@@ -255,6 +255,9 @@ def make_templates() -> Jinja2Templates:
         asset_version=__version__,
         # the server's time zone now ("UTC+03:00"), next to the times it shows
         server_zone=clock.zone,
+        # the server's clock when it rendered the page (<body data-server-time>): app.js
+        # compares it with the browser's (not the Date header: a reverse proxy sets its own)
+        server_now=lambda: int(time.time()),
     )
     templates.env.filters["softbreak"] = softbreak
     # _("...") in every template, translated for the request's language (app/i18n.py);

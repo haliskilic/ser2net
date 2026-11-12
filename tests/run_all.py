@@ -106,6 +106,7 @@ PORTABLE = [
     "test_changelog.py",
     "test_clock_ages.py",     # ages and client order by the monotonic clock (no wall clock)
     "test_time_stamps.py",    # log/audit times with their UTC offset; old lines still read
+    "test_clock_check.py",    # a clock that reads earlier than it can: start-up log, Settings
 ]
 
 # Data-path tests that need socat-backed PTYs (Linux). Best-effort: skipped if the

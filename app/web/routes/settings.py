@@ -17,7 +17,7 @@ from urllib.parse import urlencode
 from starlette.responses import PlainTextResponse, Response
 from starlette.routing import Route
 
-from ... import i18n, importer, optional
+from ... import clock, i18n, importer, optional
 from ...config import (
     API_TOKEN_DAYS_MAX, API_TOKEN_NAME, API_TOKEN_ROLES, API_TOKENS_MAX, EXPIRE_DAYS_MAX,
     EXPIRE_DAYS_MIN, NOTIFY_EVENTS, ROLES, SMTP_SECURITY, UI_LANGUAGES, WEBHOOK_FORMATS,
@@ -66,12 +66,22 @@ def routes(ctx: Ctx) -> list:
         when = state.signins.last(user)
         return time.strftime("%Y-%m-%d %H:%M", time.localtime(when)) if when else "—"
 
+    def _server_clock(admin: bool) -> dict:
+        """The server's time for the Admin interface panel, and (admins only: it names the
+        newest backup's time) whether the clock reads earlier than it can (clock.behind)."""
+        now = time.time()
+        behind = clock.behind(state.store, now) if admin else None
+        return {"server_utc": clock.utc_text(now), "server_local": clock.stamp(now),
+                "clock_behind": {"what": behind[0], "when": clock.utc_text(behind[1])}
+                if behind else None}
+
     async def settings_get(request, ok=None, error=None, new_api_token=None, import_preview=None,
                            new_cluster_key=None, restore_preview=None):
         me = current_user(request)
         backups = state.store.backups() if me is not None and me.role == "admin" else []
         ldap_problem, oidc_problem = await asyncio.to_thread(_package_problems)
-        return render(request, "settings.html", ok=ok, error=error,
+        server_clock = await asyncio.to_thread(_server_clock, me is not None and me.role == "admin")
+        return render(request, "settings.html", ok=ok, error=error, **server_clock,
                       import_preview=import_preview, restore_preview=restore_preview,
                       backups=backups,
                       admin=state.config.admin_ui,
