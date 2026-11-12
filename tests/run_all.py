@@ -82,6 +82,7 @@ PORTABLE = [
     "test_upgrade_from_2_7.py",
     "test_upgrade_from_2_8.py",  # a 2.8.0 config.json (tests/make_config_fixture.py) and data/
     "test_windows_service.py",  # real service part: Windows + SER2NET_SERVICE_TESTS=1 (CI)
+    "test_systemd_units.py",    # systemd/*.service: fresh-install paths, sandbox, verify
     "test_single_instance.py",
     "test_notifications.py",
     "test_ports_usb_identity.py",

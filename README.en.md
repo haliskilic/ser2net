@@ -219,8 +219,9 @@ run; config/logs are written to `data/` next to the binary.
 | `ser2net-linux-x64` | x86_64 Linux with glibc ≥ 2.28: RHEL / AlmaLinux / Rocky 8+, Debian 11+, Ubuntu 20.04+, Fedora, openSUSE Leap 15 (not musl/Alpine — use Docker there) |
 | `ser2net-linux-arm64` | 64-bit ARM Linux with glibc ≥ 2.28: Raspberry Pi 3/4/5 (64-bit Raspberry Pi OS 11+ or Ubuntu), ARM industrial gateways, AWS Graviton, the same distributions |
 
-Every release also publishes `SHA256SUMS`, a CycloneDX SBOM per binary (`*.cdx.json`) and
-the license texts, and the binaries carry GitHub build provenance:
+Every release also publishes `SHA256SUMS`, a CycloneDX SBOM per binary (`*.cdx.json`), the
+license texts and `ser2net-standalone.service`, the systemd unit for the Linux binaries (see
+*Run as a service*), and the binaries carry GitHub build provenance:
 `sha256sum -c SHA256SUMS --ignore-missing`,
 `gh attestation verify ser2net-linux-x64 -R haliskilic/ser2net`. The Windows exe is **not
 code-signed yet** (it will be once a signing service is configured —
@@ -539,7 +540,7 @@ directory's owner by itself):
 
 | Install | Command |
 |---|---|
-| source / Linux binary (systemd) | `sudo -u ser2net python3 /opt/ser2net/ser2net.py --data-dir /opt/ser2net/data --set-password admin` (binary: `./ser2net-linux-x64 --set-password admin`) |
+| source / Linux binary (systemd) | `sudo -u ser2net python3 /opt/ser2net/ser2net.py --data-dir /opt/ser2net/data --set-password admin` (binary with `ser2net-standalone.service`: `sudo -u ser2net /usr/local/bin/ser2net --data-dir /var/lib/ser2net --set-password admin`; started by hand: `./ser2net-linux-x64 --set-password admin`) |
 | Windows (elevated prompt, also while the service runs) | `ser2net-windows-x64.exe --data-dir C:\ProgramData\ser2net --set-password admin` (the service's data directory: `sc qc ser2net` shows it) |
 | Docker | `docker exec -it ser2net python /app/ser2net.py --no-bootstrap --data-dir /data --set-password admin` |
 
@@ -589,9 +590,42 @@ is no account at all; later starts ignore it.
   [`docs/DOCKER.md`](docs/DOCKER.md)) — `restart: unless-stopped`, `/data` volume. A plain
   `docker run` needs `--restart unless-stopped` for that (an existing container:
   `docker update --restart unless-stopped ser2net`).
-- **Linux (systemd):** `systemd/ser2net.service` — a dedicated unprivileged user,
-  `SupplementaryGroups=dialout`, `Restart=on-failure`, hardening directives.
-  **Do not run as root.**
+- **Linux (systemd):** two units. Both run ser2net as a dedicated unprivileged user
+  (`ser2net`, in the `dialout` group for the serial ports), restart it 3 s after a failure
+  and sandbox it (read-only system, own `/tmp`, a system call filter). **Do not run it as
+  root.**
+  - *Source checkout* in `/opt/ser2net`: `systemd/ser2net.service`.
+    ```bash
+    sudo useradd --system --user-group --home-dir /opt/ser2net -M -s /usr/sbin/nologin ser2net
+    sudo git clone https://github.com/haliskilic/ser2net.git /opt/ser2net
+    sudo cp /opt/ser2net/systemd/ser2net.service /etc/systemd/system/
+    sudo systemctl daemon-reload && sudo systemctl enable --now ser2net
+    ```
+    The first start makes `data/` and `lib/` for the `ser2net` user and installs the
+    bundled dependencies into `lib/` (offline). It needs Python 3.10 or newer as
+    `/usr/bin/python3`: on RHEL / AlmaLinux / Rocky 8 and 9 and Debian 11 point
+    `ExecStart=` at a newer interpreter (RHEL: `dnf install python3.11`, then
+    `/usr/bin/python3.11`) or use the binary.
+  - *Standalone binary*: `ser2net-standalone.service` (attached to every release, and in
+    `systemd/`), installed as `ser2net.service`; its data is in `/var/lib/ser2net`, which
+    systemd makes.
+    ```bash
+    sudo install -m 0755 ser2net-linux-x64 /usr/local/bin/ser2net
+    sudo useradd --system --user-group --home-dir /var/lib/ser2net -M -s /usr/sbin/nologin ser2net
+    sudo cp ser2net-standalone.service /etc/systemd/system/ser2net.service
+    sudo systemctl daemon-reload && sudo systemctl enable --now ser2net
+    ```
+  - The web UI listens on `127.0.0.1:8080` until you say otherwise. To reach it from the
+    network, run `sudo systemctl edit ser2net`, add the lines below (use TLS on a network
+    address, see Security) and `sudo systemctl restart ser2net`:
+    ```ini
+    [Service]
+    Environment=SER2NET_BIND_IP=0.0.0.0 SER2NET_PORT=8080
+    ```
+    Set the first password in the browser, or with `--set-password` (the table under
+    Security). Run such commands as the `ser2net` user (`sudo -u ser2net …`), never as
+    plain root, which would leave files the service can't read. Logs:
+    `journalctl -u ser2net` and `all.log` in the data directory.
 - **Windows:** nothing else needed. From an elevated ("Run as administrator") prompt:
   ```bat
   ser2net-windows-x64.exe --install-service

@@ -12,8 +12,20 @@ SupplementaryGroups=dialout
 WorkingDirectory=/opt/ser2net
 # On a headless first boot the console picker is non-interactive and defaults the
 # admin UI to 127.0.0.1:8080 (loopback, never network-exposed without an explicit
-# choice). To expose it on the LAN, run once interactively (or with --reconfigure)
-# to pick the bind IP and set a password, or pre-create /opt/ser2net/data/config.json.
+# choice). To expose it on the LAN, run "systemctl edit ser2net" and add
+#   [Service]
+#   Environment=SER2NET_BIND_IP=0.0.0.0 SER2NET_PORT=8080
+# (README: "Run as a service"). Commands run by hand on this data directory go as the
+# service user, never as root (root would own what they write, and the service could no
+# longer read it): sudo -u ser2net python3 /opt/ser2net/ser2net.py --data-dir
+# /opt/ser2net/data --set-password admin
+# The directories ser2net writes to (see ReadWritePaths below) are made for the
+# service user on the first start if they are missing ("+": run without the sandbox).
+ExecStartPre=+/bin/sh -c 'test -d /opt/ser2net/data || install -d -o ser2net -g ser2net -m 0700 /opt/ser2net/data'
+ExecStartPre=+/bin/sh -c 'test -d /opt/ser2net/lib || install -d -o ser2net -g ser2net -m 0700 /opt/ser2net/lib'
+# Python 3.10 or newer. Where /usr/bin/python3 is older (RHEL / AlmaLinux / Rocky 8 and 9,
+# Debian 11) put a newer one here (RHEL: dnf install python3.11, then /usr/bin/python3.11),
+# or run the standalone binary with systemd/ser2net-standalone.service instead.
 ExecStart=/usr/bin/python3 /opt/ser2net/ser2net.py --data-dir /opt/ser2net/data
 Restart=on-failure
 RestartSec=3
@@ -32,6 +44,7 @@ NoNewPrivileges=true
 #    start fails to install dependencies. If you instead pre-install deps at deploy
 #    time (python3 bootstrap.py) and add --no-bootstrap to ExecStart, you can drop
 #    /opt/ser2net/lib from this list.
+# Both must exist when the service starts: the ExecStartPre= lines above make them.
 ReadWritePaths=/opt/ser2net/data /opt/ser2net/lib
 ProtectSystem=strict
 ProtectHome=true
