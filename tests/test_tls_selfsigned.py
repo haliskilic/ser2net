@@ -15,7 +15,8 @@ executables — and the openssl command is only a fallback for source installs.
      the pair and points admin_ui.tls_cert / tls_key at it
   4. what a certificate says (certinfo, with cryptography and with the ssl module's
      decoder): subject, names, validity, self-signed or CA-issued; expired / not valid
-     yet / ending soon; files that are no certificate; the start-up log's line;
+     yet / ending soon; files that are no certificate; a relative path read from the data
+     directory; the start-up log's line;
      Settings → Admin TLS shows it, and generating while the server's clock reads
      earlier than it can warns (generated all the same)
 Parts 1, 3 and 4 need cryptography (pip install cryptography) and are skipped without (a
@@ -50,7 +51,7 @@ from _clock import WallClock  # noqa: E402
 from _optional import need  # noqa: E402
 from _server import ui_cookie  # noqa: E402
 
-from app import clock, runtime  # noqa: E402
+from app import clock, config, runtime  # noqa: E402
 from app.web import certinfo, selfsigned  # noqa: E402
 from app.web.auth import hash_password  # noqa: E402
 
@@ -328,6 +329,19 @@ def test_certificate_info():
         finally:
             certinfo.ssl = real_ssl
         print("certinfo: a key, a broken PEM block and a missing file are told apart  OK")
+
+        # a relative path from the configuration names a file in the data directory, as for
+        # every other TLS file (engine/tls.py): the certificate is found there
+        os.makedirs(os.path.join(d, "data", "tls"))
+        shutil.copy(cert, os.path.join(d, "data", "tls", "cert.pem"))
+        config.set_data_dir(os.path.join(d, "data"))
+        try:
+            assert certinfo.read(os.path.join("tls", "cert.pem")) == info
+            assert runtime.tls_certificate_note(os.path.join("tls", "cert.pem")).startswith(
+                "admin UI TLS certificate: ser2net, self-signed")
+        finally:
+            config.set_data_dir(None)
+        print("certinfo: a relative certificate path is read from the data directory  OK")
 
         line = runtime.tls_certificate_note(cert)
         assert line.startswith("admin UI TLS certificate: ser2net, self-signed, valid ") and \
