@@ -13,7 +13,7 @@ do and what works differently, before you switch.
 2. **Import the classic file with a preview.** In **Settings → Mappings export / import**,
    choose the file and **Preview import**: every connection shows as the mapping it
    becomes, with a note for each thing that is left out or works differently. Nothing
-   changes until you **Apply import**, and the current configuration is kept in
+   changes until you **Apply import** (after step 4), and the current configuration is kept in
    `backups/` either way. *Merge* updates mappings of the same name and adds the others;
    *Replace* replaces all of them. Without a browser, the REST API takes the same file
    (an operator or admin token; `dry_run=true` answers what it would do):
@@ -31,8 +31,9 @@ do and what works differently, before you switch.
    that can't be carried over, an open or close string with a byte of 0x80 or more, a
    device that only received (`wronly`, `rawlp`, `no-con-to-acc`), or a second connection
    on a device an earlier one uses. Fix each, then enable it.
-4. **Stop and disable the classic daemon** before you start these mappings: it holds the
-   same listening ports and serial devices.
+4. **Stop and disable the classic daemon** before you apply the import, which starts the
+   enabled mappings at once: the classic daemon holds the same listening ports and serial
+   devices.
    ```bash
    sudo systemctl disable --now ser2net
    ```
@@ -49,7 +50,7 @@ do and what works differently, before you switch.
    (README → *Ports below 1024*) or move the mapping to port 1024 or above.
 6. **Serial devices.** The `ser2net` user needs the devices' group (`dialout`, or `uucp` on
    Arch); see [`LINUX-SERIAL.md`](LINUX-SERIAL.md) when a port doesn't open.
-7. Start the service, enable the mappings and check the dashboard.
+7. Apply the import, enable the mappings you fixed and check the dashboard.
 
 Importing the same file again later (*Merge*) takes only what the file says from it: a
 mapping keeps what was set up here since, and never becomes more open (a disabled mapping
