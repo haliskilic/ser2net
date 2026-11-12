@@ -58,6 +58,8 @@ RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
 SystemCallArchitectures=native
 SystemCallFilter=@system-service
 SystemCallFilter=~@privileged @resources
+# denied calls fail with EPERM instead of killing the process (see ser2net.service)
+SystemCallErrorNumber=EPERM
 # MemoryDenyWriteExecute=true   # enable only after verifying ctypes/Python startup
 # UMask=0077
 
