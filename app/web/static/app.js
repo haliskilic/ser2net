@@ -348,7 +348,9 @@ function initTerm(root) {
 }
 
 // text: the console socket (raw device output, typing goes to the device);
-// hex: the traffic socket — frames [dir u8][time f64 BE][bytes], both directions
+// hex: the traffic socket, both directions. Both speak protocol 2 (?v=2, see
+// routes/console.py): a text message is a notice (JSON: {"dropped": n}); a binary one of
+// the hex view holds records [dir u8][time f64 BE][length u32 BE][bytes], one after another.
 function connectTerm(el, mode) {
   var term = el._term;
   if (el._ws) { try { el._ws.onclose = null; el._ws.close(); } catch (e) {} }
@@ -356,29 +358,43 @@ function connectTerm(el, mode) {
   term.reset();
   var scheme = location.protocol === "https:" ? "wss" : "ws";
   var path = el.getAttribute(mode === "hex" ? "data-ws-hex" : "data-ws");
-  var ws = new WebSocket(scheme + "://" + location.host + path);
+  var ws = new WebSocket(scheme + "://" + location.host + path + "?v=2");
   ws.binaryType = "arraybuffer";
   el._ws = ws;
   var bridge = el.getAttribute("data-bridge") === "1";
+  function say(msg) { term.write("\r\n\x1b[33m[" + msg + "]\x1b[0m\r\n"); }
+  function notice(text) {
+    var n = null;
+    try { n = JSON.parse(text); } catch (e) {}
+    if (n && n.dropped)
+      say(tr("dropped", "{0} bytes left out: this browser did not keep up", n.dropped));
+  }
   ws.onmessage = function (ev) {
-    if (mode === "text") {
-      if (typeof ev.data === "string") term.write(ev.data);
-      else term.write(new Uint8Array(ev.data));
-      return;
-    }
-    if (typeof ev.data === "string" || ev.data.byteLength < 9) return;
-    var dv = new DataView(ev.data);
-    term.write(hexLines(dv.getUint8(0), dv.getFloat64(1, false),
-                        new Uint8Array(ev.data, 9), bridge));
+    if (typeof ev.data === "string") notice(ev.data);
+    else if (mode === "text") term.write(new Uint8Array(ev.data));
+    else term.write(hexRecords(ev.data, bridge));
   };
   ws.onclose = function () {
-    term.write("\r\n\x1b[33m[" + tr("disconnected", "console disconnected") + "]\x1b[0m\r\n");
+    say(tr("disconnected", "console disconnected"));
   };
   var btn = el.closest("#form-panel") ? el.closest("#form-panel").querySelector("[data-term-mode]") : null;
   if (btn) btn.textContent = mode === "hex" ? tr("text_view", "Text view") : tr("hex_view", "Hex view");
   if (mode === "hex")
     term.write("\x1b[90m " + tr("hex_header", "time          direction   offset  bytes" +
                "                                            text") + "\x1b[0m\r\n");
+}
+
+// the hex view's lines for one message of packed records
+function hexRecords(buf, bridge) {
+  var dv = new DataView(buf), out = "", off = 0;
+  while (off + 13 <= buf.byteLength) {
+    var n = dv.getUint32(off + 9, false);
+    if (off + 13 + n > buf.byteLength) break;
+    out += hexLines(dv.getUint8(off), dv.getFloat64(off + 1, false),
+                    new Uint8Array(buf, off + 13, n), bridge);
+    off += 13 + n;
+  }
+  return out;
 }
 
 function hexLines(dir, ts, bytes, bridge) {
