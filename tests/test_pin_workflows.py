@@ -23,7 +23,8 @@ def test_one_job_checks_the_pins():
     assert key(vendor, "name") == "offline wheels match requirements.txt"
     assert "SER2NET_SKIP_PIN_CHECKS" not in vendor.split("\n    steps:\n", 1)[1]
     for cmd in ("python tests/test_vendor_wheels.py", "python tests/test_build_lock.py",
-                "python tests/test_vendor_assets.py", "python tools/refresh_wheels.py --verify",
+                "python tests/test_vendor_assets.py", "python tests/test_third_party.py",
+                "python tools/refresh_wheels.py --verify",
                 "python tools/refresh_locks.py --verify", "python tools/refresh_assets.py --verify"):
         assert cmd in vendor, cmd
     on_failure = [s for s in steps(vendor) if "\n        if: failure()\n" in s]

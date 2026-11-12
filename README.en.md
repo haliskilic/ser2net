@@ -250,7 +250,8 @@ executable (releases also attach it as `*.THIRD-PARTY-LICENSES.txt`).
 Build it yourself — Windows: `pwsh tools\build_standalone_windows.ps1` (what the release
 runs: the pinned python-build-standalone interpreter, the hash-locked packages, license
 texts and SBOM), or with a Python 3.12 of your own
-`pip install --require-hashes --only-binary=:all: -r requirements-lock.txt -r requirements-build.txt && pyinstaller ser2net.spec`;
+`pip install --require-hashes --only-binary=:all: -r requirements-lock.txt -r requirements-build.txt && pyinstaller ser2net.spec`
+(the spec then writes the `--licenses` text itself, from that environment);
 Linux (in an old-glibc container, so the result runs on older distributions too):
 `docker run --rm -v "$PWD:/src" -w /src almalinux:8 bash tools/build_standalone_linux.sh`.
 

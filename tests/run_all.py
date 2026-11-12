@@ -67,6 +67,7 @@ PORTABLE = [
     "test_vendor_wheels.py",
     "test_build_lock.py",     # requirements-lock/-build.txt (hashes) match the pins
     "test_vendor_assets.py",  # htmx / xterm.js recorded (vendor/npm), cached by content hash
+    "test_third_party.py",    # SBOM / --licenses: SPDX ids, native libs + CPEs, npm packages
     "test_trace.py",
     "test_session_timeout.py",
     "test_session_revocation.py",

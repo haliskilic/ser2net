@@ -55,11 +55,12 @@ foreach ($lic in "bzip2","expat","libffi","liblzma","mpdecimal","openssl-3","sql
 if ($LASTEXITCODE -ne 0) { throw "version resource generation failed" }
 & $PY tools\third_party.py licenses build\THIRD-PARTY-LICENSES.txt --strict --extra $licdir
 if ($LASTEXITCODE -ne 0) { throw "license bundle failed" }
-& $PY tools\third_party.py sbom build\ser2net.cdx.json --strict
-if ($LASTEXITCODE -ne 0) { throw "sbom failed" }
 & $PY tools\release_guard.py interpreter --min-openssl $MIN_OPENSSL
 if ($LASTEXITCODE -ne 0) { throw "release guard failed (OpenSSL below $MIN_OPENSSL)" }
 & $PY -m PyInstaller --clean --noconfirm ser2net.spec
 if ($LASTEXITCODE -ne 0) { throw "PyInstaller failed" }
+# after the build: the spec lists the binaries the exe carries (pyexpat.pyd, _decimal.pyd ...)
+& $PY tools\third_party.py sbom build\ser2net.cdx.json --strict --binaries build\bundled-binaries.txt
+if ($LASTEXITCODE -ne 0) { throw "sbom failed" }
 & dist\ser2net.exe --version
 if ($LASTEXITCODE -ne 0) { throw "the built exe did not run" }

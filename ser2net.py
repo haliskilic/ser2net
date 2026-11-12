@@ -138,10 +138,13 @@ def print_licenses() -> int:
         with open(bundled, encoding="utf-8") as fh:
             _write_utf8(fh.read())
         return 0
+    # an executable built without the license file has no THIRD-PARTY-NOTICES.md next to
+    # it either (ROOT is its temporary unpack folder): name this version's copy online
+    notices = (f"https://github.com/haliskilic/ser2net/blob/v{__version__}/THIRD-PARTY-NOTICES.md"
+               if FROZEN else os.path.join(ROOT, "THIRD-PARTY-NOTICES.md"))
     _write_utf8(
         f"ser2net {__version__} is licensed under the GNU AGPL-3.0-only (LICENSE) or a "
-        "commercial license (COMMERCIAL_LICENSE.md).\nThird-party components: "
-        f"{os.path.join(ROOT, 'THIRD-PARTY-NOTICES.md')}\n")
+        f"commercial license (COMMERCIAL_LICENSE.md).\nThird-party components: {notices}\n")
     return 0
 
 

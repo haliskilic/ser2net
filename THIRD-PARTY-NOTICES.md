@@ -7,7 +7,11 @@ components are not covered by ser2net's license.
 **Full license texts:** every standalone executable carries the texts of everything it
 contains — run `ser2net --licenses` — and each release attaches the same file as
 `ser2net-<platform>.THIRD-PARTY-LICENSES.txt`. It is generated at build time from the
-build environment (`tools/third_party.py`), so it always matches the bundled versions.
+build environment (`tools/third_party.py`), so it always matches the bundled versions. The
+release's SBOMs (`ser2net-<platform>.cdx.json`, CycloneDX) list the same components with SPDX
+license ids, the interpreter's native libraries (OpenSSL, zlib, expat, mpdecimal, SQLite as
+bundled) with their versions and CPEs, the OpenSSL that cryptography links in, and the
+browser libraries below.
 
 ## Python dependencies (`requirements.txt`, wheels in `vendor/wheels/`)
 
@@ -42,7 +46,7 @@ Docker image. Used unmodified, through their public APIs.
 | pyasn1 (ldap3 dependency) | LDAP / AD sign-in | BSD-2-Clause |
 | Authlib | OIDC single sign-on | BSD-3-Clause |
 | joserfc (Authlib dependency) | OIDC single sign-on | BSD-3-Clause |
-| cryptography | OIDC, self-signed certificates | Apache-2.0 OR BSD-3-Clause |
+| cryptography (links its own OpenSSL, Apache-2.0, into its module) | OIDC, self-signed certificates | Apache-2.0 OR BSD-3-Clause |
 | cffi, pycparser (cryptography dependencies) | | MIT-0 / BSD-3-Clause |
 | pyudev (if installed; not bundled) | hotplug events (Linux) | LGPL-2.1-or-later |
 | pywin32 (if installed; not bundled) | hotplug events (Windows) | PSF-2.0 |

@@ -109,6 +109,7 @@ jobs:
       - run: python tests/test_vendor_wheels.py
       - run: python tests/test_build_lock.py
       - run: python tests/test_vendor_assets.py
+      - run: python tests/test_third_party.py   # the license overrides are for the pinned versions
       # every wheel is the file PyPI publishes (its sha256 from PyPI's JSON API), or the
       # byte-for-byte rebuild of the pure-Python repack from one
       - name: The wheels are PyPI's files
