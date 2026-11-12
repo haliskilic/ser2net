@@ -92,6 +92,32 @@ class LogEvery:
         self._log(msg)
 
 
+class RefusalLog:
+    """The log lines of refused connections ("rejected <peer>: <why>"), which a client
+    that retries in a loop, or a scan, can cause many times a second: each reason at most
+    once per ``interval`` seconds (LogEvery), the next one saying how many were held back.
+    Other lines (a kick) are logged as they are."""
+
+    MAX_REASONS = 32  # (the reasons are fixed texts; past that, they share one line)
+
+    def __init__(self, log: Callable[[str], None], interval: float = 60.0) -> None:
+        self._log = log
+        self._interval = interval
+        self._by_reason: dict[str, LogEvery] = {}
+
+    def __call__(self, msg: str) -> None:
+        if not msg.startswith("rejected "):
+            self._log(msg)
+            return
+        why = msg.partition(": ")[2]
+        if why not in self._by_reason and len(self._by_reason) >= self.MAX_REASONS:
+            why = ""
+        limiter = self._by_reason.get(why)
+        if limiter is None:
+            limiter = self._by_reason[why] = LogEvery(self._log, self._interval)
+        limiter(msg)
+
+
 def _resource() -> Any:
     try:
         import resource
@@ -516,6 +542,7 @@ class Listener:
         self._limit = limit
         self._refused = LogEvery(log)
         self._failed = LogEvery(log)
+        self._rejected = RefusalLog(log)
         self._handshakes: dict[Any, asyncio.Task] = {}  # plain transport -> its handshake
         self.server: Any = None
 
@@ -542,7 +569,7 @@ class Listener:
         if not why and self._ssl is not None:
             ip = peer_ip(transport)
             if self._allowed is not None and not self._allowed(ip):
-                self._log(f"rejected {label}: not in allowed list")
+                self._rejected(f"rejected {label}: not in allowed list")
                 transport.close()
                 return
             why = BUDGET.handshake_room(ip)
