@@ -89,9 +89,11 @@ class _Master:
 
 
 class ModbusGatewayRunner:
-    def __init__(self, mapping: MappingConfig, logger=None, trace_dir: Optional[str] = None):
+    def __init__(self, mapping: MappingConfig, logger=None, trace_dir: Optional[str] = None,
+                 state_dir: Optional[str] = None):
         self.mapping = mapping
         self.trace_dir = trace_dir
+        self.state_dir = state_dir  # the data folder: what a Sparkplug node keeps across runs
         self._tracer: Optional[Tracer] = None
         self.status = RunnerStatus(state="stopped")
         self.log = logger
@@ -181,7 +183,8 @@ class ModbusGatewayRunner:
             mq = self.mapping.mqtt
             if mq.payload_format == "sparkplug_b":
                 from .sparkplug_node import SparkplugNode
-                self._sparkplug = SparkplugNode(self.mapping, self._log, self._write_soon)
+                self._sparkplug = SparkplugNode(self.mapping, self._log, self._write_soon,
+                                                state_dir=self.state_dir)
                 self._mqtt = self._sparkplug.publisher()
             else:
                 from .mqtt_pub import MqttPublisher

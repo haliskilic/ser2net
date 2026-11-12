@@ -40,12 +40,15 @@ class Runner(Protocol):
     async def serial_write(self, data: bytes) -> bool: ...
 
 
-def make_runner(mapping: MappingConfig, logger, trace_dir: Optional[str] = None) -> Runner:
+def make_runner(mapping: MappingConfig, logger, trace_dir: Optional[str] = None,
+                state_dir: Optional[str] = None) -> Runner:
     """Pick the runner for a mapping: the Modbus RTU<->TCP gateway when the network
-    protocol is 'modbus', otherwise the transparent serial<->network bridge."""
+    protocol is 'modbus', otherwise the transparent serial<->network bridge. ``state_dir``:
+    the data folder, where a runner keeps state across restarts (None: in memory only)."""
     if mapping.kind == "net" and mapping.network.protocol == "modbus":
         from .modbus_gateway import ModbusGatewayRunner
-        return ModbusGatewayRunner(mapping, logger=logger, trace_dir=trace_dir)
+        return ModbusGatewayRunner(mapping, logger=logger, trace_dir=trace_dir,
+                                   state_dir=state_dir)
     return MappingRunner(mapping, logger=logger, trace_dir=trace_dir)
 
 
@@ -75,9 +78,10 @@ class _Unbuildable:
         pass
 
 
-def _build_runner(mapping: MappingConfig, logger, trace_dir: Optional[str]):
+def _build_runner(mapping: MappingConfig, logger, trace_dir: Optional[str],
+                  state_dir: Optional[str] = None):
     try:
-        return make_runner(mapping, logger, trace_dir)
+        return make_runner(mapping, logger, trace_dir, state_dir)
     except Exception as e:  # only this mapping is down
         return _Unbuildable(e)
 
@@ -85,9 +89,10 @@ def _build_runner(mapping: MappingConfig, logger, trace_dir: Optional[str]):
 class Supervisor:
     def __init__(self, logger: Optional[Callable[[str], None]] = None,
                  logger_factory: Optional[Callable[[MappingConfig], Callable[[str], None]]] = None,
-                 trace_dir: Optional[str] = None):
+                 trace_dir: Optional[str] = None, state_dir: Optional[str] = None):
         self._runners: dict[str, Runner] = {}
         self.trace_dir = trace_dir  # data/traces: the only place traces are written
+        self.state_dir = state_dir  # data/: what runners keep across restarts (Sparkplug bdSeq)
         self._order: list[str] = []
         self.log = logger or (lambda m: None)
         # per-mapping logger: defaults to the global logger with a "[name]" prefix
@@ -117,7 +122,8 @@ class Supervisor:
     def _ensure_stopped_placeholder(self, mapping: MappingConfig) -> None:
         """Register a non-running runner so status is queryable for disabled mappings."""
         if mapping.id not in self._runners:
-            r = _build_runner(mapping, self._logger_factory(mapping), self.trace_dir)
+            r = _build_runner(mapping, self._logger_factory(mapping), self.trace_dir,
+                              self.state_dir)
             r.status.state = "stopped"
             self._runners[mapping.id] = r
             if mapping.id not in self._order:
@@ -131,7 +137,8 @@ class Supervisor:
             with contextlib.suppress(Exception):
                 await old.stop()
 
-        runner = _build_runner(mapping, self._logger_factory(mapping), self.trace_dir)
+        runner = _build_runner(mapping, self._logger_factory(mapping), self.trace_dir,
+                              self.state_dir)
         if mapping.id not in self._order:
             self._order.append(mapping.id)
         async with self._lock:
