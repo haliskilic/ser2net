@@ -49,6 +49,7 @@ from app.engine.cluster import (AUTH_HEADER, PEER_TTL, ClusterDiscovery, _sign,
                                 canonical_target, format_auth, key_header, parse_auth,
                                 reply_mac, request_mac)
 from app.web.auth import hash_password
+from _server import server_log
 
 
 def free_port():
@@ -373,9 +374,11 @@ def start_node(cfg_obj, env=None):
     with open(cfg, "w") as fh:
         json.dump(cfg_obj, fh)
     child = {k: v for k, v in os.environ.items() if k.lower() != "no_proxy"}
+    out = server_log(tmp)  # the node's output: a file, never an unread pipe
     proc = subprocess.Popen([sys.executable, "ser2net.py", "--no-bootstrap", "--config", cfg],
                             cwd=ROOT, stdin=subprocess.DEVNULL, env=dict(child, **(env or {})),
-                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+                            stdout=out, stderr=subprocess.STDOUT)
+    out.close()  # (the node has its own copy)
     return proc, tmp
 
 
