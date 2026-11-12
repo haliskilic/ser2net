@@ -135,7 +135,9 @@ everything from a **password-protected web UI** — no CLI or hand-edited config
   `ser2net_mapping_bytes_dropped_total`), flagged on the dashboard and logged.
 - **Notifications:** a webhook (JSON, Slack, Microsoft Teams, Discord, Telegram) and/or
   e-mail (SMTP) when a device is lost or comes back, a mapping fails to start, clients
-  come and go, or a sign-in fails; repeats are suppressed, a test message can be sent.
+  come and go, a sign-in fails, or the data disk is almost full (below the free space at
+  which traces pause; all.log warns in any case); repeats are suppressed, a test message
+  can be sent.
 - **Security:** password (set on first access, scrypt), CSRF, signed-cookie sessions,
   login rate-limiting, strict security headers; sessions end at logout, on a password
   change, per user or for everyone (Settings), and a lost password is reset with
@@ -325,9 +327,10 @@ The image has a `HEALTHCHECK` (`ser2net --healthcheck`). Details:
 - **/metrics:** Prometheus-format metrics (authenticated): per mapping whether it runs,
   its clients, bytes in / out / dropped, reconnects and dropped slow clients; for the
   process its open files and their limit (`ser2net_open_fds`, `ser2net_fd_limit`, POSIX),
-  the admin UI's connections, TLS handshakes in progress and waiting for one to end, and
-  the connections refused right after accept (`ser2net_connections_refused_total`, by
-  reason).
+  the admin UI's connections, TLS handshakes in progress and waiting for one to end, the
+  connections refused right after accept (`ser2net_connections_refused_total`, by
+  reason), the data folder's disk (`ser2net_data_free_bytes`, `ser2net_data_size_bytes`)
+  and what traces and logs take there (`ser2net_traces_bytes`, `ser2net_logs_bytes`).
 
 ---
 

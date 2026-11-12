@@ -17,7 +17,7 @@ from urllib.parse import urlencode
 from starlette.responses import PlainTextResponse, Response
 from starlette.routing import Route
 
-from ... import i18n, importer, optional
+from ... import i18n, importer, optional, storage
 from ...config import (
     EXPIRE_DAYS_MAX, EXPIRE_DAYS_MIN, NOTIFY_EVENTS, ROLES, SMTP_SECURITY, TRACE_DAYS_MAX,
     UI_LANGUAGES,
@@ -68,7 +68,9 @@ def routes(ctx: Ctx) -> list:
     async def settings_get(request, ok=None, error=None, new_api_token=None, import_preview=None,
                            new_cluster_key=None, restore_preview=None):
         me = current_user(request)
-        backups = state.store.backups() if me is not None and me.role == "admin" else []
+        is_admin = me is not None and me.role == "admin"
+        backups = state.store.backups() if is_admin else []
+        disk = await asyncio.to_thread(storage.usage, state.data_dir) if is_admin else None
         ldap_problem, oidc_problem = await asyncio.to_thread(_package_problems)
         return render(request, "settings.html", ok=ok, error=error,
                       import_preview=import_preview, restore_preview=restore_preview,
@@ -83,6 +85,7 @@ def routes(ctx: Ctx) -> list:
                       expire_days=state.config.external_users_expire_days,
                       expire_min=EXPIRE_DAYS_MIN, expire_max=EXPIRE_DAYS_MAX,
                       trace_days=state.config.trace_max_age_days, trace_days_max=TRACE_DAYS_MAX,
+                      disk=disk, size_text=storage.size_text,
                       ldap=state.config.ldap, ldap_problem=ldap_problem,
                       ldap_tls_problem=state.ldap_tls_problem,
                       oidc=state.config.oidc, oidc_problem=oidc_problem,

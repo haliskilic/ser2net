@@ -1,8 +1,11 @@
 """Event notifications: tell someone when a serial device disappears or comes back,
-a mapping fails to start, clients come and go, or a sign-in fails.
+a mapping fails to start, clients come and go, a sign-in fails, or the data disk is
+almost full.
 
 The Notifier watches the supervisor's status snapshot (every POLL_S seconds) and
-turns state changes into events; the login route reports failed sign-ins itself.
+turns state changes into events; the login route reports failed sign-ins itself. Every
+DISK_CHECK_S it also looks at the data folder's free space: below storage.floor() (where
+traces pause) it logs a warning and sends disk_low, once until there is room again.
 Each enabled event is sent to the configured webhook (generic JSON, Slack, Microsoft
 Teams Workflows, Discord or Telegram) and/or by e-mail (SMTP), from a worker task so
 a slow endpoint never holds anything up. The same event for the same mapping is sent
@@ -23,10 +26,11 @@ from collections import deque
 from email.message import EmailMessage
 from typing import Optional
 
-from . import __version__, i18n
+from . import __version__, i18n, storage
 from .i18n import _
 
 POLL_S = 2.0
+DISK_CHECK_S = 60.0
 MAX_PER_MINUTE = 20
 TIMEOUT_S = 10.0
 
@@ -39,6 +43,7 @@ def title(event: str) -> str:
         "client_connected": _("client connected"),
         "client_disconnected": _("client disconnected"),
         "login_failed": _("failed sign-in"),
+        "disk_low": _("data disk almost full"),
         "test": _("test notification"),
     }.get(event, event)
 _LOST = ("reconnecting", "device-missing")
@@ -146,6 +151,8 @@ class Notifier:
         self._sent: deque = deque()
         self._prev: dict = {}
         self._tasks: list[asyncio.Task] = []
+        self.disk_low = False      # the data disk is below storage.floor() (until room again)
+        self._disk_checked: Optional[float] = None  # time.monotonic() of the last look
 
     @property
     def settings(self):
@@ -189,8 +196,30 @@ class Notifier:
                 for event, key, name, detail in status_events(self._prev, statuses, names):
                     self.emit(event, key, name, detail)
                 self._prev = snapshot(statuses)
+                now = time.monotonic()
+                if self._disk_checked is None or now - self._disk_checked >= DISK_CHECK_S:
+                    self._disk_checked = now
+                    await self.check_disk()
             except Exception as e:  # never let the watcher die
                 self.state.log(f"notifications: watcher error: {e}")
+
+    async def check_disk(self) -> None:
+        """Look at the data folder's free space: going below storage.floor() is logged and
+        sends disk_low; having FREE_RESUME times the floor again is logged."""
+        found = await asyncio.to_thread(storage.space, self.state.data_dir)
+        if found is None:
+            return
+        free, total = found
+        need = storage.floor(total)
+        text = (f"{storage.mb(free)} free of {storage.mb(total)} on the disk of "
+                f"{self.state.data_dir}; traces pause below {storage.mb(need)}")
+        if not self.disk_low and free < need:
+            self.disk_low = True
+            self.state.log(f"WARNING: the data disk is almost full: {text}")
+            self.emit("disk_low", "data", "", text)
+        elif self.disk_low and free >= need * storage.FREE_RESUME:
+            self.disk_low = False
+            self.state.log(f"the data disk has room again: {text}")
 
     async def _worker(self) -> None:
         while True:
