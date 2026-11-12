@@ -14,6 +14,9 @@ network bytes appended to it. Checks:
     thread: the status says why, nothing is queued meanwhile, the writer tries again,
     and the trace then says how many bytes are missing; a removed traces folder is made
     again; a thread that dies anyway is named in all.log;
+  * a download of a trace being written sends it as it was when the download began:
+    exactly its Content-Length (a FileResponse sent the lines added meanwhile too, and
+    the server broke the download off);
   * deleting a mapping deletes its traces.
 Cross-platform; no serial hardware (the runner's serial port doesn't exist).
 
@@ -278,6 +281,77 @@ async def test_tracer_folder_removed(tmp):
     print("tracer: a traces folder removed while tracing is made again (owner only)  OK")
 
 
+async def _download(response, path, method="GET"):
+    """Send `response` through h11 as uvicorn does (its declared length is enforced);
+    after the first body chunk the trace writer appends to `path`. Returns (headers,
+    body, error)."""
+    import h11
+    conn = h11.Connection(h11.SERVER)
+    conn.receive_data(f"{method} /t HTTP/1.1\r\nHost: x\r\n\r\n".encode())
+    assert isinstance(conn.next_event(), h11.Request)
+    headers, body, chunks = {}, [], 0
+
+    async def send(msg):
+        nonlocal chunks
+        if msg["type"] == "http.response.start":
+            headers.update({k.decode(): v.decode() for k, v in msg["headers"]})
+            conn.send(h11.Response(status_code=msg["status"], headers=msg["headers"]))
+        elif msg["type"] == "http.response.body":
+            if msg.get("body") and method != "HEAD":
+                conn.send(h11.Data(data=msg["body"]))
+                body.append(msg["body"])
+                chunks += 1
+                if chunks == 1:  # a batch of traffic is written meanwhile
+                    with open(path, "ab") as fh:
+                        fh.write(b"x" * 5000)
+            if not msg.get("more_body"):
+                conn.send(h11.EndOfMessage())
+
+    async def receive():
+        await asyncio.sleep(3600)
+        return {"type": "http.disconnect"}
+
+    scope = {"type": "http", "method": method, "path": "/t", "headers": [],
+             "asgi": {"version": "3.0", "spec_version": "2.4"}}
+    try:
+        await response(scope, receive, send)
+    except h11.LocalProtocolError as e:
+        return headers, b"".join(body), str(e)
+    return headers, b"".join(body), ""
+
+
+async def test_live_download(tmp):
+    from starlette.responses import FileResponse
+
+    from app.web.routes.mappings import snapshot_response
+    path = os.path.join(tmp, "abc123-live.log")
+    original = bytes(range(256)) * 781 + b"end\n"  # 199940 bytes: four 64 KiB reads
+    with open(path, "wb") as fh:
+        fh.write(original)
+    headers, body, error = await _download(
+        FileResponse(path, media_type="text/plain; charset=utf-8", filename="x"), path)
+    assert error == "Too much data for declared Content-Length", (error, len(body))
+    with open(path, "wb") as fh:
+        fh.write(original)
+    fh = open(path, "rb")
+    headers, body, error = await _download(
+        snapshot_response(fh, "abc123-live.log", "text/plain; charset=utf-8"), path)
+    assert not error and body == original, (error, len(body))
+    assert headers["content-length"] == str(len(original)) and fh.closed
+    assert headers["content-disposition"] == 'attachment; filename="abc123-live.log"'
+    assert os.path.getsize(path) == len(original) + 5000  # what was added stays in the file
+    fh = open(path, "rb")
+    headers, body, error = await _download(
+        snapshot_response(fh, "sıcaklık.log", "text/plain; charset=utf-8", head=True), path,
+        method="HEAD")
+    assert not error and body == b"" and fh.closed
+    assert headers["content-length"] == str(len(original) + 5000)
+    assert headers["content-disposition"] == \
+        "attachment; filename*=utf-8''s%C4%B1cakl%C4%B1k.log", headers
+    print("download of a live trace: exactly the size it had when it began (a FileResponse "
+          "broke off: too much data for its Content-Length)  OK")
+
+
 def test_thread_errors_logged():
     from app import runtime
     logs = []
@@ -365,6 +439,8 @@ async def main():
         await test_tracer_survives_failures(os.path.join(tmp, "e"))
         await test_tracer_folder_removed(os.path.join(tmp, "f"))
         test_thread_errors_logged()
+        os.makedirs(os.path.join(tmp, "g"))
+        await test_live_download(os.path.join(tmp, "g"))
         await test_runner_confined(os.path.join(tmp, "c"))
         test_state_files(tmp)
     finally:

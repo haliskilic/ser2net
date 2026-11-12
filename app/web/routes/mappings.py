@@ -7,8 +7,9 @@ import asyncio
 import hashlib
 import os
 import time
+import urllib.parse
 
-from starlette.responses import FileResponse, PlainTextResponse, Response
+from starlette.responses import PlainTextResponse, Response, StreamingResponse
 from starlette.routing import Route
 
 from ...config import ConfigError, MappingConfig, mapping_revision
@@ -17,6 +18,39 @@ from ...i18n import _
 from . import ops
 from .common import TRIGGER, Ctx, console_interactive, sees_to_device
 from .forms import _form_error, form_context
+
+
+# what a download reads at a time (as Starlette's FileResponse)
+DOWNLOAD_CHUNK = 64 * 1024
+
+
+def snapshot_response(fh, filename: str, media_type: str, head: bool = False,
+                      chunk_size: int = DOWNLOAD_CHUNK) -> StreamingResponse:
+    """A download of the open binary file `fh` as it is now: exactly the size it has
+    (taken on the open handle, so a rotation can't put another file in its place
+    meanwhile) with that Content-Length, read off the event loop. What the trace writer
+    adds meanwhile is not sent: a FileResponse would send it past the Content-Length it
+    declared, and the server would break the download off. A file cut meanwhile (by
+    another program) ends the download early. Closes `fh`; `head`: headers only."""
+    size = os.fstat(fh.fileno()).st_size
+
+    async def body():
+        try:
+            left = 0 if head else size
+            while left > 0:
+                data = await asyncio.to_thread(fh.read, min(chunk_size, left))
+                if not data:
+                    break
+                left -= len(data)
+                yield data
+        finally:
+            fh.close()
+
+    quoted = urllib.parse.quote(filename)  # a trace name may be in any script
+    disposition = (f'attachment; filename="{filename}"' if quoted == filename
+                   else f"attachment; filename*=utf-8''{quoted}")
+    return StreamingResponse(body(), media_type=media_type, headers={
+        "Content-Length": str(size), "Content-Disposition": disposition})
 
 
 def _bulk_refused(refused: list, total: int) -> str:
@@ -177,8 +211,13 @@ def routes(ctx: Ctx) -> list:
         f = next((f for f in await asyncio.to_thread(_trace_files, mid) if f["name"] == name), None)
         if not m or f is None:
             return PlainTextResponse(_("Trace file not found"), status_code=404)
+        try:  # the file it is now, as it is now: the trace may go on writing it
+            fh = await asyncio.to_thread(open, f["path"], "rb")
+        except OSError:  # rotated or deleted meanwhile
+            return PlainTextResponse(_("Trace file not found"), status_code=404)
         ctx.audit(request, "trace_download", f"{m.name}/{name}")
-        return FileResponse(f["path"], media_type="text/plain; charset=utf-8", filename=name)
+        return snapshot_response(fh, name, "text/plain; charset=utf-8",
+                                 head=request.method == "HEAD")
 
     async def console_view(request):
         mid = request.path_params["mid"]
