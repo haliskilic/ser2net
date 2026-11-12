@@ -18,6 +18,8 @@ import threading
 import time
 from typing import Any, Callable, Optional
 
+from ..config import canonical_device
+
 BY_ID_DIR = "/dev/serial/by-id"
 
 
@@ -99,9 +101,39 @@ def visible(ports: list[dict[str, Any]], show_all: bool = False) -> list[dict[st
     return list(ports) if show_all else [p for p in ports if p.get("hardware") is not False]
 
 
-def find(ports: list[dict[str, Any]], device: str) -> Optional[dict[str, Any]]:
-    """The port whose device path or by-id name is ``device``."""
-    return next((p for p in ports if device and device in (p.get("device"), p.get("by_id"))), None)
+def names(port: dict[str, Any]) -> list[str]:
+    """The names a listed port can be set as: its device path and its udev links."""
+    return [n for n in (port.get("device"), port.get("by_id"), port.get("by_path")) if n]
+
+
+def find(ports: list[dict[str, Any]], device: str,
+         resolve: bool = False) -> Optional[dict[str, Any]]:
+    """The listed port ``device`` names: its device path or a udev link of it (by-id,
+    by-path), in any spelling Windows opens alike (canonical_device: com3 is COM3). With
+    ``resolve``, also a link elsewhere that leads to it (/dev/serial0, a udev SYMLINK; only
+    for this machine's own list, as it looks at this machine's files)."""
+    if not device or not isinstance(device, str):
+        return None
+    key = canonical_device(device)
+    for p in ports:
+        if key in (canonical_device(n) for n in names(p)):
+            return p
+    if resolve and device.startswith("/"):
+        real = os.path.realpath(device)
+        if real != device:
+            return next((p for p in ports if p.get("device") == real), None)
+    return None
+
+
+def same_port(a: str, b: str) -> bool:
+    """Whether the port names ``a`` and ``b`` open the same port on this machine: equal in
+    the canonical spelling (canonical_device), or POSIX paths that lead to one device (a
+    by-id or by-path link and the device itself)."""
+    if not a or not b:
+        return False
+    if canonical_device(a) == canonical_device(b):
+        return True
+    return a.startswith("/") and b.startswith("/") and os.path.realpath(a) == os.path.realpath(b)
 
 
 async def async_snapshot() -> list[dict[str, Any]]:

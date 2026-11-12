@@ -131,7 +131,13 @@ düzenlemeye gerek yok.
   gösterilir ve seçilebilir.
 - **Cihazı USB kimliğiyle bulma:** eşleme formundaki kutu işaretlenince adaptör VID:PID
   (+ seri no) ile bağlanır; çıkarılıp takılınca `ttyUSB0`→`ttyUSB1` ya da COM numarası
-  değişse de eşleme doğru cihazı açar.
+  değişse de eşleme doğru cihazı açar. Kendi seri numarası olmayan özdeş adaptörler (CH340,
+  çoğu PL2303) ve çok portlu bir çipin kanalları (FT4232H) aynı kimliği taşır: bunlardan
+  ayarlı port aralarındaysa o, değilse başka bir eşlemenin açık tutmadığı ilki açılır ve
+  pano tahmin yapmak zorunda kaldığını söyler. Bağlı adaptör yokken portunu artık başka bir
+  USB adaptörü almışsa o açılmaz: bağlı adaptör geri gelene ya da eşleme yeni adaptöre
+  bağlanana kadar (kutunun işaretini kaldırıp yeniden işaretleyin, kaydedin) eşleme
+  `cihaz yok` gösterir.
 - **IP seçici:** makineye atanmış IP'ler (localhost / LAN / 0.0.0.0) veya custom.
 - **Eksik ya da meşgul seri cihaz:** cihaz yokken (çıkarılmış, henüz tanınmamış) eşleme
   `cihaz yok`, açık port az önce kaybolduğunda ya da başka bir nedenle açılamadığında

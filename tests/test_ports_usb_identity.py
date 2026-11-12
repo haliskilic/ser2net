@@ -8,18 +8,26 @@ Checks:
     the selected port (VID/PID + serial number), clears it when unticked, keeps it when
     the device is unplugged, refuses a port without a USB identity, and a form without
     the field (an older cluster peer) keeps the stored binding;
-  * the engine then opens whatever device currently has that identity.
+  * the engine then opens whatever device currently has that identity: only the known
+    match keys count (a typo binds nothing), of several ports with the identity
+    (identical adapters) the configured one is opened (also through a by-id style link),
+    else one no other mapping has open, with a warning; a configured port that is another
+    USB adapter now is not opened (device missing); serial numbers in any letter case.
 
 Run: python3 tests/test_ports_usb_identity.py
 """
+import asyncio
+import errno
 import os
+import sys
 import tempfile
 from types import SimpleNamespace
+from unittest import mock
 
 from _server import ROOT  # noqa: F401  (sys.path setup)
 
-from app.config import MappingConfig
-from app.engine import portlist, serial_io
+from app.config import AppConfig, MappingConfig, SerialSettings
+from app.engine import portdiag, portlist, serial_io
 from app.web.routes.forms import _preserve_unmanaged_fields
 from app.web.routes.ops import apply_usb_match
 
@@ -101,9 +109,117 @@ def test_engine_resolves(monkeypatch_ports):
     print("engine: opens the device that has the identity now (renumbered ttyUSB0 -> ttyUSB7)  OK")
 
 
+def _twin(device, serial=None):
+    return {"device": device, "by_id": None, "vid": "1a86", "pid": "7523",
+            "serial_number": serial, "location": None, "hardware": None}
+
+
+def test_identity_resolution():
+    ch340 = {"vid": "1a86", "pid": "7523"}
+    twins = [_twin("/dev/ttyUSB0"), _twin("/dev/ttyUSB1"), _twin("/dev/ttyUSB2")]
+
+    def side(port, match):
+        return SerialSettings.from_dict({"port": port, "match": match})
+
+    # only known keys count: a typo or another program's key name binds nothing
+    for odd in ({"VID": "0403"}, {"serial": "A1"}, {"vid": ""}, "0403:6001"):
+        assert serial_io.resolve(side("/dev/ttyACM0", odd), twins) == ("/dev/ttyACM0", []), odd
+    # identical adapters: the configured one is opened when it is one of them
+    for port in ("/dev/ttyUSB1", "/dev/ttyUSB2"):
+        got = serial_io.resolve(side(port, ch340), twins)
+        assert got == (port, ["/dev/ttyUSB0", "/dev/ttyUSB1", "/dev/ttyUSB2"]), got
+    # ... also when it is set through a link that leads to it (by-id / by-path)
+    if sys.platform != "win32":  # (symlinks need a privilege there)
+        link = os.path.join(tempfile.mkdtemp(prefix="s2n_twins_"), "pci-0:2:1.0-port0")
+        os.symlink("/dev/ttyUSB2", link)
+        assert serial_io.resolve_device(side(link, ch340), twins) == "/dev/ttyUSB2"
+    # the configured one is not there: the first one no other mapping has open
+    with mock.patch.object(portdiag, "holder", lambda dev: "a" if dev == "/dev/ttyUSB0" else ""):
+        assert serial_io.resolve_device(side("/dev/ttyUSB7", ch340), twins) == "/dev/ttyUSB1"
+    with mock.patch.object(portdiag, "holder", lambda dev: "a"):  # all taken: the first
+        assert serial_io.resolve_device(side("/dev/ttyUSB7", ch340), twins) == "/dev/ttyUSB0"
+    # Windows names in another spelling are the configured port too
+    com = [dict(_twin("COM3"), device="COM3"), dict(_twin("COM4"), device="COM4")]
+    assert serial_io.resolve_device(side("com4", ch340), com) == "COM4"
+    # serial numbers compare in any letter case
+    ftdi = dict(FTDI, serial_number="a12345")
+    assert serial_io.resolve_device(side("/dev/ttyUSB0", {"vid": "0403", "pid": "6001",
+                                                          "serial_number": "A12345"}),
+                                    [ftdi]) == "/dev/ttyUSB3"
+    # the bound adapter is gone and its port is another USB adapter now: not opened
+    bound = side("/dev/ttyUSB4", {"vid": "0403", "pid": "6001", "serial_number": "A12345"})
+    try:
+        serial_io.resolve(bound, [CH340])
+    except serial_io.ForeignDevice as e:
+        assert e.errno == errno.ENODEV and portdiag.missing(e), e
+        assert "1a86:7523" in str(e) and "0403:6001 [A12345]" in str(e), e
+    else:
+        raise AssertionError("another adapter on the configured port must not be opened")
+    # ... but a port that is not there, or has no USB identity, is opened by its name
+    assert serial_io.resolve_device(bound, [FTDI]) == "/dev/ttyUSB3"
+    assert serial_io.resolve_device(bound, []) == "/dev/ttyUSB4"
+    onboard = side("/dev/ttyS0", {"vid": "0403", "pid": "6001"})
+    assert serial_io.resolve_device(onboard, [ONBOARD]) == "/dev/ttyS0"
+    print("engine: known match keys only, configured port first among identical adapters "
+          "(also via a link), else a free one, another adapter on the port refused  OK")
+
+
+def test_shared_identity_warning():
+    """open_serial says when it had to guess among several ports with the identity."""
+    if not hasattr(os, "openpty"):
+        print("shared-identity warning: no PTYs here, skipped")
+        return
+    pairs = [os.openpty() for _ in range(2)]
+    try:
+        ptys = sorted(os.ttyname(slave) for _master, slave in pairs)
+        listed = [_twin(ptys[0]), _twin(ptys[1])]
+        settings = SerialSettings.from_dict({"port": "/dev/ttyUSB9", "exclusive": False,
+                                             "match": {"vid": "1a86", "pid": "7523"}})
+
+        async def run(port):
+            settings.port = port
+            with mock.patch.object(portlist, "recent", lambda max_age=5.0: listed):
+                _r, writer, ser, device = await serial_io.open_serial(settings)
+            try:
+                return device, [n for n in serial_io.open_notes(ser) if n.kind == "identity_shared"]
+            finally:
+                writer.close()
+
+        device, notes = asyncio.run(run("/dev/ttyUSB9"))
+        assert device == ptys[0] and len(notes) == 1, (device, notes)
+        assert notes[0].text().startswith("2 connected ports have the USB identity this port "
+                                           "is bound to (1a86:7523)"), notes[0].text()
+        assert "By USB socket" in notes[0].text()
+        device, notes = asyncio.run(run(ptys[1]))  # the configured one: no guess, no warning
+        assert device == ptys[1] and notes == [], (device, notes)
+    finally:
+        for master, slave in pairs:
+            os.close(master)
+            os.close(slave)
+    print("open: a guess among identical adapters is reported once the port is open  OK")
+
+
+def test_unknown_match_keys_noted():
+    cfg = AppConfig.from_dict({"mappings": [
+        {"id": "abcabcabcab1", "name": "typo", "serial": {"port": "/dev/ttyUSB0",
+                                                           "match": {"VID": "0403"}}},
+        {"id": "abcabcabcab2", "name": "extra", "serial": {
+            "port": "/dev/ttyUSB1", "match": {"vid": "0403", "pid": "6001", "x": 1}}}]})
+    notes = [n for n in cfg.load_notes if "USB identity" in n]
+    assert len(notes) == 2 and "(VID)" in notes[0] and "opened by its name" in notes[0], notes
+    assert "(x)" in notes[1] and "opened by its name" not in notes[1], notes
+    assert cfg.mappings[0].serial.match == {"VID": "0403"}, "the stored value is kept"
+    assert cfg.mappings[0].serial.identity == {} and cfg.mappings[1].serial.identity == {
+        "vid": "0403", "pid": "6001"}
+    print("load: unknown match keys are noted and not used; the stored value is kept  OK")
+
+
 def main():
     test_sysfs_and_by_id()
     test_form_binding()
+    test_identity_resolution()
+    test_shared_identity_warning()
+    test_unknown_match_keys_noted()
     from serial.tools import list_ports
     real = list_ports.comports
     list_ports.comports = lambda: [SimpleNamespace(device="/dev/ttyUSB7", vid=0x0403, pid=0x6001,

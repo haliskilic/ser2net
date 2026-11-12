@@ -347,16 +347,17 @@ async def _resolved_off_the_loop():
         portlist._remember([{"device": "/dev/ttyUSB7", "vid": "0403", "pid": "6001",
                              "serial_number": "A1", "location": None}])
         try:
-            assert await serial_io._resolve(settings) == "/dev/ttyUSB7" and not calls, \
+            assert await serial_io._resolve(settings) == ("/dev/ttyUSB7", ["/dev/ttyUSB7"]) \
+                and not calls, \
                 "a fresh watcher list is used"
             taken, ports = portlist._recent
             portlist._recent = (taken - 60, ports)  # a minute old: not used
-            assert await serial_io._resolve(settings) == "/dev/ttyUSB5"
+            assert (await serial_io._resolve(settings))[0] == "/dev/ttyUSB5"
             assert calls and loop_thread not in calls, "enumerated in a thread"
         finally:
             portlist._recent = (0.0, [])
     plain = SerialSettings(port="/dev/ttyACM0")
-    assert await serial_io._resolve(plain) == "/dev/ttyACM0"
+    assert await serial_io._resolve(plain) == ("/dev/ttyACM0", [])
 
 
 def test_usb_identity_resolved_off_the_event_loop():
