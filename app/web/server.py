@@ -57,6 +57,18 @@ QUIET_PATHS = {"/api/status", "/api/cluster/status", "/api/cluster/local",
                "/api/ports/table", "/api/ports.json", "/healthz", "/favicon.ico"}
 
 
+def logs_request(mode: str, method: str, path: str, status: int) -> bool:
+    """Whether a web UI request gets its "HTTP ..." line in all.log (admin_ui.request_log):
+    "all" every request but the static files and the automatic refreshes (QUIET_PATHS);
+    "changes" only those that change something (not GET / HEAD / OPTIONS) and the refused
+    or failed ones (400 and up); "off" none."""
+    if path.startswith("/static") or mode == "off":
+        return False
+    if mode == "changes":
+        return method not in auth.SAFE_METHODS or status >= 400
+    return not (method == "GET" and path in QUIET_PATHS)
+
+
 def _wants_json(request) -> bool:
     return proxy.route_path(request).startswith("/api")
 
@@ -161,11 +173,9 @@ class GuardMiddleware(BaseHTTPMiddleware):
 
         response = await call_next(request)
 
-        # audit log: every state-changing request, plus meaningful page loads
-        # (skip the static assets and the periodic poll endpoints)
-        if not path.startswith("/static") and not (
-            request.method == "GET" and path in QUIET_PATHS
-        ):
+        # all.log: every state-changing request, plus meaningful page loads (skip the
+        # static assets and the periodic poll endpoints), or less (admin_ui.request_log)
+        if logs_request(cfg.admin_ui.request_log, request.method, path, response.status_code):
             ip = request.client.host if request.client else "?"
             state.log(f"HTTP {ip} {request.method} {path} -> {response.status_code}")
 

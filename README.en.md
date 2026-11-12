@@ -766,7 +766,12 @@ inside aren't readable by other users:
   leaves out the session key.
 - `all.log` — global activity (size-rotated); `audit.log` — sign-ins, config changes,
   console / hex view opens and trace downloads: who/from where/what (rotated). Searchable
-  under Settings → *Audit log*, CSV export.
+  under Settings → *Audit log*, CSV export. Every `all.log` line is also written to stdout,
+  which systemd's journal or Docker's container log keep under their own retention;
+  `SER2NET_LOG_STDOUT=off` keeps the lines in `all.log` only. `all.log` has a line with the
+  client's IP address for every web UI page and change: Settings → *Audit log* → *Web UI
+  requests in all.log* can log only changes and refused requests, or none (sign-ins and
+  the audit records are logged either way).
 - `logs/<id>.log` — per-mapping history (hourly maintenance: trimmed >15 days / >100 MB).
 - `traces/<id>-<name>` — a mapping's traffic trace. Traces are kept **only here** and
   rotate at their size limit (default 10 MB × 3 old files). Full paths from v2.7 configs

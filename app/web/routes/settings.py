@@ -21,9 +21,9 @@ from starlette.routing import Route
 from ... import i18n, importer, optional
 from ...config import (
     EXPIRE_DAYS_MAX, EXPIRE_DAYS_MIN, HSTS_MAX_AGE_MAX, NODE_NAME_ENV, NODE_NAME_MAX,
-    NOTIFY_EVENTS, ROLES, SMTP_SECURITY, UI_LANGUAGES, WEBHOOK_FORMATS, AppConfig,
-    ClusterSettings, ConfigError, NotificationSettings, User, backup_time, new_pwd_version,
-    node_name_from_env, node_name_problem, normalize_public_url, parse_cluster_peer,
+    NOTIFY_EVENTS, REQUEST_LOG_MODES, ROLES, SMTP_SECURITY, UI_LANGUAGES, WEBHOOK_FORMATS,
+    AppConfig, ClusterSettings, ConfigError, NotificationSettings, User, backup_time,
+    new_pwd_version, node_name_from_env, node_name_problem, normalize_public_url, parse_cluster_peer,
     proxy_entry_problem, public_url_problem, split_proxy_entries,
 )
 from ...engine.cluster import KEY_OVERLAP_S, key_bytes
@@ -80,6 +80,7 @@ def routes(ctx: Ctx) -> list:
                       backups=backups,
                       admin=state.config.admin_ui, hsts_max=HSTS_MAX_AGE_MAX,
                       hostname=socket.gethostname(), node_name_max=NODE_NAME_MAX,
+                      request_log_modes=REQUEST_LOG_MODES,
                       node_name_env=NODE_NAME_ENV if node_name_from_env() else "",
                       public_url=published, public_url_env=bool(proxy.public_url_from_env()),
                       trusted=proxy.trusted_entries(state.config.admin_ui),
@@ -337,6 +338,30 @@ def routes(ctx: Ctx) -> list:
                       "instance name cleared: the host name is used")
         ctx.audit(request, "node_name_set", name or "(host name)")
         return await settings_get(request, ok=_("Instance name saved."))
+
+    # ---------------- which web UI requests all.log records ----------------
+    async def settings_request_log_post(request):
+        if deny := require_role(request, "admin"):
+            return deny
+        form = await request.form()
+        if not auth.csrf_token_matches(request, form.get("_csrf")):
+            return csrf_failed()
+        mode = str(form.get("request_log") or "")
+        if mode not in REQUEST_LOG_MODES:
+            return await settings_get(request, error=_("Choose which web UI requests all.log "
+                                                       "records."))
+        ui = state.config.admin_ui
+        async with state.config_lock:
+            old, ui.request_log = ui.request_log, mode
+            try:
+                await state.asave()
+            except ConfigError as e:
+                ui.request_log = old
+                return await settings_get(request, error=str(e))
+        if mode != old:  # logged before "off" would keep this request's own line out
+            state.log(f"web UI requests in all.log: {mode} (was {old})")
+        ctx.audit(request, "request_log_set", mode)
+        return await settings_get(request, ok=_("Saved: which web UI requests all.log records."))
 
     # ---------------- behind a reverse proxy ----------------
     async def settings_proxy_post(request):
@@ -1226,6 +1251,7 @@ def routes(ctx: Ctx) -> list:
         Route("/settings/access", settings_access_post, methods=["POST"]),
         Route("/settings/proxy", settings_proxy_post, methods=["POST"]),
         Route("/settings/node-name", settings_node_name_post, methods=["POST"]),
+        Route("/settings/request-log", settings_request_log_post, methods=["POST"]),
         Route("/settings/sessions/revoke-all", settings_sessions_revoke_all, methods=["POST"]),
         Route("/settings/api-token", settings_api_token_post, methods=["POST"]),
         Route("/settings/api-token/revoke", settings_api_token_revoke, methods=["POST"]),

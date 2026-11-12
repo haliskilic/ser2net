@@ -16,6 +16,10 @@ WorkingDirectory=/opt/ser2net
 # choice). To expose it on the LAN, run once interactively (or with --reconfigure)
 # to pick the bind IP and set a password, or pre-create /opt/ser2net/data/config.json.
 ExecStart=/usr/bin/python3 /opt/ser2net/ser2net.py --data-dir /opt/ser2net/data
+# Every log line goes to data/all.log (rotated) and to stdout, which the journal keeps too
+# (journalctl -u ser2net), readable by the systemd-journal and adm groups and kept as long
+# as the journal keeps it. To keep the lines only in all.log, uncomment:
+# Environment=SER2NET_LOG_STDOUT=off
 Restart=on-failure
 RestartSec=3
 # Open files: each running mapping holds about three (serial port, listener, log) plus

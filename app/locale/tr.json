@@ -890,5 +890,11 @@
   "sends the account name, or “(unknown user)”, and the IP address": "hesap adını ya da “(unknown user)” ifadesini ve IP adresini gönderir",
   "Leave out personal data: IP addresses only as their network (10.0.5.x; IPv6 /48), no account names": "Kişisel verileri gönderme: IP adresleri yalnızca ağlarıyla (10.0.5.x; IPv6 /48), hesap adları hiç gönderilmez",
   "Send each recipient a message of their own (they don’t see each other’s addresses)": "Her alıcıya ayrı bir mesaj gönder (alıcılar birbirinin adresini görmez)",
-  "Messages go to the service you set here, which may be run in another country; the host name and the instance name are in every one.": "Mesajlar burada ayarladığınız servise gider; bu servis başka bir ülkede çalışıyor olabilir. Her mesajda host adı ve kurulum adı yer alır."
+  "Messages go to the service you set here, which may be run in another country; the host name and the instance name are in every one.": "Mesajlar burada ayarladığınız servise gider; bu servis başka bir ülkede çalışıyor olabilir. Her mesajda host adı ve kurulum adı yer alır.",
+  "Choose which web UI requests all.log records.": "all.log'un hangi web arayüzü isteklerini kaydedeceğini seç.",
+  "Saved: which web UI requests all.log records.": "Kaydedildi: all.log'un kaydedeceği web arayüzü istekleri.",
+  "Web UI requests in all.log": "all.log'daki web arayüzü istekleri",
+  "one line each, with the client’s IP address; sign-ins and the audit log’s records are written either way": "her biri için istemcinin IP adresiyle bir satır; girişler ve denetim kaydının kayıtları her durumda yazılır",
+  "Every page and change (the default)": "Her sayfa ve değişiklik (varsayılan)",
+  "Only changes, and refused or failed requests": "Yalnızca değişiklikler ile reddedilen ya da hata veren istekler"
 }
