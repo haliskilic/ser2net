@@ -139,6 +139,24 @@ def test_key_passwords(pki: Pki):
           "file fail at once with a clear error  OK")
 
 
+def test_context_options(pki: Pki):
+    """tls_context for other TLS clients: the system's CAs, no host name check, no check."""
+    ctx = tls.tls_context(server_side=False)  # a mapping without a CA file: encryption only
+    assert ctx.verify_mode == ssl.CERT_NONE and not ctx.check_hostname
+    ctx = tls.tls_context(server_side=False, ca=pki.ca.path)
+    assert ctx.verify_mode == ssl.CERT_REQUIRED and ctx.check_hostname
+    ctx = tls.tls_context(server_side=False, verify=True)  # the system's CAs
+    assert ctx.verify_mode == ssl.CERT_REQUIRED and ctx.check_hostname
+    ctx = tls.tls_context(server_side=False, ca=pki.ca.path, check_hostname=False)
+    assert ctx.verify_mode == ssl.CERT_REQUIRED and not ctx.check_hostname
+    ctx = tls.tls_context(server_side=False, ca=pki.ca.path, verify=False)
+    assert ctx.verify_mode == ssl.CERT_NONE and not ctx.cert_store_stats()["x509"]
+    ctx = tls.tls_context(server_side=True, cert=pki.cert, key=pki.key, ca=pki.ca.path)
+    assert ctx.verify_mode == ssl.CERT_REQUIRED
+    print("tls_context: checks with a CA file or the system's CAs, with or without the host "
+          "name, or none  OK")
+
+
 def test_import_warns(pki: Pki):
     item = mapping(tls_cert=pki.cert, tls_key=pki.locked).to_dict()
     plan = importer.parse_mappings_file(json.dumps({"mappings": [item]}).encode())
@@ -577,6 +595,7 @@ def main():
     try:
         pki = Pki(tmp)
         test_key_passwords(pki)
+        test_context_options(pki)
         test_import_warns(pki)
         test_api_masks_the_password()
         asyncio.run(_listener_starts(pki))

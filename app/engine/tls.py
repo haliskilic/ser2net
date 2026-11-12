@@ -1,13 +1,17 @@
 """TLS contexts made from the files the configuration names: a mapping's listener (the
 bridge and the Modbus gateway) and its connect-out link, and the admin UI's certificate.
-One place, so they all read their files the same way: a relative path names a file in the
-data directory (config.data_path), so a data directory that is moved or restored
-elsewhere keeps working. An encrypted key is decrypted with the password the configuration
-gives, and never makes OpenSSL ask for one on the terminal (without a terminal that failed
-with a bare "[Errno 22] Invalid argument"; with one, the whole process waited for someone
-to type it): without a password, loading it is an error that says so. A CA file holds PEM certificates (one or more) or one DER certificate (as
-Windows exports it); any certificate in it is trusted as it is: a CA's, an intermediate's,
-or the peer's own (self-signed) one.
+One place, so they all read their files the same way (other TLS clients can use
+tls_context too):
+
+- a relative path names a file in the data directory (config.data_path), so a data
+  directory that is moved or restored elsewhere keeps working;
+- an encrypted key is decrypted with the password the configuration gives, and never makes
+  OpenSSL ask for one on the terminal (without a terminal that failed with a bare
+  "[Errno 22] Invalid argument"; with one, the whole process waited for someone to type
+  it): without a password, loading it is an error that says so;
+- a CA file holds PEM certificates (one or more) or one DER certificate (as Windows exports
+  it); any certificate in it is trusted as it is: a CA's, an intermediate's, or the peer's
+  own (self-signed) one.
 
 A connect-out link checks the server's certificate when the mapping has a CA file
 (``tls_ca``: the certificate must chain to it and name ``remote_host``) or a pin
@@ -110,23 +114,30 @@ def _load_ca(ctx: ssl.SSLContext, path: str) -> None:
 
 
 def tls_context(*, server_side: bool, cert: Any = "", key: Any = "", password: Any = "",
-                ca: Any = "") -> ssl.SSLContext:
+                ca: Any = "", verify: Optional[bool] = None,
+                check_hostname: bool = True) -> ssl.SSLContext:
     """A TLS context made from files. Raises TlsFileError.
 
     ``server_side``: ser2net presents ``cert`` (with ``key``, decrypted with ``password``),
     which it must have; with ``ca``, a client must present a certificate that chains to a
     certificate in that file, or its handshake fails.
-    Otherwise (a client): with ``ca`` the server's certificate must chain to a certificate
-    in that file and name the host given to the handshake (server_hostname); without,
-    nothing is checked in the handshake (the caller may check a pin: check_server).
-    ``cert`` is presented to a server that asks for a client certificate."""
+    Otherwise (a client): the server's certificate is checked when ``verify`` is true, or
+    is None (the mappings) and a ``ca`` file is given: it must chain to a certificate in
+    ``ca`` (without one, to a CA the system trusts) and, with ``check_hostname``, name the
+    host given to the handshake (server_hostname). Unchecked, the caller may check a pin
+    (check_server). ``cert`` is presented to a server that asks for a client certificate."""
     import ssl
 
     cert, key, ca = str(cert or ""), str(key or ""), str(ca or "").strip()
     ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER if server_side else ssl.PROTOCOL_TLS_CLIENT)
     if not server_side:
-        ctx.check_hostname = bool(ca)
-        ctx.verify_mode = ssl.CERT_REQUIRED if ca else ssl.CERT_NONE
+        checked = bool(ca) if verify is None else verify
+        ctx.check_hostname = checked and check_hostname
+        ctx.verify_mode = ssl.CERT_REQUIRED if checked else ssl.CERT_NONE
+        if checked and not ca:
+            ctx.load_default_certs()
+        elif not checked:
+            ca = ""
     elif not cert:
         raise TlsFileError("no_cert", "a TLS listener needs a certificate and a key")
     if ca:
