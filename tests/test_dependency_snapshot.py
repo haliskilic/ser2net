@@ -1,9 +1,11 @@
-"""The pins GitHub's dependency graph leaves out are submitted, and only those.
+"""requirements.txt goes to the dependency graph complete, Python 3.10 pins included.
 
 GitHub parses requirements.txt for the dependency graph (and the Dependabot alerts) with
 its python_version markers evaluated for its newest Python, so the Python 3.10 pins are
-missing there. tools/dependency_snapshot.py turns exactly those into a dependency-
-submission snapshot, and .github/workflows/dependency-graph.yml submits it from main.
+missing there. tools/dependency_snapshot.py turns every pin of such a file into a
+dependency-submission manifest for the same file (a submission takes the place of
+GitHub's own parse of it), and .github/workflows/dependency-graph.yml submits it from main.
+Files the graph reads completely are not submitted.
 
 Run: python3 tests/test_dependency_snapshot.py   (stdlib only)
 """
@@ -20,24 +22,32 @@ import dependency_snapshot as ds
 from _workflows import jobs, permissions, read, steps, uses
 
 
-def test_python310_pins_submitted():
+def test_requirements_submitted_complete():
     m = ds.manifests()
-    assert list(m) == ["requirements.txt (Python 3.10)"], list(m)
-    manifest = m["requirements.txt (Python 3.10)"]
+    assert list(m) == ["requirements.txt"], list(m)  # requirements-optional.txt has no markers
+    manifest = m["requirements.txt"]
+    assert manifest["name"] == "requirements.txt"
     assert manifest["file"] == {"source_location": "requirements.txt"}
-    pins = {k: v["package_url"] for k, v in manifest["resolved"].items()}
-    # every python_version < "3.11" line of requirements.txt, nothing else
-    want = {}
+    got = {v["package_url"] for v in manifest["resolved"].values()}
+    want, py310 = set(), set()
     with open(os.path.join(HERE, "..", "requirements.txt"), encoding="utf-8") as fh:
         for line in fh:
             line = line.split("#", 1)[0].strip()
-            if line.endswith('; python_version < "3.11"'):
+            if line:
                 name, version = line.split(";")[0].strip().split("==")
-                want[ds.canonical(name)] = f"pkg:pypi/{ds.canonical(name)}@{version}"
-    assert len(want) >= 5 and pins == want, (pins, want)
+                want.add(f"pkg:pypi/{ds.canonical(name)}@{version}")
+                if line.endswith('; python_version < "3.11"'):
+                    py310.add(f"pkg:pypi/{ds.canonical(name)}@{version}")
+    assert got == want, (sorted(got ^ want))
+    assert len(py310) >= 5 and py310 <= got, "the pins GitHub's parse leaves out are in it"
+    assert "pkg:pypi/starlette@1.10.0" in got and len([u for u in got if "/starlette@" in u]) == 2
     assert all(v["relationship"] == "direct" and v["scope"] == "runtime"
                for v in manifest["resolved"].values())
-    print(f"the {len(pins)} Python 3.10 pins are submitted: {', '.join(sorted(pins))}  OK")
+    marked = {v["package_url"]: v["metadata"]["marker"]
+              for v in manifest["resolved"].values() if "metadata" in v}
+    assert all(marked[u] == 'python_version < "3.11"' for u in py310), marked
+    print(f"requirements.txt submitted with all {len(got)} pins, the {len(py310)} Python 3.10 "
+          "ones included  OK")
 
 
 def test_marker_rules():
@@ -53,13 +63,19 @@ def test_marker_rules():
         with open(os.path.join(tmp, "requirements-optional.txt"), "w", encoding="utf-8") as fh:
             fh.write("extra==1.0  # no markers: in the graph\n")
         m = ds.manifests(tmp)
-    assert list(m) == ["requirements.txt (Python 3.10)"], m
-    resolved = m["requirements.txt (Python 3.10)"]["resolved"]
-    # read by GitHub: no marker, a marker met on the newest Python, a platform marker;
-    # never installed (3.9 is not supported): nothing to submit
-    assert set(resolved) == {"two-names", "old-backport"}, resolved
-    assert resolved["two-names"]["package_url"] == "pkg:pypi/two-names@1.5"
-    print("submitted: older-Python pins only (not the platform or >= 3.11 ones)  OK")
+        unread = ds.unread_pins(os.path.join(tmp, "requirements.txt"))
+        os.remove(os.path.join(tmp, "requirements.txt"))
+        with open(os.path.join(tmp, "requirements.txt"), "w", encoding="utf-8") as fh:
+            fh.write('plain==1.0\nwinonly==3.0 ; platform_system == "Windows"\n')
+        complete = ds.manifests(tmp)
+    # read by GitHub: no marker, a marker met on the newest Python, a platform marker
+    assert [n for n, _v, _m in unread] == ["Two_Names", "old.backport"], unread
+    assert list(m) == ["requirements.txt"], m  # the optional file: read completely
+    # every pin a supported Python installs (3.9 is not supported)
+    assert set(m["requirements.txt"]["resolved"]) == {
+        "plain@1.0", "two-names@2.0", "two-names@1.5", "winonly@3.0", "old-backport@0.1"}
+    assert complete == {}, "a file the graph reads completely is left to it"
+    print("submitted: a file with pins the graph leaves out, complete; others not  OK")
 
 
 def test_snapshot_document():
@@ -99,7 +115,7 @@ def test_workflow():
 
 
 if __name__ == "__main__":
-    test_python310_pins_submitted()
+    test_requirements_submitted_complete()
     test_marker_rules()
     test_snapshot_document()
     test_workflow()

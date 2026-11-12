@@ -1,4 +1,4 @@
-"""The pins GitHub's dependency graph doesn't read, as a dependency-submission snapshot.
+"""requirements.txt for the dependency graph, with the pins GitHub's own parse leaves out.
 
     python tools/dependency_snapshot.py [--out FILE]     # JSON on stdout or into FILE
 
@@ -8,11 +8,13 @@ interpreter: the newest Python it has, as the repository names no version. The p
 an older Python installs (`python_version < "3.11"`: the Python 3.10 line of starlette,
 websockets, python-multipart and the exceptiongroup / taskgroup backports) are left out,
 so an advisory against one of them would raise no alert although every Python 3.10
-install ships it. .github/workflows/dependency-graph.yml submits exactly those pins through
-the dependency submission API (POST /repos/{owner}/{repo}/dependency-graph/snapshots), one
-manifest per requirements file ("requirements.txt (Python 3.10)"); Dependabot alerts then
-cover them like the pins the graph reads. Pins the graph already has are not submitted
-again, so an advisory doesn't raise the same alert twice.
+install ships it. .github/workflows/dependency-graph.yml therefore submits every pin of
+such a file, for all the Pythons and systems ser2net supports, through the dependency
+submission API (POST /repos/{owner}/{repo}/dependency-graph/snapshots). GitHub shows one
+source per manifest file and prefers a submission to its own parse, so the submitted
+requirements.txt (complete, both lines of a pin split by Python version) takes the place
+of the parse that lacks the Python 3.10 pins; a file the graph reads completely
+(requirements-optional.txt, the hash locks) is not submitted.
 
 The commit, ref and run come from the GitHub Actions environment (GITHUB_SHA, GITHUB_REF,
 GITHUB_RUN_ID); run elsewhere, it only shows what would be submitted.
@@ -52,37 +54,40 @@ def graph_reads(marker: str) -> bool:
     return any(rw.marker_applies(marker, GRAPH_PYTHON, system) for system in rw.SYSTEMS)
 
 
-def unread_pins(path: str) -> list[tuple[str, str, list[str]]]:
-    """[(name, version, the Pythons that install it)] for the pins of a requirements file
-    that a supported Python installs but the dependency graph leaves out."""
-    out = []
-    for name, version, marker in rw.read_requirements(path):
-        pythons = [py for py in rw.PYTHONS
-                   if any(rw.marker_applies(marker, py, system) for system in rw.SYSTEMS)]
-        if pythons and not graph_reads(marker):
-            out.append((name, version, pythons))
-    return out
+def installed_pins(path: str) -> list[tuple[str, str, str]]:
+    """[(name, version, marker)] for the pins of a requirements file that some supported
+    Python on some supported system installs."""
+    return [(name, version, marker) for name, version, marker in rw.read_requirements(path)
+            if any(rw.marker_applies(marker, py, system)
+                   for py in rw.PYTHONS for system in rw.SYSTEMS)]
+
+
+def unread_pins(path: str) -> list[tuple[str, str, str]]:
+    """The installed pins of a requirements file that the dependency graph leaves out."""
+    return [pin for pin in installed_pins(path) if not graph_reads(pin[2])]
 
 
 def manifests(root: str = ROOT) -> dict:
+    """{file: manifest} for the requirements files the graph doesn't read completely,
+    each with every pin it has (so the submission can stand in for GitHub's parse)."""
     out = {}
     for fn in REQUIREMENT_FILES:
-        pins = unread_pins(os.path.join(root, fn))
-        if not pins:
+        path = os.path.join(root, fn)
+        if not unread_pins(path):
             continue
-        pythons = sorted({py for _n, _v, pys in pins for py in pys}, key=rw._version_tuple)
-        key = f"{fn} (Python {', '.join(pythons)})"
-        out[key] = {
-            "name": key,
+        resolved = {}
+        for name, version, marker in installed_pins(path):
+            entry: dict[str, object] = {"package_url": f"pkg:pypi/{canonical(name)}@{version}",
+                                        "relationship": "direct", "scope": "runtime"}
+            if marker:
+                entry["metadata"] = {"marker": marker}
+            resolved[f"{canonical(name)}@{version}"] = entry
+        out[fn] = {
+            "name": fn,
             "file": {"source_location": fn},
-            "metadata": {"python_versions": ", ".join(pythons)},
-            "resolved": {
-                canonical(name): {
-                    "package_url": f"pkg:pypi/{canonical(name)}@{version}",
-                    "relationship": "direct",
-                    "scope": "runtime",
-                } for name, version, _pys in pins
-            },
+            "metadata": {"python_versions": f"{rw.PYTHONS[0]}-{rw.PYTHONS[-1]}",
+                         "systems": ", ".join(rw.SYSTEMS)},
+            "resolved": resolved,
         }
     return out
 
