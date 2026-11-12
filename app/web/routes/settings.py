@@ -628,6 +628,8 @@ def routes(ctx: Ctx) -> list:
             if err := problem():  # changed while the password was hashed
                 return await settings_get(request, error=err)
             target = state.config.get_user(username)
+            if target is None:  # (problem() has just found it)
+                return await settings_get(request, error=_("User not found."))
             old = (target.password_hash, target.pwd_version)
             target.password_hash, target.pwd_version = pw_hash, target.pwd_version + 1
             try:

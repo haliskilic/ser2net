@@ -183,7 +183,7 @@ def routes(ctx: Ctx) -> list:
         """A peer-facing JSON answer; for a signed request (also a refusal of one with a
         valid signature) signed for that request, so the caller can trust it."""
         resp = JSONResponse(payload, status_code=status_code)
-        resp.headers[AUTH_HEADER] = state.cluster.reply_auth(a, status_code, resp.body)
+        resp.headers[AUTH_HEADER] = state.cluster.reply_auth(a, status_code, bytes(resp.body))
         return resp
 
     async def cluster_local(request):

@@ -8,6 +8,8 @@ authenticated. Every response is JSON. The OpenAPI 3.0 description is served at
 """
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from starlette.exceptions import HTTPException
 from starlette.responses import JSONResponse
 from starlette.routing import Route
@@ -16,12 +18,15 @@ from ..config import ROLE_RANK, ConfigError, MappingConfig, valid_mapping_id
 from .routes import ops
 from .routes.common import client_ip as _client_ip
 
+if TYPE_CHECKING:
+    from ..state import AppState
+
 API_PREFIX = "/api/v1"
 
 REDACTED = "********"
 
 
-def _mapping_view(mapping, state) -> dict:
+def _mapping_view(mapping: MappingConfig, state: AppState) -> dict:
     """A mapping's full config plus its live runtime status. A read-only (viewer)
     token doesn't get stored secrets (the MQTT password) — the same rule as the web
     UI, where viewers can't open the edit form or the export. Operator/admin tokens
@@ -34,7 +39,7 @@ def _mapping_view(mapping, state) -> dict:
     return view
 
 
-def build_api_routes(state):
+def build_api_routes(state: AppState) -> list[Route]:
     async def list_mappings(request):
         return JSONResponse({"mappings": [_mapping_view(m, state) for m in state.config.mappings]})
 

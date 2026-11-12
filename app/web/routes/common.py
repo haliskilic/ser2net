@@ -5,11 +5,18 @@ the helpers that used to be closures inside one big ``build_routes()`` live here
 """
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from starlette.responses import PlainTextResponse
 
 from ...config import ROLE_RANK
 from ...i18n import _
 from .. import auth
+
+if TYPE_CHECKING:
+    from starlette.templating import Jinja2Templates
+
+    from ...state import AppState
 
 # HTMX response header: tells the dashboard to re-fetch the mappings table now
 TRIGGER = {"HX-Trigger": "refreshMappings"}
@@ -58,7 +65,7 @@ class Ctx:
     client_ip = staticmethod(client_ip)
     current_user = staticmethod(current_user)
 
-    def __init__(self, templates, state) -> None:
+    def __init__(self, templates: Jinja2Templates, state: AppState) -> None:
         self.templates = templates
         self.state = state
 
