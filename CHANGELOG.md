@@ -202,7 +202,9 @@ or older, read the 2.8.1 notes too):
   every port; `com3`, `COM3` and `\\.\COM3` are one port (#62).
 - **A listener retries** an address not up yet or a port in use (at most 30 s apart, without
   pulsing DTR/RTS); the admin UI starts first, so a mapping on its port no longer restart-loops
-  it; connection limits and `kick_old_user` hold for clients that arrive together (#61).
+  it; connection limits and `kick_old_user` hold for clients that arrive together. A mapping
+  now listens before it opens its device, so a taken port fails without touching the device;
+  what a client sends in the moment before the device is open is dropped (#61).
 - **IPv6:** a mapping can listen on `::1`, a bare `0.0.0.0` or `::` in a client list matches
   every client as documented, addresses next to a port are in brackets, and classic `ipv6n4`
   accepters import for both families (#64).
