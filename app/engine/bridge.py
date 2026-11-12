@@ -598,6 +598,18 @@ class RunnerStatus:
         if link != self.link:
             self.link, self.link_since = link, time.time()
         self.link_error = error
+    # Modbus gateway in edge mode: each polled unit, {"unit", "state" (unknown | online |
+    # offline), "cause" (offline: "no reply" | "port down"), "since" (unix time of the last
+    # change, None before one), "errors" (failed point reads)}
+    units: list[dict] = field(default_factory=list)
+    # ... and each polled point's last read: {"name", "unit", "value" (the last value read,
+    # None before one), "ts" (when, ms since the epoch), "error" (why the last read failed;
+    # "" when it gave the value)}
+    points: list[dict] = field(default_factory=list)
+    # the MQTT publisher's connection to its broker while the mapping runs (empty: MQTT
+    # off): MqttPublisher.state — "state" (connecting | connected | down | off), "broker",
+    # "since", "error", "dropped"
+    mqtt: dict = field(default_factory=dict)
 
     def set_clients(self, clients) -> None:
         """Publish the connected clients (access.Client: peer, seq, connected_at, priority),
@@ -671,6 +683,9 @@ class RunnerStatus:
             "last_rx": self.last_rx or None,
             "rx_idle_s": _since(self._quiet_since, now),
             "reply_wait_s": _since(self._unanswered_since, now),
+            "units": [dict(u) for u in self.units],
+            "points": [dict(p) for p in self.points],
+            "mqtt": dict(self.mqtt),
         }
 
 
@@ -1108,6 +1123,7 @@ class MappingRunner:
                 subs = self._mqtt_subscriptions()
                 self._mqtt = MqttPublisher(self.mapping.mqtt, logger=self._log,
                                            subscriptions=subs)
+                self.status.mqtt = self._mqtt.state
                 self._mqtt.connect()
                 if subs:
                     self._tx_task = asyncio.create_task(
@@ -1156,6 +1172,7 @@ class MappingRunner:
         if self._mqtt is not None:
             mqtt, self._mqtt = self._mqtt, None
             await mqtt.aclose()
+        self.status.mqtt = {}
         if self._server is not None:
             with contextlib.suppress(Exception):
                 await asyncio.wait_for(self._server.wait_closed(), timeout=5.0)

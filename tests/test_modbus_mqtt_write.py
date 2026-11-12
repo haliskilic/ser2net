@@ -22,7 +22,28 @@ anywhere without a broker or hardware. Checks:
     is not written again after a reconnect or by a new runner unless the mapping opts in,
     a retained NCMD / DCMD never is, and an empty message (clearing one) is no command;
   * Read-only refuses MQTT / Sparkplug writes as well (checked when a command arrives),
-    and the start-up log warns about commands over a broker link without TLS / username.
+    and the start-up log warns about commands over a broker link without TLS / username;
+  * a writable point on unit 0 is a broadcast: written (ok), not read back, never polled;
+  * writes are made one at a time, in the order the commands came (an answer for a
+    command refused on arrival keeps its place), and take turns on the bus with the poll;
+    at most 32 wait, a command beyond them is answered error: busy, and one that waited
+    too long for the bus error: expired;
+  * stop() answers every write before the MQTT connection closes: the one on the bus may
+    finish (else it is cancelled, and the answer says whether it was sent), the ones still
+    waiting get error: cancelled: mapping stopped, a command that comes meanwhile error:
+    mapping stopped;
+  * a JSON /set {"value", "id"} gets a JSON answer with its id and the value read back
+    ({"id", "ok": true, "value"} / {"id", "ok": false, "error"}); a plain one still "ok";
+  * Sparkplug B: every DCMD to a writable point is followed by a DDATA with the point's
+    value read back, changed or not: a write of the current value, a refused value, a
+    read-only mapping;
+  * a point's min / max / allowed refuse a value outside them before the bus (the answer
+    says why), "poll": false makes a writable point write-only (never polled, not read
+    back), the log shows the raw register value a fraction or a scale turned into, and a
+    stored limit that can't be used is ignored with a warning at start;
+  * a write that comes while a poll is reading the unit's points (the slave sends it when
+    the poll asks for the setpoint) is not followed by the value the poll read before it:
+    plain and Sparkplug B report new, then new again, never new, old, new.
 
 Run: python3 tests/test_modbus_mqtt_write.py
 """
@@ -31,6 +52,7 @@ import contextlib
 import socket
 import struct
 import sys
+import time
 import types
 from contextlib import suppress
 from unittest import mock
@@ -46,6 +68,8 @@ REGS = {10: 0, 20: 0, 21: 0, 0: 0x41BC, 1: 0x0000}   # input regs 0/1 = float32 
 COILS = {0: False, 1: False, 2: False}
 DISCRETE = {5: True}
 SEEN = []   # every request PDU the fake slave got
+ON_REQUEST = []  # callables the fake slave calls with each request PDU before it answers
+HOLD_WRITES = []  # an asyncio.Event here: the fake slave answers a write once it is set
 
 
 def free_port():
@@ -94,8 +118,14 @@ async def fake_slave(reader, writer):
             with suppress(ValueError):
                 unit, pdu = modbus.rtu_unwrap(bytes(buf))
                 buf.clear()
-                writer.write(modbus.rtu_wrap(unit, answer(pdu)))
-                await writer.drain()
+                for hook in list(ON_REQUEST):
+                    hook(pdu)
+                if HOLD_WRITES and pdu[0] in (5, 6, 15, 16):
+                    await HOLD_WRITES[0].wait()
+                reply = answer(pdu)
+                if unit != modbus.BROADCAST:  # a broadcast is carried out, never answered
+                    writer.write(modbus.rtu_wrap(unit, reply))
+                    await writer.drain()
 
 
 class Msg:
@@ -343,10 +373,13 @@ async def test_plain_one_point(slave_port):
         print("plain: a point is found by its exact topic; a read-only point is never written  OK")
 
         # a register takes one number of its own type, nothing else
-        for bad in (b"[1, 2]", b"1_000", b"nan", b"inf", b"0b11", b"1 2", b"true", b"9" * 100000):
+        for bad in (b"[1, 2]", b"1_000", b"nan", b"inf", b"0b11", b"1 2", b"true", b"9" * 1000):
             res = await answer_of("setpoint", bad)
             assert res.startswith(b"error: not a number"), (bad[:20], res)
             assert len(res) < 120, len(res)
+        # larger than SET_MAX_BYTES: refused before it is read
+        assert await answer_of("setpoint", b"9" * (64 * 1024 + 1)) == \
+            b"error: too large: 65537 bytes (at most 65536)"
         assert (await answer_of("setpoint", b"1e400")).startswith(b"error: value must be a finite")
         for text, raw in ((b"0x10", 16), (b"010", 10), (b"+7", 7), (b"-0x2", 0xFFFE), (b"12.6", 13)):
             assert await answer_of("setpoint", text) == b"ok", text
@@ -448,6 +481,38 @@ async def test_retained_replay(slave_port):
         fake.deliver(node.format("DCMD") + "/unit1", dcmd)
         assert await wait(lambda: COILS[0] is True and len(bus_writes()) == 1), bus_writes()
     print("sparkplug: retained NCMD / DCMD ignored on subscribe, a live DCMD is written  OK")
+
+
+async def test_broadcast_point(slave_port):
+    """A writable point on unit 0 is a broadcast: every slave carries out the write and none
+    answers it, so a /set is answered ok without a read-back, and the point is never
+    polled (it would only time out every cycle)."""
+    fake, logs = FakeMqtt(), []
+    points = [{"name": "all", "unit": 0, "fn": 3, "address": 10, "dtype": "int16",
+               "writable": True},
+              {"name": "temp", "unit": 1, "fn": 4, "address": 0, "dtype": "float32"}]
+    r, sw = await gateway("plain", slave_port, fake, points, logs)
+    poll = asyncio.create_task(r._poll_loop())
+    SEEN.clear()
+    REGS[10] = 0
+    try:
+        assert await wait(lambda: last(fake, "plant/a/temp") == b"23.5")
+        r._mqtt.handle_message("plant/a/all/set", b"7")
+        assert await wait(lambda: last(fake, "plant/a/all/set/result") == b"ok"), fake.published
+        assert REGS[10] == 7
+        await asyncio.sleep(0.35)  # a few more poll cycles
+        assert last(fake, "plant/a/all") is None, "a broadcast point is not read back or polled"
+        assert [p[0] for p in SEEN if p[0] != 4] == [6], SEEN  # the write; no FC3 read
+        assert any(m == "wrote 'all' = 7 (broadcast to unit 0, FC6; not read back)"
+                   for m in logs), logs
+        assert not any(m.startswith("poll 'all'") or "failed" in m for m in logs), logs
+        print("unit 0 point: an MQTT write is broadcast (ok, no read-back), never polled  OK")
+    finally:
+        r._stop.set()
+        poll.cancel()
+        with suppress(BaseException):
+            await poll
+        sw.close()
 
 
 async def test_read_only(slave_port):
@@ -554,6 +619,9 @@ async def test_sparkplug(slave_port):
         assert [(m.name, m.value) for m in d2[0].metrics] == [("level", 42)]
         assert len(d1) == 1 and len(d2) == 1, "no DDATA when nothing changed"
         assert (d1[0].seq, d2[0].seq) == (3, 4), "seq counts on from the births"
+        stamps = [m.timestamp for m in d1[0].metrics]
+        assert stamps == sorted(stamps) and stamps[-1] <= d1[0].timestamp, \
+            "each metric carries its own read time, the payload its send time"
 
         setpoint = sparkplug.Metric(name="setpoint", datatype=sparkplug.DataType.Int16, value=7)
         writes(t("DCMD", "unit2"), setpoint)    # not a point of unit2
@@ -602,8 +670,13 @@ async def test_sparkplug(slave_port):
         assert again == births, "a rebirth needs a Boolean true"
         writes(t("NCMD"), sparkplug.Metric(name="Node Control/Rebirth",
                                            datatype=sparkplug.DataType.Boolean, value=True))
-        again = len(decoded("NBIRTH")), len(decoded("DBIRTH", "unit1")), len(decoded("DBIRTH", "unit2"))
-        assert again == tuple(n + 1 for n in births), (births, again)
+
+        def counts():
+            return (len(decoded("NBIRTH")), len(decoded("DBIRTH", "unit1")),
+                    len(decoded("DBIRTH", "unit2")))
+        # (at once, or REBIRTH_EVERY_S after the connect's births)
+        assert await wait(lambda: counts() == tuple(n + 1 for n in births), t=5), \
+            (births, counts())
         assert {m.name: m.value for m in decoded("DBIRTH", "unit2")[-1].metrics} == {"level": 42}
         print("sparkplug: DDATA by exception per device (seq on), DCMD write -> FC6 only to its "
               "device, rebirth -> NBIRTH + DBIRTHs with the last values  OK")
@@ -626,6 +699,430 @@ async def test_sparkplug(slave_port):
         sw.close()
 
 
+async def test_write_queue(slave_port):
+    """MQTT writes go to the bus one at a time, in the order they came, taking turns with
+    the poll; the answers come back in that order (a refused command's too). At most 32
+    wait: a command beyond them is answered error: busy. One that waited too long for the
+    bus is not written (error: expired)."""
+    from app.engine import modbus_gateway
+    fake, logs = FakeMqtt(), []
+    r, sw = await gateway("plain", slave_port, fake, logs=logs)
+    r._resp_timeout = 5.0  # the slave holds its answers to writes for a while here
+    result = "plant/a/setpoint/set/result"
+    poll = asyncio.create_task(r._poll_loop())
+    hold = asyncio.Event()
+    HOLD_WRITES.append(hold)
+    asked = []  # what reached the slave (SEEN: what it answered)
+    ON_REQUEST.append(asked.append)
+
+    def held():  # a write is on the bus, waiting for the slave's answer
+        return any(p[0] == 6 for p in asked)
+
+    def answers():
+        return [p for t, p in fake.published if t == result]
+    try:
+        assert await wait(lambda: last(fake, "plant/a/temp") == b"23.5")
+        SEEN.clear()
+        for payload in (b"1", b"abc", b"3"):
+            r._mqtt.handle_message("plant/a/setpoint/set", payload)
+        await asyncio.sleep(0.2)
+        assert answers() == [], "answered before the write ahead of it"
+        hold.set()
+        assert await wait(lambda: len(answers()) == 3), answers()
+        assert answers()[0] == b"ok" and answers()[1].startswith(b"error: not a number") \
+            and answers()[2] == b"ok", answers()
+        assert [p for p in SEEN if p[0] == 6] == [modbus.write_single_register_pdu(10, n)
+                                                  for n in (1, 3)], SEEN
+        print("plain: writes one at a time in arrival order; a refused command's answer "
+              "keeps its place  OK")
+
+        # one write on the bus (held), 32 waiting, then two more: busy
+        hold.clear()
+        fake.published.clear()
+        SEEN.clear()
+        asked.clear()
+        for n in range(1 + modbus_gateway.WRITE_QUEUE_MAX + 2):
+            r._mqtt.handle_message("plant/a/setpoint/set", str(100 + n).encode())
+            if n == 0:
+                assert await wait(held)
+        assert answers() == [b"error: busy"] * 2, answers()
+        assert sum("32 writes are waiting for the bus already (busy)" in m for m in logs) == 1
+        hold.set()
+        assert await wait(lambda: len(answers()) == 2 + 1 + modbus_gateway.WRITE_QUEUE_MAX,
+                          t=20), len(answers())
+        assert answers()[2:] == [b"ok"] * (1 + modbus_gateway.WRITE_QUEUE_MAX)
+        writes = [i for i, p in enumerate(SEEN) if p[0] == 6]
+        assert [SEEN[i] for i in writes] == [modbus.write_single_register_pdu(10, 100 + n)
+                                             for n in range(1 + modbus_gateway.WRITE_QUEUE_MAX)]
+        polled = [p for p in SEEN[writes[0]:writes[-1]] if p[0] in (1, 2, 4)]
+        assert polled, "the poll did not get the bus while the writes were made"
+        print("plain: 32 writes wait at most (beyond: error: busy, logged once); the poll "
+              "takes turns with them  OK")
+
+        # a write that waited longer than WRITE_EXPIRE_S for its turn is not made
+        hold.clear()
+        fake.published.clear()
+        SEEN.clear()
+        asked.clear()
+        saved, modbus_gateway.WRITE_EXPIRE_S = modbus_gateway.WRITE_EXPIRE_S, 0.2
+        try:
+            r._mqtt.handle_message("plant/a/setpoint/set", b"7")
+            assert await wait(held)
+            r._mqtt.handle_message("plant/a/setpoint/set", b"8")
+            await asyncio.sleep(0.4)
+            hold.set()
+            assert await wait(lambda: len(answers()) == 2), answers()
+        finally:
+            modbus_gateway.WRITE_EXPIRE_S = saved
+        assert answers()[0] == b"ok" and answers()[1].startswith(b"error: expired: waited "), \
+            answers()
+        assert REGS[10] == 7 and [p for p in SEEN if p[0] == 6] == [
+            modbus.write_single_register_pdu(10, 7)], SEEN
+        assert any("write 'setpoint' = 8 not made: it waited" in m for m in logs), logs
+        print("plain: a write that waited too long for the bus -> error: expired, not "
+              "written  OK")
+    finally:
+        HOLD_WRITES.clear()
+        ON_REQUEST.remove(asked.append)
+        r._stop.set()
+        poll.cancel()
+        with suppress(BaseException):
+            await poll
+        await r.stop()
+        sw.close()
+
+
+async def test_json_requests(slave_port):
+    """A JSON /set carries an id: the answer echoes it, with ok and the value read back
+    from the device (or ok false and the error). A request refused before the bus still
+    gets its id back when it could be read. Plain text payloads are answered as before."""
+    import json
+    fake = FakeMqtt()
+    r, sw = await gateway("plain", slave_port, fake)
+
+    async def ask(point, payload):
+        topic = f"plant/a/{point}/set/result"
+        before = len([t for t, _p in fake.published if t == topic])
+        r._mqtt.handle_message(f"plant/a/{point}/set", payload)
+        assert await wait(lambda: len([t for t, _p in fake.published if t == topic]) > before)
+        got = last(fake, topic)
+        return json.loads(got) if got.startswith(b"{") else got
+    try:
+        REGS[10], COILS[0] = 0, False
+        assert await ask("setpoint", b'{"value": 25, "id": "abc"}') == {
+            "id": "abc", "ok": True, "value": 25}
+        assert REGS[10] == 25
+        # the value read back: 12.6 is written (and read back) as 13
+        assert await ask("setpoint", b' {"id": 7, "value": 12.6}') == {
+            "id": 7, "ok": True, "value": 13}
+        assert await ask("pump", b'{"value": true}') == {"ok": True, "value": True}
+        assert await ask("pump", b'{"value": 0, "id": "p"}') == {"id": "p", "ok": True,
+                                                               "value": False}
+        assert COILS[0] is False
+        assert await ask("setpoint", b"30") == b"ok", "plain text: answered as before"
+        for payload, rid, error in (
+                (b'{"value": "x", "id": "e1"}', "e1", "'setpoint' takes a number, not 'x'"),
+                (b'{"value": 40000, "id": "e2"}', "e2", "out of range"),
+                (b'{"value": NaN, "id": "e3"}', None, "not a JSON request"),
+                (b'{"id": "e4"}', "e4", 'the request has no "value"'),
+                (b'{"value": 1, "id": "e5", "pulse": 2}', "e5", "unknown key(s)"),
+                (b'{"value": 1, "id": "' + b"i" * 65 + b'"}', None, "the id must be"),
+                (b'{"value": 1, "id": true}', None, "the id must be"),
+                (b"{", None, "not a JSON request"),
+                # nested deeper than the parser may go (or not, by Python version): refused
+                (b'{"value": ' + b"[" * 20000 + b"]" * 20000 + b"}", None, ""),
+                (b"[1]", None, None)):
+            got = await ask("setpoint", payload)
+            if error is None:  # not a JSON object: the plain grammar's answer
+                assert got.startswith(b"error: not a number"), got
+                continue
+            assert got.get("ok") is False and error in got.get("error", "") \
+                and got.get("id") == rid and len(json.dumps(got)) < 200, (payload[:30], got)
+        assert (await ask("pump", b'{"value": 2, "id": 1}'))["error"].startswith(
+            "a coil takes true / false or 1 / 0"), "a coil: one state"
+        assert REGS[10] == 30 and COILS[0] is False
+        print("plain: a JSON /set gets its id back with ok and the value read back, or the "
+              "error; plain text answered as before  OK")
+    finally:
+        sw.close()
+
+
+async def test_sparkplug_read_back(slave_port):
+    """Sparkplug B reports by exception, so a DCMD that changes nothing would go
+    unanswered: after every DCMD to a writable point the point is read back and sent in a
+    DDATA, changed or not (a write of the current value, a value the gateway or the slave
+    refused, a read-only mapping)."""
+    t = lambda kind, dev=None: sparkplug.topic("ser2net", kind, "Line_3_PLC", dev)  # noqa: E731
+    for read_only in (False, True):
+        REGS[10], COILS[0] = 5, False
+        fake = FakeMqtt()
+        r, sw = await gateway("sparkplug_b", slave_port, fake, SP_POINTS,
+                              network={"read_only": read_only})
+        poll = asyncio.create_task(r._poll_loop())
+
+        def reported(name):
+            return [m.value for tp, p in fake.published if tp == t("DDATA", "unit1")
+                    for m in sparkplug.decode_payload(p).metrics if m.name == name]
+
+        def dcmd(*metrics):
+            r._mqtt.handle_message(t("DCMD", "unit1"), sparkplug.encode_payload(
+                sparkplug.Payload(0, list(metrics), None)))
+        try:
+            assert await wait(lambda: reported("setpoint") == [5])
+            await asyncio.sleep(0.3)
+            assert reported("setpoint") == [5], "no DDATA when nothing changed"
+            SEEN.clear()
+            checks = [(sparkplug.Metric("setpoint", sparkplug.DataType.Int16, 5), "setpoint"),
+                      (sparkplug.Metric("setpoint", sparkplug.DataType.Int32, 99999), "setpoint"),
+                      (sparkplug.Metric("pump", sparkplug.DataType.Int32, 1), "pump")]
+            for n, (metric, name) in enumerate(checks):
+                before = len(reported(name))
+                dcmd(metric)
+                assert await wait(lambda: len(reported(name)) == before + 1), (n, metric.value)
+                assert reported(name)[-1] == (5 if name == "setpoint" else False)
+            writes = [p for p in SEEN if p[0] in (5, 6, 15, 16)]
+            assert writes == ([] if read_only else [modbus.write_single_register_pdu(10, 5)]), \
+                writes
+            assert COILS[0] is False and REGS[10] == 5
+        finally:
+            r._stop.set()
+            poll.cancel()
+            with suppress(BaseException):
+                await poll
+            sw.close()
+    print("sparkplug: every DCMD to a writable point gets a DDATA with the value read back "
+          "(the current value written, a refused value, read-only)  OK")
+
+
+async def test_point_limits(slave_port):
+    """min / max / allowed limit what MQTT may write (refused before the bus, with the
+    reason); "poll": false is a write-only point (never read, a write not read back); the
+    log names the raw value written when it is not the value itself."""
+    points = [
+        {"name": "temp", "unit": 1, "fn": 4, "address": 0, "dtype": "float32"},
+        {"name": "setpoint", "unit": 1, "fn": 3, "address": 10, "dtype": "int16",
+         "writable": True, "min": 0, "max": 1500},
+        {"name": "low", "unit": 1, "fn": 3, "address": 20, "dtype": "int16", "writable": True,
+         "min": -10},
+        {"name": "mode", "unit": 1, "fn": 3, "address": 21, "dtype": "uint16",
+         "writable": True, "allowed": [0, 1, 2]},
+        {"name": "reset", "unit": 1, "fn": 1, "address": 2, "dtype": "bool", "writable": True,
+         "allowed": [True]},
+        {"name": "cmd", "unit": 1, "fn": 3, "address": 22, "dtype": "uint16", "writable": True,
+         "poll": False},
+        {"name": "flow", "unit": 1, "fn": 3, "address": 23, "dtype": "uint16", "scale": 0.1,
+         "writable": True}]
+    fake, logs = FakeMqtt(), []
+    REGS.update({10: 0, 20: 0, 21: 0, 22: 0, 23: 0})
+    COILS[2] = False
+    r, sw = await gateway("plain", slave_port, fake, points, logs)
+    poll = asyncio.create_task(r._poll_loop())
+
+    async def answer_of(point, payload):
+        topic = f"plant/a/{point}/set/result"
+        before = len([t for t, _p in fake.published if t == topic])
+        r._mqtt.handle_message(f"plant/a/{point}/set", payload)
+        assert await wait(lambda: len([t for t, _p in fake.published if t == topic]) > before)
+        return last(fake, topic)
+    try:
+        assert await wait(lambda: last(fake, "plant/a/temp") == b"23.5")
+        SEEN.clear()
+        for point, payload, error in (
+                ("setpoint", b"3000", b"error: 3000 is outside the range 0..1500 of 'setpoint'"),
+                ("setpoint", b"-1", b"error: -1 is outside the range 0..1500 of 'setpoint'"),
+                ("setpoint", b"1500.5", b"error: 1500.5 is outside the range 0..1500 of "
+                                        b"'setpoint'"),
+                ("low", b"-11", b"error: -11 is below the minimum -10 of 'low'"),
+                ("mode", b"3", b"error: 3 is not one of the values allowed for 'mode' (0, 1, 2)"),
+                ("reset", b"off", b"error: false is not one of the values allowed for 'reset' "
+                                  b"(true)")):
+            assert await answer_of(point, payload) == error, (point, payload)
+        assert not [p for p in SEEN if p[0] in (5, 6, 15, 16)], "a refused value reached the bus"
+        for point, payload in (("setpoint", b"1500"), ("setpoint", b"0"), ("low", b"30000"),
+                               ("mode", b"2"), ("reset", b"on")):
+            assert await answer_of(point, payload) == b"ok", (point, payload)
+        assert (REGS[10], REGS[20], REGS[21], COILS[2]) == (0, 30000, 2, True)
+        print("point limits: min / max / allowed refuse a value outside them before the bus, "
+              "with the reason; values inside are written  OK")
+
+        # write-only: never polled, a write not read back (JSON answer: value null)
+        await asyncio.sleep(0.3)
+        assert not [p for p in SEEN if p[0] == 3 and p[1:3] == b"\x00\x16"], "polled 'cmd'"
+        assert await answer_of("cmd", b'{"value": 7, "id": 1}') == b'{"id":1,"ok":true,"value":null}'
+        assert REGS[22] == 7 and last(fake, "plant/a/cmd") is None
+        assert not [p for p in SEEN if p[0] == 3 and p[1:3] == b"\x00\x16"], "read 'cmd' back"
+        assert "wrote 'cmd' = 7 (unit 1, FC6; write-only, not read back)" in logs, logs
+        assert r._units[1].points == [p for p in r.mapping.modbus_poll.points
+                                      if p.name != "cmd"]
+        print("write-only point (poll false): never polled, a write not read back  OK")
+
+        # the raw value: a fraction rounded by an integer type, a scale undone
+        assert await answer_of("setpoint", b"12.6") == b"ok"
+        assert await answer_of("flow", b"21.5") == b"ok"
+        assert REGS[10] == 13 and REGS[23] == 215
+        assert "wrote 'setpoint' = 12.6 (unit 1, FC6, raw value 13)" in logs, logs
+        assert "wrote 'flow' = 21.5 (unit 1, FC6, raw value 215)" in logs, logs
+        assert "wrote 'mode' = 2 (unit 1, FC6)" in logs, "raw value only when it differs"
+        print("the log names the raw register value a fraction or a scale became  OK")
+
+        # a stored limit that can't be used (not refused when it was stored by hand):
+        # ignored, with a warning at start
+        sp = r._set_points["plant/a/setpoint/set"]
+        sp.min, sp.allowed = "zero", 5
+        logs.clear()
+        r._log_policy()
+        assert any("warning: point 'setpoint': min and allowed ignored" in m for m in logs), logs
+        assert await answer_of("setpoint", b"-5") == b"ok", "the unusable min is not applied"
+        assert await answer_of("setpoint", b"1501") == \
+            b"error: 1501 is above the maximum 1500 of 'setpoint'"
+        print("a stored limit that can't be used: ignored, warned about at start  OK")
+    finally:
+        r._stop.set()
+        poll.cancel()
+        with suppress(BaseException):
+            await poll
+        sw.close()
+
+
+async def test_stop_with_writes(slave_port):
+    """stop() answers every write, in order, before the MQTT connection closes (its
+    "offline"): the write on the bus may finish; if it takes too long it is cancelled, and
+    the answer says whether its request had gone out. The writes still waiting are
+    cancelled (none was sent); a command that comes while the mapping stops is refused."""
+    from app.engine import modbus_gateway
+    result = "plant/a/setpoint/set/result"
+    hold = asyncio.Event()
+    HOLD_WRITES.append(hold)
+    asked = []
+    ON_REQUEST.append(asked.append)
+
+    def answers(fake):
+        return [p for t, p in fake.published if t == result]
+
+    def held():
+        return any(p[0] == 6 for p in asked)
+    try:
+        REGS[10] = 0
+        fake, logs = FakeMqtt(), []
+        r, sw = await gateway("plain", slave_port, fake, logs=logs)
+        r._resp_timeout = 2.0
+        for payload in (b"1", b"abc", b"2", b"3"):
+            r._mqtt.handle_message("plant/a/setpoint/set", payload)
+        assert await wait(held)
+        stopping = asyncio.create_task(r.stop())
+        await asyncio.sleep(0.1)
+        r._mqtt.handle_message("plant/a/pump/set", b"1")   # while it stops
+        assert last(fake, "plant/a/pump/set/result") == b"error: mapping stopped"
+        hold.set()                                         # the write on the bus finishes
+        await asyncio.wait_for(stopping, 10)
+        got = answers(fake)
+        assert got[0] == b"ok" and got[1].startswith(b"error: not a number") \
+            and got[2:] == [b"error: cancelled: mapping stopped"] * 2, got
+        topics = [t for t, _p in fake.published]
+        assert topics[-1] == "plant/a/status" and fake.published[-1][1] == b"offline"
+        assert REGS[10] == 1 and [p for p in asked if p[0] == 6] == [
+            modbus.write_single_register_pdu(10, 1)], asked
+        assert any("2 MQTT write(s) cancelled before they were sent, the mapping stopped: "
+                   "'setpoint', 'setpoint'" in m for m in logs), logs
+        assert any("write to 'pump' refused: the mapping is stopping" in m for m in logs), logs
+        sw.close()
+        print("stop: the write on the bus finishes, the waiting ones are cancelled, all "
+              "answered in order before 'offline'; a command meanwhile is refused  OK")
+
+        # a write that takes too long is cancelled: sent (its outcome unknown) or not sent
+        saved, modbus_gateway.WRITE_STOP_WAIT_S = modbus_gateway.WRITE_STOP_WAIT_S, 0.3
+        try:
+            for sent in (True, False):
+                hold.clear()
+                asked.clear()
+                fake, logs = FakeMqtt(), []
+                r, sw = await gateway("plain", slave_port, fake, logs=logs)
+                r._resp_timeout = 5.0
+                if not sent:  # a master's request has the bus
+                    await r._bus_lock.acquire()
+                r._mqtt.handle_message("plant/a/setpoint/set", b"9")
+                if sent:
+                    assert await wait(held)
+                else:
+                    await asyncio.sleep(0.1)
+                t0 = time.monotonic()
+                await asyncio.wait_for(r.stop(), 10)
+                assert time.monotonic() - t0 < 2.0, "stop() waited for the write too long"
+                outcome = "sent, outcome unknown" if sent else "not sent"
+                assert answers(fake) == [
+                    f"error: cancelled: mapping stopped ({outcome})".encode()], answers(fake)
+                assert any(f"write 'setpoint' = 9 cancelled (mapping stopped): {outcome}" in m
+                           for m in logs), logs
+                assert fake.published[-1] == ("plant/a/status", b"offline")
+                if not sent:
+                    r._bus_lock.release()
+                    assert not held()
+                sw.close()
+        finally:
+            modbus_gateway.WRITE_STOP_WAIT_S = saved
+        print("stop: a write that takes too long is cancelled and answered (sent, outcome "
+              "unknown / not sent)  OK")
+    finally:
+        hold.set()
+        HOLD_WRITES.clear()
+        ON_REQUEST.remove(asked.append)
+        await asyncio.sleep(0.2)  # the slave carries out the write it held (REGS[10] = 9)
+
+
+async def test_no_stale_value_after_write(slave_port):
+    """The poll publishes a unit's values once all its points are read. A write that comes
+    in between (here: sent when the poll asks for the setpoint, so it lands two reads later)
+    publishes its read-back at once; the value the poll read before the write must not be
+    published after it."""
+    points = [{"name": "setpoint", "unit": 1, "fn": 3, "address": 10, "dtype": "int16",
+               "writable": True}] + [{"name": f"r{n}", "unit": 1, "fn": 3, "address": 40 + n,
+                                      "dtype": "uint16"} for n in range(3)]
+    for fmt in ("plain", "sparkplug_b"):
+        REGS[10] = 20
+        fake = FakeMqtt()
+        r, sw = await gateway(fmt, slave_port, fake, points)
+        armed = []
+
+        def hook(pdu, r=r, fmt=fmt):
+            if armed and pdu == modbus.read_pdu(3, 10, 1):  # the poll reads the setpoint
+                armed.clear()
+                if fmt == "plain":
+                    r._mqtt.handle_message("plant/a/setpoint/set", b"25")
+                else:
+                    r._mqtt.handle_message(
+                        sparkplug.topic("ser2net", "DCMD", "Line_3_PLC", "unit1"),
+                        sparkplug.encode_payload(sparkplug.Payload(0, [sparkplug.Metric(
+                            "setpoint", sparkplug.DataType.Int16, 25)], None)))
+
+        def reported():
+            if fmt == "plain":
+                return [int(p) for t, p in fake.published if t == "plant/a/setpoint"]
+            ddata = sparkplug.topic("ser2net", "DDATA", "Line_3_PLC", "unit1")
+            return [m.value for t, p in fake.published if t == ddata
+                    for m in sparkplug.decode_payload(p).metrics if m.name == "setpoint"]
+        ON_REQUEST.append(hook)
+        poll = asyncio.create_task(r._poll_loop())
+        try:
+            assert await wait(lambda: reported() == [20]), reported()
+            armed.append(1)
+            assert await wait(lambda: REGS[10] == 25 and not armed)
+            if fmt == "plain":
+                assert await wait(lambda: reported().count(25) >= 2), reported()
+            else:  # report by exception: 25 once (a stale 20 would bring a second 25)
+                await asyncio.sleep(0.5)
+            got = reported()
+            assert got[:2] == [20, 25] and 20 not in got[1:], f"{fmt}: {got}"
+        finally:
+            ON_REQUEST.remove(hook)
+            r._stop.set()
+            poll.cancel()
+            with suppress(BaseException):
+                await poll
+            sw.close()
+    print("a write while the poll reads the unit: no stale value after the read-back "
+          "(plain, Sparkplug B)  OK")
+
+
 async def main():
     port = free_port()
     srv = await asyncio.start_server(fake_slave, "127.0.0.1", port)
@@ -634,7 +1131,14 @@ async def main():
         await test_plain_one_point(port)
         await test_retained_replay(port)
         await test_read_only(port)
+        await test_broadcast_point(port)
         await test_sparkplug(port)
+        await test_write_queue(port)
+        await test_json_requests(port)
+        await test_sparkplug_read_back(port)
+        await test_point_limits(port)
+        await test_stop_with_writes(port)
+        await test_no_stale_value_after_write(port)
     finally:
         srv.close()
         with suppress(Exception):

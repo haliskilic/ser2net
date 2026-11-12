@@ -35,7 +35,7 @@ import urllib.parse
 import uuid
 from dataclasses import dataclass, field, asdict
 from typing import Any, Iterable, Optional, Union
-from . import __version__
+from . import __version__, i18n
 from .i18n import LANGUAGES, _
 from .textfold import fold  # how names compare; still importable as app.config.fold
 
@@ -58,6 +58,9 @@ MAX_TIMER_S = 365 * 86400  # upper bound for the per-connection timers (one year
 # a mapping's no-data alarm (MappingOptions.no_data_alarm_s): looked at every 2 s
 NO_DATA_MIN_S = 10
 NO_DATA_MAX_S = 7 * 86400
+# Modbus gateway response timeout: the default, and what an edit may set
+MODBUS_TIMEOUT_DEFAULT_S = 1.0
+MODBUS_TIMEOUT_RANGE_S = (0.01, 60.0)
 # web-UI sign-in session lifetime (AppConfig.session_timeout_s)
 SESSION_TIMEOUT_DEFAULT_S = 8 * 3600
 SESSION_TIMEOUT_MIN_S = 5 * 60
@@ -1143,9 +1146,15 @@ class MappingOptions:
     rfc2217_restore_on_disconnect: bool = False
     # RFC2217: what a client's SIGNATURE request is answered with (blank: "ser2net")
     rfc2217_signature: str = ""
-    # Modbus gateway: how long to wait for an RTU slave's reply before returning a
-    # Modbus exception (0x0B gateway-target-failed) to the TCP master.
-    modbus_response_timeout_s: float = 1.0
+    # Modbus gateway: how long an RTU slave gets to begin its reply once the request is out
+    # on the line, before the gateway answers exception 0x0B (gateway target failed to
+    # respond). Read through modbus_response_timeout().
+    modbus_response_timeout_s: float = MODBUS_TIMEOUT_DEFAULT_S
+    # Modbus gateway: unit ids masters send that go to another RTU unit, as {"<id>": unit}
+    # ({"255": 1}: a request for unit 255 goes to unit 1 and is answered as unit 255). Empty
+    # (the default): each request goes to the unit it names, as before. Read through
+    # modbus_unit_map().
+    modbus_unit_map: dict = field(default_factory=dict)
     # Serial-to-network mappings (not a Modbus gateway): send poll_string to the device
     # every poll_interval_s seconds while its port is open (0 = off), e.g. a scale's or an
     # analyzer's query, so its answers reach MQTT, a trace or a UDP target without a
@@ -1171,6 +1180,8 @@ class MappingOptions:
         opts.idle_timeout_s = _legacy_seconds(opts.idle_timeout_s)
         opts.trace_both = trace_file_name(opts.trace_both)
         opts._limit_no_data_alarm(notes, path)
+        if isinstance(opts.modbus_unit_map, dict):  # (JSON keys are text)
+            opts.modbus_unit_map = {str(k): v for k, v in opts.modbus_unit_map.items()}
         return opts
 
     def _limit_no_data_alarm(self, notes: list[FieldNote], path: str) -> None:
@@ -1188,6 +1199,12 @@ class MappingOptions:
                       "used.").format(NO_DATA_MIN_S, NO_DATA_MAX_S, used)))
         self.no_data_alarm_s = used
 
+    @property
+    def modbus_unit_map_text(self) -> str:
+        """The unit map as the mapping form shows it: "255=1, 0=1"."""
+        umap = self.modbus_unit_map
+        return ", ".join(f"{k}={v}" for k, v in umap.items()) if isinstance(umap, dict) else ""
+
     def validate(self) -> None:
         for label, value in ((_("Idle timeout"), self.idle_timeout_s),
                              (_("Max connection time"), self.max_connection_time_s)):
@@ -1199,9 +1216,39 @@ class MappingOptions:
             raise ConfigError(_("Rotated trace files kept must be between 0 and 50."))
 
 
+def modbus_response_timeout(opts: MappingOptions) -> float:
+    """A Modbus gateway's response timeout in seconds. A stored value that is not a
+    positive number of seconds (before 2.9 it was in config.json only, unchecked) reads as
+    the default 1 s, as 0 always did; a numeric string counts as its number. Edits refuse
+    anything outside MODBUS_TIMEOUT_RANGE_S (validate_input)."""
+    t = opts.modbus_response_timeout_s
+    if isinstance(t, str):
+        try:
+            t = float(t.strip())
+        except ValueError:
+            return MODBUS_TIMEOUT_DEFAULT_S
+    if _is_number(t) and math.isfinite(t) and t > 0:
+        return float(min(t, MAX_TIMER_S))
+    return MODBUS_TIMEOUT_DEFAULT_S
+
+
+def modbus_unit_map(opts: MappingOptions) -> dict[int, int]:
+    """A Modbus gateway's unit map as it is used: {unit id a master sends: the RTU unit
+    the request goes to}. Entries the edits refuse (not ids 0-255 to units 1-255) are left
+    out, with a warning in the gateway's log at start."""
+    out: dict[int, int] = {}
+    umap = opts.modbus_unit_map
+    for key, unit in (umap.items() if isinstance(umap, dict) else ()):
+        sent = _loose_number(key, whole=True)
+        if _is_int(sent) and 0 <= sent <= 255 and _is_int(unit) and 1 <= unit <= 255:
+            out[sent] = unit
+    return out
+
+
 # ---------------------------------------------------------------------------
 # Per-mapping MQTT publishing (optional northbound to an IIoT broker)
 # ---------------------------------------------------------------------------
+MQTT_VALUE_FORMATS = ("text", "json")  # plain-format Modbus values (mqtt.value_format)
 MQTT_FORMATS = ("plain", "sparkplug_b")
 # what ends a serial line published to MQTT (MqttSettings.line_end)
 MQTT_LINE_ENDS = ("lf", "cr", "any")
@@ -1230,6 +1277,9 @@ class MqttSettings:
     payload_format: str = "plain"
     sparkplug_group_id: str = "ser2net"
     sparkplug_node_id: str = ""
+    # Sparkplug B: the primary host application (its host id) whose STATE the node follows,
+    # publishing its births only while that host is online; blank = none (birth at once)
+    sparkplug_primary_host_id: str = ""
     # Plain-format commands: also write a <base_topic>/<point>/set that the broker sends
     # from its retained store after each (re)connect. Off: a command is written once, when
     # it is published (Sparkplug NCMD / DCMD are never retained, so a retained one is
@@ -1244,6 +1294,30 @@ class MqttSettings:
     # Read-only refuses them; a retained one (the broker's copy, sent again after each
     # (re)connect) is ignored. Off: MQTT only publishes.
     tx_enabled: bool = field(default=False, metadata=_ONLY_TRUE)
+    # Plain-format Modbus polling: also publish each polled unit's state, retained, to
+    # <base_topic>/unit<N>/status ("online" / "offline"), on every change and after each
+    # (re)connect. Off: nothing beyond the points' values and <base_topic>/status.
+    unit_status: bool = False
+    # TLS (tls on): the broker's certificate must chain to a CA the system trusts, or with
+    # ca_file to one in that file only (PEM or DER); client_cert (PEM) is presented to a
+    # broker that asks for a certificate (mutual TLS), with its key in client_key or in the
+    # same file, encrypted with client_key_password if at all; tls_check_hostname off: the
+    # certificate need not name the broker host (its chain is still checked). See
+    # engine/mqtt_pub.tls_context; edits check the files (check_mqtt_tls_files).
+    ca_file: str = ""
+    client_cert: str = ""
+    client_key: str = ""
+    client_key_password: str = ""
+    tls_check_hostname: bool = field(default=True, metadata=_PROTECTIVE)
+    # Plain format: publish the data (serial lines, polled Modbus values) retained, so a
+    # subscriber that (re)connects gets the last one at once. Sparkplug B never retains
+    # data (the specification asks so); command results are never retained.
+    retain: bool = False
+    # Plain-format Modbus values: "text" (1 / 0 for a bit), or "json": {"value", "ts" (read
+    # time, ms since the epoch), "quality"}, with "bad" (value null) once for a point whose
+    # read fails or whose unit stops answering. Edits refuse other values; a stored one
+    # (a later version's) is published as text.
+    value_format: str = "text"
 
     @staticmethod
     def from_dict(d: dict[str, Any], notes: Optional[list[FieldNote]] = None,
@@ -1277,7 +1351,41 @@ class MqttSettings:
 # ---------------------------------------------------------------------------
 # Modbus register polling (gateway edge mode: read registers -> MQTT)
 # ---------------------------------------------------------------------------
-MODBUS_DTYPES = ("uint16", "int16", "uint32", "int32", "float32", "bool")
+MODBUS_DTYPES = ("uint16", "int16", "uint32", "int32", "float32", "bool",
+                 "int64", "uint64", "float64", "string")
+# how a device lays out a value's bytes in its registers (engine/modbus.WORD_ORDERS): ABCD
+# as Modbus sends a register, high register first; CDAB low register first ("word swap"),
+# BADC each register's bytes swapped, DCBA both
+MODBUS_WORD_ORDERS = ("ABCD", "CDAB", "BADC", "DCBA")
+MODBUS_STRING_MAX_REGS = 125  # a "string" point: at most one read's worth of registers
+MODBUS_BLOCK_GAP_MAX = 124    # block reads: unused registers between two points of a block
+# a point's whole-number keys (the typed reader takes "1" and 1.0 as 1, and leaves 1.5 for
+# an edit to refuse: validate_input)
+_POINT_INTS = ("unit", "fn", "address")
+# the keys of a point and of the poll that 2.9 added: typed from the start, so read as they
+# are (not through _read_fields), for an edit to refuse what it can't use (validate_input)
+_POINT_STRICT = ("min", "max", "allowed", "poll", "word_order", "bit", "length")
+_POLL_STRICT = ("block_reads", "block_gap")
+
+
+def _loose_number(value: Any, whole: bool) -> Any:
+    """A number as stored before its type was checked (a unit map's key): a numeric string
+    counts as its number, and where a whole number belongs (``whole``) an integral float as
+    an int. Anything else is returned as it is (edits refuse it)."""
+    if isinstance(value, str):
+        text = value.strip()
+        if re.fullmatch(r"[+-]?\d{1,30}", text):
+            return int(text)
+        try:
+            number = float(text)
+        except ValueError:
+            return value
+        if not math.isfinite(number):
+            return value
+        value = number
+    if whole and isinstance(value, float) and math.isfinite(value) and value.is_integer():
+        return int(value)
+    return value
 
 
 @dataclass
@@ -1286,19 +1394,81 @@ class ModbusPoint:
     unit: int = 1               # RTU slave id
     fn: int = 3                 # 1 = coils, 2 = discrete inputs, 3 = holding, 4 = input registers
     address: int = 0            # 0-based coil / register address
-    dtype: str = "uint16"       # uint16 | int16 | uint32 | int32 | float32 (registers), bool (bits)
+    # registers: uint16 | int16 (one), uint32 | int32 | float32 (two), int64 | uint64 |
+    # float64 (four), string ("length" registers), bool (one of its bits: "bit");
+    # coils / discrete inputs: bool
+    dtype: str = "uint16"
     scale: float = 1.0          # published value = raw * scale (0 = no scaling, as before)
     # MQTT may write it: <base_topic>/<name>/set, or a Sparkplug B DCMD to its unit's
-    # device (a coil: FC5, a holding register: FC6 / FC16 for its own one or two
-    # registers). Only coils and holding registers.
+    # device (a coil: FC5, a holding register: FC6 / FC16 for its own registers). Only
+    # coils and holding registers; not a string, nor a bit of a register.
     writable: bool = False
+    # What MQTT may write to it (optional, writable points; None = no limit, as before):
+    # the lowest and highest value, in the point's own units (as published, before the
+    # scale is undone), and the values it may take (a list; true / false for a coil). A
+    # write outside them is refused. Modbus/TCP masters are not limited by them.
+    min: Optional[float] = None
+    max: Optional[float] = None
+    allowed: Optional[list] = None
+    # False: write-only (a writable point that can't be read, such as a command register):
+    # never polled, and a write is not read back
+    poll: bool = True
+    # How the device lays out the value's bytes in its registers (MODBUS_WORD_ORDERS), for
+    # reads and writes; ABCD (the default) as before. A string: ABCD (first character in the
+    # high byte) or BADC. Read through point_order().
+    word_order: str = "ABCD"
+    # dtype "bool" on a register (fn 3, 4): which of its bits it is, 0 (least significant)
+    # to 15
+    bit: Optional[int] = None
+    # dtype "string": how many registers it takes (two characters each), 1-125
+    length: Optional[int] = None
 
     @staticmethod
     def from_dict(d: dict[str, Any], notes: Optional[list[FieldNote]] = None,
                   path: str = "") -> "ModbusPoint":
         d = dict(d or {})
         notes = [] if notes is None else notes
-        return ModbusPoint(**_read_fields(ModbusPoint, d, notes, path))
+        p = ModbusPoint(**_read_fields(ModbusPoint, d, notes, path, skip=_POINT_STRICT))
+        # the keys 2.9 added are typed from the start: kept as they are, for an edit to
+        # refuse what it can't use (ModbusPoll.validate_input); a stored one the gateway
+        # can't use is ignored, with a warning in its log at start
+        for key in _POINT_STRICT:
+            if key in d:
+                setattr(p, key, d[key])
+        return p
+
+
+def point_scale(p: ModbusPoint) -> Any:
+    """The scale a point's values are read and written with: its own when it is a number
+    (0 and 1: not scaled), else 1. A stored scale the edits refuse (text, NaN: see
+    ModbusPoll.validate_input) is ignored rather than multiplied in, with a warning in the
+    gateway's log at start."""
+    s = p.scale
+    return s if _is_number(s) and math.isfinite(s) else 1.0
+
+
+def point_order(p: ModbusPoint) -> str:
+    """The word order a point is read and written with: its own, or ABCD for a stored one
+    the edits refuse (with a warning in the gateway's log at start)."""
+    return p.word_order if p.word_order in MODBUS_WORD_ORDERS else "ABCD"
+
+
+def poll_block_gap(poll: "ModbusPoll") -> Optional[int]:
+    """Block reads (ModbusPoll.block_reads): how many unused registers (coils) may lie
+    between two points read with one request, or None when block reads are off. A stored
+    gap the edits refuse reads as 0, and anything but true as off."""
+    if poll.block_reads is not True:
+        return None
+    gap = poll.block_gap
+    return gap if _is_int(gap) and 0 <= gap <= MODBUS_BLOCK_GAP_MAX else 0
+
+
+def _register_bit(value: Any) -> bool:
+    return _is_int(value) and 0 <= value <= 15
+
+
+def _string_length(value: Any) -> bool:
+    return _is_int(value) and 1 <= value <= MODBUS_STRING_MAX_REGS
 
 
 MODBUS_POLL_DEFAULT_S = 5.0
@@ -1308,6 +1478,13 @@ MODBUS_POLL_DEFAULT_S = 5.0
 class ModbusPoll:
     interval_s: float = MODBUS_POLL_DEFAULT_S
     points: list[ModbusPoint] = field(default_factory=list)
+    # Block reads (off: one request per point, as before): a unit's points of one function
+    # that lie close together are read with one request, at most 125 registers (2000 coils
+    # or inputs), with up to block_gap unused registers (coils) between two of them. A
+    # block the slave refuses (exception 02 or 03) has its points read one at a time from
+    # then on. Read through poll_block_gap().
+    block_reads: bool = False
+    block_gap: int = 0
 
     @staticmethod
     def from_dict(d: dict[str, Any], notes: Optional[list[FieldNote]] = None,
@@ -1317,7 +1494,8 @@ class ModbusPoll:
         poll = ModbusPoll(
             points=[ModbusPoint.from_dict(p, notes, f"{path}points[{i}].")
                     for i, p in enumerate(_objects(d, "points", path))],
-            **_read_fields(ModbusPoll, d, notes, path, skip=("points",)))
+            **_read_fields(ModbusPoll, d, notes, path, skip=("points", *_POLL_STRICT)),
+            **{key: d[key] for key in _POLL_STRICT if key in d})
         # 0 or less has always meant the default interval (an <input min> keeps the form
         # from sending it); said now, where it matters
         if poll.interval_s <= 0:
@@ -1332,6 +1510,19 @@ class ModbusPoll:
             poll.interval_s = MODBUS_POLL_DEFAULT_S
         return poll
 
+    @property
+    def broadcast_points(self) -> list[str]:
+        """The names of the points on unit 0, the broadcast address: never read (no slave
+        answers a broadcast), and a write to one goes to every slave. Allowed, with a
+        warning in the log and the mapping form."""
+        return [p.name for p in self.points if p.unit == 0]
+
+    @property
+    def reserved_unit_points(self) -> list[str]:
+        """The names of the points on units 248-255, which a Modbus serial line reserves
+        (slave addresses are 1-247). Allowed, with a warning like broadcast_points."""
+        return [p.name for p in self.points if _is_int(p.unit) and 248 <= p.unit <= 255]
+
     def validate(self) -> None:
         if not self.points:
             return
@@ -1339,17 +1530,21 @@ class ModbusPoll:
             raise ConfigError(_("Modbus poll interval must be > 0 seconds."))
         seen = set()
         for p in self.points:
+            if not isinstance(p.name, str) and p.name is not None:  # (a model built in code)
+                raise ConfigError(_("Modbus poll point names are text: {0} is not.").format(
+                    repr(p.name)[:40]))
             if not isinstance(p.name, str) or not p.name.strip():
                 raise ConfigError(_("Each Modbus poll point needs a name."))
             if p.name in seen:
                 raise ConfigError(_("Duplicate Modbus poll point name: {0}.").format(repr(p.name)))
             seen.add(p.name)
-            if not _is_int(p.unit) or not (0 <= p.unit <= 255):
+            # (a number of any type compares as it did; anything else failed before too)
+            if not isinstance(p.unit, (int, float)) or not (0 <= p.unit <= 255):
                 raise ConfigError(_("Point {0}: unit must be 0-255.").format(repr(p.name)))
             if p.fn not in (1, 2, 3, 4) or not _is_int(p.fn):
                 raise ConfigError(_("Point {0}: function must be 1 (coils), 2 (discrete "
                                     "inputs), 3 (holding registers) or 4 (input registers).").format(repr(p.name)))
-            if not _is_int(p.address) or not (0 <= p.address <= 65535):
+            if not isinstance(p.address, (int, float)) or not (0 <= p.address <= 65535):
                 raise ConfigError(_("Point {0}: address must be 0-65535.").format(repr(p.name)))
             # from_dict reads both as numbers / true or false; a model built in code is
             # refused here rather than fail at every poll
@@ -1359,12 +1554,115 @@ class ModbusPoll:
                 raise ConfigError(_("Point {0}: writable must be true or false.").format(repr(p.name)))
             if p.dtype not in MODBUS_DTYPES:
                 raise ConfigError(_("Point {0}: dtype must be one of {1}.").format(repr(p.name), _choices(MODBUS_DTYPES)))
-            if (p.fn in (1, 2)) != (p.dtype == "bool"):
+            # (bool on a register and string are new in 2.9: what was refused stays refused
+            # without the bit / length they need)
+            if (p.fn in (1, 2)) != (p.dtype == "bool") and not (
+                    p.dtype == "bool" and _register_bit(p.bit)):
                 raise ConfigError(_("Point {0}: coils / discrete inputs (fn 1, 2) use dtype "
-                                    "'bool'; registers (fn 3, 4) a numeric dtype.").format(repr(p.name)))
+                                    "'bool'; registers (fn 3, 4) a numeric dtype or 'string', "
+                                    "or 'bool' with the \"bit\" (0-15) it reads.").format(
+                                        repr(p.name)))
+            if p.dtype == "string" and not _string_length(p.length):
+                raise ConfigError(_("Point {0}: a string needs its \"length\": how many "
+                                    "registers it takes (1-{1}, two characters each).").format(
+                                        repr(p.name), MODBUS_STRING_MAX_REGS))
             if p.writable and p.fn not in (1, 3):
                 raise ConfigError(_("Point {0}: only coils (fn 1) and holding registers (fn 3) "
                                     "can be written.").format(repr(p.name)))
+
+    def validate_input(self) -> None:
+        """The point options an edit may set (min, max, allowed, poll, word_order) and the
+        types of the rest. validate() leaves them alone (a stored config has to keep
+        loading); one stored that can't be used is ignored, with a warning in the gateway's
+        log at start."""
+        if not isinstance(self.block_reads, bool):
+            raise ConfigError(_("Block reads must be on or off (true or false)."))
+        if not (_is_int(self.block_gap) and 0 <= self.block_gap <= MODBUS_BLOCK_GAP_MAX):
+            raise ConfigError(_("The unused registers a block read may span must be a whole "
+                                "number from 0 to {0}.").format(MODBUS_BLOCK_GAP_MAX))
+        for p in self.points:
+            name = repr(p.name)
+            # the types validate() leaves alone: a stored point loads as it was
+            for key in _POINT_INTS:
+                if not _is_int(getattr(p, key)):
+                    raise ConfigError(_("Point {0}: {1} must be a whole number.").format(
+                        name, key))
+            if not (_is_number(p.scale) and math.isfinite(p.scale)):
+                raise ConfigError(_("Point {0}: scale must be a number (0 or 1: not "
+                                    "scaled).").format(name))
+            if not isinstance(p.writable, bool):
+                raise ConfigError(_("Point {0}: writable must be true or false.").format(name))
+            register = p.fn in (3, 4)
+            if p.word_order not in MODBUS_WORD_ORDERS:
+                raise ConfigError(_("Point {0}: word_order must be one of {1}.").format(
+                    name, ", ".join(MODBUS_WORD_ORDERS)))
+            if p.dtype == "bool" and p.word_order != "ABCD":
+                raise ConfigError(_("Point {0}: word_order is for register values, not for a "
+                                    "bit.").format(name))
+            if p.dtype == "string" and p.word_order not in ("ABCD", "BADC"):
+                raise ConfigError(_("Point {0}: a string's characters are in the high byte "
+                                    "first (\"ABCD\") or the low byte first (\"BADC\").").format(
+                                        name))
+            if p.bit is not None and not (p.dtype == "bool" and register):
+                raise ConfigError(_("Point {0}: \"bit\" reads one bit of a register: it needs "
+                                    "\"dtype\": \"bool\" and fn 3 or 4.").format(name))
+            if p.length is not None and p.dtype != "string":
+                raise ConfigError(_("Point {0}: \"length\" is for a \"string\" point.").format(
+                    name))
+            if p.dtype == "string" and p.scale not in (0, 1):
+                raise ConfigError(_("Point {0}: a string can't be scaled.").format(name))
+            if p.writable and (p.dtype == "string" or (p.dtype == "bool" and register)):
+                raise ConfigError(_("Point {0}: MQTT can't write a string or a bit of a "
+                                    "register; make it read-only.").format(name))
+            if not p.writable and any(v is not None for v in (p.min, p.max, p.allowed)):
+                raise ConfigError(_("Point {0}: min, max and allowed limit what MQTT may "
+                                    "write, so they need \"writable\": true.").format(name))
+            coil = p.fn in (1, 2)
+            if coil and (p.min is not None or p.max is not None):
+                raise ConfigError(_("Point {0}: a coil is true or false, so min and max don't "
+                                    "apply to it (use allowed).").format(name))
+            for key, value in (("min", p.min), ("max", p.max)):
+                if value is not None and not (_is_number(value) and math.isfinite(value)):
+                    raise ConfigError(_("Point {0}: {1} must be a number.").format(name, key))
+            if p.min is not None and p.max is not None and p.min > p.max:
+                raise ConfigError(_("Point {0}: min is greater than max.").format(name))
+            if p.allowed is not None and not (
+                    isinstance(p.allowed, list) and p.allowed
+                    and all(isinstance(v, bool) if coil else
+                            (_is_number(v) and math.isfinite(v)) for v in p.allowed)):
+                raise ConfigError(_("Point {0}: allowed must be a list of the values MQTT may "
+                                    "write: true / false for a coil, numbers for a "
+                                    "register.").format(name))
+            if not isinstance(p.poll, bool):
+                raise ConfigError(_("Point {0}: poll must be true or false.").format(name))
+            if not p.poll and not p.writable:
+                raise ConfigError(_("Point {0}: a point that is not polled (\"poll\": false) "
+                                    "is write-only, so it needs \"writable\": true.").format(
+                                        name))
+
+
+def unstorable_text(value: Any, where: str = "") -> Optional[str]:
+    """Where in ``value`` (a to_dict() tree: dicts, lists, strings) there is text that can't
+    be written as UTF-8 — an unpaired surrogate (U+D800-U+DFFF), which only a JSON escape
+    such as \\ud800 can make — as a path like "modbus_poll.points[0].name"; None when there
+    is none. config.json could not be saved with it."""
+    if isinstance(value, str):
+        try:
+            value.encode("utf-8")
+        except UnicodeEncodeError:
+            return where or "?"
+        return None
+    if isinstance(value, dict):
+        for k, v in value.items():
+            key = str(k).encode("utf-8", "backslashreplace").decode("utf-8")
+            spot = f"{where}.{key}" if where else key
+            if (bad := unstorable_text(k, spot)) or (bad := unstorable_text(v, spot)):
+                return bad
+    elif isinstance(value, (list, tuple)):
+        for i, v in enumerate(value):
+            if bad := unstorable_text(v, f"{where}[{i}]"):
+                return bad
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -1512,6 +1810,9 @@ class MappingConfig:
         every start), so a stored value they forbid is refused where it is used instead
         (a URL serial port: when the mapping starts, see engine/serial_io.refuse_url), or
         normalized when it is loaded (a value of the wrong type: from_dict)."""
+        if (spot := unstorable_text(self.to_dict())) is not None:
+            raise ConfigError(_("{0} has a character that can't be stored: an unpaired "
+                                "surrogate escape (\\ud800 to \\udfff).").format(spot))
         for note in self.input_notes:
             if note.kind in ("invalid", "switch_text"):
                 raise ConfigError(note.error())
@@ -1546,6 +1847,32 @@ class MappingConfig:
         if self.options.console_encoding not in CONSOLE_ENCODINGS:
             raise ConfigError(_("Unknown console text encoding {0}: use one of {1}.").format(
                 repr(self.options.console_encoding), ", ".join(CONSOLE_ENCODINGS)))
+        if self.kind == "net" and self.network.protocol == "modbus":
+            low, high = MODBUS_TIMEOUT_RANGE_S
+            timeout = self.options.modbus_response_timeout_s
+            if not _is_number(timeout) or not (low <= timeout <= high):
+                raise ConfigError(_("The Modbus response timeout must be between {0} and {1} "
+                                    "seconds.").format(f"{low:g}", f"{high:g}"))
+            if self.mqtt.value_format not in MQTT_VALUE_FORMATS:
+                raise ConfigError(_("MQTT value format must be one of {0}.").format(
+                    MQTT_VALUE_FORMATS))
+            umap = self.options.modbus_unit_map
+            if not isinstance(umap, dict) or len(modbus_unit_map(self.options)) != len(umap):
+                raise ConfigError(_("The unit map sends unit ids 0-255 to RTU units 1-255, "
+                                    "each id once, such as 255=1."))
+            self.modbus_poll.validate_input()
+            host = self.mqtt.sparkplug_primary_host_id
+            if self.mqtt.payload_format == "sparkplug_b" and host != "":
+                if not isinstance(host, str) or any(c in host for c in "/+#"):
+                    raise ConfigError(_("Sparkplug {0} must not contain '/', '+' or '#'.").format(
+                        _("primary host ID")))
+        if self.kind == "net" and self.mqtt.enabled and _plain_mqtt(self):
+            # (serial lines and their /tx writes too: a subscription to such a topic would
+            # take every matching one)
+            if mqtt_topic_problem(self.mqtt.base_topic):
+                raise ConfigError(_("The MQTT base topic can't contain '+', '#' or the null "
+                                    "character: no message can be published to such a topic."))
+            self.check_mqtt_topics()
 
     def check_tls_files(self) -> None:
         """An edit's check (mapping form, so also a cluster peer's save on the node it is
@@ -1565,14 +1892,12 @@ class MappingConfig:
             raise ConfigError(tls_file_message(e)) from None
 
     def _validate_lines_and_poll(self) -> None:
-        """A serial-to-network mapping's MQTT line end and writes, and its poll string (an
-        edit's rules: a stored value they refuse reads as off / "lf")."""
+        """A serial-to-network mapping's MQTT line end and its poll string (an edit's
+        rules: a stored value they refuse reads as off / "lf"). Its base topic, also for
+        MQTT writes, is checked with every plain-format mapping's (validate_input)."""
         mq = self.mqtt
         if mq.enabled and mq.line_end not in MQTT_LINE_ENDS:
             raise ConfigError(_("The MQTT line end must be one of {0}.").format(MQTT_LINE_ENDS))
-        if mq.enabled and mq.tx_enabled is True and mqtt_topic_problem(mq.base_topic):
-            raise ConfigError(_("The MQTT base topic can't contain '+', '#' or the null "
-                                "character: no message can be published to such a topic."))
         o = self.options
         interval = o.poll_interval_s
         if not _is_number(interval) or not (interval == 0 or 0.1 <= interval <= 86400):
@@ -1588,6 +1913,56 @@ class MappingConfig:
                 POLL_STRING_MAX))
         if interval and not data:
             raise ConfigError(_("A poll interval needs a poll string to send."))
+
+    def check_mqtt_topics(self) -> None:
+        """Plain MQTT on a Modbus gateway (an edit's rules, see validate_input): a point's
+        name is part of its topics (<base_topic>/<name>, .../set, .../set/result), so it
+        can't have '+', '#' or the null character, and a point can't be published where the
+        mapping already publishes or takes something else: its status (<base_topic>/status),
+        a unit's status (unit<N>/status, with unit_status on) or another point's command or
+        result topic. A stored mapping that breaks them keeps loading and running; start-up
+        and each start of it log a warning (mqtt_warnings). Raises ConfigError."""
+        if not (self.kind == "net" and self.network.protocol == "modbus"):
+            return
+        for p in self.modbus_poll.points:
+            if mqtt_topic_problem(p.name):
+                raise ConfigError(_("Point {0}: with the plain MQTT format its name is part "
+                                    "of its topic, which can't contain '+', '#' or the null "
+                                    "character.").format(repr(p.name)))
+        uses: dict[str, tuple[str, Any]] = {}
+        for topic, use, of in sorted(_mqtt_topics(self), key=lambda t: t[1] == "value"):
+            if topic not in uses:
+                uses[topic] = (use, of)
+                continue
+            # (an overlap is always a point's value topic: the others can't meet)
+            raise ConfigError(_("Point {0}: its MQTT topic {1} is already {2}. Rename the "
+                                "point.").format(repr(of), repr(topic), _topic_use(*uses[topic])))
+
+    def check_mqtt_tls_files(self) -> None:
+        """An edit on the node that runs the mapping (its form, the REST API): with MQTT
+        over TLS, the CA file and the client certificate and key must be usable here.
+        Neither validate() nor validate_input() checks them: a stored config whose files
+        are gone has to keep loading (the mapping then runs without MQTT, logged), a fleet
+        edit is checked by the node it is for (its own form save), and an import only warns.
+        Raises ConfigError."""
+        mq = self.mqtt
+        if not (self.kind == "net" and mq.enabled and mq.tls):
+            return
+        from .engine.mqtt_pub import TlsFileError, tls_context
+        try:
+            tls_context(mq)
+        except TlsFileError as e:
+            text = {
+                "ca_unreadable": _("The MQTT CA file {0} can't be read: {1}"),
+                "ca_empty": _("The MQTT CA file {0} holds no certificate (PEM or DER)."),
+                "key_without_cert": _("An MQTT client key needs its client certificate."),
+                "cert_unreadable": _("The MQTT client certificate or key ({0}) can't be read: "
+                                     "{1}"),
+                "cert_unusable": _("The MQTT client certificate {0} can't be used with its key "
+                                   "({1}). Is the key password right, and is it the "
+                                   "certificate's key?"),
+            }[e.kind]
+            raise ConfigError(text.format(e.path, e.detail)) from None
 
     def _validate_udp_peer(self) -> None:
         """A UDP mapping's reply address and peer timeout (an edit's rules: a stored
@@ -1675,10 +2050,11 @@ def poll_bytes(text: Any) -> bytes:
     return bytes(out)
 
 
-def mqtt_topic_problem(base_topic: Any) -> bool:
+def mqtt_topic_problem(text: Any) -> bool:
     """'+' / '#' (wildcards: a message can't be published to them, and a subscription would
-    take every matching topic) or U+0000 in a base topic."""
-    return any(c in str(base_topic) for c in "+#\x00")
+    take every matching topic) or U+0000 (which no MQTT string may have) in a topic, or in
+    the part of one a name makes (a base topic, a point's name)."""
+    return any(c in str(text) for c in "+#\x00")
 
 
 def mqtt_tx_topics(m: "MappingConfig") -> list[tuple[str, str, Any]]:
@@ -1711,6 +2087,278 @@ def tls_file_message(e: Any) -> str:
     if e.kind == "ca_empty":
         return _("The CA file {0} holds no certificate (PEM or DER).").format(e.path)
     return str(e)
+
+
+# ---------------------------------------------------------------------------
+# MQTT: the topics and identity a mapping uses on its broker, and clashes between
+# mappings. Checked where a mapping is created or changed (check_mqtt_clashes) and
+# warned about at start-up and at each start (mqtt_warnings); never by validate(): a
+# stored config with a clash keeps loading and running.
+# ---------------------------------------------------------------------------
+def _plain_mqtt(m: MappingConfig) -> bool:
+    """The mapping publishes plain MQTT topics under its base topic (serial lines, or
+    Modbus points), not Sparkplug B (which a Modbus gateway alone can speak)."""
+    return m.network.protocol != "modbus" or m.mqtt.payload_format != "sparkplug_b"
+
+
+def _mqtt_topics(m: MappingConfig) -> list[tuple[str, str, Any]]:
+    """The topics a plain-format mapping uses while it runs, as (topic, use, of): use
+    "status" (its retained online/offline and its Last Will) and "lines" (serial lines),
+    or on a Modbus gateway "value", "set" and "result" (a point's value, its command
+    topic and the answers to its commands; of = the point's name) and "unit" (a unit's
+    status, with unit_status on; of = the unit). As engine/mqtt_pub and
+    engine/modbus_gateway build them."""
+    base = str(m.mqtt.base_topic).rstrip("/")
+    out: list[tuple[str, str, Any]] = [(f"{base}/status", "status", None)]
+    if m.network.protocol != "modbus":
+        return out + [(base, "lines", None)]
+    units: list[Any] = []
+    for p in m.modbus_poll.points:
+        if p.poll is not False:  # (a write-only point is never published)
+            out.append((f"{base}/{p.name}", "value", p.name))
+            if p.unit != 0 and p.unit not in units:
+                units.append(p.unit)
+        if p.writable:
+            out.append((f"{base}/{p.name}/set", "set", p.name))
+            out.append((f"{base}/{p.name}/set/result", "result", p.name))
+    if m.mqtt.unit_status:
+        out += [(f"{base}/unit{u}/status", "unit", u) for u in units]
+    return out
+
+
+def _topic_use(use: str, of: Any) -> str:
+    if use == "status":
+        return _("the mapping's online/offline status topic")
+    if use == "unit":
+        return _("the status topic of unit {0}").format(of)
+    if use == "set":
+        return _("the command topic of point {0}").format(repr(of))
+    if use == "result":
+        return _("the topic of the answers to point {0}'s commands").format(repr(of))
+    return _("the topic of point {0}").format(repr(of))
+
+
+def sparkplug_identity(m: MappingConfig) -> tuple[str, str]:
+    """The Sparkplug B group and edge node ID a mapping's node uses (as
+    engine/sparkplug_node: a blank node ID is made from the mapping's name)."""
+    from .engine.sparkplug import sanitize_id
+    mq = m.mqtt
+    return (str(mq.sparkplug_group_id or "").strip() or "ser2net",
+            str(mq.sparkplug_node_id or "").strip() or sanitize_id(str(m.name)))
+
+
+@dataclass
+class _MqttUse:
+    """What a mapping that runs does on its broker (see _mqtt_use)."""
+    broker: str              # host:port (the host in lower case)
+    client_id: str           # "" = the client library makes one up
+    node: str                # Sparkplug B: "<group>/<edge node>"; plain: ""
+    commands: set[str]       # plain: the topics it takes writes from (<point>/set)
+    published: set[str]      # plain: the topics it publishes to
+
+
+def _mqtt_use(m: MappingConfig) -> Optional[_MqttUse]:
+    """None when the mapping starts no MQTT client (not a network mapping, MQTT off, a
+    Modbus gateway without points, a plain base topic with a wildcard: see
+    engine/mqtt_pub)."""
+    mq = m.mqtt
+    if m.kind != "net" or not mq.enabled:
+        return None
+    if m.network.protocol == "modbus" and not m.modbus_poll.points:
+        return None
+    broker = f"{str(mq.host).strip().lower()}:{mq.port}"
+    client_id = mq.client_id if isinstance(mq.client_id, str) else ""
+    if not _plain_mqtt(m):
+        return _MqttUse(broker, client_id, "/".join(sparkplug_identity(m)), set(), set())
+    if any(c in str(mq.base_topic) for c in "+#"):
+        return None
+    topics = _mqtt_topics(m)
+    return _MqttUse(broker, client_id, "",
+                    {t for t, use, _of in topics if use == "set"},
+                    {t for t, use, _of in topics if use != "set"})
+
+
+@dataclass(frozen=True)
+class MqttClash:
+    """Two enabled mappings that get in each other's way on one MQTT broker: kind
+    "client_id" (the same client ID: the broker keeps one connection per ID),
+    "sparkplug" (the same Sparkplug B edge node), "command" (a topic one of them takes
+    writes from that the other uses too) — refused where a mapping is created or changed
+    — or "shared" (both publish to a topic, such as one base topic's status: only
+    warned about, since it can be meant)."""
+    kind: str
+    other: str    # the other mapping's name
+    broker: str
+    what: str     # the client ID, "<group>/<edge node>" or the topic
+
+    @property
+    def refused(self) -> bool:
+        return self.kind != "shared"
+
+    def text(self) -> str:
+        if self.kind == "client_id":
+            return _("Mapping '{0}' already connects to the MQTT broker {1} with the client ID "
+                     "{2}. A broker keeps one connection per client ID, so the two mappings "
+                     "would keep disconnecting each other: leave the client ID blank "
+                     "(automatic) or use another one.").format(
+                         self.other, self.broker, repr(self.what))
+        if self.kind == "sparkplug":
+            return _("Mapping '{0}' is already the Sparkplug B edge node {1} (group/edge node "
+                     "ID) on the MQTT broker {2}. Two edge nodes can't share it: a host takes "
+                     "them for one and sends its commands to both. Set another edge node ID "
+                     "(a blank one is made from the mapping's name).").format(
+                         self.other, repr(self.what), self.broker)
+        if self.kind == "command":
+            return _("Mapping '{0}' also uses the MQTT topic {1} on the broker {2}, and one of "
+                     "the two takes writes from it (a point's /set): one MQTT command would be "
+                     "written by both, or the data of one taken as a command by the other. "
+                     "Give one of them another base topic.").format(
+                         self.other, repr(self.what), self.broker)
+        # only logged (never refused, so never shown in the UI)
+        return (f"mapping '{self.other}' publishes to the MQTT topic {self.what!r} on the "
+                f"broker {self.broker} too, so the messages of the two mix there (a shared "
+                ".../status shows the state of whichever connected last)")
+
+
+class _MqttIndex:
+    """The MQTT identity and topics of some mappings, by broker, to find what another
+    mapping would share with them."""
+
+    def __init__(self) -> None:
+        # (broker, client ID / "<group>/<node>" / topic) -> the mappings with it
+        self._ids: dict[tuple[str, str], list[MappingConfig]] = {}
+        self._nodes: dict[tuple[str, str], list[MappingConfig]] = {}
+        self._commands: dict[tuple[str, str], list[MappingConfig]] = {}
+        self._published: dict[tuple[str, str], list[MappingConfig]] = {}
+
+    def add(self, m: MappingConfig, use: _MqttUse) -> None:
+        b = use.broker
+        if use.client_id:
+            self._ids.setdefault((b, use.client_id), []).append(m)
+        if use.node:
+            self._nodes.setdefault((b, use.node), []).append(m)
+        for t in use.commands:
+            self._commands.setdefault((b, t), []).append(m)
+        for t in use.published:
+            self._published.setdefault((b, t), []).append(m)
+
+    def clashes(self, use: _MqttUse) -> list[MqttClash]:
+        """What a mapping with ``use`` shares with these: one clash per other mapping, the
+        most serious one; of the clashes only warned about ("shared"), just the first,
+        when there is nothing worse (mappings that share a topic on purpose would
+        otherwise say so to each other over and over)."""
+        b = use.broker
+        found: dict[str, MqttClash] = {}
+
+        def note(kind: str, others: list[MappingConfig], what: str) -> None:
+            for other in others:
+                if other.id not in found:
+                    found[other.id] = MqttClash(kind, str(other.name), b, what)
+
+        if use.client_id:
+            note("client_id", self._ids.get((b, use.client_id), []), use.client_id)
+        if use.node:
+            note("sparkplug", self._nodes.get((b, use.node), []), use.node)
+        for t in sorted(use.commands):
+            note("command", self._commands.get((b, t), []) + self._published.get((b, t), []), t)
+        for t in sorted(use.published):
+            note("command", self._commands.get((b, t), []), t)
+        if not found:  # a shared base topic shows as its status topic
+            topic = min((t for t in use.published if (b, t) in self._published),
+                        key=lambda t: (not t.endswith("/status"), t), default=None)
+            if topic is not None:
+                note("shared", self._published[(b, topic)][:1], topic)
+        return list(found.values())
+
+
+def mqtt_clashes(mapping: MappingConfig, mappings) -> list[MqttClash]:
+    """What ``mapping`` would share on its MQTT broker with the other enabled ones of
+    ``mappings`` (itself, by id, left out) while both run; nothing when it is disabled."""
+    if not mapping.enabled or (use := _mqtt_use(mapping)) is None:
+        return []
+    index = _MqttIndex()
+    for m in mappings:
+        if m.id == mapping.id or not m.enabled:
+            continue
+        try:
+            other = _mqtt_use(m)
+        except Exception:  # a hand-edited value of the wrong type: nothing to compare
+            continue
+        if other is not None and other.broker == use.broker:
+            index.add(m, other)
+    return index.clashes(use)
+
+
+def check_mqtt_clashes(mapping: MappingConfig, mappings) -> None:
+    """An edit's rule (the mapping form, also a cluster node's save of its own mapping;
+    the REST API; an import): an enabled mapping can't share its MQTT client ID, its
+    Sparkplug B edge node or a command topic with another enabled mapping on the same
+    broker. Raises ConfigError. Not in validate(): a stored config with such a clash keeps
+    loading and running (with a warning, see mqtt_warnings); only an edit has to fix it."""
+    for clash in mqtt_clashes(mapping, mappings):
+        if clash.refused:
+            raise ConfigError(clash.text())
+
+
+@contextlib.contextmanager
+def _in_english():
+    """Messages built meanwhile are in English (log lines, whatever the request's
+    language)."""
+    token = i18n.set_language(i18n.DEFAULT)
+    try:
+        yield
+    finally:
+        i18n.reset(token)
+
+
+def _topic_warnings(m: MappingConfig) -> list[str]:
+    if m.kind == "net" and m.mqtt.enabled and _plain_mqtt(m):
+        try:
+            m.check_mqtt_topics()
+        except ConfigError as e:
+            return [f"MQTT: {e}"]
+    return []
+
+
+def mqtt_warnings(mapping: MappingConfig, mappings) -> list[str]:
+    """In English, for the log: what the edits refuse in ``mapping``'s MQTT topics (see
+    check_mqtt_topics; a wildcard base topic is logged by the MQTT client itself), and
+    what it shares on its broker with the other enabled ones of ``mappings``. Empty when
+    it is disabled; never raises."""
+    if not mapping.enabled:
+        return []
+    with _in_english():
+        try:
+            return _topic_warnings(mapping) + [f"MQTT: {c.text()}"
+                                               for c in mqtt_clashes(mapping, mappings)]
+        except Exception:  # a hand-edited value of the wrong type: validate() reports it
+            return []
+
+
+def mqtt_start_warnings(mappings: list[MappingConfig]) -> list[list[str]]:
+    """mqtt_warnings for each of ``mappings``, in order, against the enabled ones before
+    it, in one pass (a clash is said once, by the later mapping of the two): for the
+    start-up's load notes and starting them all. In English; never raises."""
+    out: list[list[str]] = []
+    index = _MqttIndex()
+    with _in_english():
+        for m in mappings:
+            lines: list[str] = []
+            if m.enabled:
+                try:
+                    lines = _topic_warnings(m)
+                    if (use := _mqtt_use(m)) is not None:
+                        lines += [f"MQTT: {c.text()}" for c in index.clashes(use)]
+                        index.add(m, use)
+                except Exception:  # a hand-edited value of the wrong type: validate() says
+                    lines = []
+            out.append(lines)
+    return out
+
+
+def _mqtt_load_notes(mappings: list[MappingConfig]) -> list[str]:
+    return [f"mapping '{m.name}': {line}" for m, lines in
+            zip(mappings, mqtt_start_warnings(mappings), strict=True) for line in lines]
 
 
 # ---------------------------------------------------------------------------
@@ -2298,7 +2946,8 @@ class ClusterSettings:
 
 NOTIFY_EVENTS = ("device_lost", "device_back", "start_failed", "link_lost", "link_back",
                  "client_connected", "client_disconnected", "login_failed", "disk_low",
-                 "no_data", "data_back", "peer_offline", "peer_back", "service_started")
+                 "no_data", "data_back", "peer_offline", "peer_back", "service_started",
+                 "unit_offline", "unit_back")
 # (a saved events list is kept as it is: these are what a config without one gets)
 NOTIFY_DEFAULT_EVENTS = ("device_lost", "device_back", "start_failed", "link_lost", "link_back")
 WEBHOOK_FORMATS = ("json", "slack", "teams", "discord", "telegram")
@@ -2310,9 +2959,9 @@ class NotificationSettings:
     """Event notifications (app/notify.py): a webhook and/or e-mail when a serial
     device disappears or comes back, a mapping fails to start, clients connect or
     disconnect, a sign-in fails, the data disk is almost full, a device sends nothing
-    (a mapping's no-data alarm), a cluster node goes offline or ser2net has started.
-    Off by default; the same event for the same mapping is sent at most once per
-    repeat_s."""
+    (a mapping's no-data alarm), a cluster node goes offline, a polled Modbus unit stops or
+    starts answering again, or ser2net has started. Off by default; the same event for the
+    same mapping is sent at most once per repeat_s."""
     enabled: bool = False
     events: list[str] = field(default_factory=lambda: list(NOTIFY_DEFAULT_EVENTS))
     repeat_s: int = 300
@@ -2782,6 +3431,8 @@ class AppConfig:
                         "them can open it")
             if m.enabled:
                 enabled.append(m)
+        # MQTT clashes the edits refuse now (or warn about): kept, and said at start-up
+        cfg.load_notes += _mqtt_load_notes(cfg.mappings)
         return cfg
 
     def serial_conflict(self, m: MappingConfig) -> str:

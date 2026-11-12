@@ -20,6 +20,7 @@ portable test guards the template side of the contract on every platform:
 Run: python3 tests/test_ui_markup.py
 """
 import glob
+import html
 import html.parser
 import json
 import os
@@ -293,7 +294,7 @@ def test_ports_table_and_assets():
             csrf_token = "t"
             user = None
     page = env.get_template("base.html").render(request=Req)
-    for asset in ("app.css", "app.js", "theme.js", "htmx.min.js", "xterm.js", "xterm.css"):
+    for asset in ("app.css", "app.js", "points.js", "theme.js", "htmx.min.js", "xterm.js", "xterm.css"):
         assert f"/static/{asset}?v={__version__}" in page, f"{asset} lacks the ?v= cache-buster"
     print("ports table contract + versioned static asset URLs  OK")
 
@@ -370,7 +371,8 @@ def test_mapping_form_modbus_fields():
             user = None
     tpl = make_templates().env.get_template("_mapping_form.html")
     m = MappingConfig.from_dict({"id": "mb1", "name": "gw", "serial": {"port": "COM3"},
-                                 "network": {"protocol": "modbus", "port": 502}})
+                                 "network": {"protocol": "modbus", "port": 502},
+                                 "options": {"modbus_response_timeout_s": 0.8}})
     root = parse(tpl.render(request=Req, mapping=m, is_new=False, modbus_points_json="",
                             ports=[], ips=[], error=None))
 
@@ -385,11 +387,56 @@ def test_mapping_form_modbus_fields():
         assert not any(c.startswith("network_protocol=") for c in conditions(name)), name
     # plain-format /set only (Sparkplug commands are never retained); the hidden marker
     # sits with the checkbox, so it is posted exactly when the checkbox is offered
-    for name in ("mqtt_apply_retained_set", "mqtt_apply_retained_set_shown"):
+    for name in ("mqtt_apply_retained_set", "mqtt_apply_retained_set_shown",
+                 "mqtt_unit_status", "mqtt_unit_status_shown", "mqtt_value_format"):
         assert conditions(name) == ["mqtt_payload_format=plain", "network_protocol=modbus"], \
             (name, conditions(name))
+    # retained data: plain format, serial lines too (not only Modbus); marker beside it
+    for name in ("mqtt_retain", "mqtt_retain_shown"):
+        assert conditions(name) == ["mqtt_payload_format=plain", "kind=net"], conditions(name)
+    # the Sparkplug primary host: Modbus gateways in Sparkplug B format; its own marker
+    assert conditions("mqtt_sparkplug_primary_host_id") == [
+        "mqtt_payload_format=sparkplug_b", "network_protocol=modbus", "kind=net"], \
+        conditions("mqtt_sparkplug_primary_host_id")
+    # the response timeout: Modbus gateways only; the field is its own presence marker
+    assert conditions("opt_modbus_response_timeout_s") == ["network_protocol=modbus"]
+    # the points' options marker is posted exactly when the points JSON is
+    assert conditions("modbus_point_options_shown") == conditions("modbus_points") == [
+        "network_protocol=modbus"], conditions("modbus_point_options_shown")
+    field = next(n for n in root.walk() if n.attrs.get("name") == "opt_modbus_response_timeout_s")
+    assert field.attrs.get("value") == "0.8" and field.attrs.get("type") == "number", field.attrs
     print("mapping form: banner/close-on/client buffer not offered for modbus; the retained "
-          "/set option only for plain-format points  OK")
+          "/set and unit status options only for plain-format points; the response timeout "
+          "for modbus  OK")
+
+
+def test_mapping_form_mqtt_tls_fields():
+    """The MQTT TLS files sit with the other broker fields (every net mapping that
+    publishes: serial lines, plain Modbus, Sparkplug B), under the MQTT fieldset only; the
+    CA file field is their presence marker, so it must be posted whenever the others are;
+    the key password is a password field; the host name check is ticked by default."""
+    class Req:
+        class state:
+            csrf_token = "t"
+            user = None
+    tpl = make_templates().env.get_template("_mapping_form.html")
+    for stored, checked in (({}, True), ({"tls_check_hostname": False}, False)):
+        m = MappingConfig.from_dict({"id": "m1", "name": "m", "serial": {"port": "COM3"},
+                                     "mqtt": dict({"enabled": True, "host": "b",
+                                                   "base_topic": "t", "tls": True,
+                                                   "client_key_password": "pw"}, **stored)})
+        root = parse(tpl.render(request=Req, mapping=m, is_new=False, modbus_points_json="",
+                                ports=[], ips=[], error=None))
+        fields = {n.attrs.get("name"): n for n in root.walk() if n.attrs.get("name")}
+        for name in ("mqtt_ca_file", "mqtt_client_cert", "mqtt_client_key",
+                     "mqtt_client_key_password", "mqtt_tls_check_hostname"):
+            conditions = [a.attrs["data-show-when"] for a in fields[name].ancestors()
+                          if "data-show-when" in a.attrs]
+            assert conditions == ["kind=net"], (name, conditions)
+        assert fields["mqtt_client_key_password"].attrs.get("type") == "password"
+        assert ("checked" in fields["mqtt_tls_check_hostname"].attrs) == checked, stored
+    print("mapping form: MQTT CA / client certificate / key / password / host name check "
+          "with the broker fields  OK")
 
 
 def test_mapping_form_hidden_characters():
@@ -605,6 +652,67 @@ def test_mqtt_tx_tags():
     for m in (serial("ro", read_only=True), serial("off", {"tx_enabled": False})):
         assert ">CMD" not in row(m) and 'class="banner warn"' not in form_of(m), m.id
     print("CMD tag and the form warning for MQTT writes to a serial mapping (<topic>/tx)  OK")
+
+
+def test_units_not_answering():
+    """A running Modbus gateway whose polled units stopped answering says which, under its
+    state; not for units that answer or are not polled yet, nor while the mapping is not
+    running (the port being down is said there already)."""
+    tpl = make_templates().env.get_template("_mappings_body.html")
+    m = MappingConfig.from_dict({"id": "gw", "name": "gw", "serial": {"port": "COM3"},
+                                 "network": {"protocol": "modbus", "port": 502}})
+
+    def units(*states):
+        return [{"unit": n, "state": st, "cause": "no reply" if st == "offline" else "",
+                 "since": None, "errors": 0} for n, st in states]
+    for state, unit_states, shown in (
+            ("running", [(1, "online"), (2, "offline"), (7, "offline"), (9, "unknown")], "2, 7"),
+            ("running", [(1, "online"), (2, "unknown")], None),
+            ("running", [], None),
+            ("reconnecting", [(1, "offline")], None)):
+        out = tpl.render(mappings=[m], statuses={"gw": {"state": state, "units": units(*unit_states)}},
+                         can_edit=False)
+        check_table_contract(out, f"mappings table ({state}, {unit_states})")
+        root = parse(out)
+        flagged = [n for n in root.walk() if "data-units-offline" in n.attrs]
+        if shown is None:
+            assert not flagged, (state, unit_states, out)
+            continue
+        assert len(flagged) == 1 and f"Modbus unit(s) not answering: {shown}" in out, out
+        assert "in 3 polls in a row" in flagged[0].attrs["title"], flagged[0].attrs
+    out = tpl.render(mappings=[m], statuses={"gw": {"state": "running"}}, can_edit=False)
+    assert "data-units-offline" not in out, "a status without units (an older peer's) works"
+    print("dashboard: a running gateway lists the units that stopped answering  OK")
+
+
+def test_mqtt_not_connected():
+    """A mapping whose MQTT publisher has no connection to its broker, or could not start,
+    says so under its state, with the reason; not while connected or connecting, nor for
+    a status without mqtt (MQTT off, an older peer's)."""
+    tpl = make_templates().env.get_template("_mappings_body.html")
+    m = MappingConfig.from_dict({"id": "m1", "name": "m1", "serial": {"port": "COM3"},
+                                 "mqtt": {"enabled": True, "host": "b", "base_topic": "t"}})
+    for mq, shown in (
+            ({"state": "down", "broker": "b:1883", "error": "b:1883 refused the connection: "
+              "Not authorized"}, "MQTT: no connection to b:1883 (b:1883 refused the "
+                                 "connection: Not authorized)"),
+            ({"state": "off", "broker": "b:1883", "error": "paho-mqtt is not installed"},
+             "MQTT off: paho-mqtt is not installed"),
+            ({"state": "connected", "broker": "b:1883", "error": ""}, None),
+            ({"state": "connecting", "broker": "b:1883", "error": ""}, None),
+            ({}, None), (None, None)):
+        st = {"state": "device-missing", "last_error": "no such device"}
+        if mq is not None:
+            st["mqtt"] = mq
+        out = tpl.render(mappings=[m], statuses={"m1": st}, can_edit=False)
+        check_table_contract(out, f"mappings table (mqtt {mq})")
+        flagged = [n for n in parse(out).walk() if "data-mqtt-down" in n.attrs]
+        if shown is None:
+            assert not flagged, (mq, out)
+            continue
+        assert len(flagged) == 1 and html.escape(shown, quote=False) in out, out
+        assert "the mapping’s log" in flagged[0].attrs["title"], flagged[0].attrs
+    print("dashboard: an MQTT publisher without a broker connection says why  OK")
 
 
 def test_mapping_form_kick_hint():
@@ -969,6 +1077,47 @@ def test_mapping_form_protocols_and_ignored_settings():
           "pointed out  OK")
 
 
+def test_mapping_form_unit_warnings():
+    """Poll points on unit 0 (broadcast: never read, written to every slave) or on the
+    reserved units 248-255 are kept, and the form says so in a warning naming them
+    (escaped); points on 1-247 get none."""
+    class Req:
+        class state:
+            csrf_token = "t"
+            user = None
+    tpl = make_templates().env.get_template("_mapping_form.html")
+
+    def warnings(units):
+        m = MappingConfig.from_dict({
+            "id": "uw1", "name": "gw", "serial": {"port": "COM3"},
+            "network": {"protocol": "modbus", "port": 502},
+            "modbus_poll": {"points": [{"name": f"p<{u}>", "unit": u, "fn": 3, "address": 0,
+                                        "dtype": "uint16", "writable": u == 0}
+                                       for u in units]}})
+        out = tpl.render(request=Req, mapping=m, is_new=False, modbus_points_json="",
+                         ports=[], ips=[], error=None)
+        for n in (n for n in parse(out).walk() if "data-unit-warning" in n.attrs):
+            owner = next(a for a in n.ancestors() if "data-show-when" in a.attrs)
+            assert owner.attrs["data-show-when"] == "network_protocol=modbus", owner.attrs
+        return [html.unescape(t) for t in
+                re.findall(r"<div class=\"banner warn\" data-unit-warning>(.*?)</div>", out)]
+
+    assert warnings([1, 17, 247]) == []
+    both = warnings([1, 0, 248, 255])
+    assert len(both) == 2, both
+    assert "unit 0, the broadcast address: p<0>." in both[0], both[0]
+    assert "units 248–255" in both[1] and "p<248>, p<255>." in both[1], both[1]
+    out = tpl.render(request=Req, mapping=MappingConfig.from_dict({
+        "id": "uw2", "name": "gw", "serial": {"port": "COM3"},
+        "network": {"protocol": "modbus", "port": 502},
+        "modbus_poll": {"points": [{"name": "<b>x</b>", "unit": 0, "fn": 3, "address": 0,
+                                    "dtype": "uint16"}]}}),
+        is_new=False, modbus_points_json="", ports=[], ips=[], error=None)
+    assert "&lt;b&gt;x&lt;/b&gt;" in out and "<b>x</b>" not in out, "point names are escaped"
+    print("mapping form: points on unit 0 / 248-255 named in a warning (escaped); none for "
+          "1-247  OK")
+
+
 def main():
     test_softbreak()
     test_mappings_table()
@@ -980,6 +1129,7 @@ def main():
     test_secret_fields()
     test_mapping_form_modbus_fields()
     test_mapping_form_hidden_characters()
+    test_mapping_form_mqtt_tls_fields()
     test_mapping_form_udp_fields()
     test_number_fields_required()
     test_mapping_form_rfc2217_restore()
@@ -997,6 +1147,9 @@ def main():
     test_console_says_why()
     test_unsaved_form_is_guarded()
     test_app_js_inserts_no_server_html()
+    test_mapping_form_unit_warnings()
+    test_units_not_answering()
+    test_mqtt_not_connected()
     print("\nPASS: UI markup contract")
 
 

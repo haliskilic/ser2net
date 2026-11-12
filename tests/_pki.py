@@ -3,6 +3,7 @@
     from _pki import TestCA
     ca = TestCA(folder)                                   # folder/<name>.pem: the CA
     cert, key = ca.issue(folder, "dc", ["dc.corp.local", "127.0.0.1"])
+    cert, key = ca.issue(folder, "gw", ["gateway"], password=b"pw")  # an encrypted key
     ca.der_path                                           # the CA as DER (Windows' .cer)
 
 Names that parse as IP addresses become IP subject alternative names, the rest DNS
@@ -66,9 +67,11 @@ class TestCA:
             b = b.add_extension(x509.SubjectAlternativeName(sans), critical=False)
         return b.sign(signer, hashes.SHA256())
 
-    def issue(self, folder: str, stem: str, names, self_signed: bool = False):
+    def issue(self, folder: str, stem: str, names, self_signed: bool = False,
+              password: bytes | None = None):
         """A server certificate for `names` (signed by this CA, or by its own key):
-        (certificate path, key path), PEM."""
+        (certificate path, key path), PEM; the key encrypted with `password` if given
+        (also usable as a client certificate: it has no extended key usage)."""
         from cryptography import x509
         from cryptography.hazmat.primitives import serialization
         from cryptography.hazmat.primitives.asymmetric import ec
@@ -84,5 +87,6 @@ class TestCA:
         with open(key_path, "wb") as fh:
             fh.write(key.private_bytes(serialization.Encoding.PEM,
                                        serialization.PrivateFormat.PKCS8,
-                                       serialization.NoEncryption()))
+                                       serialization.BestAvailableEncryption(password)
+                                       if password else serialization.NoEncryption()))
         return cert_path, key_path

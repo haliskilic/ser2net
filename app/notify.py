@@ -1,6 +1,7 @@
 """Event notifications: tell someone when a serial device disappears or comes back,
 a mapping fails to start, clients come and go, a sign-in fails, the data disk is almost
-full, a device sends nothing, a cluster node goes offline, or ser2net has started.
+full, a device sends nothing, a cluster node goes offline, a Modbus unit that a gateway
+polls stops answering or answers again, or ser2net has started.
 
 The Notifier watches the supervisor's status snapshot (every POLL_S seconds) and
 turns state changes into events; the login route reports failed sign-ins itself. Every
@@ -79,11 +80,16 @@ def title(event: str) -> str:
         "peer_offline": _("cluster node offline"),
         "peer_back": _("cluster node back"),
         "service_started": _("ser2net started"),
+        "unit_offline": _("Modbus unit not answering"),
+        "unit_back": _("Modbus unit answering again"),
         "test": _("test notification"),
     }.get(event, event)
 
 
 _LOST = ("reconnecting", "device-missing")
+
+
+_SILENT = ("offline", "no reply")  # a polled unit that stopped answering (not: the port down)
 
 
 def status_events(prev: dict, statuses: dict, names: dict) -> list[tuple[str, str, str, str]]:
@@ -95,7 +101,11 @@ def status_events(prev: dict, statuses: dict, names: dict) -> list[tuple[str, st
     A connect-out link (``link``) is lost when an attempt to connect fails while it was
     up or connecting, and back when it is up again after that: a link that is closed and
     at once connected again (a max connection time or idle timeout, the remote closing
-    it) goes through "connecting", not "down", so it is not reported."""
+    it) goes through "connecting", not "down", so it is not reported.
+
+    A Modbus unit is reported when it stops answering, and again once it answers (not
+    while its serial port is down: device_lost says that). An older snapshot (2-tuple:
+    no link, no units) still compares."""
     events = []
     for mid, st in statuses.items():
         name = names.get(mid)
@@ -110,7 +120,9 @@ def status_events(prev: dict, statuses: dict, names: dict) -> list[tuple[str, st
             if link == "down":
                 events.append(("link_lost", mid, name, st.get("link_error") or ""))
             continue
-        old_state, old_peers, old_link = old
+        old_state, old_peers = old[0], old[1]
+        old_link = old[2] if len(old) > 2 else ""
+        old_units = old[3] if len(old) > 3 else {}
         device = st.get("device") or ""
         if old_state == "running" and state in _LOST:
             events.append(("device_lost", mid, name, st.get("last_error") or device))
@@ -126,6 +138,12 @@ def status_events(prev: dict, statuses: dict, names: dict) -> list[tuple[str, st
             events.append(("client_connected", f"{mid}:{_client_host(p)}", name, p))
         for p in sorted(old_peers - peers):
             events.append(("client_disconnected", f"{mid}:{_client_host(p)}", name, p))
+        for unit, now in _units(st).items():
+            was = old_units.get(unit)
+            if now == _SILENT and was != _SILENT:
+                events.append(("unit_offline", f"{mid}:unit{unit}", name, f"unit {unit}"))
+            elif was == _SILENT and now[0] == "online":
+                events.append(("unit_back", f"{mid}:unit{unit}", name, f"unit {unit}"))
     return events
 
 
@@ -269,10 +287,26 @@ class PeerWatch:
         return events
 
 
-def snapshot(statuses: dict) -> dict:
-    return {mid: (st.get("state"), {c.get("peer") for c in st.get("clients") or []},
-                  st.get("link") or "")
-            for mid, st in statuses.items()}
+def _units(st: dict) -> dict:
+    return {u.get("unit"): (u.get("state"), u.get("cause") or "") for u in st.get("units") or []}
+
+
+def snapshot(statuses: dict, prev: Optional[dict] = None) -> dict:
+    """What status_events compares: each mapping's state, clients, connect-out link and
+    polled units. Given the previous snapshot, a unit that had stopped answering stays so
+    while it is "unknown" again (its mapping restarted, e.g. on a save), so its return is
+    still reported."""
+    snap = {}
+    for mid, st in statuses.items():
+        units = _units(st)
+        before = (prev or {}).get(mid)
+        if before is not None and len(before) > 3:
+            for unit, was in before[3].items():
+                if was == _SILENT and units.get(unit, ("",))[0] == "unknown":
+                    units[unit] = _SILENT
+        snap[mid] = (st.get("state"), {c.get("peer") for c in st.get("clients") or []},
+                     st.get("link") or "", units)
+    return snap
 
 
 def baseline(statuses: dict) -> dict:
@@ -545,7 +579,7 @@ class Notifier:
                 names = {m.id: m.name for m in self.state.config.mappings}
                 for event, key, name, detail in status_events(self._prev, statuses, names):
                     self.emit(event, key, name, detail)
-                self._prev = snapshot(statuses)
+                self._prev = snapshot(statuses, self._prev)
                 self.check_silence(statuses)
                 now = time.monotonic()
                 if self._disk_checked is None or now - self._disk_checked >= DISK_CHECK_S:

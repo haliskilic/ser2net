@@ -55,7 +55,13 @@ PORTABLE = [
     "test_route_access.py",   # every route and WebSocket against the access matrix
     "test_console_feed.py",   # console / hex-view feeds: bounds, batches, close, limits
     "test_mqtt_pub.py",
+    "test_mqtt_link.py",      # MQTT connection log, status, /metrics; broker parts need paho
+    "test_mqtt_tls.py",       # MQTT TLS options; needs cryptography, broker parts paho
+    "test_mqtt_identity.py",  # MQTT topics, client IDs, Sparkplug nodes apart; Copy
+    "test_modbus_points.py",  # point types, the points JSON and its error path
+    "test_modbus_point_reads.py",  # word order, 64-bit, strings, bits, block reads, unit map
     "test_modbus_poll.py",
+    "test_modbus_unit_health.py",
     "test_ldap.py",
     "test_oidc.py",
     "test_directory_login.py",  # LDAP/OIDC sign-in end to end; skips without ldap3 / authlib
@@ -95,8 +101,10 @@ PORTABLE = [
     "test_port_picker.py",
     "test_dashboard.py",
     "test_modbus_mqtt_write.py",
+    "test_modbus_mqtt_broker.py",  # edge mode with real paho and a test broker; needs paho
     "test_modbus_write.py",
     "test_sparkplug.py",
+    "test_sparkplug_node.py",
     "test_ser2net_import.py",
     "test_import_safety.py",
     "test_i18n.py",
