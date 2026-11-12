@@ -11,4 +11,5 @@
 - [ ] Mevcut `config.json` dosyaları değişiklik gerekmeden açılıyor (yeni alanların varsayılanı var) / Existing `config.json` files still load unchanged (new fields have defaults)
 - [ ] `requirements.txt` değiştiyse `python tools/refresh_wheels.py` çalıştırıldı / If `requirements.txt` changed, `python tools/refresh_wheels.py` was run
 - [ ] Gerekirse README (TR + EN) ve CHANGELOG güncellendi / README (TR + EN) and CHANGELOG updated where needed
+- [ ] Yeni bir kişisel veri saklıyor ya da host dışına gönderiyorsa (ya da saklama süresini değiştiriyorsa) `docs/PRIVACY.md` güncellendi / If it stores or sends new personal data (or changes how long it is kept), `docs/PRIVACY.md` was updated
 - [ ] İlk katkıysa CLA imzalandı / CLA signed (first contribution)

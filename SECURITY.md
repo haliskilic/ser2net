@@ -25,7 +25,8 @@ In scope: the web UI and its sign-in (local accounts, LDAP, OIDC), roles, CSRF a
 session handling, the REST API and its token, the console WebSocket, the LAN cluster
 endpoints and key, the data bridges (access lists, TLS), the MQTT / Sparkplug commands of
 Modbus mappings, config/backup/trace files, the standalone executables, the Docker image and
-the release pipeline.
+the release pipeline. What ser2net stores and sends about people, for how long and how to
+erase it: [docs/PRIVACY.md](docs/PRIVACY.md).
 
 Not vulnerabilities by themselves: a setting an admin chose deliberately (e.g. login
 switched off on a trusted network, plain HTTP, `0.0.0.0` binding), or findings that
@@ -105,6 +106,8 @@ Kapsamda: web arayüzü ve girişi (yerel hesaplar, LDAP, OIDC), roller, CSRF ve
 yönetimi, REST API ve token'ı, konsol WebSocket'i, LAN cluster uç noktaları ve anahtarı,
 veri köprüleri (erişim listeleri, TLS), Modbus eşlemelerinin MQTT / Sparkplug komutları,
 config/yedek/trace dosyaları, standalone binary'ler, Docker imajı ve sürüm hattı.
+ser2net'in kişiler hakkında neyi sakladığı ve gönderdiği, ne kadar tuttuğu ve nasıl
+silineceği: [docs/PRIVACY.md](docs/PRIVACY.md).
 
 Tek başına açık sayılmayanlar: bir admin'in bilerek seçtiği ayarlar (ör. güvenilir ağda
 girişin kapatılması, düz HTTP, `0.0.0.0`'a bağlama) ya da saldırganın makineyi veya admin

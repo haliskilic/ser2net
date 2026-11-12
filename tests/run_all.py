@@ -117,6 +117,7 @@ PORTABLE = [
     "test_activity_log.py",    # SER2NET_LOG_STDOUT, admin_ui.request_log
     "test_login_notice.py",    # Settings -> Web UI access -> Sign-in notice
     "test_backup_erasure.py",  # deleting backups, a deleted account out of every backup
+    "test_privacy_doc.py",     # docs/PRIVACY.md's numbers and settings match the code
 ]
 
 # Data-path tests that need socat-backed PTYs (Linux). Best-effort: skipped if the

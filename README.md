@@ -827,6 +827,14 @@ bir veri klasörünü ya da Docker volume'unu, bir disk ya da VM imajını, indi
 bir dışa aktarımı — bir parola kasası gibi koruyun. Böyle bir kopya sızarsa neyin
 değiştirileceği [SECURITY.md](SECURITY.md)'de (*Saklanan gizli değerler*) yazar.
 
+**Kişisel veriler:** hesap adları (LDAP ya da SSO adı çoğu zaman bir e-posta adresidir), IP
+adresleri, girişler ve başarısız girişler `config.json`, `backups/`, `all.log*` (ve onun
+journal'daki ya da Docker log'undaki stdout kopyası), `audit.log*` ve `logs/` içinde
+kaydedilir. Bildirimler, LDAP, SSO, MQTT ve cluster yalnızca siz kurduğunuzda host dışına
+veri gönderir; telemetri yoktur. **[docs/PRIVACY.md](docs/PRIVACY.md)** neyin nerede ve ne
+kadar süre tutulduğunu, kimin görebildiğini, daha az tutan ayarları ve bir erişim talebinin
+nasıl yanıtlanacağını, bir kişinin ya da tüm kurulumun nasıl silineceğini anlatır.
+
 Eşleme ID'leri (yukarıdaki `<id>`; REST API'de de kullanılır) 1–64 harf, rakam ya da `_`
 içerir; yeni eşlemeler 12 hex haneli bir ID alır. Başka biçimdeki bir ID (elle düzenlenmiş
 ya da içe aktarılmış) config yüklenirken ya da dosya içe aktarılırken değiştirilir; açılış
