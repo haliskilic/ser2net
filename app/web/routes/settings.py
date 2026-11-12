@@ -323,6 +323,36 @@ def routes(ctx: Ctx) -> list:
                                   ok=_("New API token generated (role: {0}). Copy it now — it "
                                        "is not shown again.").format(role))
 
+    async def settings_api_token_role(request):
+        """Give the REST API token another role, keeping the token: what uses it goes on
+        working (regenerating it to change the role broke every integration at once)."""
+        if deny := require_role(request, "admin"):
+            return deny
+        form = await request.form()
+        if not auth.csrf_token_matches(request, form.get("_csrf")):
+            return csrf_failed()
+        role = str(form.get("api_token_role") or "").strip().lower()
+        if role not in ROLES:
+            return await settings_get(request, error=_("Invalid role."))
+        problem = ""
+        async with state.config_lock:
+            before = state.config.api_token_role
+            if not state.config.api_token_hash:
+                problem = _("There is no REST API token to give a role: generate one.")
+            else:
+                state.config.api_token_role = role
+                try:
+                    await state.asave()
+                except ConfigError as e:
+                    state.config.api_token_role = before
+                    problem = str(e)
+        if problem:
+            return await settings_get(request, error=problem)
+        state.log(f"REST API token role changed: {before} -> {role}")
+        ctx.audit(request, "api_token_role", f"{before} -> {role}")
+        return await settings_get(request, ok=_("The REST API token’s role is now {0}; the token "
+                                                "stays the same.").format(role))
+
     async def settings_api_token_revoke(request):
         if deny := require_role(request, "admin"):
             return deny
@@ -1111,6 +1141,7 @@ def routes(ctx: Ctx) -> list:
         Route("/settings/access", settings_access_post, methods=["POST"]),
         Route("/settings/sessions/revoke-all", settings_sessions_revoke_all, methods=["POST"]),
         Route("/settings/api-token", settings_api_token_post, methods=["POST"]),
+        Route("/settings/api-token/role", settings_api_token_role, methods=["POST"]),
         Route("/settings/api-token/revoke", settings_api_token_revoke, methods=["POST"]),
         Route("/settings/users", settings_users_create, methods=["POST"]),
         Route("/settings/users/password", settings_users_password, methods=["POST"]),

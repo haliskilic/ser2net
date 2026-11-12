@@ -75,8 +75,11 @@
           {% if can_edit %}
           <div class="btn-group">
             {% if m.enabled %}
-            <button class="btn sm" id="{{ rid }}-run" aria-describedby="{{ rid }}-name" hx-post="/api/mappings/{{ m.id }}/stop" hx-swap="none" hx-disabled-elt="this">{{ t.stop }}</button>
-            <button class="btn sm" id="{{ rid }}-restart" aria-describedby="{{ rid }}-name" hx-post="/api/mappings/{{ m.id }}/restart" hx-swap="none" hx-disabled-elt="this">{{ t.restart }}</button>
+            {#- asked only while clients are connected: they are disconnected (a question at
+                every click would soon be clicked through) #}
+            {% set n = st.client_count|default(0) if st else 0 %}
+            <button class="btn sm" id="{{ rid }}-run" aria-describedby="{{ rid }}-name" hx-post="/api/mappings/{{ m.id }}/stop"{% if n %} hx-confirm="{{ _('Stop “%(name)s”? %(n)s connected client(s) will be disconnected, and it stays stopped until it is started again.', name=m.name, n=n) }}"{% endif %} hx-swap="none" hx-disabled-elt="this">{{ t.stop }}</button>
+            <button class="btn sm" id="{{ rid }}-restart" aria-describedby="{{ rid }}-name" hx-post="/api/mappings/{{ m.id }}/restart"{% if n %} hx-confirm="{{ _('Restart “%(name)s”? %(n)s connected client(s) will be disconnected.', name=m.name, n=n) }}"{% endif %} hx-swap="none" hx-disabled-elt="this">{{ t.restart }}</button>
             {% else %}
             <button class="btn sm" id="{{ rid }}-run" aria-describedby="{{ rid }}-name" hx-post="/api/mappings/{{ m.id }}/start" hx-swap="none" hx-disabled-elt="this">{{ t.start }}</button>
             {% endif %}
@@ -90,7 +93,7 @@
             {% if can_edit %}
             <button class="btn sm" id="{{ rid }}-copy" aria-describedby="{{ rid }}-name" hx-post="/api/mappings/{{ m.id }}/duplicate" hx-swap="none" hx-disabled-elt="this">{{ t.duplicate }}</button>
             <button class="btn sm danger" id="{{ rid }}-delete" aria-describedby="{{ rid }}-name" hx-delete="/api/mappings/{{ m.id }}"
-                    hx-confirm="{{ _('Delete mapping “%(name)s”?', name=m.name) }}" hx-swap="none" hx-disabled-elt="this">{{ t.delete }}</button>
+                    hx-confirm="{{ _('Delete mapping “%(name)s”? Its log and trace files are deleted too (backups don’t keep them).', name=m.name) }}" hx-swap="none" hx-disabled-elt="this">{{ t.delete }}</button>
             {% endif %}
           </div>
         </div>

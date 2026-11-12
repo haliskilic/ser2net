@@ -119,7 +119,10 @@
               <input type="hidden" name="username" value="{{ u.username }}">
               <button class="btn sm" type="submit" aria-describedby="user-{{ loop.index }}-name">{{ _("Sign out") }}</button>
             </form>
-            <form method="post" action="/settings/users/delete" class="inline">
+            {#- asked for a local account: its password is gone with it (a directory account
+                comes back at its next sign-in while the directory allows it) #}
+            <form method="post" action="/settings/users/delete" class="inline"{% if u.source == 'local' %}
+                  data-confirm="{{ _('Delete the user “%(user)s”? The password goes with it: only restoring a configuration backup brings it back.', user=u.username) }}"{% endif %}>
               <input type="hidden" name="_csrf" value="{{ request.state.csrf_token }}">
               <input type="hidden" name="username" value="{{ u.username }}">
               <button class="btn sm danger" type="submit" aria-describedby="user-{{ loop.index }}-name">{{ _("Delete") }}</button>
@@ -396,7 +399,8 @@
     <label>{{ _("Key path") }} <input type="text" name="tls_key" value="{{ admin.tls_key }}" placeholder="/path/key.pem"></label>
     <button class="btn primary" type="submit">{{ _("Save TLS") }}</button>
   </form>
-  <form method="post" action="/settings/tls/generate" class="inline mt-sm">
+  <form method="post" action="/settings/tls/generate" class="inline mt-sm"{% if admin.tls_cert %}
+        data-confirm="{{ _('Replace the certificate %(cert)s with a new self-signed one, from the next restart? Browsers warn about a new certificate until they are told to trust it.', cert=admin.tls_cert) }}"{% endif %}>
     <input type="hidden" name="_csrf" value="{{ request.state.csrf_token }}">
     <button class="btn" type="submit">{{ _("Generate a self-signed certificate") }}</button>
   </form>
@@ -422,10 +426,18 @@
         {% for r in roles %}<option value="{{ r }}" {% if r == cur %}selected{% endif %}>{{ r }}</option>{% endfor %}
       </select>
     </label>
-    <button class="btn primary" type="submit">{{ _("Regenerate token") if api_token_set else _("Generate token") }}</button>
+    {% if api_token_set %}
+    <button class="btn primary" type="submit"
+            data-confirm="{{ _('Replace the REST API token? Everything that uses the current one gets 401 until it is given the new one.') }}">{{ _("Regenerate token") }}</button>
+    {# the same token, another role: nothing that uses it has to change #}
+    <button class="btn" type="submit" formaction="/settings/api-token/role">{{ _("Change the role only") }}</button>
+    {% else %}
+    <button class="btn primary" type="submit">{{ _("Generate token") }}</button>
+    {% endif %}
   </form>
   {% if api_token_set %}
-  <form method="post" action="/settings/api-token/revoke" class="inline mt-sm">
+  <form method="post" action="/settings/api-token/revoke" class="inline mt-sm"
+        data-confirm="{{ _('Revoke the REST API token? The REST API is switched off, and everything that uses it gets 401.') }}">
     <input type="hidden" name="_csrf" value="{{ request.state.csrf_token }}">
     <button class="btn" type="submit">{{ _("Revoke") }}</button>
   </form>
