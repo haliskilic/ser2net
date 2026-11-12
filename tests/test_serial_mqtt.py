@@ -321,7 +321,9 @@ def test_poll_validation():
         m(**ok).validate_input()
     for bad, text in (({"poll_string": "\\q", "poll_interval_s": 1}, "after a backslash"),
                       ({"poll_string": "P", "poll_interval_s": 0.05}, "poll interval"),
-                      ({"poll_string": "P", "poll_interval_s": "soon"}, "poll interval"),
+                      # (not a number at all: the typed reader names the setting)
+                      ({"poll_string": "P", "poll_interval_s": "soon"},
+                       'options.poll_interval_s: "soon" is not a finite number'),
                       ({"poll_interval_s": 5}, "needs a poll string"),
                       ({"poll_string": "x" * 1025, "poll_interval_s": 1}, "at most 1024")):
         stored = m(**bad)

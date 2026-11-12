@@ -108,7 +108,7 @@ def delete_traces():
         assert st == 403 and len(os.listdir(traces)) == 5, os.listdir(traces)
 
         st, _, page = op.post(f"/api/mappings/{A}/traces/{A}-old.log", method="DELETE", htmx=True)
-        assert st == 200 and "Deleted 1 trace file(s)." in page, page[:600]
+        assert st == 200 and "Deleted 1 trace file." in page, page[:600]
         assert f"{A}-old.log" not in page and f"{A}-a.log.1" in page
         assert not os.path.exists(os.path.join(traces, f"{A}-old.log"))
         for bad in (f"{B}-b.log", "..%2Fconfig.json", "%2E%2E%2F%2E%2E%2Fall.log", "no-such"):
@@ -132,7 +132,7 @@ def delete_traces():
         st, _, body = op.get("/api/status")
         assert f'hx-get="/api/mappings/{B}/traces"' in body, "B has files: Trace offered"
         st, _, page = op.post(f"/api/mappings/{B}/traces", method="DELETE", htmx=True)
-        assert st == 200 and "Deleted 2 trace file(s)." in page and "No trace files yet." in page
+        assert st == 200 and "Deleted 2 trace files." in page and "No trace files yet." in page
         assert not [n for n in os.listdir(traces) if n.startswith(f"{B}-")], os.listdir(traces)
         st, _, body = op.get("/api/status")
         assert f'hx-get="/api/mappings/{B}/traces"' not in body, "no files, no tracing: no Trace"
@@ -140,7 +140,7 @@ def delete_traces():
         assert st == 200 and "No trace files to delete." in page
         assert op.post("/api/mappings/nosuchmapping/traces", method="DELETE", htmx=True)[0] == 404
         st, _, page = admin.get("/settings/audit?action=trace_delete")
-        assert "3 record(s)" in page, page[page.find("record(s)") - 40:][:200]
+        assert "3 records" in page, page[page.find("records") - 40:][:200]
         with open(os.path.join(srv.data, "audit.log"), encoding="utf-8") as fh:
             records = [ln.split("\t") for ln in fh.read().splitlines() if "\ttrace_delete\t" in ln]
         details = [r[3] for r in records]
