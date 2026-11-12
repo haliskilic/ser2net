@@ -134,9 +134,12 @@ def test_notices():
             st, h, _ = b.post("/api/mappings/fb0000000004/start", htmx=True)
             kind, text = note(h)
             assert st == 200 and kind == "warn" and text.startswith("“Delta” could not start: "), text
-            # what the error means, in the page's language; the error itself as its tooltip
-            assert text.endswith("The port is already in use by another program (or another "
-                                 "mapping)."), text
+            # what the error means, in the page's language, then what to do about a taken port
+            # and that it is tried again; the error itself as its tooltip
+            assert text.startswith("“Delta” could not start: The port is already in use by "
+                                   "another program (or another mapping). Another program"), text
+            assert text.endswith("It is started as soon as it can listen there (its row shows "
+                                 "when it is tried again)."), text
             assert "already in use" in detail(h).lower() and "Errno" in detail(h), detail(h)
             st, _, log = b.get("/api/mappings/fb0000000004/log")
             assert "start failed: " in log, "the reason belongs in the mapping's own log too"

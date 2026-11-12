@@ -151,7 +151,7 @@ def test_names_and_hints():
     out = _field(TWINS[1]["by_path"])
     assert _selected(_select(out, "serial_port")) == [TWINS[1]["by_path"]]
     assert "(not connected)" not in out and "This by-id name is not unique" not in out
-    assert "have the USB identity of /dev/ttyUSB1" in out, "the identity is still shared"
+    assert "has the USB identity of /dev/ttyUSB1" in out, "the identity is still shared"
     out = _field("com3")  # another spelling of a listed port: chosen as it is written
     options = _select(out, "serial_port")
     assert _selected(options) == ["com3"] and "com3 → COM3</option>" in options, options
