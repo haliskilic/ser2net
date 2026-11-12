@@ -43,7 +43,7 @@ def choose_admin_bind(current: AdminUI | None = None) -> tuple[str, int]:
                 ip = netinfo.validate_ip(custom)
                 break
             except ValueError as e:
-                print(f"  Invalid IP: {e}")
+                print(f"  {e}")
                 continue
         try:
             idx = int(raw)

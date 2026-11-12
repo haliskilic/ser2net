@@ -159,6 +159,9 @@ connection: &v6
 connection: &v6any
   accepter: tcp,ipv6,2007
   connector: serialdev,/dev/ttyUSB7
+connection: &v6long
+  accepter: tcp,ipv6,[0:0:0:0:0:0:0:1],2008
+  connector: serialdev,/dev/ttyUSB8
 connection: &hostname
   accepter: tcp,myhost.example.com,2009
   connector: serialdev,/dev/ttyUSB9
@@ -186,8 +189,9 @@ def test_accepters():
     assert net["rfcoff"]["protocol"] == "telnet"
     assert (net["udp"]["mode"], net["udp"]["protocol"], net["udp"]["port"]) == ("udp", "raw", 2004)
     assert net["udptel"]["protocol"] == "raw" and has(warns, "udptel:", "telnet over UDP")
-    # ::1 is not accepted as a bind IP here (config treats ::/8 as reserved): stay on loopback
-    assert net["v6"]["bind_ip"] == "127.0.0.1" and has(warns, "v6:", "IPv6 loopback")
+    # the IPv6 loopback stays the IPv6 loopback (any spelling of it), with nothing to say
+    assert net["v6"]["bind_ip"] == "::1" and not has(warns, "v6:")
+    assert net["v6long"]["bind_ip"] == "::1" and not has(warns, "v6long:")
     assert net["v6any"]["bind_ip"] == "::"
     # a host name can't be bound: listening on 0.0.0.0 would be wider, so it comes in disabled
     assert net["hostname"]["bind_ip"] == "0.0.0.0" and maps["hostname"]["enabled"] is False
