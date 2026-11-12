@@ -670,7 +670,8 @@ is no account at all; later starts ignore it.
   `docker update --restart unless-stopped ser2net`).
 - **Linux (systemd):** `systemd/ser2net.service` — a dedicated unprivileged user,
   `SupplementaryGroups=dialout`, `Restart=on-failure`, hardening directives.
-  **Do not run as root.**
+  **Do not run as root.** Several instances: the template `systemd/ser2net@.service`
+  (below).
 - **Windows:** nothing else needed. From an elevated ("Run as administrator") prompt:
   ```bat
   ser2net-windows-x64.exe --install-service
@@ -699,6 +700,47 @@ is no account at all; later starts ignore it.
   `SER2NET_WINDOWS_LOOP=proactor` (for the service: a system environment variable) switches
   to the proactor loop, which has no such limit; it is new, so test serial timing (e.g.
   Modbus RTU) with it before relying on it. The start-up log names the loop in use.
+
+### Several instances on one machine
+
+Each instance needs its own:
+
+- **data directory** (`--data-dir`): a second ser2net on the same one stops at start. Don't
+  copy a data directory to make another instance — the copy has the same cluster identity
+  (the fleet view then shows a "copy of this installation" warning) and session key:
+  start the new one empty and import the mappings (**Settings → Mappings export / import**).
+- **web UI port:** the console picker (first start, `--reconfigure`, `--install-service`)
+  tries the port it offers and, when another program (another instance) has it, says so
+  and offers the next free one; a choice you type is kept. A first start without a terminal
+  (a service, a container) keeps its port and logs the warning. Without the picker:
+  `SER2NET_BIND_IP` + `SER2NET_PORT`.
+- **mapping ports and serial devices:** a TCP/UDP port and a serial device belong to one
+  instance. A mapping saved while another program holds its port or device is kept, and the
+  UI says why it didn't start.
+- **name:** **Settings → Admin interface → Name of this instance** (or
+  `SER2NET_NODE_NAME`) — notifications, the browser tab, the top bar and the fleet view
+  then say which instance it is.
+- imported mappings that publish to MQTT need **ids** of their own: a client id that is
+  set, and a Sparkplug edge node id (the mapping's name when blank) — a broker drops a
+  client whose id another one takes over, and two Sparkplug nodes of one id in a group
+  confuse its host application.
+
+The browser keeps each instance's sign-in apart when they are on different ports
+(`http://host:8080`, `http://host:8081`); 2.8 and older shared one sign-in per host name, so
+reach those under different host names (the IP address and the name) or in separate browser
+profiles.
+
+- **Windows:** `ser2net-windows-x64.exe --install-service --service-name ser2net-line2
+  --data-dir C:\ProgramData\ser2net-line2` (and a firewall rule per service:
+  [docs/WINDOWS.md](docs/WINDOWS.md)).
+- **Linux (systemd):** the template `systemd/ser2net@.service` runs one instance per name,
+  with its data in `/var/lib/ser2net/<name>` and its address in `/etc/ser2net/<name>.env`
+  (`SER2NET_BIND_IP=0.0.0.0`, `SER2NET_PORT=8081`); the instance name is its name in
+  notifications. Install the bundled dependencies once (`python3 /opt/ser2net/bootstrap.py`
+  as the `ser2net` user), then `systemctl enable --now ser2net@line1 ser2net@line2`.
+- **Docker:** one container per instance, each with its own volume, `container_name` and
+  published ports (`8081:8080`), and `SER2NET_NODE_NAME` (or `hostname:`) for its name
+  ([docs/DOCKER.md](docs/DOCKER.md)).
 
 ---
 

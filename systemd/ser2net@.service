@@ -1,0 +1,64 @@
+[Unit]
+# One ser2net per instance name: systemctl enable --now ser2net@line1 ser2net@line2
+# Each keeps its data (config.json, logs) in /var/lib/ser2net/<name>, made by systemd.
+# Give each its own web UI address in /etc/ser2net/<name>.env, for example:
+#   SER2NET_BIND_IP=0.0.0.0
+#   SER2NET_PORT=8081
+# (without it a first start binds 127.0.0.1:8080, which the next instance then can't
+# have: all.log says so). The instance name is also the name notifications, the browser
+# tab and the cluster's fleet view give it; an empty SER2NET_NODE_NAME= in that file
+# leaves the name to Settings -> Admin interface.
+# Several instances on one machine: README.en.md, "Run as a service".
+Description=ser2net (%i) — serial-to-network bridge with web config UI
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Run as a dedicated unprivileged user that is a member of the 'dialout' group
+# so it can open serial devices (NEVER run this as root).
+User=ser2net
+SupplementaryGroups=dialout
+WorkingDirectory=/opt/ser2net
+# The instances share one code tree and its ./lib: install the bundled dependencies there
+# once at deploy time (sudo -u ser2net python3 /opt/ser2net/bootstrap.py, or as root
+# followed by chown -R ser2net /opt/ser2net/lib), so no instance writes to it.
+Environment=SER2NET_NODE_NAME=%i
+EnvironmentFile=-/etc/ser2net/%i.env
+StateDirectory=ser2net/%i
+StateDirectoryMode=0700
+ExecStart=/usr/bin/python3 /opt/ser2net/ser2net.py --no-bootstrap --data-dir /var/lib/ser2net/%i
+Restart=on-failure
+RestartSec=3
+# Open files: each running mapping holds about three (serial port, listener, log) plus
+# one per client (see ser2net.service).
+LimitNOFILE=65536
+
+# --- Hardening (as ser2net.service; StateDirectory is writable without ReadWritePaths) ---
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ProtectProc=invisible
+ProcSubset=pid
+ProtectControlGroups=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectClock=true
+ProtectHostname=true
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+# Add AF_NETLINK to enable pyudev event-driven hotplug; without it ser2net falls
+# back to polling (which works fine), so it is left out of the default allow-list.
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+# MemoryDenyWriteExecute=true   # enable only after verifying ctypes/Python startup
+# UMask=0077
+
+[Install]
+WantedBy=multi-user.target
