@@ -693,20 +693,21 @@ class MappingRunner:
             # admission right after accept; a TLS client's allow-list check comes
             # before its handshake (netguard.start_server)
             self._server = await netguard.start_server(
-                self._on_client, net.bind_ip, net.port, ssl=server_ssl(net),
+                self._on_client, netguard.listen_hosts(net), net.port, ssl=server_ssl(net),
                 allowed=self._access.allowed, log=self._log)
-            self._log(f"listening on {net.bind_ip}:{net.port} ({net.protocol}"
-                      f"{', TLS' if net.tls else ''}, {sockopts.describe(net)})")
+            self._log(f"listening on {netguard.listen_where(net, self._server.sockets)} "
+                      f"({net.protocol}{', TLS' if net.tls else ''}, {sockopts.describe(net)})")
         elif net.mode == "udp":
             udp = _UdpBridge(self)  # a malformed stored reply address fails the start
             bound = udp
-            loop = asyncio.get_running_loop()
+            sock = await netguard.udp_socket(net)
             try:
-                self._udp_transport, _ = await loop.create_datagram_endpoint(
-                    lambda: bound, local_addr=(net.bind_ip, net.port))
+                self._udp_transport, _ = await asyncio.get_running_loop().create_datagram_endpoint(
+                    lambda: bound, sock=sock)
             except OSError as e:
+                sock.close()
                 raise netguard.BindError.of(e) from e
-            self._log(f"UDP on {net.bind_ip}:{net.port}, {udp.describe()}")
+            self._log(f"UDP on {netguard.listen_where(net, [sock])}, {udp.describe()}")
 
         # If the rest fails to come up, tear everything down (the listener too), so that
         # nothing is left holding the port or the serial device.

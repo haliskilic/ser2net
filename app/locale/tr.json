@@ -903,5 +903,6 @@
   "by USB socket: right while the adapter stays in this socket": "USB soketine göre: adaptör bu sokette kaldıkça doğrudur",
   "Serial port {0} has a control character in it (a line break?): type the device's path again.": "Seri port {0} bir kontrol karakteri içeriyor (satır sonu mu?): cihazın yolunu yeniden yazın.",
   "Other device path…": "Başka bir cihaz yolu…",
-  "Device path": "Cihaz yolu"
+  "Device path": "Cihaz yolu",
+  "Listening for IPv4 and IPv6 clients (dual_stack) needs the bind IP 0.0.0.0 or ::, not {0}.": "IPv4 ve IPv6 istemcileri birlikte dinlemek (dual_stack) için dinleme IP'si 0.0.0.0 ya da :: olmalı, {0} değil."
 }

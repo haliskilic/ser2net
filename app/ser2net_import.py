@@ -1654,7 +1654,7 @@ def _assemble(conns: list[_Conn], warnings: list[str], budget: _Budget) -> list[
         proto = "udp" if net["mode"] == "udp" else "tcp"
         on_port = listening.setdefault((proto, net["port"]), {})
         other = next((name for ip, name in on_port.items()
-                      if _ip_overlaps(ip, net["bind_ip"])), None)
+                      if _ip_overlaps(ip, net["bind_ip"], udp=proto == "udp")), None)
         if other is not None:
             warn(_("{0}: skipped: {1} port {2} is already used by '{3}'")
                  .format(c.label, proto.upper(), net["port"], other))
