@@ -307,6 +307,21 @@ def test_endpoints():
         assert any(m["endpoint"].endswith(str(port)) for m in data["mappings"]), data["mappings"]
         print("cluster/local: created mapping appears with its endpoint  OK")
 
+        # a remote start that can't be saved (a copy on EDGE1's serial port): refused with
+        # the reason, in a signed 400, and nothing changes
+        edge_m = next(m for m in data["mappings"] if m["name"] == "EDGE1")
+        post(f"/api/mappings/{edge_m['id']}/duplicate", {"_csrf": csrf()}, header=True)
+        _, body = raw_request(ui, "/api/cluster/local", {"X-Cluster-Key": key})
+        copy = next(m for m in json.loads(body)["mappings"] if m["name"] == "EDGE1 (copy)")
+        form = urllib.parse.urlencode({"mapping_id": copy["id"], "action": "start"}).encode()
+        st, body, _reply, _h, ok = signed_call(ui, key, "/api/cluster/control", "POST", form,
+                                               to=node_id)
+        assert st == 400 and ok and body["ok"] is False, (st, body)
+        assert "both use serial port /dev/ttyTEST" in body["error"], body
+        _, body = raw_request(ui, "/api/cluster/local", {"X-Cluster-Key": key})
+        assert not next(m for m in json.loads(body)["mappings"] if m["id"] == copy["id"])["enabled"]
+        print("cluster/control: a start that can't be saved is refused with the reason  OK")
+
         # who acted on the sending node: a signed request's name is recorded as that node's
         # claim; one sent with the raw key (a node running 2.8.0 or older) is not used
         edge = next(m["id"] for m in data["mappings"] if m["name"] == "EDGE1")
@@ -328,20 +343,6 @@ def test_endpoints():
                          "cluster-peer", "cluster-peer"], users
         print("remote action: the sending node's user is recorded as its claim "
               "(cluster-peer:NODE/USER); without one, or with the raw key: cluster-peer  OK")
-        # a remote start that can't be saved (a copy on EDGE1's serial port): refused with
-        # the reason, in a signed 400, and nothing changes
-        edge_m = next(m for m in data["mappings"] if m["name"] == "EDGE1")
-        post(f"/api/mappings/{edge_m['id']}/duplicate", {"_csrf": csrf()}, header=True)
-        _, body = raw_request(ui, "/api/cluster/local", {"X-Cluster-Key": key})
-        copy = next(m for m in json.loads(body)["mappings"] if m["name"] == "EDGE1 (copy)")
-        form = urllib.parse.urlencode({"mapping_id": copy["id"], "action": "start"}).encode()
-        st, body, _reply, _h, ok = signed_call(ui, key, "/api/cluster/control", "POST", form,
-                                               to=node_id)
-        assert st == 400 and ok and body["ok"] is False, (st, body)
-        assert "both use serial port /dev/ttyTEST" in body["error"], body
-        _, body = raw_request(ui, "/api/cluster/local", {"X-Cluster-Key": key})
-        assert not next(m for m in json.loads(body)["mappings"] if m["id"] == copy["id"])["enabled"]
-        print("cluster/control: a start that can't be saved is refused with the reason  OK")
 
         # the aggregated table (session-authed) renders this node + mapping
         html = op.open(f"http://127.0.0.1:{ui}/api/cluster/status", timeout=10).read().decode()
@@ -649,7 +650,8 @@ def test_manual_peer_and_remote_control():
             q = urllib.parse.urlencode({"host": "127.0.0.1", "port": ui_b, "mid": sink["id"]})
             code, page = get_a(f"/api/cluster/peer-form?{q}")
             assert code == 200, (sink["name"], code, page[:300])
-            assert post_page("/api/cluster/peer-save", browser_post(page)) == (200, ""), sink["name"]
+            got = post_page("/api/cluster/peer-save", browser_post(page))
+            assert got == (200, ""), (sink["name"], got)
         after = json.load(open(os.path.join(tb, "config.json")))["mappings"]
         assert form_cases.relevant(after) == form_cases.relevant(before), [
             (a["name"], a, b_) for a, b_ in zip(form_cases.relevant(before),

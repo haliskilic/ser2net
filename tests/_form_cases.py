@@ -8,11 +8,63 @@ is; settings a mode or kind doesn't use have values too, as after switching it.
 """
 from __future__ import annotations
 
+import atexit
 import copy
 import os
+import shutil
+import subprocess
+import tempfile
 
-# an existing file: an edit checks that a mapping's TLS certificate and key exist
-TLS_FILE = os.path.abspath(__file__)
+
+def _tls_file() -> str:
+    """A PEM file with a self-signed certificate and its key (and so a CA file too): an edit
+    loads a TLS mapping's files (engine/tls.py). Made once per process, with cryptography,
+    else the openssl command, in a folder removed at exit; with neither, an existing file
+    (an edit that loads it then refuses it)."""
+    folder = tempfile.mkdtemp(prefix="s2n_form_cases_")
+    atexit.register(shutil.rmtree, folder, True)
+    path = os.path.join(folder, "kitchen-sink.pem")
+    try:
+        import datetime
+
+        from cryptography import x509
+        from cryptography.hazmat.primitives import hashes, serialization
+        from cryptography.hazmat.primitives.asymmetric import ec
+        from cryptography.x509.oid import NameOID
+        key = ec.generate_private_key(ec.SECP256R1())
+        name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "ser2net-form-cases")])
+        now = datetime.datetime.now(datetime.timezone.utc)
+        cert = (x509.CertificateBuilder().subject_name(name).issuer_name(name)
+                .public_key(key.public_key()).serial_number(x509.random_serial_number())
+                .not_valid_before(now - datetime.timedelta(days=1))
+                .not_valid_after(now + datetime.timedelta(days=3650))
+                .add_extension(x509.BasicConstraints(ca=True, path_length=None), critical=True)
+                .sign(key, hashes.SHA256()))
+        with open(path, "wb") as fh:
+            fh.write(cert.public_bytes(serialization.Encoding.PEM))
+            fh.write(key.private_bytes(serialization.Encoding.PEM,
+                                       serialization.PrivateFormat.PKCS8,
+                                       serialization.NoEncryption()))
+        return path
+    except ImportError:
+        pass
+    try:
+        keyfile, certfile = path + ".key", path + ".crt"
+        subprocess.run(["openssl", "req", "-x509", "-newkey", "ec", "-pkeyopt",
+                        "ec_paramgen_curve:P-256", "-nodes", "-days", "3650",
+                        "-subj", "/CN=ser2net-form-cases", "-keyout", keyfile, "-out", certfile],
+                       check=True, capture_output=True, timeout=60)
+        with open(path, "wb") as out:
+            for part in (certfile, keyfile):
+                with open(part, "rb") as fh:
+                    out.write(fh.read())
+        return path
+    except (OSError, subprocess.SubprocessError):
+        return os.path.abspath(__file__)
+
+
+# a certificate with its key, in one file: tls_cert, tls_key and the CA files name it
+TLS_FILE = _tls_file()
 
 # the serial ports and bind addresses the form offers (what state.ports / netinfo give)
 PORTS = [
@@ -24,6 +76,7 @@ PORTS = [
 ]
 IPS = [
     {"value": "0.0.0.0", "label": "All interfaces (0.0.0.0)", "kind": "all"},
+    {"value": "*", "label": "All interfaces (IPv4 + IPv6)", "kind": "all"},   # (dual_stack)
     {"value": "127.0.0.1", "label": "Localhost (127.0.0.1)", "kind": "loopback"},
     {"value": "192.168.1.10", "label": "eth0 — 192.168.1.10", "kind": "lan"},
 ]
@@ -34,14 +87,16 @@ _SERIAL_A = {
     "rts_on_open": "on", "dtr_on_open": "off", "exclusive": False,
     "advanced": {"rs485_enabled": True, "rs485_delay_before_tx_ms": 0.5,
                  "rs485_delay_after_tx_ms": 1.5, "rs485_rts_level_for_tx": False,
-                 "hangup_when_done": True, "nobreak": True}}
+                 "hangup_when_done": True, "nobreak": True, "tiocexcl": True,
+                 "respect_uucp_locks": True}}
 _SERIAL_B = {
     "port": "/dev/ttyACM5", "match": {"vid": "1a86", "pid": "7523"}, "baudrate": 19200,
     "bytesize": 6, "parity": "O", "stopbits": 1.5, "flowcontrol": "dsrdtr",
     "rts_on_open": "off", "dtr_on_open": "on", "exclusive": False,
     "advanced": {"rs485_enabled": True, "rs485_delay_before_tx_ms": 0.25,
                  "rs485_delay_after_tx_ms": 0.75, "rs485_rts_level_for_tx": False,
-                 "hangup_when_done": True, "nobreak": True}}
+                 "hangup_when_done": True, "nobreak": True, "tiocexcl": True,
+                 "respect_uucp_locks": True}}
 _NETWORK = {
     "bind_ip": "10.0.0.5", "port": 4555, "remote_host": "plc.example", "remote_port": 2001,
     "udp_peer_host": "10.0.0.8", "udp_peer_port": 5001, "udp_peer_timeout_s": 30,
@@ -49,19 +104,25 @@ _NETWORK = {
     "allowed_client_ips": ["10.0.0.0/24", "192.168.1.7"], "priority_client_ips": ["10.0.0.7"],
     "read_only": True, "client_queue_max": 8192, "tcp_keepalive": False,
     "keepalive_idle_s": 30, "keepalive_interval_s": 5, "keepalive_count": 4,
-    "connect_timeout_s": 2.5, "tls": True, "tls_cert": TLS_FILE, "tls_key": TLS_FILE}
+    "connect_timeout_s": 2.5, "tls": True, "tls_cert": TLS_FILE, "tls_key": TLS_FILE,
+    "tls_key_password": "kitchen-sink-key-pw", "tls_ca": TLS_FILE,
+    "tls_fingerprint": "AB:" * 31 + "AB", "tls_client_ca": TLS_FILE,
+    "disconnect_without_device": True}
 _OPTIONS = {
     "banner": "Hello \\N on \\p", "openstr": "INIT\r\n", "closestr": "BYE\r",
     "closeon": "logout\r\n", "idle_timeout_s": 300, "max_connection_time_s": 86400,
     "trace_both": "plc1.trace", "trace_hexdump": True, "trace_timestamp": False,
     "trace_max_mb": 2.5, "trace_keep": 7, "rfc2217_poll_modem_interval_s": 2.0,
     "rfc2217_net_timeout_s": 9.0, "rfc2217_restore_on_disconnect": True,
-    "modbus_response_timeout_s": 2.5, "no_data_alarm_s": 300, "no_data_reply_only": True}
+    "modbus_response_timeout_s": 2.5, "no_data_alarm_s": 300, "no_data_reply_only": True,
+    "console_encoding": "iso-8859-9", "rfc2217_signature": "ser2net kitchen sink",
+    "poll_string": "P\\r\\n", "poll_interval_s": 0.5, "poll_with_clients": True}
 _MQTT = {
     "enabled": True, "host": "broker.example", "port": 8883, "base_topic": "ser2net/plc1",
     "qos": 2, "tls": True, "username": "plc", "password": "p@ss w'rd\"<&>",
     "client_id": "s2n-plc1", "payload_format": "plain", "sparkplug_group_id": "line3",
-    "sparkplug_node_id": "plc-1", "apply_retained_set": True}
+    "sparkplug_node_id": "plc-1", "apply_retained_set": True, "line_end": "cr",
+    "tx_enabled": True}
 _POINTS = [
     {"name": "run", "unit": 2, "fn": 1, "address": 5, "dtype": "bool", "scale": 1.0,
      "writable": True},
@@ -97,13 +158,15 @@ def mappings() -> list[dict]:
          "serial_b": _SERIAL_B,
          "network": _with(_NETWORK, mode="udp", protocol="raw", bind_ip="192.168.1.10",
                           tls=False, udp_peer_host="192.168.1.20", udp_peer_port=4002,
-                          udp_peer_timeout_s=60, allowed_client_ips=["192.168.1.0/24"]),
+                          udp_peer_timeout_s=60, allowed_client_ips=["192.168.1.0/24"],
+                          udp_targets=["192.168.1.255:10110", "10.0.0.9:5000"],
+                          udp_broadcast=True),
          "options": _with(_OPTIONS, closeon=""), "mqtt": _with(_MQTT, enabled=False),
          "modbus_poll": {"interval_s": 2.5, "points": []}},
         {"id": "sinkrfc22171", "name": "RFC 2217", "enabled": True, "kind": "net",
          "serial": _with(_SERIAL_A, match={}, port="COM7"), "serial_b": _SERIAL_B,
          "network": _with(_NETWORK, mode="server", protocol="rfc2217", max_connections=1,
-                          bind_ip="0.0.0.0", port=4556),
+                          bind_ip="0.0.0.0", port=4556, dual_stack=True),
          "options": _OPTIONS, "mqtt": _MQTT, "modbus_poll": {"interval_s": 2.5, "points": []}},
         {"id": "sinkmodbus01", "name": "Modbus Sparkplug", "enabled": True, "kind": "net",
          "serial": _with(_SERIAL_A, port="/dev/ttyUSB9", match={}), "serial_b": _SERIAL_B,
