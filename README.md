@@ -488,7 +488,9 @@ yapar ([`docs/REVERSE-PROXY.md`](docs/REVERSE-PROXY.md)). Ayrıntılar:
 - **Log:** eşlemenin geçmiş logu (en yeni üstte, restart sonrası kalıcı).
 - **Monitor:** tarayıcıda canlı seri terminal (xterm.js); salt okunur olmayan ağ
   eşlemelerinde operator'ler cihaza yazabilir (Modbus gateway konsolu yalnızca hattı izler
-  ve hex görünümünde açılır). Hex görünümü iki yönü gösterir; viewer'lar yalnızca cihazın
+  ve hex görünümünde açılır); konsoldaki **BREAK gönder** düğmesi, telnet istemcisinin
+  BREAK'i gibi seri hattı 0,25 sn break durumunda tutar (denetim kaydına `mapping_break`
+  olarak yazılır). Hex görünümü iki yönü gösterir; viewer'lar yalnızca cihazın
   gönderdiklerini görür. Eşleme durunca ya da yeniden başlayınca konsol bunu söyler ve
   kendiliğinden yeniden bağlanır; yetişemeyen bir tarayıcıya kaç bayt kaçırdığı söylenir.
   Türkçe (ya da başka) harfleri tek baytlı bir kod sayfasıyla gönderen bir cihaz için
