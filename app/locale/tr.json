@@ -910,5 +910,12 @@
   "All IPv6 interfaces (::)": "Tüm IPv6 arayüzleri (::)",
   "Localhost, IPv6 (::1)": "Yalnızca bu makine, IPv6 (::1)",
   "0.0.0.0 takes IPv4 clients only, :: IPv6 clients only": "0.0.0.0 yalnızca IPv4, :: yalnızca IPv6 istemcileri alır",
-  "ser2net listened on IPv4 and IPv6 for an accepter that names no address family or address ({0}): imported on 0.0.0.0, which takes IPv4 clients only; pick “All interfaces (IPv4 + IPv6)” as the bind IP to take IPv6 clients too": "ser2net, adres ailesi ya da adres belirtmeyen bir accepter için IPv4 ve IPv6'da dinliyordu ({0}): yalnızca IPv4 istemcileri alan 0.0.0.0 olarak içe aktarıldı; IPv6 istemcileri de almak için dinleme IP'si olarak “Tüm arayüzler (IPv4 + IPv6)” seçeneğini seç"
+  "ser2net listened on IPv4 and IPv6 for an accepter that names no address family or address ({0}): imported on 0.0.0.0, which takes IPv4 clients only; pick “All interfaces (IPv4 + IPv6)” as the bind IP to take IPv6 clients too": "ser2net, adres ailesi ya da adres belirtmeyen bir accepter için IPv4 ve IPv6'da dinliyordu ({0}): yalnızca IPv4 istemcileri alan 0.0.0.0 olarak içe aktarıldı; IPv6 istemcileri de almak için dinleme IP'si olarak “Tüm arayüzler (IPv4 + IPv6)” seçeneğini seç",
+  "The TLS file {0} can't be read: {1}": "TLS dosyası {0} okunamıyor: {1}",
+  "The TLS key {0} is password-protected: enter its password (TLS key password).": "TLS anahtarı {0} parolayla korunuyor: parolasını gir (TLS anahtar parolası).",
+  "The TLS certificate {0} can't be used with its key ({1}). Is the key password right, and is it the certificate's key?": "TLS sertifikası {0} anahtarıyla kullanılamıyor ({1}). Anahtar parolası doğru mu, anahtar bu sertifikanın mı?",
+  "Mapping #{0} ({1}): {2} It can't start until that is fixed.": "Eşleme #{0} ({1}): {2} Bu düzeltilene kadar başlatılamaz.",
+  "TLS key password": "TLS anahtar parolası",
+  "only for an encrypted key": "yalnızca şifreli bir anahtar için",
+  "Remove the stored password": "Kayıtlı parolayı sil"
 }

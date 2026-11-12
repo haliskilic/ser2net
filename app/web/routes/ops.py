@@ -2,6 +2,8 @@
 validate + persist + apply, without any HTTP concerns."""
 from __future__ import annotations
 
+import asyncio
+
 from ...config import ConfigError, MappingConfig, valid_mapping_id
 from ...engine import portlist
 from ...i18n import _
@@ -60,6 +62,7 @@ async def save_mapping_from_form(state, form) -> tuple[bool, str]:
         apply_usb_match(mapping, form, await state.ports.current(), existing)
         mapping.validate()
         mapping.validate_input()
+        await asyncio.to_thread(mapping.check_tls_files)  # (reads the files)
     except (ValueError, ConfigError) as e:
         return False, str(e)
     if conflict := (state.config.own_port_conflict(mapping)  # the admin UI's port, ...

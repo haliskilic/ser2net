@@ -26,6 +26,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Callable, Collection, Iterable, Optional, Protocol, Union
 
 from ..config import canonical_ip, normalize_cidr
+from . import tls
 
 if TYPE_CHECKING:
     import ssl
@@ -148,10 +149,6 @@ class AccessPolicy:
 
 
 def server_ssl(net: NetworkSettings) -> Optional[ssl.SSLContext]:
-    """The TLS context of a mapping's TCP listener (None without TLS)."""
-    if not net.tls:
-        return None
-    import ssl
-    ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-    ctx.load_cert_chain(net.tls_cert, net.tls_key)
-    return ctx
+    """The TLS context of a mapping's TCP listener (None without TLS; engine/tls.py).
+    Raises tls.TlsFileError when its files can't be used."""
+    return tls.mapping_context(net)

@@ -61,6 +61,7 @@ def parse_mappings_file(raw: bytes, filename: str = "") -> ImportPlan:
             m.validate_input()
         except (TypeError, ValueError) as e:  # ConfigError is a ValueError
             raise ConfigError(_("Mapping #{0} ({1}): {2}").format(i, item.get('name', '?'), e)) from None
+        warnings.extend(_tls_warning(i, m))
         if item.get("id") and item["id"] != m.id:
             warnings.append(_("Mapping #{0} ({1}): {2} is not a valid mapping id (1-64 letters, "
                               "digits or _), so it gets a new one.").format(
@@ -82,9 +83,22 @@ def _classic_ser2net(text: str, filename: str) -> ImportPlan:
         raise ConfigError(" ".join(warnings) or _("The file has no ser2net connections to import."))
     source = _("ser2net.yaml (ser2net 4.x)") if looks_yaml(text) else _("ser2net.conf (ser2net 3.x)")
     mappings = [MappingConfig.from_dict(d) for d in dicts]
-    for m in mappings:
+    for i, m in enumerate(mappings, 1):
         m.validate_input()  # the converter skips URL devices already; this backs it up
+        warnings.extend(_tls_warning(i, m))
     return ImportPlan(source=source, mappings=mappings, warnings=warnings)
+
+
+def _tls_warning(i: int, m: MappingConfig) -> list[str]:
+    """A TLS mapping whose certificate and key don't load here (a key that needs its
+    password, files of another machine) is imported all the same, with a warning: it can't
+    start until that is fixed, and never runs without TLS."""
+    try:
+        m.check_tls_files()
+    except ConfigError as e:
+        return [_("Mapping #{0} ({1}): {2} It can't start until that is fixed.").format(
+            i, m.name, e)]
+    return []
 
 
 def _match(existing: list[MappingConfig], m: MappingConfig):

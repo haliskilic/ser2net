@@ -111,6 +111,7 @@ PORTABLE = [
     "test_serial_diagnostics.py",  # PTY parts POSIX / Linux only; the rest runs on Windows too
     "test_serial_retries.py",      # PTY parts POSIX only; the rest runs on Windows too
     "test_ipv6.py",                # IPv6 parts skip where the machine has no IPv6 loopback
+    "test_tls_mapping.py",         # a mapping's TLS files; needs cryptography (SKIP without)
 ]
 
 # Data-path tests that need socat-backed PTYs (Linux). Best-effort: skipped if the
