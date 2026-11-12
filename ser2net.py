@@ -252,14 +252,18 @@ def load_dependencies(args: argparse.Namespace, refresh: bool) -> None:
     if FROZEN:
         return
     sys.path.insert(0, ROOT)  # ensure local packages (app/, bootstrap) import first
-    import bootstrap
-
     if not args.no_bootstrap:
+        import bootstrap
+
         bootstrap.ensure(online=args.online, refresh_lib=refresh)
     else:
         lib = os.path.join(ROOT, "lib")
         if os.path.isdir(lib):
             sys.path.insert(0, lib)
+        try:
+            import bootstrap
+        except ImportError:  # a package of ser2net without it: nothing to check
+            return
         bootstrap.warn_if_stale()
     if bootstrap.notes:
         from app import standalone  # (its notes are the lines all.log gets at start-up)
