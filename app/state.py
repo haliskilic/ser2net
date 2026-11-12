@@ -622,6 +622,10 @@ class AppState:
         self.started_at = time.time()
         # the admin UI listener's connection guard (runtime.py; None in tests without one)
         self.admin_guard: Any = None
+        # the event loop watchdog (runtime.py, app/watchdog.py; None in tests without one),
+        # and the start-up line about a previous run it ended ("" when there was none)
+        self.loop_watchdog: Any = None
+        self.previous_hang = ""
         # first-run setup (see prepare_first_run)
         self.setup_code = ""
         self.setup_locked = False
