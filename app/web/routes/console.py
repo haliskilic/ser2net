@@ -4,6 +4,7 @@ view (timestamped; what is sent to the device only for operators and admins)."""
 from __future__ import annotations
 
 import asyncio
+import collections
 import contextlib
 import struct
 import time
@@ -57,6 +58,12 @@ def routes(ctx: Ctx) -> list:
             return
 
         await websocket.accept()
+        # the mapping's runner as it is now, with nothing awaited until the monitor is in:
+        # a restart while the handshake went on replaced the one looked up above
+        runner = state.supervisor.get_runner(mid)
+        if runner is None:  # deleted meanwhile
+            await websocket.close(code=1011)
+            return
         mon = _Monitor()
         runner.add_monitor(mon)
         # viewers get an observe-only console; writing to the device needs operator+
@@ -68,12 +75,13 @@ def routes(ctx: Ctx) -> list:
 
         async def sender():
             while True:
-                data = await mon.queue.get()
-                if data is None:  # mapping stopped
+                chunks, ended = await mon.take()
+                for data in chunks:
+                    await websocket.send_bytes(data)
+                if ended:  # mapping stopped
                     with contextlib.suppress(Exception):
                         await websocket.close()
                     return
-                await websocket.send_bytes(data)
 
         async def receiver():
             while True:
@@ -130,6 +138,10 @@ def routes(ctx: Ctx) -> list:
             await websocket.close(code=1011)
             return
         await websocket.accept()
+        runner = state.supervisor.get_runner(mid)  # as it is now (see the console's)
+        if runner is None:
+            await websocket.close(code=1011)
+            return
         to_device = sees_to_device(ws_user, mapping)
         mon = _TrafficMonitor(to_device=to_device)
         runner.add_traffic_monitor(mon)
@@ -140,11 +152,11 @@ def routes(ctx: Ctx) -> list:
 
         async def sender():
             while True:
-                item = await mon.queue.get()
-                if item is None:  # mapping stopped
+                records, ended = await mon.take()
+                for direction, ts, data in records:
+                    await websocket.send_bytes(struct.pack(">Bd", direction, ts) + data)
+                if ended:  # mapping stopped
                     return
-                direction, ts, data = item
-                await websocket.send_bytes(struct.pack(">Bd", direction, ts) + data)
 
         async def receiver():  # nothing is accepted from the browser; notice a close
             while (await websocket.receive()).get("type") != "websocket.disconnect":
@@ -178,47 +190,61 @@ def routes(ctx: Ctx) -> list:
     ]
 
 
-class _Monitor:
-    """A browser console observer: serial traffic is pushed here (best-effort —
-    drops oldest on overflow so a slow viewer never stalls the bridge)."""
+class _Feed:
+    """What one browser viewer has not been sent yet. The bridges put() into it
+    synchronously from their read loops, best-effort: when it is full the oldest item is
+    dropped, so a slow viewer never stalls a bridge. Its end is a flag, not an item in the
+    queue, so a full feed can't lose it: the sender sends what is left, then stops."""
+
+    MAX_ITEMS = 4096
 
     def __init__(self) -> None:
-        self.queue: asyncio.Queue = asyncio.Queue(maxsize=2048)
+        self._items: collections.deque = collections.deque()
+        self._ready = asyncio.Event()  # something to take, or closed
+        self.closed = False
 
-    def feed(self, data: bytes) -> None:
-        try:
-            self.queue.put_nowait(data)
-        except asyncio.QueueFull:
-            with contextlib.suppress(Exception):
-                self.queue.get_nowait()
-                self.queue.put_nowait(data)
+    def put(self, item) -> None:
+        if self.closed:
+            return
+        self._items.append(item)
+        if len(self._items) > self.MAX_ITEMS:
+            self._items.popleft()
+        self._ready.set()
 
     def close(self) -> None:
-        with contextlib.suppress(Exception):
-            self.queue.put_nowait(None)  # sentinel: tells the sender to close
+        """The runner stopped (or let the viewer go): no more items come."""
+        self.closed = True
+        self._ready.set()
+
+    async def take(self) -> tuple[list, bool]:
+        """What to send next, once there is something: (items, ended). `ended`: the feed
+        is closed and nothing is left after these."""
+        while not self._items and not self.closed:
+            self._ready.clear()
+            await self._ready.wait()
+        items = list(self._items)
+        self._items.clear()
+        return items, self.closed
 
 
+class _Monitor(_Feed):
+    """A browser console observer: what the device sends (runner.add_monitor)."""
 
-class _TrafficMonitor:
-    """A hex-view observer: (direction, time, bytes) items, best-effort like _Monitor
-    (the oldest item is dropped on overflow so a slow browser never stalls a bridge).
+    MAX_ITEMS = 2048
+
+    def feed(self, data: bytes) -> None:
+        self.put(data)
+
+
+class _TrafficMonitor(_Feed):
+    """A hex-view observer: (direction, time, bytes) items (runner.add_traffic_monitor).
     Without `to_device`, what is sent to the device is left out."""
 
     def __init__(self, *, to_device: bool) -> None:
-        self.queue: asyncio.Queue = asyncio.Queue(maxsize=4096)
+        super().__init__()
         self.to_device = to_device
 
     def feed_traffic(self, direction: int, data: bytes) -> None:
         if direction == TO_DEVICE and not self.to_device:
             return
-        item = (direction, time.time(), bytes(data))
-        try:
-            self.queue.put_nowait(item)
-        except asyncio.QueueFull:
-            with contextlib.suppress(Exception):
-                self.queue.get_nowait()
-                self.queue.put_nowait(item)
-
-    def close(self) -> None:
-        with contextlib.suppress(Exception):
-            self.queue.put_nowait(None)
+        self.put((direction, time.time(), bytes(data)))

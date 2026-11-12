@@ -40,6 +40,7 @@ Run: python3 tests/test_route_access.py
 """
 from __future__ import annotations
 
+import asyncio
 import http.client
 import http.cookiejar
 import json
@@ -262,7 +263,8 @@ def test_traffic_feed():
     def fed(mon):
         mon.feed_traffic(TO_DEVICE, b"typed-secret")
         mon.feed_traffic(FROM_DEVICE, b"Password: ")
-        return [mon.queue.get_nowait()[::2] for _ in range(mon.queue.qsize())]
+        mon.close()
+        return [item[::2] for item in asyncio.run(mon.take())[0]]
 
     assert fed(_TrafficMonitor(to_device=False)) == [(FROM_DEVICE, b"Password: ")]
     assert fed(_TrafficMonitor(to_device=True)) == [(TO_DEVICE, b"typed-secret"),
