@@ -19,8 +19,8 @@
 ### v1.1 — hardening & ops
 - config_lock released before supervisor calls; status snapshot reads
 - Session revocation on password change (`pwd_version`); IPv4-mapped IPv6 normalization
-- Tight CSP (no `unsafe-inline`; inline *styles* are allowed again since v2.2 for the
-  console, see v2.1a); data/logs dirs `0700`; expanded systemd hardening
+- Tight CSP (no `unsafe-inline`; inline *styles* are allowed again since the `v2.2` tag for
+  the console, see v2.1a: `style-src 'self' 'unsafe-inline'`, scripts stay `'self'`); data/logs dirs `0700`; expanded systemd hardening
 - `closeon`; narrowed serial_io exceptions
 
 ### v1.2 — scale & perf
@@ -42,7 +42,7 @@
 - xterm.js terminal over an authenticated WebSocket (`/api/mappings/{id}/console`):
   read live traffic, or type to the device (net mappings, not read-only)
 - Per-mapping monitor sink in the engine; session-cookie auth + Origin/Host CSWSH guard
-- CSP `style-src` allows `'unsafe-inline'` (v2.2): xterm.js's DOM renderer adds `<style>`
+- CSP `style-src` allows `'unsafe-inline'` (since the `v2.2` tag): xterm.js's DOM renderer adds `<style>`
   elements and style attributes without a nonce (xtermjs/xterm.js#4445); scripts stay
   `'self'` only
 
@@ -209,7 +209,8 @@
   authentication off by default and later drop it; optional TLS certificate pinning for
   peer requests (requests and replies are signed, but over plain HTTP a reply can still be
   read on the network); optional IPv6 (multicast) discovery
-- `.deb` / `.rpm` packages and an install script for the Linux executable
+- `.deb` / `.rpm` packages (the Linux executable has an install script,
+  `systemd/ser2net-install.sh`, since 2.9.0)
 - RTU inter-frame tuning for the Modbus gateway
 
 ### Icebox / conditional
@@ -223,5 +224,6 @@
 ---
 
 ## Per-release definition of done
-Each item ships with: a socat/PTY-based integration test, updated offline wheels,
-README/feature docs, a green full test suite + stress regression, and a git tag.
+What a change and a release need (tests, `tr.json`, both READMEs and the guides in `docs/`,
+the CHANGELOG, upgrade fixtures, screenshots when the UI changed, the release steps):
+[CONTRIBUTING.md](CONTRIBUTING.md#releases) and the pull request checklist.
