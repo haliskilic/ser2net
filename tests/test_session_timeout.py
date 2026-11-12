@@ -72,7 +72,7 @@ def main():
         assert srv.saved_config()["session_timeout_s"] == 600
         st, _, page = b.post("/settings/access", {"require_login": "on", "anonymous_role": "viewer",
                                                   "session_minutes": "inf"})
-        assert st == 200 and "Session lifetime must be a number of minutes" in page, (st, page[:400])
+        assert st == 400 and "Session lifetime must be a number of minutes" in page, (st, page[:400])
         st, _, page = b.post("/settings/access", {"require_login": "on", "anonymous_role": "viewer",
                                                   "session_minutes": "45"})
         assert st == 200 and srv.saved_config()["session_timeout_s"] == 2700, page[:400]

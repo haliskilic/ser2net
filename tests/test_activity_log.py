@@ -45,9 +45,10 @@ def _handlers(env: dict, data: str):
         if "SER2NET_LOG_STDOUT" not in env:
             os.environ.pop("SER2NET_LOG_STDOUT", None)
         state = st.AppState(ConfigStore(os.path.join(data, "config.json")), AppConfig())
+    # (the console copy is written by a thread of its own: its handler's target)
     kinds = sorted("file" if isinstance(h, RotatingFileHandler) else
-                   "stdout" if getattr(h, "stream", None) is sys.stdout else "other"
-                   for h in state._logger.handlers)
+                   "stdout" if getattr(getattr(h, "target", h), "stream", None) is sys.stdout
+                   else "other" for h in state._logger.handlers)
     return state, kinds
 
 
@@ -109,8 +110,9 @@ def test_request_log_modes():
     for bad in ("verbose", "", None, 3, ["off"]):
         cfg = AppConfig.from_dict({"admin_ui": {"request_log": bad}})
         assert cfg.admin_ui.request_log == "all", bad
-        assert any("admin_ui.request_log" in n and "using all" in n for n in cfg.load_notes), \
-            cfg.load_notes
+        # (the range check's note, or the typed reader's for a value that is no text)
+        assert any("admin_ui.request_log" in n and ("using all" in n or '"all" is used' in n)
+                   for n in cfg.load_notes), cfg.load_notes
         cfg.validate()
     print("request_log: all / changes / off pick the right requests; an unknown value "
           "loads as all with a note  OK")

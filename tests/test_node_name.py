@@ -51,8 +51,11 @@ def test_config() -> None:
         cfg.admin_ui))
     cfg = AppConfig.from_dict({"admin_ui": {"node_name": "  Line 1 — Hat B  "}})
     assert cfg.admin_ui.node_name == "Line 1 — Hat B" and not cfg.load_notes
+    # (a number reads as its text, as any text setting: the typed reader)
+    cfg = AppConfig.from_dict({"admin_ui": {"node_name": 42}})
+    assert cfg.admin_ui.node_name == "42" and any("admin_ui.node_name" in n for n in cfg.load_notes)
     for bad in ("x" * 65, "line\r\nBcc: someone@example.com", "tab\there", "a b",
-                "rtl‮evil", 42, ["x"]):
+                "rtl‮evil", ["x"]):
         cfg = AppConfig.from_dict({"admin_ui": {"node_name": bad}})
         assert cfg.admin_ui.node_name == "", bad
         assert any("admin_ui.node_name" in n for n in cfg.load_notes), (bad, cfg.load_notes)

@@ -456,7 +456,9 @@ def test_targets_validation():
     for bad in ("plc.local:5000", "10.0.0.1", "10.0.0.1:0", "10.0.0.1:70000", "fd00::1:9",
                 "0.0.0.0:9", "[10.0.0.1:9", 5000):
         refused(mapping(udp_targets=[bad]), "is not an IP address and a port")
-    refused(mapping(udp_targets="10.0.0.1:9"), "must be a list")
+    one = mapping(udp_targets="10.0.0.1:9")   # a text reads as a one-entry list (the typed reader)
+    assert one.network.udp_targets == ["10.0.0.1:9"], one.network.udp_targets
+    one.validate_input()
     refused(mapping(udp_targets=["[fd00::1]:9"]), "is IPv6, but the mapping listens on 0.0.0.0")
     refused(mapping(bind_ip="::", dual_stack=False, udp_targets=["10.0.0.1:9"]),
             "is IPv4, but the mapping")
