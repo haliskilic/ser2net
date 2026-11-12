@@ -103,14 +103,39 @@ düzenlemeye gerek yok.
   248–255 unit'lerindeki noktalar için uyarır. **Salt okunur** bu yazmaları da reddeder
   (`error: mapping is read-only`; reddedilen DCMD loglanır); MQTT'den yazma alan eşlemeler
   panoda **CMD** etiketiyle gösterilir (bkz. Güvenlik: kimin komut gönderebileceğine broker
-  karar verir). İstenirse **Sparkplug B**
-  edge node olarak, her Modbus unit'i bir cihaz (`unit1`, …): `bdSeq` ile NBIRTH/NDEATH,
-  `seq` ile DBIRTH/DDATA, DCMD ile yazma, NCMD ile rebirth. Bir komut yayınlandığında bir
-  kez yazılır: broker'ın yeniden bağlanma, yeniden başlatma ya da config kaydından sonra
-  tekrar gönderdiği retained bir `/set`, **Retained /set komutunu her bağlantıdan sonra
-  yeniden uygula** işaretli değilse yok sayılır (ve loglanır); retained bir Sparkplug
-  NCMD/DCMD her zaman yok sayılır, boş bir mesaj (retained mesajı temizleyen) komut
-  değildir ve ser2net bağlı değilken yayınlanan bir komut sonradan iletilmez.
+  karar verir). Noktalar unit unit okunur ve her unit'in sağlığı izlenir: art arda 3
+  okumada noktalarının hiçbirine yanıt vermeyen (ya da seri portu o kadar süre yok olan)
+  bir unit **offline** olur, bir kez loglanır ve bundan sonra her turda tek noktayla
+  (sırayla) yoklanır; böylece hattı her turda bir yanıt süresi kadar tutar. Yanıt verince
+  bütün noktaları yeniden okunur. Bir slave exception'ı (olmayan bir register için `0x02`
+  gibi) da yanıttır; böyle bir nokta hata vermeye başladığında (en çok dakikada bir) ve
+  yeniden okunduğunda unit'iyle birlikte loglanır. Modbus/TCP master'larının istekleri
+  bundan etkilenmez. Her unit'in durumu status'ta (REST API) ve `/metrics`'te yer alır;
+  pano yanıt vermeyen unit'leri gösterir, **Modbus unit'i yanıt vermiyor / yeniden yanıt
+  veriyor** bildirimleri (işaretlenene kadar kapalı) haber verir ve düz MQTT bu durumu
+  `<topic>/unit<N>/status`'a retained olarak yayınlayabilir (`online` / `offline`; eşleme
+  formunda **Her unit'in durumunu yayınla**; eşleme durduğunda son durumu korur, bu yüzden
+  `<topic>/status` ile birlikte okunmalı). İstenirse **Sparkplug B** edge node olarak, her
+  Modbus unit'i bir cihaz (`unit1`, …): `bdSeq` ile NBIRTH/NDEATH, `seq` ile DBIRTH/DDATA,
+  DCMD ile yazma, NCMD ile rebirth. Offline olan bir unit DDEATH alır ve birth'lerin
+  dışında kalır; yeniden yanıt verince yeni okunan değerlerle DBIRTH alır (okunamayan bir
+  nokta birth'te eski değeriyle değil null olarak gider). Veri ancak oturumun NBIRTH ve
+  DBIRTH'lerinden sonra gider, her metrik okunduğu anla damgalanır ve NaN olarak kalan bir
+  değer bir kez gönderilir. `bdSeq` (Int64) yeniden başlatmalardan sonra devam eder
+  (`data/sparkplug-bdseq.json`); böylece host, elektrik kesintisinde kopan oturumun
+  Will'ini yeni oturumdan ayırabilir. DDATA metrik datatype'larını taşımaya devam eder
+  (spesifikasyon yalnızca göndermemeyi öneriyor; eski Tahu host'ları ve basit tüketiciler
+  bunlara dayanıyor). İsteğe bağlı bir **primary host ID** ile düğüm o host uygulamasının
+  STATE mesajını izler (Sparkplug 3.0 `spBv1.0/STATE/<id>` ya da eski `STATE/<id>`):
+  birth'ler yalnızca host online iken gider; host offline olunca düğüm NDEATH gönderir ve
+  onu beklemek için yeniden bağlanır. Eşleme başına tek broker vardır (dolaşılacak broker
+  listesi yok; yedekli broker'ların önüne konan bir DNS adı ya da sanal IP temel failover
+  sağlar) ve host yokken veri saklanmaz (store and forward yok). Bir komut yayınlandığında
+  bir kez yazılır: broker'ın yeniden bağlanma, yeniden başlatma ya da config kaydından
+  sonra tekrar gönderdiği retained bir `/set`, **Retained /set komutunu her bağlantıdan
+  sonra yeniden uygula** işaretli değilse yok sayılır (ve loglanır); retained bir
+  Sparkplug NCMD/DCMD her zaman yok sayılır, boş bir mesaj (retained mesajı temizleyen)
+  komut değildir ve ser2net bağlı değilken yayınlanan bir komut sonradan iletilmez.
 - **Client-side sanal COM:** uzaktaki portu yerel `COMx`/`tty` olarak göstermek için
   reçeteler (pyserial `rfc2217://`, Linux `socat`, Windows com0com+com2tcp / HW VSP3) —
   bkz. [`docs/VIRTUAL-COM.md`](docs/VIRTUAL-COM.md).
@@ -150,8 +175,9 @@ düzenlemeye gerek yok.
   değilken ya da bir UDP datagram'ı kuyruğu dolu bulduğunda) atılmış sayılır
   (`bytes_dropped`, `ser2net_mapping_bytes_dropped_total`), panoda işaretlenir ve loglanır.
 - **Bildirimler:** cihaz koptuğunda/geri geldiğinde, eşleme başlamadığında, istemci
-  bağlanıp düştüğünde ya da hatalı girişte webhook (JSON, Slack, Microsoft Teams,
-  Discord, Telegram) ve/veya e-posta (SMTP); tekrarlar bastırılır, test mesajı gönderilir.
+  bağlanıp düştüğünde, hatalı girişte ya da periyodik okunan bir Modbus unit'i yanıt
+  vermeyi kesip yeniden yanıt verdiğinde webhook (JSON, Slack, Microsoft Teams, Discord,
+  Telegram) ve/veya e-posta (SMTP); tekrarlar bastırılır, test mesajı gönderilir.
 - **Güvenlik:** parola (ilk erişimde belirlenir, scrypt), CSRF, imzalı-çerez oturum,
   login oran sınırı, sıkı güvenlik başlıkları; oturumlar çıkışta, parola değişince, kullanıcı
   bazında ya da herkes için (Ayarlar) kapanır, unutulan parola `ser2net --set-password` ile
@@ -341,7 +367,9 @@ olarak yazdığı dosyalar klasörün sahibine verilir; yükseltmede elle bir ş
   düşürülen yavaş istemciler; süreç için açık dosya sayısı ve sınırı (`ser2net_open_fds`,
   `ser2net_fd_limit`, POSIX), yönetim arayüzünün bağlantıları, süren ve sıra bekleyen TLS
   el sıkışmaları ve kabulden hemen sonra reddedilen bağlantılar
-  (`ser2net_connections_refused_total`, nedene göre).
+  (`ser2net_connections_refused_total`, nedene göre); bir Modbus gateway'in periyodik
+  okuduğu her unit için yanıt verip vermediği (`ser2net_modbus_unit_up`) ve başarısız
+  okumaları (`ser2net_modbus_unit_poll_errors_total`).
 
 ---
 

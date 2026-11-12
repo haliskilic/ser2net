@@ -101,10 +101,35 @@ everything from a **password-protected web UI** — no CLI or hand-edited config
   and on units 248–255, which a serial line reserves. **Read-only** refuses these writes
   too (`error: mapping is read-only`; a refused DCMD is logged), and the dashboard marks a
   mapping that takes MQTT writes with **CMD** (see Security: the broker decides who may
-  send them).
-  Optionally as a **Sparkplug B** edge node with one device per Modbus unit (`unit1`, …):
-  NBIRTH/NDEATH with `bdSeq`, DBIRTH/DDATA with `seq`, writes via DCMD, rebirth via NCMD.
-  A command is written once, when it is published: a retained `/set` that the broker sends
+  send them). Points are read unit by unit, and each unit's health is followed: a unit
+  that gives no reply to any of its points in 3 polls in a row (or whose serial port stays
+  gone that long) is **offline**, logged once, and from then on polled with one point per
+  cycle (each in turn), so it holds the bus for one response timeout per cycle; when it
+  answers, all its points are read again. A slave exception (such as `0x02` for a register
+  it doesn't have) is an answer; such a point is logged with its unit when it starts
+  failing (at most once a minute) and when it reads again. Requests from Modbus/TCP
+  masters are not affected. Each unit's state is in the status (REST API) and `/metrics`,
+  the dashboard names the units that stopped answering, the **Modbus unit not answering /
+  answering again** notifications (off until ticked) report them, and plain MQTT can
+  publish it, retained, to `<topic>/unit<N>/status` (`online` / `offline`; **Publish each
+  unit's state** in the mapping form; it keeps the last state while the mapping is
+  stopped, so read it together with `<topic>/status`). Optionally as a **Sparkplug B**
+  edge node with one device per Modbus unit (`unit1`, …): NBIRTH/NDEATH with `bdSeq`,
+  DBIRTH/DDATA with `seq`, writes via DCMD, rebirth via NCMD. An offline unit gets a
+  DDEATH and is left out of the births; when it answers again it gets a DBIRTH with the
+  values just read (a point whose read fails is sent as null in a birth, not with its old
+  value). Data goes out only after the session's NBIRTH and DBIRTHs, each metric is
+  stamped with the time it was read, and a value that stays NaN is sent once. `bdSeq`
+  (Int64) continues across restarts (`data/sparkplug-bdseq.json`), so a host can tell the
+  Will of a session cut off by a power loss from the new session. DDATA keeps the metric
+  datatypes (the specification only advises against them, and older Tahu hosts and simple
+  consumers rely on them). A **primary host ID** (optional) makes the node follow that
+  host application's STATE (Sparkplug 3.0 `spBv1.0/STATE/<id>`, or the older
+  `STATE/<id>`): the births go out only while it is online, and when it goes offline the
+  node sends NDEATH and reconnects to wait for it. There is one broker per mapping (no
+  broker list to walk; a DNS name or a virtual IP in front of redundant brokers gives
+  basic failover), and nothing is stored for a host that is away (no store and forward). A
+  command is written once, when it is published: a retained `/set` that the broker sends
   again after a reconnect, a restart or a configuration save is ignored (and logged)
   unless **Re-apply a retained /set after every connect** is ticked; a retained Sparkplug
   NCMD/DCMD is always ignored, an empty message (clearing a retained one) is not a
@@ -149,7 +174,8 @@ everything from a **password-protected web UI** — no CLI or hand-edited config
   `ser2net_mapping_bytes_dropped_total`), flagged on the dashboard and logged.
 - **Notifications:** a webhook (JSON, Slack, Microsoft Teams, Discord, Telegram) and/or
   e-mail (SMTP) when a device is lost or comes back, a mapping fails to start, clients
-  come and go, or a sign-in fails; repeats are suppressed, a test message can be sent.
+  come and go, a sign-in fails, or a polled Modbus unit stops or starts answering again;
+  repeats are suppressed, a test message can be sent.
 - **Security:** password (set on first access, scrypt), CSRF, signed-cookie sessions,
   login rate-limiting, strict security headers; sessions end at logout, on a password
   change, per user or for everyone (Settings), and a lost password is reset with
@@ -335,7 +361,8 @@ The image has a `HEALTHCHECK` (`ser2net --healthcheck`). Details:
   process its open files and their limit (`ser2net_open_fds`, `ser2net_fd_limit`, POSIX),
   the admin UI's connections, TLS handshakes in progress and waiting for one to end, and
   the connections refused right after accept (`ser2net_connections_refused_total`, by
-  reason).
+  reason); for a Modbus gateway's polled units whether each answers
+  (`ser2net_modbus_unit_up`) and its failed reads (`ser2net_modbus_unit_poll_errors_total`).
 
 ---
 
