@@ -930,8 +930,8 @@ is no account at all; later starts ignore it.
   audit log (`cluster_auth_failed`).
 - **Who acted:** a remote start/stop/restart or edit is recorded in the audit log of both
   nodes: on the node the browser is signed in to under the user's name, and on the node it
-  changed as `cluster-peer:NODE/USER` — the sending node's host name and its user, as that
-  node states it in the signed request (a claim of a node with the cluster key, not an
+  changed as `cluster-peer:NODE/USER` — the sending node's name (its instance name, else its
+  host name; without spaces) and its user, as that node states it in the signed request (a claim of a node with the cluster key, not an
   account of the changed node). A request from a node running 2.8.1 or older stays
   `cluster-peer`.
 - **Older nodes (legacy authentication):** nodes running 2.8.0 or older only know the raw

@@ -841,10 +841,12 @@ class ClusterDiscovery:
         """POST a form to a key-guarded path of a known peer: its JSON answer — also a
         400 refusal, whose "error" is the peer's own message (e.g. why it can't save
         a mapping) — or None. *actor*: the user acting on this node, sent with this
-        node's host name (ACTOR_FIELD, ACTOR_NODE_FIELD) for the peer's audit log."""
+        node's name (node_label: its instance name, else the host name; ACTOR_FIELD,
+        ACTOR_NODE_FIELD) for the peer's audit log."""
         fields = list(fields.items() if isinstance(fields, dict) else fields)
         if actor:
-            fields += [(ACTOR_FIELD, actor[:ACTOR_MAX]), (ACTOR_NODE_FIELD, socket.gethostname())]
+            fields += [(ACTOR_FIELD, actor[:ACTOR_MAX]),
+                       (ACTOR_NODE_FIELD, node_label(self.config.admin_ui))]
         body = urllib.parse.urlencode(fields).encode()
         status, data = await self._request(target, "POST", path, None, body, timeout)
         return data if 200 <= status < 300 or status == 400 else None

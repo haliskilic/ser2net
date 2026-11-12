@@ -539,6 +539,14 @@ def test_signed_peer_calls():
         assert peer.auths[-1].ok and urllib.parse.parse_qs(peer.requests[-1]["body"].decode()) \
             == {"mapping_id": ["m1"], "action": ["start"], "_actor": ["Ayşe İlker"],
                 "_actor_node": [socket.gethostname()]}, peer.requests[-1]["body"]
+        # ...with this instance's name when it has one (Settings -> Admin interface)
+        d.config.admin_ui.node_name = "line 1 · hall B"
+        try:
+            assert (await d.control_peer(t, "m1", "stop", actor="admin"))["path"]
+        finally:
+            d.config.admin_ui.node_name = ""
+        assert urllib.parse.parse_qs(peer.requests[-1]["body"].decode())["_actor_node"] == \
+            ["line 1 · hall B"], peer.requests[-1]["body"]
         assert (await d.post_peer(t, "/api/cluster/mapping-save", [("id", "m1")],
                                   actor="x" * 300))["path"]
         assert urllib.parse.parse_qs(peer.requests[-1]["body"].decode())["_actor"] == ["x" * 128]
