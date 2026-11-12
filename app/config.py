@@ -1064,7 +1064,8 @@ class ClusterSettings:
 
 
 NOTIFY_EVENTS = ("device_lost", "device_back", "start_failed",
-                 "client_connected", "client_disconnected", "login_failed")
+                 "client_connected", "client_disconnected", "login_failed",
+                 "unit_offline", "unit_back")
 NOTIFY_DEFAULT_EVENTS = ("device_lost", "device_back", "start_failed")
 WEBHOOK_FORMATS = ("json", "slack", "teams", "discord", "telegram")
 SMTP_SECURITY = ("starttls", "ssl", "none")
@@ -1074,8 +1075,9 @@ SMTP_SECURITY = ("starttls", "ssl", "none")
 class NotificationSettings:
     """Event notifications (app/notify.py): a webhook and/or e-mail when a serial
     device disappears or comes back, a mapping fails to start, clients connect or
-    disconnect, or a sign-in fails. Off by default; the same event for the same
-    mapping is sent at most once per repeat_s."""
+    disconnect, a sign-in fails, or a polled Modbus unit stops or starts answering again.
+    Off by default; the same event for the same mapping is sent at most once per
+    repeat_s."""
     enabled: bool = False
     events: list[str] = field(default_factory=lambda: list(NOTIFY_DEFAULT_EVENTS))
     repeat_s: int = 300

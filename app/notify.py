@@ -1,5 +1,6 @@
 """Event notifications: tell someone when a serial device disappears or comes back,
-a mapping fails to start, clients come and go, or a sign-in fails.
+a mapping fails to start, clients come and go, a sign-in fails, or a Modbus unit that a
+gateway polls stops answering or answers again.
 
 The Notifier watches the supervisor's status snapshot (every POLL_S seconds) and
 turns state changes into events; the login route reports failed sign-ins itself.
@@ -39,14 +40,21 @@ def title(event: str) -> str:
         "client_connected": _("client connected"),
         "client_disconnected": _("client disconnected"),
         "login_failed": _("failed sign-in"),
+        "unit_offline": _("Modbus unit not answering"),
+        "unit_back": _("Modbus unit answering again"),
         "test": _("test notification"),
     }.get(event, event)
 _LOST = ("reconnecting", "device-missing")
 
 
+_SILENT = ("offline", "no reply")  # a polled unit that stopped answering (not: the port down)
+
+
 def status_events(prev: dict, statuses: dict, names: dict) -> list[tuple[str, str, str, str]]:
     """Events between two status snapshots: [(event, key, mapping name, detail)].
-    A mapping seen for the first time produces none (start-up)."""
+    A mapping seen for the first time produces none (start-up). A Modbus unit is reported
+    when it stops answering, and again once it answers (not while its serial port is down:
+    device_lost says that)."""
     events = []
     for mid, st in statuses.items():
         name = names.get(mid)
@@ -56,7 +64,7 @@ def status_events(prev: dict, statuses: dict, names: dict) -> list[tuple[str, st
         state, peers = st.get("state"), {c.get("peer") for c in st.get("clients") or []}
         if old is None:
             continue
-        old_state, old_peers = old
+        old_state, old_peers, old_units = old[0], old[1], (old[2] if len(old) > 2 else {})
         device = st.get("device") or ""
         if old_state == "running" and state in _LOST:
             events.append(("device_lost", mid, name, st.get("last_error") or device))
@@ -68,12 +76,33 @@ def status_events(prev: dict, statuses: dict, names: dict) -> list[tuple[str, st
             events.append(("client_connected", f"{mid}:{p}", name, p))
         for p in sorted(old_peers - peers):
             events.append(("client_disconnected", f"{mid}:{p}", name, p))
+        for unit, now in _units(st).items():
+            was = old_units.get(unit)
+            if now == _SILENT and was != _SILENT:
+                events.append(("unit_offline", f"{mid}:unit{unit}", name, f"unit {unit}"))
+            elif was == _SILENT and now[0] == "online":
+                events.append(("unit_back", f"{mid}:unit{unit}", name, f"unit {unit}"))
     return events
 
 
-def snapshot(statuses: dict) -> dict:
-    return {mid: (st.get("state"), {c.get("peer") for c in st.get("clients") or []})
-            for mid, st in statuses.items()}
+def _units(st: dict) -> dict:
+    return {u.get("unit"): (u.get("state"), u.get("cause") or "") for u in st.get("units") or []}
+
+
+def snapshot(statuses: dict, prev: Optional[dict] = None) -> dict:
+    """What status_events compares: each mapping's state, clients and polled units. Given the
+    previous snapshot, a unit that had stopped answering stays so while it is "unknown"
+    again (its mapping restarted, e.g. on a save), so its return is still reported."""
+    snap = {}
+    for mid, st in statuses.items():
+        units = _units(st)
+        before = (prev or {}).get(mid)
+        if before is not None and len(before) > 2:
+            for unit, was in before[2].items():
+                if was == _SILENT and units.get(unit, ("",))[0] == "unknown":
+                    units[unit] = _SILENT
+        snap[mid] = (st.get("state"), {c.get("peer") for c in st.get("clients") or []}, units)
+    return snap
 
 
 def message(event: str, mapping: str, detail: str) -> tuple[str, str]:
@@ -188,7 +217,7 @@ class Notifier:
                 names = {m.id: m.name for m in self.state.config.mappings}
                 for event, key, name, detail in status_events(self._prev, statuses, names):
                     self.emit(event, key, name, detail)
-                self._prev = snapshot(statuses)
+                self._prev = snapshot(statuses, self._prev)
             except Exception as e:  # never let the watcher die
                 self.state.log(f"notifications: watcher error: {e}")
 
