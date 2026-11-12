@@ -512,8 +512,8 @@ document.addEventListener("htmx:beforeSwap", function (e) {
     }
   }
 
-  document.addEventListener("input", function (e) {
-    if (e.target.closest && e.target.closest("[data-mapping-tools]")) apply();
+  document.addEventListener("input", function (e) {   // (the search box; not a checkbox's)
+    if (e.target.matches && e.target.matches("[data-mapping-tools] [data-filter-text]")) apply();
   });
   document.addEventListener("change", function (e) {
     if (e.target.hasAttribute && e.target.hasAttribute("data-select-shown")) {
