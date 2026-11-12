@@ -27,7 +27,7 @@ body:
     id: about
     attributes:
       label: "`ser2net --about` çıktısı / output"
-      description: Sürüm, işletim sistemi ve bileşenler. / Version, OS and components.
+      description: "Sürüm, işletim sistemi ve bileşenler. Bilinen klasörler kısaltılır (`<python>`, `<ser2net>`, `~`); kalan yollarda hesap adınız görünebilir, göndermeden önce bakın. / Version, OS and components. Known folders are shortened (`<python>`, `<ser2net>`, `~`); other paths can show your account name, so check before posting."
       render: text
     validations:
       required: true
@@ -46,5 +46,5 @@ body:
     id: logs
     attributes:
       label: Log
-      description: "`data/all.log` ve ilgili eşlemenin log'undan ilgili satırlar (şifreleri çıkarın). / Relevant lines from data/all.log and the mapping's log (remove secrets)."
+      description: "`data/all.log` ve ilgili eşlemenin log'undan ilgili satırlar. Göndermeden önce bakın: log'larda IP adresleri, kullanıcı adları ve host adı vardır; bunları biçimi koruyarak maskeleyin (ör. 10.0.x.x, user1). Parola, API token'ı ya da cluster anahtarını asla yapıştırmayın. / Relevant lines from data/all.log and the mapping's log. Check before posting: logs show IP addresses, user names and the host name; mask them, keeping the format (e.g. 10.0.x.x, user1). Never paste passwords, the API token or the cluster key."
       render: text

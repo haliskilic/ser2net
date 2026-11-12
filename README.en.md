@@ -245,8 +245,11 @@ don't delete it under a long-running instance; a copy left behind by a killed pr
 still ages out as usual. For certificate checks (MQTT over TLS, OIDC, LDAPS / StartTLS) it
 uses the distribution's CA bundle, or `SSL_CERT_FILE` if set.
 
-`ser2net --about` shows the versions (Python, OpenSSL, components) — add it to bug
-reports. `ser2net --licenses` prints the license text of every component inside the
+`ser2net --about` shows the versions (Python, OpenSSL, components) and where each
+component is loaded from, with the known folders shortened (`<python>`, `<ser2net>`,
+`<bundle>`, `<override>`, `~`) so the account name in a path stays out — add it to bug
+reports, and mask IP addresses, user names and the host name in log lines you paste.
+`ser2net --licenses` prints the license text of every component inside the
 executable (releases also attach it as `*.THIRD-PARTY-LICENSES.txt`).
 
 Build it yourself — Windows: `pip install -r requirements.txt -r requirements-optional.txt pyinstaller && pyinstaller ser2net.spec`;
