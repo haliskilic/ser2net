@@ -160,6 +160,14 @@ class GuardMiddleware(BaseHTTPMiddleware):
                 or getattr(request.state, "csrf_renew", False)):
             auth.set_cookie(response, request, cfg, auth.CSRF_COOKIE, request.state.csrf_token,
                             max_age=cfg.session_timeout_s)
+        # A page whose token is no longer the browser's (a sign-in in another tab gave the
+        # browser a new one: Ctx.new_csrf_token) gets the current one with the answer to its
+        # next htmx request, which app.js takes, so a form left open while the session ended
+        # can still be saved after signing in again. Only the page's own requests can read
+        # an answer's headers, as they can read its <meta name="csrf-token">.
+        if (request.headers.get("hx-request") == "true"
+                and request.headers.get("x-csrf-token") != request.state.csrf_token):
+            response.headers["X-CSRF-Token"] = request.state.csrf_token
         if request.state.legacy_session is not None:
             auth.move_session(response, request, cfg, request.state.legacy_session)
         return response

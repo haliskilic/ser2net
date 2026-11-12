@@ -42,10 +42,19 @@ document.addEventListener("htmx:beforeRequest", function (e) {
   e.detail.askedBy = e.detail.elt;
 });
 
-// 1) Send the CSRF token on every htmx request (double-submit cookie pattern).
+// 1) Send the CSRF token on every htmx request (double-submit cookie pattern). A new
+//    one (a sign-in in another tab renews it) comes with the next answer (X-CSRF-Token):
+//    the page and its forms take it, so what was left open there can still be saved.
 document.addEventListener("htmx:configRequest", function (e) {
   var m = document.querySelector('meta[name="csrf-token"]');
   if (m) e.detail.headers["X-CSRF-Token"] = m.getAttribute("content");
+});
+document.addEventListener("htmx:afterRequest", function (e) {
+  var xhr = e.detail.xhr, t = xhr && xhr.status ? xhr.getResponseHeader("X-CSRF-Token") : null;
+  if (!t) return;
+  var m = document.querySelector('meta[name="csrf-token"]');
+  if (m) m.setAttribute("content", t);
+  document.querySelectorAll('input[name="_csrf"]').forEach(function (i) { i.value = t; });
 });
 
 // 1a) Detected-ports panel: "show / hide the ports without hardware" sticks across the
@@ -915,7 +924,8 @@ var feedback = (function () {
   }
 
   // 401: the session ended (or was ended). Not a redirect: an open form would lose its
-  // unsaved changes. Signing in again (it keeps the CSRF cookie) brings the page back.
+  // unsaved changes. Signing in again brings the page back (with the new CSRF token the
+  // sign-in gave the browser: 1).
   function sessionEnded() {
     // ?next= is the page's path without the base path (the server puts it back)
     var base = basePath(), path = location.pathname, keep = !!dirtyForm();
