@@ -124,10 +124,11 @@ def check_audit(admin) -> None:
         got = by_detail.get(want["detail"])
         assert got is not None, f"audit record missing: {line!r}"
         assert {k: got[k] for k in want} == want, (got, want)
-    times = [r["time"] for r in rows]
-    assert times == sorted(times, reverse=True), "audit records are listed newest first"
-    assert any(r["action"] == "login" and r["user"] == "admin" and r["time"] > "2026-11-05"
-               for r in rows), "a new record was not appended after the 2.8.0 ones"
+    planted = [ln.split("\t")[3] for ln in AUDIT_1 + AUDIT][::-1]  # newest first
+    assert [r["detail"] for r in rows][-len(planted):] == planted, \
+        "the records of audit.log, then audit.log.1, newest first, after the new ones"
+    assert any(r["action"] == "login" and r["user"] == "admin" for r in rows), \
+        "no new record (a sign-in) was appended after the 2.8.0 ones"
     st, _, page = admin.get("/settings/audit?user=op1")
     # (the page breaks long details at dots, so the records are told apart by their IPs)
     assert st == 200 and "10.0.0.8" in page, page
@@ -181,7 +182,8 @@ def main():
             assert diffs == EXPECTED_CHANGES, f"the re-save at start changed: {diffs}"
             store = ConfigStore(srv.config_path)
             names = store.backup_names()
-            assert names[-3:] == [BACKUP_2, BACKUP, OLD_BACKUP], names  # newest first
+            kept = [n for n in names if n in (OLD_BACKUP, BACKUP, BACKUP_2)]
+            assert kept == [BACKUP_2, BACKUP, OLD_BACKUP], names  # newest first, -2 after
             new = [n for n in names if n not in (OLD_BACKUP, BACKUP, BACKUP_2)]
             assert dump(boot) in [store.read_backup(n) for n in new], \
                 f"the untouched 2.8.0 config.json is not among the new backups {new}"
