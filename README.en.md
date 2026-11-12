@@ -410,6 +410,17 @@ bound without TLS. For LAN deployments, use TLS (`admin_ui.tls_*`) and per-mappi
 device path or COM name only; pyserial URL handlers (`socket://`, `rfc2217://`, `spy://`,
 `loop://`, ...) are not accepted as a port.
 
+**The admin UI's certificate:** Settings → *Admin TLS (HTTPS)* shows the configured certificate's
+name, its other names and when it is valid (UTC), flagged when it has ended, isn't valid
+yet or ends within 30 days; the start-up log has the same line (a WARNING then), for a
+self-signed certificate and a CA-issued one alike. *Generate a self-signed certificate*
+makes one valid for 825 days in all, from a day before now, so clients whose clock is a
+little behind accept it at once (a source install without the `cryptography` package
+uses the `openssl` command, whose certificate starts now). Its dates come from the
+server's clock: made while that clock is wrong, the certificate looks expired or not yet
+valid to clients whose clock is right, so the page warns when the clock reads earlier than
+it can (see *Time synchronisation*).
+
 **Connection limits:** on a TLS mapping, a host not in `allowed_client_ips` is closed before
 the TLS handshake; a handshake must be over within 15 s, and at most 32 run at once from one
 address (128 in all). More connections wait up to 15 s for one of those to end (at most 64

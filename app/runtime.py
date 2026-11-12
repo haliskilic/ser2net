@@ -33,7 +33,7 @@ from . import accounts, clock, console, datalock, i18n, standalone
 from .config import ConfigError, ConfigStore
 from .engine import netguard
 from .state import AppState, write_audit_record
-from .web import httpguard
+from .web import certinfo, httpguard
 from .web.server import build_app
 
 
@@ -256,6 +256,21 @@ def require_admin_tls(admin) -> None:
                              f"{_os_error(e)}{fix}") from None
 
 
+def tls_certificate_note(path: str) -> str:
+    """The start-up log's line about the admin UI's certificate: its subject and validity,
+    a WARNING when it has ended, isn't valid yet or ends soon (certinfo); "" when there
+    is nothing to read it with."""
+    try:
+        info = certinfo.read(path)
+    except certinfo.CertReadError as e:
+        if e.code == "no_decoder":
+            return ""
+        what = "no PEM certificate in it" if e.code == "not_pem" else str(e)
+        return f"WARNING: admin UI TLS certificate {path}: {what}"
+    line = f"admin UI TLS certificate: {info.describe()}"
+    return line if info.state() == "valid" else f"WARNING: {line}"
+
+
 def hold_data_dir(config_path: str) -> str | None:
     """Take the data directory's single-instance lock (app.datalock) before anything is
     written there: a second ser2net on the same directory stops here with one line; a
@@ -353,6 +368,8 @@ async def _serve(store: ConfigStore, config, loop_note: str = "") -> int:
         if warning := winservice.location_warning():
             state.log(warning)
     state.prepare_first_run()
+    if admin.tls_enabled and (note := tls_certificate_note(admin.tls_cert)):
+        state.log(note)
     if admin.bind_ip not in ("127.0.0.1", "::1", "localhost") and not admin.tls_enabled:
         state.log("WARNING: admin UI is bound to a network address over plain HTTP — "
                   "the password and session cookies travel unencrypted. Configure TLS "

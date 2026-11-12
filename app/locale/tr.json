@@ -909,5 +909,18 @@
   "This browser’s clock is {0} ahead of the server’s. If this browser’s clock is right, the server’s is wrong: logs, the audit log and backups get wrong times, and sign-ins and certificate checks can fail. Check the server’s time sync.": "Bu tarayıcının saati sunucununkinden {0} ileride. Tarayıcının saati doğruysa sunucununki yanlış: loglar, denetim kaydı ve yedekler yanlış zaman alır; girişler ve sertifika kontrolleri de başarısız olabilir. Sunucunun saat eşitlemesini kontrol et.",
   "This browser’s clock is {0} behind the server’s. If this browser’s clock is right, the server’s is wrong: logs, the audit log and backups get wrong times, and sign-ins and certificate checks can fail. Check the server’s time sync.": "Bu tarayıcının saati sunucununkinden {0} geride. Tarayıcının saati doğruysa sunucununki yanlış: loglar, denetim kaydı ve yedekler yanlış zaman alır; girişler ve sertifika kontrolleri de başarısız olabilir. Sunucunun saat eşitlemesini kontrol et.",
   "{0} min": "{0} dk",
-  "{0} h": "{0} sa"
+  "{0} h": "{0} sa",
+  "The certificate file can’t be read (%(error)s): ser2net can’t start with TLS until it can.": "Sertifika dosyası okunamıyor (%(error)s): bu düzelene kadar ser2net TLS ile başlayamaz.",
+  "The certificate file holds no PEM certificate: ser2net can’t start with TLS like this.": "Sertifika dosyasında PEM biçiminde bir sertifika yok: ser2net bu hâliyle TLS ile başlayamaz.",
+  "Install the <span class=\"mono\">cryptography</span> package to see the certificate’s details here.": "Sertifikanın ayrıntılarını burada görmek için <span class=\"mono\">cryptography</span> paketini kur.",
+  "Certificate: <span class=\"mono\">%(subject)s</span>": "Sertifika: <span class=\"mono\">%(subject)s</span>",
+  "self-signed": "self-signed",
+  "not valid yet": "henüz geçerli değil",
+  "ends in %(days)s day(s)": "%(days)s gün içinde bitiyor",
+  "%(days)s day(s) left": "%(days)s gün kaldı",
+  "Valid from %(start)s to %(end)s UTC": "Geçerlilik: %(start)s – %(end)s UTC",
+  "names: %(names)s": "adlar: %(names)s",
+  "By this server’s clock the certificate ended at %(end)s UTC: browsers and clients that check it refuse the connection. Renew it, or generate a new self-signed one.": "Bu sunucunun saatine göre sertifikanın süresi %(end)s UTC'de doldu: onu kontrol eden tarayıcılar ve istemciler bağlantıyı reddeder. Sertifikayı yenile ya da yeni bir self-signed sertifika üret.",
+  "The certificate starts at %(start)s UTC, later than this server’s clock reads: the clock is behind (see Admin interface), or the certificate was made while a clock was ahead. Clients whose clock reads earlier refuse it.": "Sertifika %(start)s UTC'de başlıyor, yani sunucunun saatinin gösterdiğinden sonra: ya saat geride (bkz. Yönetim arayüzü) ya da sertifika bir saat ilerideyken üretildi. Saati bundan önceyi gösteren istemciler sertifikayı reddeder.",
+  "The server’s clock reads {0} UTC, which can’t be right (Settings → Admin interface says why), and the certificate is dated from it: clients whose clock is right may take it for expired or not valid yet. Set the clock, then generate the certificate again.": "Sunucunun saati {0} UTC gösteriyor ve bu doğru olamaz (nedenini Ayarlar → Yönetim arayüzü söyler); sertifikanın tarihleri de bu saatten alındı: saati doğru olan istemciler onu süresi dolmuş ya da henüz geçerli değil sayabilir. Saati düzelt, sonra sertifikayı yeniden üret."
 }
