@@ -355,6 +355,37 @@ def test_mqtt_command_tags():
           "read-only is RO only  OK")
 
 
+def test_units_not_answering():
+    """A running Modbus gateway whose polled units stopped answering says which, under its
+    state; not for units that answer or are not polled yet, nor while the mapping is not
+    running (the port being down is said there already)."""
+    tpl = make_templates().env.get_template("_mappings_body.html")
+    m = MappingConfig.from_dict({"id": "gw", "name": "gw", "serial": {"port": "COM3"},
+                                 "network": {"protocol": "modbus", "port": 502}})
+
+    def units(*states):
+        return [{"unit": n, "state": st, "cause": "no reply" if st == "offline" else "",
+                 "since": None, "errors": 0} for n, st in states]
+    for state, unit_states, shown in (
+            ("running", [(1, "online"), (2, "offline"), (7, "offline"), (9, "unknown")], "2, 7"),
+            ("running", [(1, "online"), (2, "unknown")], None),
+            ("running", [], None),
+            ("reconnecting", [(1, "offline")], None)):
+        out = tpl.render(mappings=[m], statuses={"gw": {"state": state, "units": units(*unit_states)}},
+                         can_edit=False)
+        check_table_contract(out, f"mappings table ({state}, {unit_states})")
+        root = parse(out)
+        flagged = [n for n in root.walk() if "data-units-offline" in n.attrs]
+        if shown is None:
+            assert not flagged, (state, unit_states, out)
+            continue
+        assert len(flagged) == 1 and f"Modbus unit(s) not answering: {shown}" in out, out
+        assert "in 3 polls in a row" in flagged[0].attrs["title"], flagged[0].attrs
+    out = tpl.render(mappings=[m], statuses={"gw": {"state": "running"}}, can_edit=False)
+    assert "data-units-offline" not in out, "a status without units (an older peer's) works"
+    print("dashboard: a running gateway lists the units that stopped answering  OK")
+
+
 def test_mapping_form_kick_hint():
     """A server mapping with "Kick old client" on and no allow-list says, in its form, that any
     host reaching the port can take the connection over; with an allow-list, or without
@@ -431,6 +462,7 @@ def main():
     test_mapping_form_kick_hint()
     test_mqtt_command_tags()
     test_mapping_form_unit_warnings()
+    test_units_not_answering()
     print("\nPASS: UI markup contract")
 
 

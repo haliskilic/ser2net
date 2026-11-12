@@ -299,6 +299,10 @@ class RunnerStatus:
     # the serial devices open now, for the Ports page's "in use" (both ports of a
     # serial<->serial bridge, whose `device` reads "A <-> B"); not part of as_dict()
     devices: tuple[str, ...] = ()
+    # Modbus gateway in edge mode: each polled unit, {"unit", "state" (unknown | online |
+    # offline), "cause" (offline: "no reply" | "port down"), "since" (unix time of the last
+    # change, None before one), "errors" (failed point reads)}
+    units: list[dict] = field(default_factory=list)
 
     def set_clients(self, clients) -> None:
         """Publish the connected clients (each has peer, connected_at and priority)."""
@@ -328,6 +332,7 @@ class RunnerStatus:
             "dropped_clients": self.dropped_clients,
             "queue_overflows": self.queue_overflows,
             "last_error": self.last_error,
+            "units": [dict(u) for u in self.units],
         }
 
 

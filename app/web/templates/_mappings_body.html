@@ -41,6 +41,8 @@
         {% if st and st.last_error and state in ('error','device-missing','reconnecting') %}
           <div class="err-small" title="{{ st.last_error }}">{{ st.last_error|softbreak }}</div>
         {% endif %}
+        {% set silent = (st.units if st and st.units else [])|selectattr('state', 'equalto', 'offline')|map(attribute='unit')|list %}
+        {% if state == 'running' and silent %}<div class="err-small" data-units-offline title="{{ _('polled Modbus units that gave no reply to any of their points in 3 polls in a row; they are polled with one point per cycle until they answer (see the mapping’s log)') }}">⚠ {{ _("Modbus unit(s) not answering: %(units)s", units=silent|join(', ')) }}</div>{% endif %}
       </td>
       <td data-label="{{ _('Clients') }}">
         {{ st.client_count if st else 0 }}{% if m.network.max_connections > 1 %}/{{ m.network.max_connections }}{% endif %}
