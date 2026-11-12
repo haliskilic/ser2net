@@ -124,6 +124,19 @@ document.addEventListener("submit", function (e) {
   if (f && !window.confirm(f.getAttribute("data-confirm"))) e.preventDefault();
 });
 
+// 2d) Settings → Single sign-on: with no Redirect URI set, the one shown is made from
+//     the address the request reached ser2net with. When a reverse proxy changed that
+//     address, show the redirect URI for this browser's address too.
+document.addEventListener("DOMContentLoaded", function () {
+  var shown = document.querySelector("#oidc-redirect[data-auto]");
+  var warn = document.getElementById("oidc-redirect-mismatch");
+  if (!shown || !warn) return;
+  var mine = location.origin + "/auth/oidc/callback";
+  if (shown.getAttribute("data-uri") === mine) return;
+  warn.querySelector("[data-browser-uri]").textContent = mine;
+  warn.hidden = false;
+});
+
 // 3) Cancel/Close buttons clear the form/log panel. Done via a delegated
 //    listener (not inline onclick, which the Content-Security-Policy blocks).
 document.addEventListener("click", function (e) {

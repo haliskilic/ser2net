@@ -333,7 +333,7 @@
   "Open access is <b>ON</b>: anyone who can reach this page gets the <span class=\"mono\">%(role)s</span> role without a password.": "Açık erişim <b>ETKİN</b>: bu sayfaya ulaşabilen herkes parolasız olarak <span class=\"mono\">%(role)s</span> rolünü alır.",
   "Open access: only this node is shown. <a href=\"/login\">Sign in</a> to see and manage the other cluster nodes.": "Açık erişim: yalnızca bu düğüm gösteriliyor. Diğer cluster düğümlerini görmek ve yönetmek için <a href=\"/login\">giriş yap</a>.",
   "Open audit log →": "Denetim kaydını aç →",
-  "OpenID Connect SSO (Keycloak, Entra ID, Google, Okta…). A claim maps to a ser2net role. Redirect URI: <span class=\"mono\">&lt;this-url&gt;/auth/oidc/callback</span>. Needs <span class=\"mono\">authlib</span> (optional).": "OpenID Connect SSO (Keycloak, Entra ID, Google, Okta…). Bir claim, bir ser2net rolüne eşlenir. Redirect URI: <span class=\"mono\">&lt;this-url&gt;/auth/oidc/callback</span>. İsteğe bağlı <span class=\"mono\">authlib</span> paketini gerektirir.",
+  "OpenID Connect SSO (Keycloak, Entra ID, Google, Okta…). A claim maps to a ser2net role. Needs <span class=\"mono\">authlib</span> (optional).": "OpenID Connect SSO (Keycloak, Entra ID, Google, Okta…). Bir claim, bir ser2net rolüne eşlenir. İsteğe bağlı <span class=\"mono\">authlib</span> paketini gerektirir.",
   "Operator group": "Operator grubu",
   "optional": "isteğe bağlı",
   "optional, e.g. %(example)s": "isteğe bağlı, ör. %(example)s",
@@ -842,5 +842,10 @@
   "Too many sign-ins at the same time. Try again in a moment.": "Aynı anda çok fazla giriş deneniyor. Biraz sonra tekrar dene.",
   "Refused: this request was sent by a page of another web site. If you used ser2net’s own page, its address must reach ser2net unchanged (behind a reverse proxy: as Host or X-Forwarded-Host).": "Reddedildi: bu isteği başka bir web sitesinin sayfası gönderdi. ser2net'in kendi sayfasını kullandıysan, sayfanın adresi ser2net'e değişmeden ulaşmalı (reverse proxy arkasında: Host ya da X-Forwarded-Host olarak).",
   "Remove the stored password": "Kayıtlı parolayı sil",
-  "The export holds each mapping’s MQTT broker password in plain text: keep the file as safe as a password.": "Dışa aktarılan dosya her eşlemenin MQTT broker parolasını açık metin olarak içerir: dosyayı bir parola kadar güvenli tut."
+  "The export holds each mapping’s MQTT broker password in plain text: keep the file as safe as a password.": "Dışa aktarılan dosya her eşlemenin MQTT broker parolasını açık metin olarak içerir: dosyayı bir parola kadar güvenli tut.",
+  "Redirect URI to register at the identity provider:": "Kimlik sağlayıcıya kaydedilecek redirect URI:",
+  "Redirect URI below is blank, so it is made from the address in this page’s request": "aşağıdaki Redirect URI boş olduğu için bu sayfanın isteğindeki adresten oluşturuldu",
+  "as set below": "aşağıda ayarlandığı gibi",
+  "This redirect URI starts with http://: most identity providers accept http:// only for localhost. Use HTTPS (Admin TLS, or a reverse proxy with TLS) and register the https:// address.": "Bu redirect URI http:// ile başlıyor: kimlik sağlayıcıların çoğu http:// adresini yalnızca localhost için kabul eder. HTTPS kullan (Admin TLS ya da TLS'li bir reverse proxy) ve https:// adresini kaydet.",
+  "This browser has the page at another address, for which the redirect URI is <span class=\"mono\" data-browser-uri></span>: a reverse proxy in between changed the address ser2net sees. If users sign in at this browser’s address, enter that value as Redirect URI below and register it at the identity provider.": "Bu tarayıcıda sayfa başka bir adreste açık; o adres için redirect URI <span class=\"mono\" data-browser-uri></span>: aradaki bir reverse proxy, ser2net'in gördüğü adresi değiştirmiş. Kullanıcılar bu tarayıcıdaki adresten giriş yapıyorsa, bu değeri aşağıya Redirect URI olarak gir ve kimlik sağlayıcıya kaydet."
 }

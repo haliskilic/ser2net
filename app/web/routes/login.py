@@ -182,20 +182,11 @@ def routes(ctx: Ctx) -> list:
         return user
 
     # ---------------- OIDC single sign-on ----------------
-    def _oidc_redirect_uri(request) -> str:
-        cfg_uri = state.config.oidc.redirect_uri.strip()
-        if cfg_uri:
-            return cfg_uri
-        scheme = request.headers.get("x-forwarded-proto") or request.url.scheme
-        host = (request.headers.get("x-forwarded-host") or request.headers.get("host")
-                or request.url.netloc)
-        return f"{scheme}://{host}/auth/oidc/callback"
-
     async def oidc_login(request):
         oidc = state.config.oidc
         if not oidc.enabled:
             return RedirectResponse("/login", status_code=303)
-        redirect_uri = _oidc_redirect_uri(request)
+        redirect_uri = oidc_auth.redirect_uri(oidc, request)
         st, nonce = secrets.token_urlsafe(16), secrets.token_urlsafe(16)
         verifier = oidc_auth.new_code_verifier()   # PKCE
         try:
@@ -210,6 +201,11 @@ def routes(ctx: Ctx) -> list:
             state.log(f"OIDC login init failed: {e}")
             return render(request, "login.html", status_code=502, error=None,
                           oidc_enabled=True, oidc_error=_("SSO provider is unreachable."))
+        # the address the provider sends the browser back to, which it must have registered:
+        # when it refuses it, the user stays on the provider's error page
+        state.log(f"OIDC login init from {client_ip(request)}: redirect URI {redirect_uri!r}"
+                  + ("" if oidc.redirect_uri.strip() else
+                     " (made from the request; Settings → Single sign-on (OIDC) shows it)"))
         resp = RedirectResponse(url, status_code=303)
         resp.set_cookie(OIDC_COOKIE,
                         auth.sign_payload(state.config.secret_key,

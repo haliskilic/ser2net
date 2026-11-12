@@ -554,6 +554,15 @@ yapılandırılandan farklıysa all.log bir kez uyarır. id_token'ın zamanları
 (NTP); bir token zamanı yüzünden reddedilirse all.log bu sunucunun saatinin sağlayıcınınkinden
 kaç saniye geri ya da ileri olduğunu yazar.
 
+**SSO redirect URI'si:** **Ayarlar → Tek oturum açma (OIDC)**, sağlayıcıya kaydedilecek
+redirect URI'yi gösterir: girilen *Redirect URI*'yi ya da alan boşsa sayfanın isteğinden
+oluşturulanı (`X-Forwarded-Proto` ya da isteğin şeması, `X-Forwarded-Host` ya da `Host`, ardından
+`/auth/oidc/callback`; `Forwarded` ve `X-Forwarded-Port` okunmaz, böylece çalışan kurulumların
+kaydettiği adres değişmez). Bu adres loopback dışı bir host için http:// ise ya da tarayıcının
+adresinden farklıysa (arada adresi değiştiren bir reverse proxy varsa) sayfa uyarır ve
+tarayıcının adresine göre değeri gösterir; o değeri *Redirect URI* alanına girin. Her SSO
+girişinin başlangıcı gönderilen redirect URI'yi all.log'a yazar.
+
 **TLS üzerinden LDAP (LDAPS / StartTLS):** dizin sunucusunun sertifikası denetlenir.
 Sertifika sistemin güvendiği bir CA'dan gelmeli (Linux / Docker: CA paketi; Windows: sertifika
 deposu, domain üyesi bir makinede AD CA'sı genellikle zaten oradadır) ve sunucu URI'sindeki
