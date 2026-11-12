@@ -573,11 +573,11 @@ up under **Settings → Two-factor sign-in**: it adds the key shown there to an 
 app (Google or Microsoft Authenticator, Aegis, FreeOTP, KeePassXC, … — typed in, or the
 `otpauth://` link pasted or turned into a QR code with any QR maker; ser2net adds no
 dependency for it) and confirms with a code and its password. From then on, signing in takes
-the password and the app's 6-digit code; its other sessions end at that moment. A code is
-accepted for its 30-second step and one step either side (a clock a little off), and only
-once; wrong codes count against the address together with wrong passwords, and five for one
-account in 5 minutes block it for a while. The codes follow the clock: keep the server's
-time right (NTP). Turning it off takes the password and a code. **Lost authenticator:** an
+the password and the app's 6-digit code (turning it on ends the account's other sessions).
+A code is accepted for its 30-second step and one step either side (a clock a little off),
+and only once; wrong codes count against the address together with wrong passwords, and five
+for one account in 5 minutes block it for a while. The codes follow the clock: keep the
+server's time right (NTP). Turning it off takes the password and a code. **Lost authenticator:** an
 admin turns it off for that account under **Settings → Users** (*Turn off 2FA*, which signs
 it out); for the only admin, `ser2net --set-password NAME` on the server sets a new password
 and turns it off (see below). LDAP and OIDC accounts get a second factor from the directory
