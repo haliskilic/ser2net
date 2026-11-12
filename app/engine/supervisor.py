@@ -18,6 +18,7 @@ import asyncio
 import contextlib
 from typing import Any, Callable, Optional, Protocol
 
+from .. import tlsreload
 from ..config import AppConfig, MappingConfig
 from . import serial_io
 from .bridge import MappingRunner, RunnerStatus, remove_files
@@ -265,6 +266,21 @@ class Supervisor:
             if done is not None:
                 return await asyncio.wrap_future(done)
             return await asyncio.to_thread(remove_files, paths)
+
+    async def renew_tls(self, mapping_id: str, build: Callable[[], Any]) -> Optional[str]:
+        """In the mapping's turn: its running TLS listener gets a context made by build()
+        (tlsreload.prepare) for the connections it accepts from now on; those open keep
+        theirs. Returns None when it has none (not running, no TLS), "" once renewed, else
+        why not (the context in use stays)."""
+        async with self._turn(mapping_id):
+            listener = getattr(self._runners.get(mapping_id), "listener", None)
+            if listener is None or listener.ssl is None:
+                return None
+            prepared = await tlsreload.prepare(build)
+            if not prepared.usable or prepared.context is None:
+                return prepared.error or prepared.later or "no TLS context"
+            listener.ssl = prepared.context
+            return ""
 
     async def renew_traces(self, begun_before: float) -> int:
         """Have every running trace whose file holds traffic from before `begun_before`

@@ -632,6 +632,8 @@ class AppState:
         self.admin_tls_waiting = ""
         # the Windows service's name when ser2net runs as one (runtime.service_main)
         self.service_name = ""
+        # reloads of config.json under way (SIGHUP: app/reload.py)
+        self.reloads: set[asyncio.Task] = set()
         # the event loop watchdog (runtime.py, app/watchdog.py; None in tests without one),
         # and the start-up line about a previous run it ended ("" when there was none)
         self.loop_watchdog: Any = None
@@ -1178,6 +1180,9 @@ class AppState:
     async def _apply_account_request(self, request) -> tuple[bool, str]:
         if request is None:
             return False, "the request was unreadable or too old; run the command again"
+        if request.get("action") == "reload":  # `ser2net --reload`
+            from .reload import reload_config
+            return await reload_config(self, "command line", user=accounts.ACTOR)
         async with self.config_lock:
             try:
                 change = accounts.apply(self.config, request)

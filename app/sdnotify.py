@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import os
 import socket
+import time
 from typing import Mapping, Optional
 
 
@@ -40,6 +41,17 @@ def notify(*fields: str, env: Optional[Mapping[str, str]] = None) -> bool:
 def ready(status: str = "", env: Optional[Mapping[str, str]] = None) -> bool:
     """ser2net has started: its mappings run and its admin UI listens."""
     return notify("READY=1", *([f"STATUS={status}"] if status else []), env=env)
+
+
+def reloading(env: Optional[Mapping[str, str]] = None) -> bool:
+    """ser2net reads config.json again (systemctl reload, SIGHUP); ready() follows when it
+    is done (also what Type=notify-reload waits for)."""
+    fields = ["RELOADING=1"]
+    try:
+        fields.append(f"MONOTONIC_USEC={time.clock_gettime_ns(time.CLOCK_MONOTONIC) // 1000}")
+    except (AttributeError, OSError):  # (no CLOCK_MONOTONIC: Windows, which has no systemd)
+        pass
+    return notify(*fields, env=env)
 
 
 def stopping(env: Optional[Mapping[str, str]] = None) -> bool:

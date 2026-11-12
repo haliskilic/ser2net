@@ -3,6 +3,8 @@
     ser2net --set-password NAME   a new password for local account NAME, whose sessions
                                   end (NAME is created as an admin if it doesn't exist)
     ser2net --sign-out-all        a new session key: every web UI session ends
+    ser2net --reload              the running instance reads config.json again
+                                  (app/reload.py); only while one runs
     SER2NET_ADMIN_PASSWORD_FILE   (+ SER2NET_ADMIN_USER, default "admin") the first admin
                                   of an install without accounts, e.g. a Docker secret
 
@@ -412,10 +414,55 @@ def _hand_over(request: dict, data_dir: str, pid: Optional[int]) -> Optional[str
                        "command again once its web UI answers; otherwise see its log (all.log)")
 
 
+def reload_running(config_path: str) -> str:
+    """`ser2net --reload`: the instance running with this data directory reads config.json
+    again (the same hand-over as the account commands; it also works for the Windows
+    service and in a container). Raises AccountError when none runs, or it didn't reload."""
+    data_dir = os.path.dirname(os.path.abspath(config_path))
+    request = {"action": "reload"}
+    try:
+        try:
+            note = datalock.acquire(data_dir, brief=True, wait=datalock.BRIEF_WAIT_S)
+        except datalock.Held as e:
+            if e.brief:  # one of the account commands, still busy
+                raise AccountError(f"{e}; run this again in a moment") from None
+            message = _reloaded(_hand_over, request, data_dir, e.pid)
+            if message is not None:
+                return message
+        else:  # no instance holds the lock; one may run where it can't be used
+            running = os.path.isfile(config_path) and healthcheck.check(config_path, timeout=3)[0]
+            if running or note is not None:
+                request_id = post_request(data_dir, request)
+                result = wait_answer(data_dir, request_id,
+                                     WAIT_RUNNING_S if running else WAIT_STOPPED_S)
+                if result is not None:
+                    return _reloaded(_done, result)
+        raise AccountError(f"ser2net is not running with {data_dir}: nothing to reload (it "
+                           "reads config.json when it starts)")
+    finally:
+        datalock.release(data_dir)  # if this command took it
+
+
+def _reloaded(how, *args):
+    """A reload's answer; one from an instance before 2.9.0 says that it can't."""
+    try:
+        return how(*args)
+    except AccountError as e:
+        if str(e).startswith("unknown request"):
+            raise AccountError("the running ser2net is older than 2.9.0 and can't reload "
+                               "config.json: restart it instead") from None
+        raise
+
+
 def main(args, config_path: str, stdin=None) -> int:
-    """`ser2net --set-password NAME` / `ser2net --sign-out-all`."""
+    """`ser2net --set-password NAME` / `ser2net --sign-out-all` / `ser2net --reload`."""
     stdin = sys.stdin if stdin is None else stdin
     try:
+        if getattr(args, "reload", False):
+            data_dir = os.path.dirname(os.path.abspath(config_path))
+            note = become_owner(data_dir)  # (the request files must be the server's to read)
+            print(f"ser2net: {reload_running(config_path)}{note}")
+            return 0
         if args.set_password is not None:
             from .web.routes.forms import _username_problem
 

@@ -32,7 +32,8 @@ else:  # pragma: no cover - exercised only on Python 3.10
     from taskgroup import Runner
 
 from . import (
-    accounts, console, datalock, i18n, logsetup, sdnotify, standalone, tlsreload, watchdog,
+    accounts, console, datalock, i18n, logsetup, reload, sdnotify, standalone, tlsreload,
+    watchdog,
 )
 from .config import ConfigError, ConfigStore
 from .engine import netguard
@@ -119,6 +120,25 @@ _shutdown_requested = threading.Event()
 _shutdown_hooks: list = []
 # Called once the server is ready (when_ready): the Windows service reports RUNNING then.
 _ready_hooks: list[Callable[[], None]] = []
+
+
+# SIGHUP (POSIX) has ser2net read config.json again (app/reload.py). One that comes before
+# the event loop handles it (while config.json is loaded at start-up) is noted here instead
+# of ending the process, its default, and handled once the server runs.
+_hangups: list[float] = []
+
+
+def _defer_hangups() -> None:
+    if hasattr(signal, "SIGHUP"):
+        with contextlib.suppress(ValueError, OSError):  # (not the main thread)
+            signal.signal(signal.SIGHUP, lambda _sig, _frame: _hangups.append(time.time()))
+
+
+def _stdin_is_terminal() -> bool:
+    try:
+        return sys.stdin is not None and os.isatty(sys.stdin.fileno())
+    except (AttributeError, ValueError, OSError):
+        return False
 
 
 def when_ready(hook: Callable[[], None]) -> None:
@@ -298,6 +318,7 @@ def hold_data_dir(config_path: str) -> str | None:
 
 
 def main(config_path: str, reconfigure: bool = False) -> int:
+    _defer_hangups()
     standalone.prepare()  # standalone Linux binary: find the system CA certificates
     lock_note = hold_data_dir(config_path)
     try:
@@ -483,6 +504,27 @@ async def _serve(store: ConfigStore, config, loop_note: str = "") -> int:
         with contextlib.suppress(NotImplementedError, ValueError, RuntimeError, AttributeError):
             loop.add_signal_handler(sig, _request_shutdown)
 
+    # SIGHUP: read config.json again. A terminal that closes sends it too (to a ser2net
+    # started in it): its stdin is a terminal no more then, and ser2net stops cleanly,
+    # as the end of that session asks; `kill -HUP` while the terminal is open reloads.
+    in_terminal = _stdin_is_terminal()
+
+    def _hangup() -> None:
+        if in_terminal and not _stdin_is_terminal():
+            state.log("SIGHUP: the terminal ser2net was started in was closed — shutting down")
+            _request_shutdown()
+            return
+        task = asyncio.create_task(reload.reload_config(state, "SIGHUP"), name="reload")
+        state.reloads.add(task)
+        task.add_done_callback(state.reloads.discard)
+
+    if hasattr(signal, "SIGHUP"):
+        with contextlib.suppress(NotImplementedError, ValueError, RuntimeError):
+            loop.add_signal_handler(signal.SIGHUP, _hangup)
+            if _hangups:  # (one that came while ser2net was starting)
+                _hangups.clear()
+                _hangup()
+
     def _from_other_thread() -> None:
         loop.call_soon_threadsafe(_request_shutdown)
 
@@ -498,6 +540,10 @@ async def _serve(store: ConfigStore, config, loop_note: str = "") -> int:
     finally:
         sdnotify.stopping()
         ready_task.cancel()
+        for task in list(state.reloads):  # (a reload under way ends with the process)
+            task.cancel()
+            with contextlib.suppress(BaseException):
+                await task
         _shutdown_hooks.remove(_from_other_thread)
         guard.close()
         state.log("shutting down — stopping all mappings")

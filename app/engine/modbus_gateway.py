@@ -112,6 +112,11 @@ class ModbusGatewayRunner:
         """The trace writer while the mapping runs with tracing on."""
         return self._tracer
 
+    @property
+    def listener(self) -> Optional[netguard.Listener]:
+        """The Modbus TCP listener while the mapping runs, else None."""
+        return self._server
+
     # ---- console monitors (watch the raw bus) ----
     def add_monitor(self, mon) -> None:
         self._monitors.add(mon)

@@ -393,8 +393,8 @@ değiştirmediyse değişir (yoksa `412`, `precondition_failed`); `If-Match` olm
 Başlatma ve durdurma idempotenttir: ayarlarıyla zaten çalışan bir eşlemeyi başlatmak ya da
 durmuş birini durdurmak hiçbir şeyi değiştirmez (`"changed": false`; istemcileri, seri portu
 ve MQTT bağlantısı yerinde kalır). Çalışan bir eşlemeyi yeniden başlatmak için — örneğin
-open string'ini yeniden göndermek ya da değiştirilen bir TLS sertifikasını yüklemek için —
-`restart` kullan. Eşlemenin kendi ayarlarıyla gelen bir `PUT` da hiçbir şeyi değiştirmez.
+open string'ini yeniden göndermek için — `restart` kullan (aynı yollarda yenilenen bir TLS
+sertifikasını `config.json`'un yeniden yüklenmesi de istemcileri düşürmeden okur). Eşlemenin kendi ayarlarıyla gelen bir `PUT` da hiçbir şeyi değiştirmez.
 Bir değer metin olarak da gönderilebilir (`"9600"`; `"false"` false demektir); ayarın tipine
 uymayan bir değer `400` ve ayarın yoluyla reddedilir (`serial.baudrate: "fast" is not a whole
 number.`). Koruyucu bir ayar (`read_only`, `tls`) yalnızca JSON `true` / `false` alır: metin
@@ -681,7 +681,9 @@ içeren bir dosyaya (Docker secret) yönlendirin; ad için `SER2NET_ADMIN_USER` 
   `docker run` ile çalıştırıyorsanız `--restart unless-stopped` ekleyin (var olan bir
   container için: `docker update --restart unless-stopped ser2net`).
 - **Linux (systemd):** `systemd/ser2net.service` — ayrı, yetkisiz bir kullanıcı,
-  `SupplementaryGroups=dialout`, `Restart=on-failure`, sertleştirme direktifleri.
+  `SupplementaryGroups=dialout`, `Restart=on-failure`, sertleştirme direktifleri;
+  `systemctl reload ser2net` `config.json`'u yeniden okur (bkz. Yapılandırma & durum
+  dosyaları).
   **root ile çalıştırmayın.** İsteğe bağlı: `systemd/ser2net.service.d/notify.conf`
   drop-in'i (`Type=notify`, `WatchdogSec=120`) systemd'nin ser2net'i ancak eşlemeleri
   çalışıp arayüzü dinlemeye başladığında başlamış saymasını ve event loop'u yanıt vermeyi
@@ -816,6 +818,26 @@ Eşleme ID'leri (yukarıdaki `<id>`; REST API'de de kullanılır) 1–64 harf, r
 içerir; yeni eşlemeler 12 hex haneli bir ID alır. Başka biçimdeki bir ID (elle düzenlenmiş
 ya da içe aktarılmış) config yüklenirken ya da dosya içe aktarılırken değiştirilir; açılış
 logu ya da içe aktarma önizlemesi bunu belirtir.
+
+**ser2net çalışırken `config.json`'u değiştirmek:** ser2net dosyayı açılışta okur, sonra
+bellekteki kopyasıyla çalışır. Elle ya da bir araçla (Ansible, kopyalanan bir dosya) yapılan
+bir düzenlemeden sonra dosyayı yeniden okutun — yeniden başlatma gerekmez:
+`systemctl reload ser2net` ya da `kill -HUP <pid>` (SIGHUP, Linux/macOS;
+`docker kill -s HUP ser2net`), aynı `--data-dir` ile `ser2net --reload` (her platformda;
+Windows servisi ve konteyner için de) ya da Ayarlar → *Yapılandırma yedekleri* →
+*config.json'u yeniden yükle*. Dosya bir düzenleme gibi denetlenir: okunamıyor ya da
+doğrulanmıyorsa (değişen bir eşlemede yanlış tipte bir değer, aynı portu kullanan iki eşleme,
+hiç kullanıcı hesabı olmaması, yüklenemeyen bir TLS çifti) hiçbir şey değişmez ve nedeni
+`all.log`'a yazılır. Aksi halde parça parça uygulanır: ayarları değişmeyen bir eşleme
+istemcileriyle çalışmayı sürdürür (çalışması gerekip çalışmayan başlatılır), değişen yeniden
+başlar, kaldırılan durur, yeni olan başlar; küme yalnızca ayarları değiştiyse yeniden başlar.
+Yönetim arayüzünün ve değişmeyen TLS eşlemelerinin sertifika dosyaları yeni bağlantılar için
+yeniden okunur (yenilenen bir sertifika: örn. certbot'un
+`--deploy-hook "systemctl reload ser2net"` seçeneği). Yönetim arayüzünün adresi ancak bir
+sonraki açılışta geçerli olur (log, yanıt ve Ayarlar bunu söyler); `--data-dir` / `--config`
+ve ortam değişkenleri de öyle. Terminalde, terminal kapanınca gelen SIGHUP ser2net'i yine
+(düzgünce) kapatır. Log satırı ve denetim kaydı (`config_reload`) neyin değiştiğini söyler.
+Bu arada arayüzden yapılan kayıtlar kullanılan yapılandırmayı yazar; önce yeniden yükleyin.
 
 `config.json` + `all.log` silinince sistem **sıfırdan** başlar (sonraki açılış artık
 olmayan eşlemelerin log'larını ve trace'lerini siler; `backups/` kendiliğinden geri

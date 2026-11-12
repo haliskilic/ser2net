@@ -11,6 +11,7 @@ Run:
     python3 ser2net.py --reconfigure   # re-pick the admin UI bind IP/port on the console
     python3 ser2net.py --about         # versions of the bundled components (for bug reports)
     python3 ser2net.py --set-password admin   # lost the password? (also while it runs)
+    python3 ser2net.py --reload        # the running ser2net reads config.json again
     python3 ser2net.py --help
 """
 from __future__ import annotations
@@ -105,7 +106,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                           "the first line of stdin.")
     one.add_argument("--sign-out-all", action="store_true",
                      help="End every web UI session (new session key), then exit.")
+    run = p.add_argument_group("a running ser2net")
+    run.add_argument("--reload", action="store_true",
+                     help="Have the ser2net running with this data directory read config.json "
+                          "again and apply it without a restart (mappings that didn't change "
+                          "keep running with their clients), then exit. On Linux/macOS "
+                          "SIGHUP does the same (systemctl reload ser2net).")
     args = p.parse_args(argv)
+    if args.reload and (args.set_password is not None or args.sign_out_all):
+        p.error("--reload can't be combined with --set-password or --sign-out-all")
     args.data_dir_given = args.data_dir is not None
     if args.data_dir is None:
         args.data_dir = os.path.join(_app_dir(), "data")
@@ -213,7 +222,7 @@ def main(argv: list[str] | None = None) -> int:
     # 2. resolve config path
     config_path = args.config or os.path.join(args.data_dir, "config.json")
 
-    if args.set_password is not None or args.sign_out_all:
+    if args.set_password is not None or args.sign_out_all or args.reload:
         from app import accounts
 
         return accounts.main(args, config_path)

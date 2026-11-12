@@ -422,7 +422,7 @@
 
 <section class="panel panel-narrow">
   <div class="panel-head"><h2>{{ _("Admin TLS (HTTPS)") }}</h2></div>
-  <p class="muted mb-sm">{{ _("Encrypts this management UI. A change applies to new connections at once (the files are read when you save); connections already open keep theirs.") }}</p>
+  <p class="muted mb-sm">{{ _("Encrypts this management UI. A change applies to new connections at once (the files are read when you save, and again when ser2net reloads config.json); connections already open keep theirs.") }}</p>
   <form method="post" action="/settings/tls" class="authform">
     <input type="hidden" name="_csrf" value="{{ request.state.csrf_token }}">
     <label>{{ _("Certificate path") }} <input type="text" name="tls_cert" value="{{ admin.tls_cert }}" placeholder="/path/cert.pem"></label>
@@ -520,6 +520,11 @@
 <section class="panel panel-narrow" id="backups">
   <div class="panel-head"><h2>{{ _("Configuration backups") }}</h2></div>
   <p class="muted mb-sm">{{ _('Every change keeps the <span class="mono">config.json</span> it writes in the data folder’s <span class="mono">backups/</span>, and the one it replaces if that isn’t there yet (the newest 50; the one in use is marked), so the current configuration is kept there too, also when an older version takes over. Starting or stopping a mapping takes no backup of its own (the newest one is updated), so it doesn’t push out the backups of real changes. Restoring one brings back its mappings and settings after showing what changes for sign-in and access; the user accounts, the REST API token and the cluster key stay as they are unless you restore them too. A restore can be undone. Backups contain password hashes and secrets: only admins see them, and a download leaves out the session key.') }}</p>
+  <form method="post" action="/settings/config/reload" class="authform mb-sm">
+    <input type="hidden" name="_csrf" value="{{ request.state.csrf_token }}">
+    <p class="muted mb-sm">{{ _('<span class="mono">config.json</span> changed by hand or by a tool (Ansible …) is used once ser2net reads it again: here, with <span class="mono">ser2net --reload</span>, or on Linux with SIGHUP (<span class="mono">systemctl reload ser2net</span>). Mappings whose settings didn’t change keep running with their clients; certificate files are read again. A file that doesn’t validate changes nothing (all.log says why); a new admin UI address waits for the next start.') }}</p>
+    <button class="btn" type="submit">{{ _("Reload config.json") }}</button>
+  </form>
   {% if newer_writer %}<div class="banner warn">{{ _('At start-up, config.json had been written by ser2net %(newer)s, a newer version than this one (%(this)s). What only that version knows is not used here, and it is left out when this version saves config.json. The backups below keep the file as that version left it: restore it after upgrading again.', newer=newer_writer, this=asset_version) }}</div>{% endif %}
   {% if unknown_keys %}<div class="banner warn">{{ _('At start-up, config.json had settings this version doesn’t know: %(keys)s. They are not used here, and they are left out when config.json is saved; the backups below keep the file with them.', keys=(unknown_keys[:10] | join(', ')) ~ (' …' if unknown_keys | length > 10 else '')) }}</div>{% endif %}
   {% if restore_preview %}

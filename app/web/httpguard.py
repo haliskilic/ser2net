@@ -59,6 +59,13 @@ class AdminGuard:
     def stopping(self) -> bool:
         return bool(self.server is not None and self.server.should_exit)
 
+    def use_limits(self, admin: Any) -> None:
+        """admin_ui's connection limits as they are now (a reload): from the next
+        connection or request on."""
+        self.connections.total = admin.max_connections
+        self.connections.per_ip = admin.max_connections_per_ip
+        self.request_timeout = admin.request_timeout_s
+
     def admit(self, transport: Any) -> bool:
         """Whether an accepted connection may in; a refused one is closed and logged."""
         ip = netguard.peer_ip(transport)

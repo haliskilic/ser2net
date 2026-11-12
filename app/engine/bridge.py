@@ -868,6 +868,11 @@ class MappingRunner:
         """The trace writer while the mapping runs with tracing on."""
         return self._tracer
 
+    @property
+    def listener(self) -> Optional[netguard.Listener]:
+        """The server mode listener while the mapping runs, else None."""
+        return self._server
+
     def _log(self, msg: str) -> None:
         # The logger (a per-mapping logger from AppState) adds the "[name]" prefix
         # for the global all.log and also writes to this mapping's own log file.

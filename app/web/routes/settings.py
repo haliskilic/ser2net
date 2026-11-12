@@ -17,7 +17,7 @@ from urllib.parse import urlencode
 from starlette.responses import PlainTextResponse, Response
 from starlette.routing import Route
 
-from ... import console, i18n, importer, optional, storage
+from ... import console, i18n, importer, optional, reload, storage
 from ...config import (
     BACKUPS_MIN_KEPT, EXPIRE_DAYS_MAX, EXPIRE_DAYS_MIN, LOG_DAYS_MAX, NOTIFY_EVENTS, ROLES,
     SMTP_SECURITY, TRACE_DAYS_MAX, UI_LANGUAGES,
@@ -27,7 +27,7 @@ from ...config import (
 from ...engine.cluster import KEY_OVERLAP_S, key_bytes
 from ...i18n import _
 from .. import auth, ldap_auth, selfsigned
-from .common import Ctx, csrf_failed
+from .common import Ctx, client_ip, csrf_failed
 from .forms import (
     _checkbox, _ldap_from_form, _oidc_from_form, _password_problem, _username_problem,
 )
@@ -1077,6 +1077,22 @@ def routes(ctx: Ctx) -> list:
             set_session(resp, request, mine)
         return resp
 
+    async def config_reload(request):
+        """Read config.json again and apply it, as SIGHUP / `ser2net --reload` do
+        (app/reload.py): for an edit made outside the UI (by hand, Ansible ...)."""
+        if deny := require_role(request, "admin"):
+            return deny
+        form = await request.form()
+        if not auth.csrf_token_matches(request, form.get("_csrf")):
+            return csrf_failed()
+        ok, message = await reload.reload_config(state, "Settings", client_ip(request),
+                                                 ctx.actor(request))
+        if ok:
+            return await settings_get(request, ok=_("config.json was read again and applied: "
+                                                    "{0}").format(message))
+        return await settings_get(request, error=_("config.json was not reloaded, the "
+                                                   "configuration in use stays: {0}").format(message))
+
     async def backup_restore_mappings(request):
         """Restore only a backup's mappings, through the import preview (replace)."""
         if deny := require_role(request, "admin"):
@@ -1240,6 +1256,7 @@ def routes(ctx: Ctx) -> list:
         Route("/settings/audit", audit_page),
         Route("/settings/audit.csv", audit_csv),
         Route("/settings/backups/restore", backup_restore, methods=["POST"]),
+        Route("/settings/config/reload", config_reload, methods=["POST"]),
         Route("/settings/backups/restore-mappings", backup_restore_mappings, methods=["POST"]),
         Route("/settings/backups/{name}", backup_download),
     ]
