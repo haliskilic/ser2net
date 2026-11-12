@@ -10,7 +10,9 @@ event loop stopped). Now, on a real server:
     connecting and of the end of each response, or it is closed; a slow but complete head
     is served; an upgraded WebSocket (the console) is not timed;
   - a request body has to keep coming too (one that stops, or is trickled after the app
-    answered without reading it, is closed in time; a slow but steady one is read), and a
+    answered without reading it, is closed in time; a slow but steady one is read; one
+    the app answered before it was in, from a client that asked to close the connection,
+    is read to its end before the connection closes, so it is not reset), and a
     client that takes nothing of its response for request_timeout_s is dropped, while a
     slow reader gets all of it;
   - at most admin_ui.max_connections_per_ip from one address and admin_ui.max_connections
@@ -177,6 +179,32 @@ def test_request_body_deadline():
                 early.sendall(b"x")
             time.sleep(0.3)
         assert time.monotonic() - t0 < 4, "a body trickled after the response kept the socket"
+        # the same from a client that asked to close the connection (urllib does): the rest
+        # of the body is read before the close, which is then a clean one. Closed at once,
+        # the body arriving afterwards reset the connection, and a client on Windows lost
+        # the answer it had not read yet (a refusal's, say).
+        closing = connect(port)
+        closing.sendall(b"GET /healthz HTTP/1.1\r\nHost: x\r\nConnection: close\r\n"
+                        b"Content-Length: 50\r\n\r\n")
+        assert response(closing) == (b"HTTP/1.1 200 OK", b"ok")
+        assert still_open(closing), "closed with the request's body still to come"
+        closing.sendall(b"y" * 50)
+        closing.settimeout(3)
+        try:
+            assert closing.recv(100) == b"", "more than the answer"
+        except ConnectionResetError:
+            raise AssertionError("the connection was reset, not closed") from None
+        stalled = connect(port)   # ... but not for longer than the request deadline
+        stalled.sendall(b"GET /healthz HTTP/1.1\r\nHost: x\r\nConnection: close\r\n"
+                        b"Content-Length: 50\r\n\r\nyyyy")
+        assert response(stalled) == (b"HTTP/1.1 200 OK", b"ok")
+        assert closed_within(stalled, 6) < 4, "a body that stops after the answer kept the socket"
+        waiting = connect(port)   # one that waited for "100 Continue" and sends no body,
+        waiting.sendall(b"GET /healthz HTTP/1.1\r\nHost: x\r\nConnection: close\r\n"
+                        b"Expect: 100-continue\r\nContent-Length: 50\r\n\r\n")
+        assert response(waiting) == (b"HTTP/1.1 200 OK", b"ok")
+        waiting.shutdown(socket.SHUT_WR)   # ... but closes: closed at once
+        assert closed_within(waiting, 2) < 1
         steady = connect(port)  # slow, but steady: 1.25 KB/s for longer than the deadline
         body = b"username=nobody&password=" + b"x" * 3975
         steady.sendall(b"POST /login HTTP/1.1\r\nHost: x\r\n" + form +
@@ -189,10 +217,12 @@ def test_request_body_deadline():
         status, _page = response(steady)
         assert status.startswith(b"HTTP/1.1 "), status
         assert get(steady) == b"ok", "the connection must stay usable after a slow body"
-        for s in (stuck, early, steady):
+        for s in (stuck, early, closing, stalled, waiting, steady):
             s.close()
     print("admin UI: a request body that stops or trickles is closed after request_timeout_s "
-          "(also one answered before it was read); a slow but steady body is read  OK")
+          "(also one answered before it was read); answered before it was read, with "
+          "Connection: close, the rest is read before a clean close; a slow but steady body "
+          "is read  OK")
 
 
 def test_send_deadline():
