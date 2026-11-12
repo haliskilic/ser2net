@@ -1,26 +1,30 @@
-"""Serial port enumeration + live (hotplug-aware) port list.
+"""Serial port enumeration + the live port list.
 
-Baseline is privilege-free polling of ``serial.tools.list_ports.comports()`` on a
-timer, diffed against the last snapshot — works identically on Windows and Linux
-and needs no elevation just to *list* ports. (Opening a port for forwarding does
-need dialout-group membership on Linux; that surfaces in the engine, not here.)
+Listing ports is privilege-free polling of ``serial.tools.list_ports.comports()``, which
+works the same on Windows and Linux and needs no elevation just to *list* ports. (Opening a
+port for forwarding does need the serial group on Linux; that surfaces in the engine, not
+here.)
 
-An optional event-driven layer (pyudev on Linux, WM_DEVICECHANGE on Windows) can
-be layered later to merely *trigger* an immediate rescan; the polling loop remains
-the always-correct source of truth.
+PortWatcher keeps the list. Taking it is a full enumeration (sysfs or SetupAPI, a few ms
+per port), so it is not taken at every poll: every couple of seconds a cheap check
+(port_signature: a few directory reads, a registry key on Windows) tells whether a port
+came or went, and only then is the list taken again; also when the UI or the API asks for
+one older than a couple of seconds (PortWatcher.current), and at least every minute
+(what else may use a port changes without the ports changing).
 """
 from __future__ import annotations
 
 import asyncio
 import os
 import sys
-import threading
 import time
 from typing import Any, Callable, Optional
 
 from ..config import canonical_device
 
 BY_ID_DIR = "/dev/serial/by-id"
+BY_PATH_DIR = "/dev/serial/by-path"
+SYS_CLASS_TTY = "/sys/class/tty"
 
 
 def _normalize(p: Any) -> dict[str, Any]:
@@ -165,21 +169,85 @@ def _remember(ports: list[dict[str, Any]]) -> None:
     _recent = (time.monotonic(), list(ports))
 
 
-class PortWatcher:
-    """Polls the serial port list on an interval and tracks the current snapshot.
+def port_signature(sys_class: str = SYS_CLASS_TTY,
+                   link_dirs: tuple[str, ...] = (BY_ID_DIR, BY_PATH_DIR)) -> Optional[tuple]:
+    """What changes when a serial port comes or goes, read without enumerating the ports:
+    Linux the tty devices in sysfs (and where each one sits, which a USB adapter in another
+    socket changes) and the /dev/serial links udev makes a moment later; Windows the COM
+    ports the registry lists; elsewhere the tty and cu nodes in /dev. None when it can't be
+    read (then the list is taken at every poll). Blocking (a few directory reads)."""
+    try:
+        if sys.platform.startswith("linux"):
+            ttys = []
+            for name in sorted(os.listdir(sys_class)):
+                try:
+                    ttys.append((name, os.readlink(os.path.join(sys_class, name))))
+                except OSError:  # (not a link: a stand-in tree, an odd sysfs)
+                    ttys.append((name, ""))
+            links = []
+            for d in link_dirs:
+                try:
+                    links.append(tuple(sorted(os.listdir(d))))
+                except OSError:  # no such links (no udev: a container), or none yet
+                    links.append(())
+            return tuple(ttys), tuple(links)
+        if sys.platform == "win32":
+            return _serialcomm()
+        return tuple(sorted(n for n in os.listdir("/dev") if n.startswith(("tty", "cu."))))
+    except OSError:
+        return None
 
-    ``get()`` returns the latest list. ``version`` increments on every change, so
-    the UI can poll cheaply and the watcher can notify a callback (e.g. to push a
-    refresh). Cross-platform, privilege-free.
+
+def _serialcomm() -> tuple:
+    """Windows: the COM ports HKLM\\HARDWARE\\DEVICEMAP\\SERIALCOMM lists (each driver
+    adds its ports there), as (value name, COM name) pairs; () when the key is not there (no
+    port yet)."""
+    import winreg  # type: ignore[import-not-found,unused-ignore]
+
+    try:
+        key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE,  # type: ignore[attr-defined,unused-ignore]
+                             r"HARDWARE\DEVICEMAP\SERIALCOMM")
+    except FileNotFoundError:
+        return ()
+    found = []
+    with key:
+        i = 0
+        while True:
+            try:
+                name, value, _kind = winreg.EnumValue(key, i)  # type: ignore[attr-defined,unused-ignore]
+            except OSError:  # no more values
+                break
+            found.append((str(name), str(value)))
+            i += 1
+    return tuple(sorted(found))
+
+
+class PortWatcher:
+    """Keeps the serial port list (see the module docstring for when it is taken).
+
+    ``get()`` returns the latest list, ``current()`` one at most ``max_age`` seconds old.
+    ``version`` increments whenever the set of ports changes, and ``on_change`` is called
+    then (Supervisor.ports_changed: mappings waiting for a port try again). Cross-platform,
+    privilege-free.
     """
 
-    def __init__(self, interval: float = 2.0, on_change: Optional[Callable[[list[dict[str, Any]]], None]] = None):
+    # how old a list the UI or the API may be shown (current)
+    FRESH = 2.0
+
+    def __init__(self, interval: float = 2.0,
+                 on_change: Optional[Callable[[list[dict[str, Any]]], None]] = None,
+                 full_interval: float = 60.0,
+                 signature: Optional[Callable[[], Optional[tuple]]] = None):
         self.interval = interval
+        self.full_interval = full_interval
         self._on_change = on_change
+        self._signature = signature or port_signature
         self._ports: list[dict[str, Any]] = []
         self._version = 0
+        self._taken = 0.0   # time.monotonic() when the list was taken
+        self._sig: Optional[tuple] = None  # port_signature then
         self._task: Optional[asyncio.Task] = None
-        self._rescans: set = set()   # keep refs to fire-and-forget rescan tasks
+        self._scanning: Optional[asyncio.Future] = None  # a list being taken now
         self._stop = asyncio.Event()
 
     @property
@@ -189,18 +257,19 @@ class PortWatcher:
     def get(self) -> list[dict[str, Any]]:
         return list(self._ports)
 
+    async def current(self, max_age: float = FRESH) -> list[dict[str, Any]]:
+        """The list, taken again first when it is older than ``max_age`` seconds (one
+        enumeration for any number of callers at once)."""
+        if time.monotonic() - self._taken > max_age:
+            await self._rescan()
+        return self.get()
+
     async def start(self) -> None:
-        # prime synchronously so the first UI render has data
-        self._ports = await async_snapshot()
-        _remember(self._ports)
+        # take the list now, so the first UI render has data
+        await self._rescan()
         self._version = 1
         self._stop.clear()
         self._task = asyncio.create_task(self._run(), name="port-watcher")
-        # optional event-driven layer (just triggers an immediate rescan); polling
-        # above remains the always-correct source of truth if this can't start.
-        self._loop = asyncio.get_running_loop()
-        self._event_thread: Optional[threading.Thread] = None
-        self._start_event_watcher()
 
     async def stop(self) -> None:
         global _recent
@@ -214,51 +283,25 @@ class PortWatcher:
                 pass
             self._task = None
 
-    def _trigger_rescan(self) -> None:
-        # keep a reference so the task isn't garbage-collected mid-flight (RUF006)
-        if self._stop.is_set():
-            return
-        task = asyncio.ensure_future(self.refresh_now())
-        self._rescans.add(task)
-        task.add_done_callback(self._rescans.discard)
+    async def _rescan(self) -> None:
+        scan = self._scanning
+        if scan is None or scan.done():
+            scan = self._scanning = asyncio.ensure_future(self._scan())
+        # (a caller that goes away, a closed request, does not cancel it for the others)
+        await asyncio.shield(scan)
 
-    def _start_event_watcher(self) -> None:
-        """Best-effort hotplug events; silently no-op (polling continues) if the
-        platform library is missing or the source can't be created."""
-        if sys.platform.startswith("linux"):
-            try:
-                import pyudev  # optional
-                ctx = pyudev.Context()
-                mon = pyudev.Monitor.from_netlink(ctx)
-                mon.filter_by("tty")
-
-                def run():
-                    for _dev in iter(lambda: mon.poll(timeout=1.0), False):
-                        if self._stop.is_set():
-                            break
-                        if _dev is not None:
-                            self._loop.call_soon_threadsafe(self._trigger_rescan)
-
-                thread = threading.Thread(target=run, daemon=True)
-                thread.start()
-                self._event_thread = thread
-            except Exception:
-                pass  # libudev/pyudev unavailable or blocked -> polling only
-        elif sys.platform == "win32":
-            try:
-                import win32gui  # noqa: F401  (pywin32, optional)
-                from . import _win_hotplug  # optional helper module
-
-                self._event_thread = _win_hotplug.start(self._loop, self._trigger_rescan,
-                                                        self._stop)
-            except Exception:
-                pass  # pywin32 / helper unavailable -> polling only
-
-    async def refresh_now(self) -> list[dict[str, Any]]:
-        """Force an immediate rescan (used by the UI 'Refresh' button)."""
-        new = await async_snapshot()
+    async def _scan(self) -> None:
+        sig, new = await asyncio.to_thread(self._take)
+        self._sig, self._taken = sig, time.monotonic()
         self._apply(new)
-        return self.get()
+
+    def _take(self) -> tuple[Optional[tuple], list[dict[str, Any]]]:
+        # the signature before the list: a port that comes while it is taken is seen next time
+        try:
+            sig = self._signature()
+        except Exception:
+            sig = None
+        return sig, snapshot()
 
     def _apply(self, new: list[dict[str, Any]]) -> None:
         _remember(new)  # (before on_change: a mapping it wakes resolves its port from it)
@@ -278,8 +321,15 @@ class PortWatcher:
         while not self._stop.is_set():
             try:
                 await asyncio.sleep(self.interval)
-                new = await async_snapshot()
-                self._apply(new)
+                try:
+                    sig = await asyncio.to_thread(self._signature)
+                except Exception:
+                    sig = None
+                if (sig is None or sig != self._sig
+                        or time.monotonic() - self._taken >= self.full_interval):
+                    await self._rescan()
+                else:
+                    _remember(self._ports)  # still the ports there are (portlist.recent)
             except asyncio.CancelledError:
                 raise
             except Exception:

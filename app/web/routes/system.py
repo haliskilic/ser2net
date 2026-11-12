@@ -71,15 +71,15 @@ def routes(ctx: Ctx) -> list:
                                  media_type="text/plain; version=0.0.4")
 
     async def api_ports_json(request):
-        return JSONResponse(state.ports.get())
+        return JSONResponse(await state.ports.current())
 
     async def api_ports_refresh(request):
-        ports = await state.ports.refresh_now()
+        ports = await state.ports.current(max_age=0.0)
         selected = request.query_params.get("selected", "")
         return render(request, "_serial_port_select.html", ports=ports, selected=selected)
 
     async def api_ports_table(request):
-        ports = state.ports.get()
+        ports = await state.ports.current()
         show_all = request.query_params.get("all") == "1"
         shown = portlist.visible(ports, show_all)
         return render(request, "_ports_table.html", ports=shown, show_all=show_all,

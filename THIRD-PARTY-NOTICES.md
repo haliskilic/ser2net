@@ -44,8 +44,6 @@ Docker image. Used unmodified, through their public APIs.
 | joserfc (Authlib dependency) | OIDC single sign-on | BSD-3-Clause |
 | cryptography | OIDC, self-signed certificates | Apache-2.0 OR BSD-3-Clause |
 | cffi, pycparser (cryptography dependencies) | | MIT-0 / BSD-3-Clause |
-| pyudev (if installed; not bundled) | hotplug events (Linux) | LGPL-2.1-or-later |
-| pywin32 (if installed; not bundled) | hotplug events (Windows) | PSF-2.0 |
 
 ## Inside the standalone executables
 
@@ -81,9 +79,9 @@ Each native library's own license text is included in `ser2net --licenses` and i
 
 ## LGPL components
 
-ldap3 (and pyudev, when installed) are LGPL libraries. ser2net uses them unmodified
-through their public APIs. The LGPL lets you run the program with a modified version of
-the library; that right holds for every distribution of ser2net — AGPL or commercial:
+ldap3 is an LGPL library. ser2net uses it unmodified through its public API. The LGPL
+lets you run the program with a modified version of the library; that right holds for
+every distribution of ser2net — AGPL or commercial:
 
 - **Source and Docker installs:** ldap3 is a normal Python package; install another
   version with `pip`.

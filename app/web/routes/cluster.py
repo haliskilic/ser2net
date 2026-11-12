@@ -305,7 +305,7 @@ def routes(ctx: Ctx) -> list:
         m = cfg.get_mapping(request.query_params.get("mid", ""))
         if not m:
             return _peer_json(a, {"error": "not_found"}, 404)
-        return _peer_json(a, {"mapping": m.to_dict(), "ports": state.ports.get(),
+        return _peer_json(a, {"mapping": m.to_dict(), "ports": await state.ports.current(),
                               "ips": netinfo.list_ip_candidates()})
 
     async def cluster_mapping_save(request):

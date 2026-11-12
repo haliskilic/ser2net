@@ -143,7 +143,7 @@ def build_api_routes(state):
         return JSONResponse({"mappings": state.supervisor.all_status()})
 
     async def ports(request):
-        return JSONResponse({"ports": state.ports.get()})
+        return JSONResponse({"ports": await state.ports.current()})
 
     async def health(request):
         return JSONResponse({"status": "ok", "mappings": len(state.config.mappings)})

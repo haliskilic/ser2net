@@ -78,6 +78,7 @@ PORTABLE = [
     "test_single_instance.py",
     "test_notifications.py",
     "test_ports_usb_identity.py",
+    "test_port_watcher.py",
     "test_dashboard.py",
     "test_modbus_mqtt_write.py",
     "test_modbus_write.py",
