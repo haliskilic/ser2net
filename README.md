@@ -491,9 +491,10 @@ istek gövdesi gelmeyi kesen (gövdeye bu süre artı gelen her KiB için bir sa
 da bir yanıttan bu süre boyunca hiçbir şey almayan bağlantıyı kapatır (konsol WebSocket'i
 süreye tabi değildir) ve aynı anda en fazla `admin_ui.max_connections`
 (256), bir adresten en fazla `admin_ui.max_connections_per_ip` (64) bağlantı kabul eder;
-TLS el sıkışması bir eşleminkiyle aynı sınırlara tabidir. Bu anahtarlar yalnızca
-`config.json`'dadır (0 = sınır yok); bir reverse proxy arkasında tüm kullanıcılar proxy'nin
-adresinden gelir, gerekirse adres başına sınırı yükseltin. Süreç açık dosya sınırına
+TLS el sıkışması bir eşleminkiyle aynı sınırlara tabidir. Bu adres başına sınırlarda bir
+IPv6 istemci /64 ağıyla sayılır (bir makine /64'ünün her adresini kullanabilir). Bu
+anahtarlar yalnızca `config.json`'dadır (0 = sınır yok); bir reverse proxy arkasında tüm
+kullanıcılar proxy'nin adresinden gelir, gerekirse adres başına sınırı yükseltin. Süreç açık dosya sınırına
 yaklaşınca yeni bağlantılar (her eşlemeye ve arayüze) log'a bir satır yazılarak reddedilir;
 böylece seri portlar, log'lar ve yapılandırma ihtiyaç duydukları dosyaları açabilir.
 
