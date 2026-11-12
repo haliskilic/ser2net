@@ -155,7 +155,13 @@ def test_mappings_shape():
     out = make_templates().env.get_template("_mappings_body.html").render(
         mappings=[m], statuses={"m1": b}, can_edit=True)
     assert f'<span id="m-m1-bytes">{_in_out(b)}</span>' in out, "a patched span shows what the table does"
-    assert 'data-since="900.0"' in out and '<span class="dur">9h 59m</span>' in out, out
+    # the time shown is counted from connected_at, in the page's language (since filter);
+    # a client without it (an older peer's payload) shows the duration it came with
+    assert 'data-since="900.0"' in out and re.search(r'<span class="dur">\d+h \d\dm</span>', out), out
+    del b["clients"][0]["connected_at"]
+    out = make_templates().env.get_template("_mappings_body.html").render(
+        mappings=[m], statuses={"m1": b}, can_edit=True)
+    assert "data-since" not in out and '<span class="dur">9h 59m</span>' in out, out
     print("mappings table: connection times and counters are not part of the shape  OK")
 
 
