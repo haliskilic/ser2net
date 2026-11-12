@@ -166,7 +166,7 @@ everything from a **password-protected web UI** — no CLI or hand-edited config
   always contacted directly, never through an HTTP proxy (`HTTP(S)_PROXY` / `ALL_PROXY`
   apply to webhooks and SSO only).
 - **Deployment:** official **Docker** image + `docker-compose`; **systemd** unit;
-  Linux+Windows × Python 3.10–3.13 **CI** (GitHub Actions).
+  Linux+Windows × Python 3.10–3.14 **CI** (GitHub Actions).
 - **MQTT publishing (optional):** publish each mapping's serial lines to an MQTT
   broker (host/port/topic/QoS/TLS/credentials) with a retained birth/death status.
   Needs `paho-mqtt` (optional; the bridge runs normally without it).
@@ -673,7 +673,8 @@ python3 tests/run_all.py -v         # also show the output of passing tests
 The socat tests use virtual serial ports (Linux); no hardware needed. Individual
 files still run directly, e.g. `python3 tests/test_rest_api.py`. On every pull request
 CI (GitHub Actions) runs ruff, mypy, `pip-audit`, the offline-wheel check, the full
-matrix (ubuntu/windows × Python 3.10–3.13) and coverage (`python3 tests/coverage_run.py`,
+matrix (ubuntu/windows × Python 3.10–3.14, each leg also doing the offline first-run
+install; 3.15 runs without blocking) and coverage (`python3 tests/coverage_run.py`,
 which also measures the servers the tests start). Development setup and rules:
 [CONTRIBUTING.md](CONTRIBUTING.md).
 

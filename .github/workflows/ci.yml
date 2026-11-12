@@ -108,7 +108,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest]
-        python-version: ["3.10", "3.11", "3.12", "3.13"]
+        python-version: ["3.10", "3.11", "3.12", "3.13", "3.14"]
         # The py3.12 legs (the binaries' and the image's Python) also install the pinned
         # optional packages, so the LDAP / OIDC / MQTT code paths run with ldap3, authlib
         # and paho-mqtt; the other legs keep testing ser2net without them.
@@ -131,11 +131,59 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: ${{ matrix.python-version }}
+      # What a source install does on its first run, before anything else is installed:
+      # bootstrap.py puts the pinned dependencies from vendor/wheels into ./lib with
+      # pip --no-index (no network), and the app has to import from there. ./lib is
+      # removed again, so the suite below runs on the packages installed next.
+      - name: Offline first run (bootstrap.py from vendor/wheels, the app imports from ./lib)
+        shell: bash
+        run: |
+          python bootstrap.py
+          python -c "import os, sys; sys.path[:0] = ['lib', '.']
+          import serial, starlette, uvicorn, app.runtime, app.web.server
+          lib = os.path.abspath('lib')
+          assert all(os.path.abspath(m.__file__).startswith(lib) for m in (serial, starlette, uvicorn))"
+          python ser2net.py --about
+          rm -rf lib
       - name: Install dependencies (+ cryptography for the in-process certificate tests)
         run: pip install -r requirements.txt cryptography
       - name: Install the optional packages (MQTT / LDAP / OIDC; py3.12 legs)
         if: matrix.optional
         run: pip install -r requirements-optional.txt
+      - name: Install socat (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y socat
+      - name: Install pydivert (Windows dead-peer test)
+        if: runner.os == 'Windows'
+        run: pip install pydivert==4.0.1
+      - name: Run portable test suite (Windows)
+        if: runner.os == 'Windows'
+        run: python tests/run_all.py -v
+      - name: Run full test suite incl. socat data-path (Linux)
+        if: runner.os == 'Linux'
+        run: python tests/run_all.py --socat -v
+
+  # The newest Python, before its wheels have all settled: shows what breaks there
+  # without blocking a merge (not in ci-ok's needs, continue-on-error). Move it into the
+  # matrix above once it passes.
+  test-next:
+    name: test ${{ matrix.os }} py3.15 (not required)
+    runs-on: ${{ matrix.os }}
+    continue-on-error: true
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    env:
+      SER2NET_BLACKHOLE_TESTS: "1"
+      SER2NET_SERVICE_TESTS: "1"
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.15"
+          allow-prereleases: true
+      - run: pip install -r requirements.txt cryptography
       - name: Install socat (Linux)
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y socat

@@ -69,6 +69,15 @@ the optional feature packages bundled into the binaries and the Docker image in
 `python tools/refresh_wheels.py` so `vendor/wheels/` (the offline install set) matches —
 this also applies to Dependabot's pull requests.
 
+### Python versions
+CI tests Python 3.10–3.14 on Linux and Windows; the newest release (3.15) runs too, without
+blocking a merge, until its wheels have settled. Python 3.10 is past its end of life but
+stays supported while distributions people run ser2net on ship it (Ubuntu 22.04): it keeps
+the last dependency releases that support it (the `python_version < "3.11"` pins). It is
+dropped once one of those frozen pins has a known vulnerability that no release supporting
+3.10 fixes (the py3.10 dependency audit reports it), announced in the release notes one
+minor release ahead.
+
 ### Commits and pull requests
 Short imperative subjects with a prefix: `feat:`, `fix:`, `test:`, `docs:`, `ci:`,
 `deps:`, `refactor:` (optionally a scope, e.g. `fix(modbus): …`). Keep a pull request to
@@ -126,6 +135,15 @@ binary'lere ve Docker imajına giren isteğe bağlı paketler `requirements-opti
 `requirements.txt`'i değiştirdikten sonra `python tools/refresh_wheels.py` çalıştırın;
 `vendor/wheels/` (çevrimdışı kurulum seti) eşleşsin. Bu Dependabot'un PR'ları için de
 geçerli.
+
+### Python sürümleri
+CI, Python 3.10–3.14'ü Linux ve Windows'ta test eder; en yeni sürüm (3.15) de çalışır, ama
+wheel'ları oturana kadar birleştirmeyi engellemez. Python 3.10'un ömrü doldu, ama ser2net'in
+kullanıldığı dağıtımlar onu getirdiği sürece (Ubuntu 22.04) desteklenir: onu destekleyen
+son bağımlılık sürümlerinde kalır (`python_version < "3.11"` pin'leri). Bu donmuş
+pin'lerden birinde, 3.10'u destekleyen hiçbir sürümün düzeltmediği bilinen bir güvenlik
+açığı çıkınca (py3.10 bağımlılık denetimi bunu bildirir) bırakılır; bu, bir minor sürüm
+önceden sürüm notlarında duyurulur.
 
 ### Commit ve pull request
 Kısa, emir kipinde ve önekli başlıklar: `feat:`, `fix:`, `test:`, `docs:`, `ci:`,
