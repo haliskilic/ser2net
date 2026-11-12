@@ -444,7 +444,9 @@ everything from a **password-protected web UI** — no CLI or hand-edited config
   whichever connected last) are allowed, with a warning in the mapping's log when it
   starts. A config.json that already has such a clash keeps loading and running: start-up
   and each start of the mapping log it, and an edit of either mapping has to resolve it
-  (or disable one of them). Two ser2net installations can't see each other's mappings:
+  (or disable one of them); starting a disabled mapping that would clash with an enabled
+  one (Start, a bulk start, the REST API, a cluster node) is refused with the reason, as for
+  a shared serial port. Two ser2net installations can't see each other's mappings:
   give each its own topics and client IDs. Over **TLS**
   the broker's certificate must chain to a CA the system trusts — or, with a **CA
   certificate file** (PEM, or DER), to one in that file only — and name the broker host

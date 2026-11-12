@@ -252,16 +252,23 @@ async def apply_actions(state, ids, action) -> list[ActionResult]:
     return results
 
 
+def _start_clash(config, m: MappingConfig) -> str:
+    """What a mapping just switched on would share with another enabled one: a serial port
+    (AppConfig.serial_conflict, in any spelling of the port and by USB identity), or on its
+    MQTT broker a client ID, Sparkplug B edge node or command topic (mqtt_conflict)."""
+    return config.serial_conflict(m) or mqtt_conflict(config, m)
+
+
 def _refuse_clashes(config, started: list) -> dict[str, ConfigError]:
-    """Mappings just switched on whose start would share a serial port with another
-    enabled one (AppConfig.serial_conflict, in any spelling of the port and by USB
-    identity) or that the save would refuse: each is switched off again, by id with the
-    reason. One check when none is refused; otherwise they are switched on again one by
-    one, in order, so the first of two that share a port starts. (ser2net's own ports and
-    the admin UI's TLS key are checked when a mapping is created or changed, not at a
-    start: a stored clash must not stop one.)"""
+    """Mappings just switched on whose start would share a serial port or what an MQTT
+    broker tells clients apart by with another enabled one (_start_clash), or that the
+    save would refuse: each is switched off again, by id with the reason. One check when
+    none is refused; otherwise they are switched on again one by one, in order, so the
+    first of two that share a port starts. (ser2net's own ports and the admin UI's TLS key
+    are checked when a mapping is created or changed, not at a start: a stored clash must
+    not stop one; nor does a clash between mappings enabled already.)"""
     def refusal(m) -> Optional[ConfigError]:
-        if clash := config.serial_conflict(m):
+        if clash := _start_clash(config, m):
             return ConfigError(clash)
         try:
             config.validate_for_save()
@@ -269,7 +276,7 @@ def _refuse_clashes(config, started: list) -> dict[str, ConfigError]:
             return e
         return None
 
-    if not any(config.serial_conflict(m) for m in started):
+    if not any(_start_clash(config, m) for m in started):
         try:
             config.validate_for_save()
             return {}

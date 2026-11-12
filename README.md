@@ -458,7 +458,9 @@ düzenlemeye gerek yok.
   bir base topic; `<topic>/status` o zaman en son bağlananı gösterir) izin verilir, eşleme
   başlarken log'una bir uyarı yazılır. Böyle bir çakışması zaten olan bir config.json
   yüklenmeye ve çalışmaya devam eder: açılış ve eşlemenin her başlatılışı bunu loglar,
-  iki eşlemeden birinin düzenlemesi ise çakışmayı gidermeli (ya da birini kapatmalı). İki
+  iki eşlemeden birinin düzenlemesi ise çakışmayı gidermeli (ya da birini kapatmalı); etkin
+  bir eşlemeyle çakışacak kapalı bir eşlemeyi başlatmak (Başlat, toplu başlatma, REST API,
+  bir küme düğümü) paylaşılan bir seri porttaki gibi nedeniyle reddedilir. İki
   ayrı ser2net kurulumu birbirinin eşlemelerini göremez: her birine kendi topic'lerini ve
   client ID'lerini ver. **TLS**'te broker'ın
   sertifikası sistemin güvendiği bir CA'ya — **CA sertifika dosyası** (PEM ya da DER)
