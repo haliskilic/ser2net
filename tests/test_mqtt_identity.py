@@ -340,6 +340,13 @@ def test_copy():
     assert copy_of(AppConfig(mappings=[a, *others]), a).network.port == 5021, \
         "UDP, another address, a connect-out mapping: the port is free for TCP here"
     assert copy_of(AppConfig(mappings=[a, listener(5021, "0.0.0.0")]), a).network.port == 5022
+    beside_ui = AppConfig(mappings=[a])
+    beside_ui.admin_ui.bind_ip, beside_ui.admin_ui.port = "127.0.0.1", 5021
+    assert copy_of(beside_ui, a).network.port == 5022, "not the admin UI's port"
+    both = gw("B", port=5030)
+    both.network.bind_ip, both.network.dual_stack = "::", True  # IPv4 and IPv6 clients
+    assert copy_of(AppConfig(mappings=[a, both]), gw("A4", port=5030)).network.port == 5031, \
+        "a listener that takes both families has the IPv4 port too"
     top = gw("A", port=65535)
     assert copy_of(AppConfig(mappings=[top, listener(65534)]), top).network.port == 65533
     out = gw("O")
@@ -459,13 +466,33 @@ def test_server():
         raw["mqtt"]["client_id"] = "gw-r"
         st, out = api("POST", "/api/v1/mappings", raw)
         assert st == 201, (st, out)
+        rid = out["id"]
         raw["mqtt"]["client_id"] = "gw-a"
-        st, out = api("PUT", f"/api/v1/mappings/{out['id']}", raw)
+        st, out = api("PUT", f"/api/v1/mappings/{rid}", raw)
         assert st == 400 and "'gw-a'" in out.get("detail", ""), (st, out)
         bad = dict(raw, name="R2", mqtt=dict(raw["mqtt"], base_topic="r/#", client_id=""))
         st, out = api("POST", "/api/v1/mappings", bad)
         assert st == 400 and "base topic" in out.get("detail", ""), (st, out)
-        print("REST API: a shared client ID and a wildcard base topic refused (POST, PUT)  OK")
+        # a PATCH is checked like a PUT, and so is the REST import (dry run and apply)
+        req = urllib.request.Request(
+            srv.base + f"/api/v1/mappings/{rid}", method="PATCH",
+            data=json.dumps({"mqtt": {"client_id": "gw-a"}}).encode(),
+            headers={"Authorization": f"Bearer {TOKEN}",
+                     "Content-Type": "application/merge-patch+json"})
+        try:
+            urllib.request.urlopen(req, timeout=10)
+            raise AssertionError("a PATCH to a shared client ID was accepted")
+        except urllib.error.HTTPError as e:
+            assert e.code == 400 and "client ID" in e.read().decode(), e.code
+        clash = {"mappings": [dict(raw, name="R3", serial={"port": "/dev/ser2net-test-R3"},
+                                   network=dict(raw["network"], port=free_port()))]}
+        st, out = api("POST", "/api/v1/import?dry_run=true", clash)
+        assert st == 200 and out["valid"] is False and "client ID" in out["problem"], (st, out)
+        before = names()
+        st, out = api("POST", "/api/v1/import", clash)
+        assert st == 400 and "client ID" in out.get("detail", "") and names() == before, (st, out)
+        print("REST API: a shared client ID and a wildcard base topic refused (POST, PUT, "
+              "PATCH, import)  OK")
 
         export = json.dumps({"mappings": [gw("D", "plant/line3", [PUMP], port=free_port())
                                           .to_dict() | {"mqtt": {"enabled": True,
