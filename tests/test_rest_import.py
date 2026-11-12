@@ -87,9 +87,11 @@ def main():
             urllib.request.build_opener(NoRedirect).open(req, timeout=10)
             raise AssertionError("/metrics answered without a session")
         except urllib.error.HTTPError as e:
-            assert e.code == 303 and e.headers["Location"] == "/login?next=%2Fmetrics", e.code
+            # a client that sends credentials is no browser: 401, which names the REST route
+            assert e.code == 401 and e.headers["WWW-Authenticate"].startswith("Bearer"), e.code
+            assert b"/api/v1/metrics" in e.read()
         print("metrics: /api/v1/metrics with the API token; no token -> 401; /metrics still "
-              "needs a session  OK")
+              "needs a session (a token there: 401)  OK")
 
         # ---- dry run: what GET /mappings answers, one changed + one new ----
         st, _, listing = call(base, "GET", "/api/v1/mappings")

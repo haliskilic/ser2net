@@ -30,6 +30,7 @@ import tempfile
 import threading
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
@@ -228,7 +229,7 @@ def test_server():
         assert code == 400 and err["error"] == "validation" and "serial port" in err["detail"], err
         st, _, text = b.post("/api/mappings/bulk", {"action": "start", "ids": [a_id, dup["id"]]},
                              htmx=True)
-        assert st == 400 and text.startswith("1 of 2 selected mapping(s) not changed: "), text
+        assert st == 400 and text.startswith("1 of 2 selected mappings not changed: "), text
         assert mapping_of(srv, "A (copy)")["enabled"] is False
         assert srv.saved_config()["mappings"][1]["enabled"] is False
         # ... and a later, unrelated change is saved
@@ -284,8 +285,10 @@ def test_server():
             assert code == 500 and err["error"] == "save_failed", err
             # a stop stops anyway, and says that it isn't kept
             wait_state(srv, "A", ALIVE)
-            st, _, text = b.post(f"/api/mappings/{a_id}/stop", htmx=True)
-            assert st == 200 and text.startswith("Stopped, but config.json could not be saved"), text
+            st, h, _text = b.post(f"/api/mappings/{a_id}/stop", htmx=True)
+            notice = json.loads(urllib.parse.unquote(h.get("X-Notice") or "{}"))
+            assert st == 200 and notice.get("kind") == "warn" and notice.get("text", "").startswith(
+                "Stopped, but config.json could not be saved"), (st, notice)
             wait_state(srv, "A", ("stopped",))
             assert mapping_of(srv, "A")["enabled"] is False
             code, err = api(srv, "POST", f"/mappings/{other['id']}/start")
