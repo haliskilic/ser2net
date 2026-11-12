@@ -110,7 +110,8 @@ def ad_directory():
     users = {"jdoe": [ADMINS], "ayse": ["CN=BİLGİ İŞLEM,OU=Gruplar," + BASE],
              "mehmet": ["CN=Domain Users,CN=Users," + BASE, "CN=Kalite Kontrol,OU=Gruplar," + BASE],
              "Admin": [ADMINS],   # a directory account named like the local admin
-             "alice": [ADMINS]}   # ... and one named like an OIDC account
+             "alice": [ADMINS],   # ... and one named like an OIDC account
+             "zeynep": ["CN=Bilgi İşlem,OU=Gruplar," + BASE]}
     entries, passwords = {}, {}
     for account, groups in users.items():
         dn = f"CN={account},OU=People,{BASE}"
@@ -257,6 +258,30 @@ def test_ldap():
                 assert "LDAP settings saved." in page, st
                 assert srv.saved_config()["ldap"]["nested_groups"] is expect, fields
             print("LDAP: the nested-groups box is saved; an older form keeps it  OK")
+
+            # a sign-in that changes no account writes nothing; one whose new account
+            # can't be saved still signs in (the account is used from memory)
+            def config_file():
+                with open(srv.config_path, "rb") as fh:
+                    return os.stat(srv.config_path).st_mtime_ns, fh.read()
+            before = config_file()
+            Browser(srv.base).login("ayse", "pw-ayse")
+            assert config_file() == before, "an unchanged account was saved again"
+            if os.name == "posix" and os.geteuid() != 0:
+                os.chmod(srv.data, 0o500)  # config.json can't be replaced
+                try:
+                    z = Browser(srv.base)
+                    z.login("zeynep", "pw-zeynep")
+                    assert signed_in(srv, z.cookie("ser2net_session").value)
+                finally:
+                    os.chmod(srv.data, 0o700)
+                assert config_file() == before
+                assert ("WARNING: LDAP: could not save the account of 'zeynep' (Could not save "
+                        "config.json: Permission denied); they are signed in") in all_log(srv)
+                print("LDAP: an unchanged account is not saved again; an account that can't be "
+                      "saved still signs in  OK")
+            else:
+                print("SKIP: the unwritable config.json part needs a POSIX non-root run")
 
 
 # ---------------- OIDC ----------------

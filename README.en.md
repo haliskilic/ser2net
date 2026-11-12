@@ -61,7 +61,11 @@ everything from a **password-protected web UI** — no CLI or hand-edited config
   on a LAN's broadcast address (with **Allow broadcast**, `udp_broadcast`), a multicast
   group, several hosts.
   Datagrams wait for the serial port in a queue of at most 64 KiB: what a sender faster
-  than the line sends beyond that is dropped, counted and logged.
+  than the line sends beyond that is dropped, counted and logged. UDP is always raw (a
+  stored `telnet` is read as `raw`, which is what it always did) and has no connections a
+  close-on string could close. A setting that does nothing — this one, MQTT on a
+  serial↔serial bridge, MQTT on a Modbus gateway without poll points — is logged when the
+  mapping starts and shown in its edit form and in the REST API's `warnings`.
 - **Protocols:** `raw`, `telnet` (8-bit clean), `rfc2217` (remote live changes to
   baud/parity/data bits/stop bits/flow control), `modbus` (RTU↔TCP gateway). An RFC 2217
   request the port can't carry out (a malformed or reserved value, or one the serial port
@@ -238,8 +242,18 @@ everything from a **password-protected web UI** — no CLI or hand-edited config
   `ser2net_mapping_bytes_dropped_total`), flagged on the dashboard and logged.
 - **Notifications:** a webhook (JSON, Slack, Microsoft Teams, Discord, Telegram) and/or
   e-mail (SMTP) when a device is lost or comes back, a mapping fails to start, a
-  connect-out mapping loses or regains its remote server, clients come and go, or a
-  sign-in fails; repeats are suppressed, a test message can be sent.
+  connect-out mapping loses or regains its remote server, clients come and go, a sign-in
+  fails, or the data disk is almost full (below the free space at which traces pause;
+  all.log warns in any case); repeats are suppressed, a test message can be sent. Off until
+  chosen in Settings: **no data from a device** (a mapping's *No-data alarm* in its
+  options: the port is open but the device has sent nothing for that many seconds, or, for
+  a device that speaks only when asked, what was sent to it got no answer; also shown on
+  the dashboard, in the mapping's log and in `/metrics`, with the time of the device's last
+  byte, `ser2net_mapping_last_rx_timestamp_seconds`) and data from it again, a **cluster
+  node offline** (a node heard from that is no longer heard from for 20 s, or a configured
+  peer that misses two answers a minute apart) and back, and **ser2net started** (15 s
+  after a start: which mappings run, and whether the previous run was ended by the event
+  loop watchdog). The same events are logged in all.log whether or not they are sent.
   With a public URL (Settings → Reverse proxy) each message ends with it, and the JSON
   format has a `url` field. The client events send the client's IP address, a failed
   sign-in the account name (or `(unknown user)`) and the IP address; *Leave out personal
@@ -466,6 +480,10 @@ The image has a `HEALTHCHECK` (`ser2net --healthcheck`). Behind a reverse proxy,
 - **Start/Stop/Restart/Copy/Delete:** per row. Stop and Restart ask first while clients
   are connected (they are disconnected; a stopped mapping stays stopped); Delete also
   removes the mapping's log and trace files.
+- **Edit:** an edit form opened before the mapping changed (another user or tab, a start or
+  stop, the REST API) is not saved: it comes back with your values and a note, and saving
+  it again replaces the changes. A form whose mapping was deleted meanwhile comes back as a
+  new mapping. A copy (*Copy*) has no MQTT client ID of its own until you give it one.
 - **Log:** the mapping's history (newest first, persists across restarts).
 - **Monitor:** live serial terminal in the browser (xterm.js); operators type to the
   device on network mappings that aren't read-only (a Modbus gateway's console only
@@ -479,29 +497,41 @@ The image has a `HEALTHCHECK` (`ser2net --healthcheck`). Behind a reverse proxy,
   CP857, ISO-8859-1, Windows-1252, CP437): the console shows its text with it and sends
   what is typed with it, and the hex view's text column too. The bridge passes the bytes
   unchanged either way.
-- **Trace** (operators): the mapping's trace files, to list and download.
+- **Trace** (operators): the mapping's trace files, to list, download and delete (one
+  file or all, audited) — while tracing is on, and after it was switched off as long as
+  files are left.
 - **Settings:** change password, **two-factor sign-in**, **web UI access** (login required /
   open access with a role), admin TLS (provide paths or generate self-signed; a previous
-  generated pair is kept as `*.bak`), generate/revoke **REST API tokens** or change the first
-  token's role only (a one-time token has a Copy button), mappings **backup/restore** (JSON),
-  status, and the
+  generated pair is kept as `*.bak`; new connections get it at once, no restart),
+  generate/revoke **REST API tokens** or change the first token's role only (a one-time
+  token has a Copy button), mappings **backup/restore** (JSON), status, and the
   **name of this instance** (Admin interface; or `SER2NET_NODE_NAME`): notifications, the
   browser tab, the top bar and the LAN cluster's fleet view use it instead of the host name,
   which instances on one machine share; the generic JSON webhook also gets `hostname` and
-  `instance_id`. A saved form returns to the page at its own section, which says what was
-  done; a reload or Back does not post it again (no second token, no second restore). A
-  refused form keeps what was typed, with the reason (passwords and keys are typed again).
+  `instance_id`. The Admin interface panel shows the address and protocol the UI serves, a
+  changed address in `config.json` that waits for the next start, and how this installation
+  changes it (Docker: `SER2NET_BIND_IP` / `SER2NET_PORT`; Windows service: reinstall with
+  `--reconfigure`; else a start with `--reconfigure`). A saved form returns to the page at
+  its own section, which says what was done; a reload or Back does not post it again (no
+  second token, no second restore). A refused form keeps what was typed, with the reason
+  (passwords and keys are typed again).
 - **/metrics:** Prometheus-format metrics (a web UI session; with the REST API token:
-  `/api/v1/metrics`, see REST API): per mapping whether it runs,
-  its clients, bytes in / out / dropped, reconnects (of those, failed opens of the serial
-  port, `ser2net_mapping_open_failures_total`, and losses of the open port,
-  `ser2net_mapping_device_lost_total`) and dropped slow clients (a connect-out
-  mapping also whether its link is up, `ser2net_mapping_link_up`, and its failed connect
-  attempts, `ser2net_mapping_connect_failures_total`); for the
-  process its open files and their limit (`ser2net_open_fds`, `ser2net_fd_limit`, POSIX),
-  the admin UI's connections, TLS handshakes in progress and waiting for one to end, and
-  the connections refused right after accept (`ser2net_connections_refused_total`, by
-  reason).
+  `/api/v1/metrics`, see REST API): per mapping whether it is enabled
+  (`ser2net_mapping_enabled`: 0 for a mapping stopped on purpose, so it is not mistaken for
+  one that failed), whether it runs, its state (`ser2net_mapping_state`, one series per
+  state, 1 for the current one), its clients, bytes in / out / dropped, reconnects (of
+  those, failed opens of the serial port, `ser2net_mapping_open_failures_total`, and losses
+  of the open port, `ser2net_mapping_device_lost_total`) and dropped slow clients (a
+  connect-out mapping also whether its link is up, `ser2net_mapping_link_up`, and its
+  failed connect attempts, `ser2net_mapping_connect_failures_total`); for the process the
+  version (`ser2net_build_info`), its start time (`ser2net_start_time_seconds`), its open
+  files and their limit (`ser2net_open_fds`, `ser2net_fd_limit`, POSIX), the admin UI's
+  connections, TLS handshakes in progress and waiting for one to end, the connections
+  refused right after accept (`ser2net_connections_refused_total`, by reason), the data
+  folder's disk (`ser2net_data_free_bytes`, `ser2net_data_size_bytes`) and what traces and
+  logs take there (`ser2net_traces_bytes`, `ser2net_logs_bytes`). Every series has its
+  `# HELP` and `# TYPE` line. Without a session a scraper gets `401` (a browser is sent to
+  the sign-in page), and successful scrapes are not written to `all.log`.
 
 ### Serial ports shared with other programs (Linux)
 
@@ -551,7 +581,8 @@ curl -X POST -H "Authorization: Bearer $TOKEN" http://HOST:8080/api/v1/mappings/
 ```
 Endpoints: `GET/POST /mappings`, `GET/PUT/PATCH/DELETE /mappings/{id}`,
 `POST /mappings/{id}/{start|stop|restart}`, `POST /import`, `GET /status`, `GET /ports`,
-`GET /metrics`, `GET /health` (unauthenticated), `GET /openapi.json`.
+`GET /metrics`, `GET /info` (ser2net's version, the API's version and its `features`),
+`GET /health` (unauthenticated), `GET /openapi.json`.
 
 **`PUT` replaces the whole mapping.** Every field the body leaves out gets its default, as in
 a new mapping: listen on `0.0.0.0` port 4001, no client allow-list, not read-only, enabled
@@ -563,11 +594,34 @@ that changes only what the body names. An object merges into the stored one
 replaces it, and `null` resets a field to its default (`{"network":{"allowed_client_ips":null}}`).
 The result is checked like any edit; a refused patch changes nothing (HTTP 400). The
 previous configuration of every change stays in `backups/`.
+`GET /mappings/{id}` answers the mapping's revision in `ETag`: send it back in `If-Match`
+with a `PUT` or `DELETE` to change the mapping only if nobody changed it since (else `412`,
+`precondition_failed`); without `If-Match` they work as before.
+Start and stop are idempotent: starting a mapping that already runs with its settings, or
+stopping a stopped one, changes nothing (`"changed": false`; its clients, serial port and
+MQTT connection stay) — use `restart` to restart a running mapping, e.g. to send its open
+string again (a renewed TLS certificate at the same paths is also read by a reload of
+`config.json`, without dropping clients). A `PUT` or `PATCH` with the mapping's own
+settings changes nothing either.
+A value may be sent as text (`"9600"`, `"false"` is false); one that is not of the setting's
+type is refused with `400` and the setting's path (`serial.baudrate: "fast" is not a whole
+number.`). A protective switch (`read_only`, `tls`) takes only JSON `true` / `false`: text is
+refused (`network.read_only: use true or false (JSON booleans), not a string.`), and so is an
+import of such a file. In a hand-edited `config.json`, text in a protective switch
+(`read_only`, `tls`, `require_login`, `tls_verify`, `start_tls`) keeps it on unless empty, as
+before 2.9.0, with a start-up note. Keys that are not settings are ignored and named in the
+response's `warnings` list. An unexpected server error is a JSON `500` too.
+A change that can't be saved changes nothing: `400` (`validation`) when the configuration
+would not validate — a start that would share a serial port with a running mapping, for
+example — and `500` (`save_failed`) when `config.json` can't be written (a full or
+read-only disk). A stop always stops; when `config.json` can't be written, the response's
+`warning` says that the mapping starts again when ser2net restarts.
 
 **Many mappings in one change:** `POST /import` takes what **Settings → Mappings export / import**
 writes or `GET /mappings` answers (`{"mappings": [...]}`), a whole `config.json` (only its
 mappings are used) or a classic `ser2net.yaml` / `ser2net.conf`. `?mode=merge` (the default)
-updates a mapping with the same id, else the same name, and adds the others;
+updates a mapping with the same id, else the same name, and adds the others (a mapping it
+updates keeps the settings the body doesn't have);
 `?mode=replace` makes the body's mappings the only ones. It is one save — one backup, all
 or nothing: a result that isn't valid (two mappings on one port, ...) is refused whole
 (HTTP 400) and nothing changes. `?dry_run=true` answers what it would do (each mapping
@@ -615,7 +669,11 @@ bound without TLS. For LAN deployments, use TLS (`admin_ui.tls_*`) and per-mappi
 `allowed_client_ips`. Raw TCP is plaintext — be careful on untrusted networks. A bare
 `0.0.0.0`/`::` in an allow/priority list means "any client", IPv4 and IPv6 alike;
 `0.0.0.0/0` is every IPv4 client and `::/0` every IPv6 one. An IPv4-mapped entry
-(`::ffff:192.168.1.0/120`) matches the IPv4 addresses it maps. A mapping's serial port is a
+(`::ffff:192.168.1.0/120`) matches the IPv4 addresses it maps. An entry that is no IP address
+or network (a host name, a range, a comma-joined list — only a hand-edited `config.json` can
+have one, every edit refuses it) is left out, which the start-up log, the mapping's start and
+its edit form say; an allow-list with no usable entry at all refuses every client (before
+2.9.0 it admitted everyone). A mapping's serial port is a
 device path or COM name only; pyserial URL handlers (`socket://`, `rfc2217://`, `spy://`,
 `loop://`, ...) are not accepted as a port.
 
@@ -993,6 +1051,27 @@ is no account at all; later starts ignore it.
   rejected** for the nodes not changed yet, and a banner lists the nodes that broadcast with a
   different key. *Auto-discovery* can be switched off where only manual peers are used.
 
+### Upgrading a cluster
+
+- **Upgrade every node, then edit across nodes.** A node edits another node's mapping with
+  its own form, so a setting one of the two versions doesn't have can't be edited that way.
+  From 2.9.0 on the fleet view tags a peer running an **older version** or a **newer
+  version**, a banner lists the versions while they differ, the edit form of such a peer says
+  so and leaves out the settings an older peer doesn't keep, and a peer is offered only what
+  its version can do (before 2.6.0: view only; 2.6.0: start, stop and restart, no edit).
+- **Edits from older nodes:** a 2.9.0 node keeps what an older node's form can't send: the
+  MQTT client ID (no field before 2.9.0), the USB identity and the Modbus points' `writable`
+  (before 2.8.0), RS-485 (2.6.1 / 2.6.2). Editing an older node, it sends that node's own
+  trace path back unchanged and the settings its form leaves out for a Modbus gateway
+  (banner, close-on string, client buffer).
+- **Released versions don't change:** an edit **from** a node before 2.9.0 **to** another
+  node before 2.9.0 loses what it always lost (every such edit clears the MQTT client ID; a
+  2.7 node's edit clears the `writable` flags of a 2.8 node's Modbus points). Upgrade those
+  nodes first, or edit their mappings on the node itself until then.
+- **Order:** upgrade the nodes one at a time; with *Legacy authentication* on (the default)
+  nodes running 2.8.0 or older keep working until the last one is upgraded; then untick it on
+  every node (see LAN cluster above).
+
 ---
 
 ## ⚙️ Run as a service
@@ -1003,13 +1082,18 @@ is no account at all; later starts ignore it.
   volume. A plain `docker run` needs `--restart unless-stopped --init --stop-timeout 30` for
   that (an existing container: `docker update --restart unless-stopped ser2net`).
 - **Linux (systemd):** `systemd/ser2net.service` — a dedicated unprivileged user,
-  `SupplementaryGroups=dialout`, `Restart=on-failure`, hardening directives. On Arch,
-  Manjaro and EndeavourOS the serial group is `uucp` and there is no `dialout` group (the
-  unit would fail with `status=216/GROUP`): set it with `systemctl edit ser2net`
+  `SupplementaryGroups=dialout`, `Restart=on-failure`, hardening directives;
+  `systemctl reload ser2net` reads `config.json` again (see Configuration & state files).
+  On Arch, Manjaro and EndeavourOS the serial group is `uucp` and there is no `dialout`
+  group (the unit would fail with `status=216/GROUP`): set it with `systemctl edit ser2net`
   (`[Service]`, `SupplementaryGroups=`, then `SupplementaryGroups=uucp`; the unit's comment
   has it).
   **Do not run as root.** Several instances: the template `systemd/ser2net@.service`
-  (below).
+  (below). Optional: the drop-in `systemd/ser2net.service.d/notify.conf`
+  (`Type=notify`, `WatchdogSec=120`) makes systemd count ser2net as started only once its
+  mappings run and its UI listens (or tries again to), and restart it when its event loop
+  stops answering (remove it before going back to a version before 2.9.0, which never
+  reports ready).
 - **Windows:** nothing else needed. From an elevated ("Run as administrator") prompt:
   ```bat
   ser2net-windows-x64.exe --install-service
@@ -1024,9 +1108,14 @@ with the configuration, backups, logs, audit log and traces: delete it to remove
   run several instances via `--service-name`. Stop/start: `sc stop ser2net` /
   `sc start ser2net` or *Services* (services.msc). Re-running `--install-service` from a
   newer exe upgrades it in place and keeps the data directory the service uses (a 2.8.0
-  service too). **[`docs/WINDOWS.md`](docs/WINDOWS.md)** covers the
+  service too). The service is *Running* once its UI listens (*Starting* until then), so
+  `--install-service` reports a service that stops while it starts (with its exit code and
+  where to look) instead of success. **[`docs/WINDOWS.md`](docs/WINDOWS.md)** covers the
   firewall rule you need to reach it from other hosts, changing the address, upgrading and
-  the SmartScreen warning on unsigned builds.
+  the SmartScreen warning on unsigned builds. Use the service for production: a console
+  window can be closed or signed out of. A click into a console window (QuickEdit) pauses
+  its output until Esc or Enter; ser2net keeps forwarding meanwhile, only the console's
+  lines wait (and past a limit are dropped and counted; `all.log` has them all).
 - **Start order:** the admin UI comes first. Its TLS pair must load, or the start stops
   (with the reason in `all.log`) before any serial port is opened, so a restart policy
   can't reset DTR-sensitive boards in a loop. Its port is taken before the mappings start:
@@ -1036,6 +1125,19 @@ with the configuration, backups, logs, audit log and traces: delete it to remove
   apart (`all.log` says so). A mapping can't be saved on the UI's TCP address and port, nor
   a UDP one on the cluster's discovery port while discovery is on (form, REST API, cluster,
   import; a copy's port skips them).
+- **A stuck event loop is restarted.** All mappings and the web UI run on one event loop.
+  When a call blocks it, ser2net writes every thread's stack to `hang.log` in the data
+  directory and exits (code 70) after 90 s, so the restart policy (Docker, systemd, the
+  Windows service) starts it again; the next start keeps the file as `hang.log.1` and says
+  so in `all.log`. `SER2NET_LOOP_WATCHDOG=<seconds>` changes the limit, `0` switches it
+  off. 90 s is far above what a busy instance needs to get back to its loop (about a
+  second), and a machine that slept or a container that was paused is not counted.
+  `/metrics` has the loop's lag (`ser2net_event_loop_lag_seconds`). `/healthz` answers
+  `ok` while the loop runs and is only a liveness check: Docker marks a container that
+  stops answering *unhealthy* but restarts nothing for it; under Kubernetes use it as a
+  liveness probe with room for a busy moment, e.g.
+  `livenessProbe: {httpGet: {path: /healthz, port: 8080}, periodSeconds: 30,
+  timeoutSeconds: 5, failureThreshold: 4}` (add `scheme: HTTPS` with TLS).
 - **Many mappings:** a running mapping keeps about three files open (its serial port, its
   listener and its log), plus one per connected client. At start ser2net raises its soft
   open-file limit toward the hard limit (at most 65536) and logs the result (`open files:
@@ -1141,20 +1243,35 @@ owner-only (POSIX `0700`; Windows `icacls` owner/SYSTEM/Administrators), so the 
 inside aren't readable by other users:
 - `config.json` — admin IP, password hashes, all mappings (atomic write), and the secrets
   ser2net has to use itself, in plain text (see *Secrets* below).
-- `backups/` — the previous `config.json` before every change (newest 50). Download or
-  restore one under Settings → *Configuration backups*. A restore first shows what changes
+- `backups/` — the `config.json` every change writes, and the one it replaces when that
+  isn't kept yet (newest 50): the newest backup is always the current `config.json`.
+  Starting or stopping a mapping adds no backup but updates the newest one, so it doesn't
+  push out the backups of real changes. A new backup's name sorts first also after the
+  clock went back (it takes the newest backup's time with the next number; the list then
+  also shows when it was really saved). The
+  list shows which release wrote each one. Download or restore one under Settings →
+  *Configuration backups*. A restore first shows what changes
   for sign-in and access, then brings back the mappings and settings; the user accounts
   and passwords, the REST API tokens and the cluster key stay as they are unless you tick
   the box to restore them too (that also signs everyone else out). *Only its mappings*
-  goes through the import preview. A restore can be undone too; a downloaded backup
-  leaves out the session key. The list names each backup's accounts; an admin can delete
+  goes through the import preview. A restore is applied like a reload of `config.json`
+  (see below): mappings it leaves as they are keep running with their clients, its admin
+  TLS is used at once (files that can't be loaded refuse the restore), its admin UI address
+  at the next start. A restore can be undone too; a downloaded backup leaves out the
+  session key. The list names each backup's accounts; an admin can delete
   one backup or all of them there. Deleting a user leaves the account (with its password
   hash) in the backups made before — a restore with accounts would bring it back — so
   *Remove it from the backups* takes an account that no longer exists out of every backup
   that has it (the rest of each backup stays as it was). All of it is audited.
 - `all.log` — global activity (size-rotated): also every REST API request but the
   successful polls of `/status`, `/health`, `/ports`, `/metrics` and `/openapi.json`, with the
-  token's name; `audit.log` — sign-ins and failed ones, config changes, console / hex view
+  token's name, and the warnings and errors of the web server and other libraries (an
+  address the admin UI can't use, a request it can't parse, the traceback of a request that
+  failed; each message at most once a minute). On Windows, when another program holds it
+  open and it can't be rotated, it is written on and rotated later, its older files kept.
+  The Windows service also writes `service.log` (what Python itself reports, e.g. a crash;
+  the previous start's kept as `service.log.1`) and, when it stops on an error, an entry in
+  the Application event log; `audit.log` — sign-ins and failed ones, config changes, console / hex view
   opens, consoles that wrote to a device, trace downloads, mapping and audit exports and
   refused REST API tokens: who/from where/what (rotated). Searchable under Settings → *Audit
   log* (letter case and accents ignored, as on the dashboard), CSV export (UTF-8, commas, for
@@ -1166,10 +1283,43 @@ inside aren't readable by other users:
   client's IP address for every web UI page and change: Settings → *Audit log* → *Web UI
   requests in all.log* can log only changes and refused requests, or none (sign-ins and
   the audit records are logged either way).
-- `logs/<id>.log` — per-mapping history (hourly maintenance: trimmed >15 days / >100 MB).
+- **Retention.** By default the logs keep their size limits however old the records are
+  (all.log 10 MB × 6 files, audit.log 5 MB × 2, the newest 50 backups; a mapping log 15
+  days). Logs hold IP addresses, user names and raw serial data, so a period can be set
+  under Settings → *Retention* (admins): then all.log and audit.log begin a new file once
+  their first record is a fifth of that many days old and delete a file once its first
+  record is older — nothing older is kept, and at least four fifths of the period stay as
+  far as the sizes allow (audit.log then keeps up to 6 files) — the mapping logs keep at
+  most that many of their 15 days, and configuration backups named for an older time go,
+  never the newest 5. Checked at once and every hour; a clock set ahead while ser2net
+  runs deletes nothing early (ages count from the clock at start-up plus the time it has
+  run). Restoring a backup from before 2.9 resets the period to 0 (off). The copy of every
+  log line on the standard output is kept by whatever collects it: Docker caps it with the
+  `logging:` options of `docker-compose.yml` (or the `local` driver), systemd's journal with
+  `MaxRetentionSec=` / `SystemMaxUse=` in `/etc/systemd/journald.conf`.
+- `logs/<id>.log` — per-mapping history (hourly maintenance: lines older than 15 days are
+  dropped, but never the last 1000 the Log panel shows, so a clock that jumps ahead or a
+  corrected date doesn't empty it; with a shorter period set under Settings → *Retention*,
+  nothing older than that stays, however few lines are left; a log over 100 MB is cut to
+  90 MB).
 - `traces/<id>-<name>` — a mapping's traffic trace. Traces are kept **only here** and
   rotate at their size limit (default 10 MB × 3 old files). Full paths from v2.7 configs
-  are reduced to the file name, which is logged at start-up.
+  are reduced to the file name, which is logged at start-up. A trace that can't be written
+  (folder removed, disk full, no file handle left) pauses instead of stopping: the
+  dashboard row and the Trace panel say why, ser2net tries again every few seconds (making
+  the folder again) and the trace then notes how many bytes are missing. A trace also
+  pauses before the disk fills up: while the data folder's disk has less than 256 MB free
+  (5% of a larger disk, at most 1 GB), checked at each new file and every 8 MB written; it
+  goes on by itself once there is 10% more. Rotated files past a lowered *Rotated trace
+  files kept* are deleted when the trace starts. Traces hold the raw traffic in both
+  directions, personal data and passwords typed to a device included:
+  delete them in the Trace panel once they are no longer needed (the file being written
+  begins again with the next traffic), or have them deleted after a number of days without
+  writes under Settings → *Retention* (off by default; checked every hour; a file a mapping
+  keeps writing into begins anew once it holds traffic from that many days ago, so it goes
+  too, that many days after its last write). Deleting a
+  mapping deletes its traces; those of mappings a replace import or a restore removed stay until
+  the next start (an undone restore finds them), which deletes them and logs how many.
 - `tls/` — certificate/key if self-signed is generated. A relative TLS path (admin UI or a
   mapping: certificate, key, CA files) is a file in the data directory, e.g. `tls/cert.pem`,
   so it keeps working when the data directory moves. An absolute path that is no longer
@@ -1217,10 +1367,34 @@ new mappings get 12 hex digits. An id in any other form (hand-edited or imported
 replaced when the config is loaded or the file is imported; the start-up log or the import
 preview says so.
 
+**Changing `config.json` while ser2net runs:** ser2net reads it at start-up and then works
+from its copy in memory. After an edit by hand or by a tool (Ansible, a copied file), have it
+read the file again — no restart: `systemctl reload ser2net` or `kill -HUP <pid>` (SIGHUP,
+Linux/macOS; `docker kill -s HUP ser2net`), `ser2net --reload` with the same `--data-dir`
+(any platform, also for the Windows service and in a container) or Settings →
+*Configuration backups* → *Reload config.json*. The file is checked as an edit is: when it
+can't be read or doesn't validate (a value of the wrong type in a changed mapping, two
+mappings on one port, no user accounts, a TLS pair that doesn't load) nothing changes and
+`all.log` says why. Otherwise it is applied part by part: a mapping whose settings didn't
+change keeps running with its clients (one that should run but doesn't is started), a
+changed one restarts, a removed one stops, a new one starts; the cluster restarts only when
+its settings changed. The admin UI's certificate files and those of unchanged TLS mappings
+are read again for new connections (a renewed certificate: e.g. certbot's
+`--deploy-hook "systemctl reload ser2net"`). The admin UI's address takes effect only at the
+next start (the log, the reply and Settings say so), as do `--data-dir` / `--config` and the
+environment variables. In a terminal, SIGHUP from the terminal closing still ends ser2net
+(cleanly). The log line and the audit record (`config_reload`) say what changed. An edit that
+isn't reloaded is noticed within seconds (a WARNING in `all.log`, a banner in Settings). A
+change saved meanwhile — in the UI, a start or stop, an LDAP/OIDC sign-in — is not refused,
+but it writes the configuration in use: the edited file is kept in `backups/` first, and
+`all.log`, the audit log (`config_outside_edit_replaced`) and Settings name that backup, with a
+link to restore it. So reload before saving anything else.
+
 **Starting over:** stop ser2net, then delete the data directory (or everything in it; keep
 `tls/` to reuse a generated certificate). Deleting only `config.json` resets the accounts,
-settings and mappings, but `audit.log` (and `audit.log.1`), the rotated `all.log.1`–`.5`,
-`backups/` and `traces/` stay (`logs/` is emptied at the next start), and whoever completes
+settings and mappings, but `audit.log` (and `audit.log.1`), the rotated `all.log.1`–`.5` and
+`backups/` stay (the logs and traces of mappings that no longer exist are deleted at the
+next start), and whoever completes
 the first-run setup next sees that audit log — the earlier users' names, addresses and
 failed sign-ins — and those backups, with the earlier accounts and secrets, in Settings.
 Don't do it while ser2net runs: its next save writes the configuration it has in memory,
@@ -1230,6 +1404,16 @@ it with the `/data` volume, see [docs/DOCKER.md](docs/DOCKER.md)) and messages
 notifications have sent. To get back in after a lost password, use `--set-password`
 instead (see Security): it keeps everything else. `admin-requests/` only holds a
 command-line request until the running instance takes it.
+
+**Going back to an older version:** stop the service and copy the data folder first. A
+release drops the settings it doesn't know at its first save — 2.7.x at once in Docker (with
+`SER2NET_BIND_IP` it saves at every start) — and 2.7.x keeps no backups; it also refuses
+Modbus coil / discrete-input points (fn 1/2), so a config with them doesn't start there.
+Since 2.9.0 the newest backup is always the current `config.json`, so the newer file is still
+in `backups/` after an older release replaced it: after upgrading again, restore it under
+Settings → *Configuration backups*. A `config.json` written by a newer release (its
+`written_by`), or with settings this release doesn't know, is reported at start-up and on
+that page.
 
 **Copying an installation** (a disk or VM image, a copied data folder or Docker volume):
 `config.json` holds the node's identity — its cluster id (`instance_id`) and the key that
@@ -1248,9 +1432,11 @@ whose refreshes fail is marked *not up to date*. The mapping form asks before un
 changes are thrown away. In the console, **Shift+Tab** moves the keyboard focus out (Tab
 goes to the device).
 **Import:** shows a preview first; choose *merge* (update mappings with the same name, add
-the new ones) or *replace all*. The one-step import of 2.7 scripts (a POST without
-`step=preview`) still replaces all mappings from a JSON file; a classic ser2net file is
-taken only through the preview.
+the new ones) or *replace all*. Settings an export of an older version doesn't have (2.7's
+Modbus points have no `writable`, no trace rotation, no Sparkplug B, ...) are named in the
+preview; a merge keeps their current values, *replace all* gives them the defaults. The
+one-step import of 2.7 scripts (a POST without `step=preview`) still replaces all mappings
+from a JSON file; a classic ser2net file is taken only through the preview.
 
 ---
 

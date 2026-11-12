@@ -46,6 +46,10 @@ ROOT = os.path.join(os.path.dirname(__file__), "..")
 sys.path.insert(0, os.path.join(ROOT, "lib"))
 sys.path.insert(0, ROOT)
 
+import _form_cases as form_cases                                # noqa: E402
+from _formsubmit import browser_post                           # noqa: E402
+
+from app import __version__                                    # noqa: E402
 from app.config import AppConfig, ClusterSettings              # noqa: E402
 from app.engine import netinfo                                  # noqa: E402
 from app.engine.cluster import (AUTH_HEADER, PEER_TTL, ClusterDiscovery, _sign,  # noqa: E402
@@ -324,6 +328,20 @@ def test_endpoints():
                          "cluster-peer", "cluster-peer"], users
         print("remote action: the sending node's user is recorded as its claim "
               "(cluster-peer:NODE/USER); without one, or with the raw key: cluster-peer  OK")
+        # a remote start that can't be saved (a copy on EDGE1's serial port): refused with
+        # the reason, in a signed 400, and nothing changes
+        edge_m = next(m for m in data["mappings"] if m["name"] == "EDGE1")
+        post(f"/api/mappings/{edge_m['id']}/duplicate", {"_csrf": csrf()}, header=True)
+        _, body = raw_request(ui, "/api/cluster/local", {"X-Cluster-Key": key})
+        copy = next(m for m in json.loads(body)["mappings"] if m["name"] == "EDGE1 (copy)")
+        form = urllib.parse.urlencode({"mapping_id": copy["id"], "action": "start"}).encode()
+        st, body, _reply, _h, ok = signed_call(ui, key, "/api/cluster/control", "POST", form,
+                                               to=node_id)
+        assert st == 400 and ok and body["ok"] is False, (st, body)
+        assert "both use serial port /dev/ttyTEST" in body["error"], body
+        _, body = raw_request(ui, "/api/cluster/local", {"X-Cluster-Key": key})
+        assert not next(m for m in json.loads(body)["mappings"] if m["id"] == copy["id"])["enabled"]
+        print("cluster/control: a start that can't be saved is refused with the reason  OK")
 
         # the aggregated table (session-authed) renders this node + mapping
         html = op.open(f"http://127.0.0.1:{ui}/api/cluster/status", timeout=10).read().decode()
@@ -373,6 +391,14 @@ def rendered_actions(html, mid):
         if urllib.parse.parse_qs(urllib.parse.urlsplit(url).query).get("mid") == [mid]:
             out["edit"] = url
     return out
+
+
+def node_row(html, tag):
+    """The fleet view's row of the node that has this tag ("manual", "this node")."""
+    rows = re.findall(r'<tr class="node-row[^"]*">(.*?)</tr>', html, re.S)
+    row = [r for r in rows if f'<span class="tag">{tag}</span>' in r]
+    assert len(row) == 1, (tag, rows)
+    return row[0]
 
 
 def trap_listener():
@@ -432,7 +458,9 @@ def test_manual_peer_and_remote_control():
                            {"name": "REMOTE2", "enabled": False, "kind": "net",
                             "serial": {"port": "/dev/ttyTEST2", "baudrate": 9600},
                             "network": {"mode": "server", "protocol": "raw",
-                                        "bind_ip": "127.0.0.1", "port": map_port2}}]}
+                                        "bind_ip": "127.0.0.1", "port": map_port2}}]
+                           # every setting non-default (stopped: they bind nothing)
+                           + [dict(m, enabled=False) for m in form_cases.mappings()]}
     node_a = {"admin_ui": {"bind_ip": "127.0.0.1", "port": ui_a},
               "cluster": {"enabled": True, "key": key, "discovery_port": dp_a,
                           "peers": [f"127.0.0.1:{ui_b}"]}}
@@ -493,7 +521,8 @@ def test_manual_peer_and_remote_control():
         # A's aggregated view fetches B through the manual peer: shows it + health
         html = op.open(f"http://127.0.0.1:{ui_a}/api/cluster/status", timeout=10).read().decode()
         assert "REMOTE1" in html and "manual" in html, html[:500]
-        assert ("v2.6" in html or "up " in html), "per-node health (version/uptime) missing"
+        peer_row = node_row(html, "manual")   # B's row, not this node's own
+        assert f"v{__version__}" in peer_row and "up " in peer_row, peer_row
         assert "unsigned key" not in html, "two current nodes must sign their requests"
         assert not trapped(proxy), "peer calls must connect directly, never via a proxy"
         print("manual peer aggregated with health (version/uptime) + 'manual' tag, signed  OK")
@@ -600,6 +629,55 @@ def test_manual_peer_and_remote_control():
             os.path.join(tb, "audit.log"), encoding="utf-8").read()
         trap.close()
         print("remote edit of a peer's mapping took effect on the peer  OK")
+
+        def post_page(path, fields):
+            req = urllib.request.Request(
+                f"http://127.0.0.1:{ui_a}{path}", method="POST",
+                data=urllib.parse.urlencode(fields).encode(),
+                headers={"Content-Type": "application/x-www-form-urlencoded",
+                         "X-CSRF-Token": csrf()})
+            try:
+                r = op.open(req, timeout=10)
+            except urllib.error.HTTPError as e:
+                r = e
+            return r.status if hasattr(r, "status") else r.code, r.read().decode()
+
+        # every setting survives an unchanged edit of the form A renders, posted as a
+        # browser posts it (and A, reading the mapping back, finds nothing B didn't keep)
+        before = json.load(open(os.path.join(tb, "config.json")))["mappings"]
+        for sink in form_cases.mappings():
+            q = urllib.parse.urlencode({"host": "127.0.0.1", "port": ui_b, "mid": sink["id"]})
+            code, page = get_a(f"/api/cluster/peer-form?{q}")
+            assert code == 200, (sink["name"], code, page[:300])
+            assert post_page("/api/cluster/peer-save", browser_post(page)) == (200, ""), sink["name"]
+        after = json.load(open(os.path.join(tb, "config.json")))["mappings"]
+        assert form_cases.relevant(after) == form_cases.relevant(before), [
+            (a["name"], a, b_) for a, b_ in zip(form_cases.relevant(before),
+                                                form_cases.relevant(after), strict=True)
+            if a != b_][:1]
+        print(f"remote edit: {len(form_cases.mappings())} kitchen-sink mappings saved "
+              "unchanged through the rendered form keep every setting  OK")
+
+        # the form carries the revision B gave; B refuses it once the mapping changed
+        # there (here: stopped from the fleet view), and the form shown again has B's new
+        # revision, so saving it again is a deliberate overwrite
+        _, data = raw_request(ui_b, f"/api/cluster/mapping-data?mid={mid}", hdr)
+        data = json.loads(data)
+        assert data["version"] == __version__ and "edit" in data["caps"] and data["rev"], data
+        code, page = get_a(acts["edit"])
+        opened = browser_post(page)
+        assert dict(opened)["rev"] == data["rev"], "the form carries the peer's revision"
+        stop = dict(acts["stop"]) if "stop" in acts else {**acts["start"], "action": "stop"}
+        assert post_a("/api/cluster/control-peer", stop) == 200
+        code, page = post_page("/api/cluster/peer-save", opened)
+        assert code == 400 and "was changed after this form was opened" in page, (code, page[:600])
+        assert json.loads(raw_request(ui_b, "/api/cluster/local", hdr)[1])["mappings"][0][
+            "enabled"] is False, "the stale form must not be saved"
+        again = browser_post(page)
+        assert dict(again)["rev"] != data["rev"], "shown again with the peer's new revision"
+        assert post_page("/api/cluster/peer-save", again)[0] == 200
+        print("remote edit: the peer refuses a form opened before the mapping changed; the "
+              "form shown again saves  OK")
 
         # the proxy forwards only known, validated fields: a URL serial port is refused
         bad_port = {**edit, "serial_port": "socket://10.0.0.9:1"}
@@ -800,8 +878,17 @@ def test_edit_on_a_peer_with_its_own_id():
                 "serial_bytesize": "8", "serial_parity": "N", "serial_stopbits": "1",
                 "serial_flowcontrol": "none", "network_mode": "server",
                 "network_protocol": "raw", "network_bind_ip": "127.0.0.1", "network_port": "4555"}
-        assert post_a("/api/cluster/peer-save", edit) == 200, seen
-        assert ("mapping-data", peer_id) in seen and seen[-1] == ("mapping-save", peer_id), seen
+        req = urllib.request.Request(f"http://127.0.0.1:{ui_a}/api/cluster/peer-save",
+                                     data=urllib.parse.urlencode(edit).encode(), method="POST")
+        req.add_header("Content-Type", "application/x-www-form-urlencoded")
+        req.add_header("X-CSRF-Token", csrf())
+        with op.open(req, timeout=10) as r:
+            assert r.status == 200, seen
+            saved = r.read().decode()
+        assert ("mapping-data", peer_id) in seen and seen[-2] == ("mapping-save", peer_id), seen
+        # read back afterwards: the stand-in keeps nothing, and the answer says what
+        assert seen[-1] == ("mapping-data", peer_id), seen
+        assert "but it did not keep:" in saved and "serial.port" in saved, saved
         # The form leaves the MQTT password blank to keep it, but a 2.8 peer would store a
         # blank field as the password: the peer is sent the password to store (the one it
         # has, unless one was typed or the remove box ticked), never the write-only marker.

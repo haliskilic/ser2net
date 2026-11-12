@@ -6,8 +6,8 @@ row buttons (Start/Stop/Restart/Edit/Log/Monitor/Copy/Delete) ended up outside i
 and the whole page scrolled sideways. This drives a real browser (Playwright +
 Chromium) against two real nodes — A shows B through a manual cluster peer — whose
 mappings use such values, at desktop, half-screen, tablet and phone widths, and
-checks the dashboard, the log / console / edit views, the settings page (users with row
-buttons, a backup's restore preview, a classic ser2net file's import preview) — in
+checks the dashboard, the log / console / edit / trace views, the settings page (users with
+row buttons, a backup's restore preview, a classic ser2net file's import preview) — in
 English and again in Turkish, whose texts are longer:
 
   * the page never scrolls sideways and no table needs horizontal scrolling
@@ -47,7 +47,10 @@ English and again in Turkish, whose texts are longer:
     the typed path; the ports panel's Refresh keeps "show all ports";
   * Settings notes a browser clock 10 minutes off the server's (Playwright's fake clock in
     a context of its own; the machine's clock is not touched), inside its panel, and
-    shows no note while the clocks agree.
+    shows no note while the clocks agree;
+  * the mapping form of every kitchen-sink mapping (tests/_form_cases.py), on this node
+    and on the peer, posts what tests/_formsubmit.py says a browser posts, and saving
+    it unchanged keeps every setting of the mapping.
 
 Opt-in: needs `pip install playwright && python -m playwright install chromium`.
 Skipped when Playwright or its browser is missing, unless SER2NET_UI_TESTS=1 (the
@@ -65,10 +68,14 @@ import subprocess
 import sys
 import tempfile
 import time
+import urllib.parse
 
 ROOT = os.path.join(os.path.dirname(__file__), "..")
 sys.path.insert(0, os.path.join(ROOT, "lib"))
 sys.path.insert(0, ROOT)
+
+import _form_cases as form_cases  # noqa: E402
+from _formsubmit import browser_post  # noqa: E402
 
 from app.web.auth import hash_password  # noqa: E402
 
@@ -84,6 +91,8 @@ LONG_WORDS = "Packaging line 2 weighing scale near the north loading dock (Mettl
 BY_ID = "/dev/serial/by-id/usb-FTDI_FT232R_USB_UART_A50285BI-if00-port0"
 LONG_HOST = "very-long-hostname-for-the-remote-serial-server.factory-floor.example-industries.internal"
 USER = "operations.supervisor.building-b.east-wing"   # long account name in the top bar
+TRACE_ID = "uilayout0001"  # the long-named mapping traces: the Trace panel's file rows
+TRACE_NAME = "production-line-3-plc-siemens-s7-1500-main-controller-building-b-east.trace"
 PASSWORD = "layout-pass-123"
 
 # Returns a list of human-readable layout problems on the current page.
@@ -179,10 +188,11 @@ def demo_mappings(prefix, raw_port):
     """Worst-case values: an unbroken 75-char name, a by-id path, a long remote host,
     a serial↔serial bridge; enabled ones fail to open their port → long errors."""
     return [
-        {"name": prefix + LONG_NAME, "enabled": True,
+        {"id": TRACE_ID, "name": prefix + LONG_NAME, "enabled": True,
          "serial": {"port": BY_ID, "baudrate": 115200, "flowcontrol": "rtscts"},
          "network": {"mode": "server", "protocol": "rfc2217", "bind_ip": "127.0.0.1",
-                     "port": free_port(), "read_only": True}},
+                     "port": free_port(), "read_only": True},
+         "options": {"trace_both": TRACE_NAME, "trace_keep": 50}},
         {"name": prefix + LONG_WORDS, "enabled": False,
          "serial": {"port": BY_ID + "-second", "baudrate": 9600},
          "network": {"mode": "client", "protocol": "raw", "remote_host": LONG_HOST, "remote_port": 4001}},
@@ -200,11 +210,20 @@ def demo_mappings(prefix, raw_port):
     ]
 
 
+def kitchen_sinks():
+    """Mappings with every setting other than its default (stopped: they bind nothing)."""
+    return [dict(m, enabled=False) for m in form_cases.mappings()]
+
+
 def start_node(cfg, backup=False):
     tmp = tempfile.mkdtemp(prefix="ser2net_ui_")
     path = os.path.join(tmp, "config.json")
     with open(path, "w", encoding="utf-8") as fh:
         json.dump(cfg, fh)
+    os.makedirs(os.path.join(tmp, "traces"))  # rotated files of the trace (Trace panel)
+    for n in (1, 2, 49):
+        with open(os.path.join(tmp, "traces", f"{TRACE_ID}-{TRACE_NAME}.{n}"), "wb") as fh:
+            fh.write(b"x" * 1500 * n)
     if backup:  # an older version in backups/, for the restore preview
         os.makedirs(os.path.join(tmp, "backups"))
         with open(os.path.join(tmp, "backups", "config-20260101T000000Z.json"), "w",
@@ -717,7 +736,7 @@ def main():
     node_b = {"admin_ui": {"bind_ip": "127.0.0.1", "port": ui_b}, "users": users,
               "cluster": {"enabled": True, "key": key, "discovery_port": free_port(),
                           "advertise_ip": "127.0.0.1"},
-              "mappings": demo_mappings("B-", free_port())}
+              "mappings": demo_mappings("B-", free_port()) + kitchen_sinks()}
     # a second (long-named) account: the Users table's row buttons + the set-password form
     # (with two-factor sign-in: its tag and the "Turn off 2FA" button too)
     others = [{"username": "night-shift.operator.building-b.east", "role": "operator",
@@ -739,7 +758,7 @@ def main():
               "api_tokens": tokens,
               "cluster": {"enabled": True, "key": key, "discovery_port": free_port(),
                           "peers": [f"127.0.0.1:{ui_b}"]},
-              "mappings": demo_mappings("", raw_a)}
+              "mappings": demo_mappings("", raw_a) + kitchen_sinks()}
     nodes = [start_node(node_a, backup=True), start_node(node_b)]
     clients, problems, browser_errors = [], [], []
     base = f"http://127.0.0.1:{ui_a}"
@@ -825,7 +844,7 @@ def main():
                         filter_row(f"{lang} dashboard @{w}", "[data-mapping-tools]")
                 for w in (1024, 390):
                     page.set_viewport_size({"width": w, "height": 900})
-                    for view in ("Log", "Monitor", "Edit"):
+                    for view in ("Log", "Monitor", "Edit", "Trace"):
                         dashboard()
                         open_view(TR[view] if lang == "tr" else view)
                         check(f"{lang} {view.lower()} view @{w}")
@@ -945,6 +964,67 @@ def main():
             import_round_trip(browser, base, problems, os.path.join(nodes[0][1], "config.json"))
             print(f"an imported close-on string through the mapping form and back: "
                   f"{'OK' if len(problems) == n else f'{len(problems) - n} problem(s)'}")
+
+            # UDP offers raw only: picking UDP selects raw, the other protocols can't be
+            # picked until the mode is TCP again
+            dashboard()
+            open_view(TR["Edit"])  # the language is Turkish here (the loop above)
+            selects = "#form-panel select[name=network_%s]"
+            protocols = ("() => { const s = document.querySelector('#form-panel "
+                         "select[name=network_protocol]'); return [s.value, [...s.options]"
+                         ".filter(o => o.disabled).map(o => o.value)]; }")
+            page.select_option(selects % "protocol", "telnet")
+            page.select_option(selects % "mode", "udp")
+            if page.evaluate(protocols) != ["raw", ["telnet", "rfc2217", "modbus"]]:
+                problems.append(f"UDP mode: protocol select is {page.evaluate(protocols)}")
+            page.select_option(selects % "mode", "server")
+            if page.evaluate(protocols) != ["raw", []]:
+                problems.append(f"server mode: protocol select is {page.evaluate(protocols)}")
+            print("mapping form: UDP leaves only raw to pick, TCP all protocols")
+
+            # the form data the browser posts for each kitchen-sink mapping is what
+            # tests/_formsubmit.py computes from the same page, and saving the form
+            # unchanged keeps every setting — on this node and on the peer
+            page.goto(f"{base}/lang/en?next=/")
+            dashboard()
+            token = page.evaluate("() => document.querySelector('meta[name=csrf-token]').content")
+            form_data = "() => [...new FormData(document.querySelector('#form-panel form'))]"
+            for where, tmp, url_of in (
+                    ("this node", nodes[0][1], lambda mid: f"/api/mappings/{mid}/form"),
+                    ("the peer", nodes[1][1], lambda mid: "/api/cluster/peer-form?" +
+                     urllib.parse.urlencode({"host": "127.0.0.1", "port": ui_b, "mid": mid}))):
+                with open(os.path.join(tmp, "config.json"), encoding="utf-8") as fh:
+                    before = form_cases.relevant(json.load(fh)["mappings"])
+                for sink in form_cases.mappings():
+                    url = url_of(sink["id"])
+                    sent = page.request.get(base + url, headers={"X-CSRF-Token": token}).text()
+                    page.evaluate("u => htmx.ajax('GET', u, {target: '#form-panel', "
+                                  "swap: 'innerHTML'})", url)
+                    page.wait_for_selector(f"#form-panel input[name=name][value='{sink['name']}']")
+                    page.wait_for_timeout(200)
+                    real = [tuple(x) for x in page.evaluate(form_data)]
+                    if real != browser_post(sent):
+                        problems.append(f"{sink['name']} on {where}: the browser posts {real}, "
+                                        f"tests/_formsubmit.py says {browser_post(sent)}")
+                    refused = page.evaluate(
+                        "() => [...document.querySelectorAll('#form-panel form :invalid')]"
+                        ".filter(e => e.name).map(e => e.name)")
+                    if refused:  # htmx would not submit it
+                        problems.append(f"{sink['name']} on {where}: the browser refuses "
+                                        f"{refused}")
+                        continue
+                    with page.expect_response(lambda r: r.request.method == "POST"
+                                              and "save" in r.url) as saved:
+                        page.click("#form-panel button[type=submit]")
+                    if saved.value.status != 200:
+                        problems.append(f"{sink['name']} on {where}: saving it unchanged "
+                                        f"answered {saved.value.status}")
+                with open(os.path.join(tmp, "config.json"), encoding="utf-8") as fh:
+                    after = form_cases.relevant(json.load(fh)["mappings"])
+                problems.extend(f"{a['name']} on {where} changed by an unchanged save: {a} -> {b}"
+                                for a, b in zip(before, after, strict=True) if a != b)
+            print("mapping form: the browser posts what tests/_formsubmit.py computes; an "
+                  "unchanged save keeps every setting, on this node and on the peer")
             browser.close()
 
         assert not problems, "layout problems:\n  " + "\n  ".join(problems)

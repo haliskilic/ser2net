@@ -3,7 +3,9 @@
 
 - ``allowed_client_ips``: blank admits every source, otherwise only the listed IPs/CIDRs
   (an IPv4-mapped IPv6 peer counts as its IPv4 address, an IPv4-mapped entry as the IPv4
-  addresses it maps, and a bare 0.0.0.0 or :: as every source, IPv4 and IPv6);
+  addresses it maps, and a bare 0.0.0.0 or :: as every source, IPv4 and IPv6); entries
+  that are no address or network (a hand-edited config.json) are left out, and a list
+  with no usable entry at all admits nobody, never everyone;
 - at ``max_connections`` a source in ``priority_client_ips`` always gets in by kicking a
   client (the oldest non-priority one, else the oldest); any other source gets in only
   with ``kick_old_user``, by kicking the oldest non-priority client: it never takes a
@@ -24,17 +26,16 @@ import contextlib
 import ipaddress
 import itertools
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Callable, Collection, Iterable, Optional, Protocol, Union
+from typing import TYPE_CHECKING, Any, Callable, Collection, Iterable, Optional, Protocol
 
-from ..config import canonical_ip, normalize_cidr
+from ..config import ClientNetwork as Network
+from ..config import canonical_ip, client_networks
 from . import tls
 
 if TYPE_CHECKING:
     import ssl
 
     from ..config import NetworkSettings
-
-Network = Union[ipaddress.IPv4Network, ipaddress.IPv6Network]
 
 
 class Client(Protocol):
@@ -74,19 +75,21 @@ def connection_order() -> int:
     return next(_ORDER)
 
 
-def parse_nets(cidrs: Iterable[str]) -> list[Network]:
+def parse_nets(cidrs: Iterable[Any]) -> list[Network]:
     """The networks of an IP/CIDR list. A bare wildcard address (0.0.0.0, ::) stands for
     every client, IPv4 and IPv6 alike (0.0.0.0/0 and ::/0 are each one family); an
-    IPv4-mapped entry for the IPv4 addresses it maps. An unparsable entry is skipped
-    (validated elsewhere)."""
+    IPv4-mapped entry for the IPv4 addresses it maps. An entry that is no address or
+    network is left out (config.client_networks: the edits refuse it, the runner names it
+    at start)."""
     nets: list[Network] = []
-    for c in cidrs:
+    for c in cidrs or []:
+        text = c if isinstance(c, str) else str(c)
         with contextlib.suppress(ValueError, TypeError):
-            if "/" not in c and ipaddress.ip_address(canonical_ip(c.strip())).is_unspecified:
+            if "/" not in text and ipaddress.ip_address(canonical_ip(text.strip())).is_unspecified:
                 nets += _ANY
                 continue
-        with contextlib.suppress(ValueError):
-            nets.append(_unmapped(ipaddress.ip_network(normalize_cidr(c), strict=False)))
+        found, _ignored = client_networks([text])
+        nets += [_unmapped(n) for n in found]
     return nets
 
 
@@ -126,10 +129,12 @@ class AccessPolicy:
         self.net = net
         self._allowed = parse_nets(net.allowed_client_ips)
         self._priority = parse_nets(net.priority_client_ips)
+        # no allow-list = everyone; one whose entries are all unusable = nobody (the runner
+        # logs which entries it left out at start: MappingConfig.ignored_settings)
+        self._everyone = not net.allowed_client_ips
 
     def allowed(self, ip: str) -> bool:
-        # empty allow-list = allow everyone
-        return True if not self._allowed else ip_in_nets(ip, self._allowed)
+        return self._everyone or ip_in_nets(ip, self._allowed)
 
     def is_priority(self, ip: str) -> bool:
         return ip_in_nets(ip, self._priority)

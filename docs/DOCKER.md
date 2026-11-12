@@ -54,6 +54,12 @@ release tag).
   Non-interactive: `docker exec -i ser2net ... --set-password admin < password.txt`.
   `... --sign-out-all` ends every web UI session. `docker exec` runs as root; the command
   switches to the owner of `/data` before writing, so file ownership stays right.
+- **`config.json` changed in the volume:** `docker kill -s HUP ser2net` (or
+  `docker exec ser2net python /app/ser2net.py --no-bootstrap --data-dir /data --reload`, or
+  Settings → *Configuration backups* → *Reload config.json*) has ser2net read it again
+  without a restart: mappings whose settings didn't change keep their clients, a file that
+  doesn't validate changes nothing (the log says why). The admin UI address comes from
+  `SER2NET_BIND_IP` / `SER2NET_PORT`, which a reload keeps.
 
 ## Plain docker run
 
@@ -165,23 +171,32 @@ and session key. README, *Several instances on one machine*, has the whole check
 
 ## Notes
 
-- **Health.** The image has a `HEALTHCHECK` (`ser2net --healthcheck` asks `/healthz`):
-  `docker ps` shows `healthy` once the UI answers — also before the first-run setup. A
-  certificate set or generated under Settings → Admin TLS is used from the next restart;
-  until then the probe finds the UI on plain http and still reports it healthy. The
+- **Health.** The image has a `HEALTHCHECK` (`ser2net --healthcheck` asks `/healthz`,
+  over HTTPS when `config.json` sets admin TLS, and over the other scheme when that one
+  gets no answer): `docker ps` shows `healthy` once the UI answers — also before the
+  first-run setup. The
   probe connects directly, so `HTTP_PROXY` / `HTTPS_PROXY` given to the container (for
   webhooks or SSO) don't affect it. Docker doesn't restart a container because it is
   unhealthy; only the restart policy brings back one that exited. If the UI's port can't
   be bound at start (with the host network: another program has it), the container stays
   up and `unhealthy` while the mappings run, and the UI comes up once the port is free.
+  So that a stuck event loop doesn't leave a container that runs but forwards nothing,
+  ser2net exits by itself when its loop has not run for 90 s (its threads' stacks in
+  `/data/hang.log`), and the restart policy starts it again; `SER2NET_LOOP_WATCHDOG` sets
+  the limit in seconds (`0` = off). A busy container is not affected: it gets back to its
+  loop within about a second, and `docker pause` is not counted.
 - **Logs.** Every log line goes to `/data/all.log` (rotated, 10 MB × 5) and to the
   container's output, which Docker keeps without a limit by default: cap it with
-  `--log-opt max-size=10m --log-opt max-file=3` (compose: `logging:`), or for every
-  container in `/etc/docker/daemon.json`. The lines name clients and the web UI's users by
-  IP address and user name (see [PRIVACY.md](PRIVACY.md)); `-e SER2NET_LOG_STDOUT=off`
-  keeps them in `/data/all.log` only (`docker logs` then shows just what isn't a log line,
-  such as a start-up error), and Settings → Audit log → *Web UI requests in all.log* can
-  leave out page views or every request line.
+  `--log-opt max-size=10m --log-opt max-file=3` (compose: `logging:`), use the `local`
+  driver (`--log-driver local`: compressed, capped at 100 MB by default), or set either for
+  every container in `/etc/docker/daemon.json`. How long ser2net keeps its own logs, audit
+  log and backups is set under Settings → *Retention* (off by default; see the README's
+  *Retention*); the container's output is kept by Docker's settings alone. The lines name
+  clients and the web UI's users by IP address and user name (see
+  [PRIVACY.md](PRIVACY.md)); `-e SER2NET_LOG_STDOUT=off` keeps them in `/data/all.log`
+  only (`docker logs` then shows just what isn't a log line, such as a start-up error), and
+  Settings → Audit log → *Web UI requests in all.log* can leave out page views or every
+  request line.
 - **Clock.** A container has no clock of its own: it uses the host's. Keep the host's
   clock synchronised (NTP; README, *Time synchronisation*): ser2net never sets it, and a
   wrong clock puts wrong times in logs and backups and makes sign-ins and certificate

@@ -1153,13 +1153,37 @@ def _roll_back(api, svc, previous, done, name: str) -> str:
         return f"putting the previous version back failed too: {e}; check it with sc qc {name}"
 
 
+START_TIMEOUT_S = 90.0  # how long --install-service waits for the service to be running
+
+
+def _wait_started(api, svc, timeout: float = START_TIMEOUT_S) -> tuple[int, int]:
+    """Wait while a service starts: (its state then, its exit code). It is RUNNING once
+    its admin UI listens (run), STOPPED when the start failed, still START_PENDING after
+    ``timeout``."""
+    st = api.SERVICE_STATUS()
+    end = time.monotonic() + timeout
+    while True:
+        if not api.dll.QueryServiceStatus(svc, ctypes.byref(st)):
+            raise _fail("QueryServiceStatus")
+        if st.dwCurrentState in (SERVICE_RUNNING, SERVICE_STOPPED) or time.monotonic() > end:
+            code = (st.dwServiceSpecificExitCode
+                    if st.dwWin32ExitCode == ERROR_SERVICE_SPECIFIC_ERROR else st.dwWin32ExitCode)
+            return st.dwCurrentState, code
+        time.sleep(0.3)
+
+
 def _start_and_wait(api, svc, name: str, data_dir: str, log: Callable[[str], None]) -> None:
     if not api.dll.StartServiceW(svc, 0, None):
         raise _fail("Starting the service")
-    state = _wait_state(api, svc, SERVICE_RUNNING)
+    state, code = _wait_started(api, svc)
     if state != SERVICE_RUNNING:
-        raise ServiceError(f"The service did not reach RUNNING (state {state}); "
-                           f"see {os.path.join(data_dir, 'all.log')}.")
+        logs = (f"see {os.path.join(data_dir, 'all.log')} and {SERVICE_LOG} there, or the "
+                "Application event log")
+        if state == SERVICE_STOPPED:
+            raise ServiceError(f"The service did not reach RUNNING: it stopped while starting "
+                               f"(exit code {code}); {logs}.")
+        raise ServiceError(f"The service did not reach RUNNING within {START_TIMEOUT_S:g} s "
+                           f"(state {state}); {logs}.")
     log(f"service '{name}' is running")
 
 
@@ -1169,6 +1193,44 @@ def kept_data_note(name: str, data_dir: Optional[str]) -> str:
     return (f"service '{name}' removed. Its data directory{where} is kept, with config.json "
             "(the accounts and the stored secrets), backups/, all.log, audit.log, logs/, "
             "traces/ and tls/: delete that folder to remove them too")
+START_WAIT_HINT_MS = 30000  # what a START_PENDING report tells the SCM to allow for
+START_PROGRESS_S = 5.0      # how often a start under way is reported again
+
+
+class StartProgress:
+    """While the server starts, ``report`` START_PENDING again every ``every`` seconds
+    (run()'s report() counts the checkpoint up), so the SCM doesn't take a slow start
+    (many serial ports to open) for a hung one. start() when the start begins, finish()
+    once it is over (ready, or failed); finish() is True the first time only."""
+
+    def __init__(self, report: Callable[[], None], every: Optional[float] = None) -> None:
+        self._report = report
+        self._every = START_PROGRESS_S if every is None else every
+        self._done = threading.Event()
+        self._finished = False
+        self._lock = threading.Lock()
+        self._thread: Optional[threading.Thread] = None
+
+    def start(self) -> None:
+        with self._lock:
+            if self._thread is not None or self._finished:
+                return
+            self._thread = threading.Thread(target=self._run, name="service-start-progress",
+                                            daemon=True)
+            self._thread.start()
+
+    def _run(self) -> None:
+        while not self._done.wait(self._every):
+            self._report()
+
+    def finish(self) -> bool:
+        with self._lock:
+            first, self._finished = not self._finished, True
+            thread = self._thread
+        self._done.set()
+        if thread is not None and thread is not threading.current_thread():
+            thread.join(self._every + 1)
+        return first
 
 
 def uninstall(name: str, log: Callable[[str], None] = print) -> None:
@@ -1250,13 +1312,19 @@ class StopProgress:
             thread.join(self._every + 1)
 
 
-def run(name: str, main: Callable[[], int], stop: Callable[[], None]) -> int:
+def run(name: str, main: Callable[[], int], stop: Callable[[], None],
+        log_path: Optional[str] = None,
+        on_ready: Optional[Callable[[Callable[[], None]], None]] = None) -> int:
     """For --service: hand the process to the SCM dispatcher (blocks until the service
     has stopped). ``main`` runs the server in the service thread; ``stop`` is called
-    (from the SCM's thread) on a stop or shutdown request."""
+    (from the SCM's thread) on a stop or shutdown request. ``log_path``: where stderr goes
+    (service_log). ``on_ready(callback)`` (runtime.when_ready) has the server call back
+    once it is ready: the service is START_PENDING until then (StartProgress) and RUNNING
+    from then on, so a start that fails is seen as one; without it, RUNNING is reported
+    before main() runs."""
     api = _advapi()
     name = check_name(name)
-    redirect_missing_stdio()
+    redirect_missing_stdio(log_path)
     result = {"code": 0}
     handle = {"h": None}
     status = api.SERVICE_STATUS(SERVICE_WIN32_OWN_PROCESS, SERVICE_START_PENDING, 0, 0, 0, 0, 0)
@@ -1291,8 +1359,18 @@ def run(name: str, main: Callable[[], int], stop: Callable[[], None]) -> int:
 
     def service_main(_argc, _argv):
         handle["h"] = api.dll.RegisterServiceCtrlHandlerExW(name, handler, None)
-        report(SERVICE_START_PENDING, wait_hint=30000)
-        report(SERVICE_RUNNING)
+        report(SERVICE_START_PENDING, wait_hint=START_WAIT_HINT_MS)
+        starting = StartProgress(lambda: report(SERVICE_START_PENDING,
+                                                wait_hint=START_WAIT_HINT_MS))
+
+        def running() -> None:
+            if starting.finish():
+                report(SERVICE_RUNNING)
+        if on_ready is None:
+            running()
+        else:
+            on_ready(running)
+            starting.start()
         code = 1
         try:
             code = int(main() or 0)
@@ -1301,6 +1379,7 @@ def run(name: str, main: Callable[[], int], stop: Callable[[], None]) -> int:
         except BaseException:  # whatever happens, the SCM must still be told STOPPED
             import traceback
             traceback.print_exc()
+        starting.finish()
         result["code"] = code
         progress.finish()
         report(SERVICE_STOPPED, code=code)
@@ -1316,8 +1395,112 @@ def run(name: str, main: Callable[[], int], stop: Callable[[], None]) -> int:
     return result["code"]
 
 
-def redirect_missing_stdio() -> None:
-    """A service has no console: print() / logging to a missing stdout must not fail."""
+def redirect_missing_stdio(log_path: Optional[str] = None) -> None:
+    """A service has no console: print() / logging to a missing stdout must not fail.
+    With ``log_path`` a missing stderr goes there (service_log) instead of nowhere."""
+    if log_path is not None and sys.stderr is None:
+        log = service_log(log_path)
+        if log is not None:
+            sys.stderr = log
     for stream in ("stdout", "stderr"):
         if getattr(sys, stream) is None:
             setattr(sys, stream, open(os.devnull, "w", encoding="utf-8"))
+
+
+EVENTLOG_ERROR_TYPE = 0x0001
+EVENT_START_FAILED = 1  # the event id of "the service stopped: <why>"
+
+
+def report_event(source: str, text: str) -> bool:
+    """An error entry in the Windows Application event log, from ``source`` (the service
+    name), where an administrator looks first. The source is not registered: Event
+    Viewer says it has no description for event 1 and shows ``text`` below that. Best
+    effort, never raises; False when it couldn't be written (or not on Windows)."""
+    if os.name != "nt":
+        return False
+    try:
+        from ctypes import wintypes as w
+        dll = _win.WinDLL("advapi32", use_last_error=True)
+        dll.RegisterEventSourceW.restype = w.HANDLE
+        dll.RegisterEventSourceW.argtypes = [w.LPCWSTR, w.LPCWSTR]
+        dll.ReportEventW.restype = w.BOOL
+        dll.ReportEventW.argtypes = [w.HANDLE, w.WORD, w.WORD, w.DWORD, ctypes.c_void_p,
+                                     w.WORD, w.DWORD, ctypes.POINTER(w.LPCWSTR),
+                                     ctypes.c_void_p]
+        dll.DeregisterEventSource.argtypes = [w.HANDLE]
+        handle = dll.RegisterEventSourceW(None, source)
+        if not handle:
+            return False
+        try:
+            strings = (w.LPCWSTR * 1)(text[:31000])  # (an entry holds at most 31839)
+            return bool(dll.ReportEventW(handle, EVENTLOG_ERROR_TYPE, 0, EVENT_START_FAILED,
+                                         None, 1, 0, strings, None))
+        finally:
+            dll.DeregisterEventSource(handle)
+    except Exception:
+        return False
+
+
+SERVICE_LOG = "service.log"
+SERVICE_LOG_MAX = 10 * 1024 * 1024  # what one run writes to it at most
+
+
+class CappedLog:
+    """A text stream that takes at most ``limit`` bytes, then one line saying so: what
+    Python itself reports on stderr (tracebacks), which a fault repeated for days must not
+    turn into a full disk."""
+
+    def __init__(self, fh, limit: int = SERVICE_LOG_MAX) -> None:
+        self._fh = fh
+        self._left = limit
+        self._full = False
+        self.encoding = fh.encoding
+        self.errors = fh.errors
+
+    def write(self, text: str) -> int:
+        if self._full:
+            return len(text)
+        data = text.encode(self.encoding, "replace")
+        out = text
+        if len(data) > self._left:
+            self._full = True
+            out = data[:self._left].decode(self.encoding, "ignore") + \
+                "\n... service.log is full for this run: what follows is not kept\n"
+        self._left -= len(data)
+        try:
+            self._fh.write(out)
+            self._fh.flush()
+        except (OSError, ValueError):
+            self._full = True
+        return len(text)
+
+    def flush(self) -> None:
+        with contextlib.suppress(OSError, ValueError):
+            self._fh.flush()
+
+    def fileno(self) -> int:
+        return self._fh.fileno()
+
+    def isatty(self) -> bool:
+        return False
+
+
+def service_log(path: str) -> Optional[CappedLog]:
+    """stderr for the Windows service: <data>/service.log, begun anew at each start (the
+    previous one kept as service.log.1). Python's own reports go there: a traceback that
+    no handler took, faulthandler's dump of a crash. The service's log lines are in
+    all.log; this is a separate file because a second handle on all.log would keep
+    Windows from rotating it. None when it can't be opened."""
+    with contextlib.suppress(OSError):
+        if os.path.exists(path):
+            os.replace(path, path + ".1")
+    try:
+        fh = open(path, "w", encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+    log = CappedLog(fh)
+    log.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')} service start (pid {os.getpid()})\n")
+    with contextlib.suppress(Exception):  # a crash in native code: the threads' stacks
+        import faulthandler
+        faulthandler.enable(file=fh, all_threads=True)
+    return log

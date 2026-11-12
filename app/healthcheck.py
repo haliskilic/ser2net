@@ -5,8 +5,9 @@ Reads the admin UI address from config.json (SER2NET_BIND_IP / SER2NET_PORT win,
 start-up), asks /healthz and exits 0 when it answers "ok", else 1. A wildcard bind
 (0.0.0.0 / ::, or every interface of both families: "" / SER2NET_BIND_IP=*) is probed on
 loopback; TLS is accepted without a certificate check (the probe only asks whether the
-server is up, and a self-signed certificate is normal); a TLS change not yet in effect (it
-is, from the next start) is tried the other way. The
+server is up, and a self-signed certificate is normal). When the scheme config.json
+implies gets no answer, the other one is tried in the time left: config.json may have
+been changed by hand (or TLS switched in a way the running UI doesn't serve yet). The
 probe always connects directly: HTTP(S)_PROXY / ALL_PROXY, set so that webhooks or SSO
 can reach the Internet, don't apply to it. Standard library only.
 """
@@ -40,18 +41,21 @@ def target(config_path: str) -> str:
 
 
 def check(config_path: str, timeout: float = 5.0) -> tuple[bool, str]:
-    """(healthy, what to print). A certificate set in Settings (or generated there) is
-    used from the next start, while config.json names it at once: when the configured
-    scheme gets no answer, the other one is asked in the time left, so an instance that
-    still runs plain http (or still https) until its restart is not reported unhealthy."""
+    """(healthy, what to print). config.json may name a scheme the running instance
+    doesn't serve (edited by hand and not reloaded, or a change that waits for the next
+    start): when the configured scheme gets no answer, the other one is asked in the time
+    left, so such an instance is not reported unhealthy."""
     url = target(config_path)
     deadline = time.monotonic() + timeout
     ok, msg = _probe(url, timeout)
+    if ok or msg.startswith(f"unhealthy: {url} answered"):
+        return ok, msg
     left = deadline - time.monotonic()
-    if not ok and left > 0.5:
-        other = ("http:" + url[6:]) if url.startswith("https:") else ("https:" + url[5:])
+    if left > 0.5:
+        scheme, rest = url.split(":", 1)
+        other = ("http" if scheme == "https" else "https") + ":" + rest
         if _probe(other, left)[0]:
-            return True, f"ok: {other} (TLS changes take effect at the next start)"
+            return True, f"ok: {other}"
     return ok, msg
 
 

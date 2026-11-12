@@ -8,6 +8,7 @@ M4: two enabled mappings must not target the same serial device.
 Pure stdlib + the app package (needs ./lib on path for app.web.routes).
 Run: python3 tests/test_config_validation.py
 """
+import json
 import os
 import sys
 
@@ -42,7 +43,8 @@ def test_preserve_unmanaged_fields_on_edit():
         "id": existing.id, "name": "dev", "serial": {"port": "COM3", "baudrate": 19200},
         "options": {"banner": "hello", "closeon": "logout"}})
 
-    _preserve_unmanaged_fields(edited, existing)
+    form = {"serial_rs485_delay_before_tx_ms": "0", "opt_banner": "hello", "opt_closeon": "logout"}
+    _preserve_unmanaged_fields(edited, existing, form)
 
     assert edited.serial.match == {"vid": "0403", "pid": "6001"}, "stable-id match dropped on edit"
     # RS-485 is form-managed now: the (empty) submission wins, not the old value
@@ -257,17 +259,29 @@ def test_connection_lifecycle_validation():
     bad = [
         ({"keepalive_idle_s": 0}, None, "Keepalive idle time"),
         ({"keepalive_idle_s": 40000}, None, "Keepalive idle time"),
-        ({"keepalive_interval_s": "10"}, None, "Keepalive probe interval"),
         ({"keepalive_count": 0}, None, "Keepalive probe count"),
         ({"keepalive_count": 128}, None, "Keepalive probe count"),
-        ({"keepalive_count": True}, None, "Keepalive probe count"),
         ({"connect_timeout_s": -1}, None, "Connect timeout"),
         ({"connect_timeout_s": 3601}, None, "Connect timeout"),
         (None, {"max_connection_time_s": -1}, "Max connection time"),
-        (None, {"max_connection_time_s": "24h"}, "Max connection time"),
     ]
     for network, options, needle in bad:
         _expect_error(mapping(network, options), needle)
+    # a number sent as text is that number; a value that is no number is refused by an
+    # edit and reads as the default when it is loaded (validate() never sees it)
+    assert mapping({"keepalive_interval_s": "10"}).network.keepalive_interval_s == 10
+    for network, options, attr, default in (
+            ({"keepalive_count": True}, None, ("network", "keepalive_count"), 3),
+            (None, {"max_connection_time_s": "24h"}, ("options", "max_connection_time_s"), 0)):
+        m = mapping(network, options)
+        assert getattr(getattr(m, attr[0]), attr[1]) == default, (attr, m)
+        m.validate()
+        try:
+            m.validate_input()
+        except ConfigError as e:
+            assert f"{attr[0]}.{attr[1]}:" in str(e), e
+        else:
+            raise AssertionError(f"an edit accepted {network or options}")
     # a negative idle timeout is rejected when set directly...
     neg = mapping()
     neg.options.idle_timeout_s = -5
@@ -544,6 +558,129 @@ def test_form_udp_reply_fields():
     print("form: UDP reply address / peer timeout parsed when shown, kept when absent  OK")
 
 
+def test_form_mqtt_client_id():
+    """The MQTT client id is in the form (blank = automatic). A form without the field
+    (one rendered by a node before 2.9.0: an older cluster peer's) keeps the stored id."""
+    base = {"name": "m", "kind": "net", "enabled": "on", "serial_port": "COM7",
+            "serial_baudrate": "9600", "network_mode": "server", "network_protocol": "raw",
+            "network_bind_ip": "0.0.0.0", "network_port": "4001"}
+    existing = MappingConfig.from_dict({"name": "m", "serial": {"port": "COM7"},
+                                        "mqtt": {"client_id": "s2n-plc1"}})
+
+    def parsed(form):
+        m = MappingConfig.from_dict(_build_mapping_dict(form, strict=True))
+        _preserve_unmanaged_fields(m, existing if form.get("id") else None, form)
+        return m.mqtt.client_id
+
+    assert parsed(dict(base, id=existing.id)) == "s2n-plc1", "absent from the form: kept"
+    assert parsed(dict(base, id=existing.id, mqtt_client_id=" s2n-new ")) == "s2n-new"
+    assert parsed(dict(base, id=existing.id, mqtt_client_id="")) == "", "blank = automatic"
+    assert parsed(base) == "" and parsed(dict(base, mqtt_client_id="x")) == "x"
+    print("form: MQTT client id set when posted, kept when an older form leaves it out  OK")
+
+
+def _edit(existing, form):
+    m = MappingConfig.from_dict(_build_mapping_dict(dict(form, id=existing.id), strict=True))
+    _preserve_unmanaged_fields(m, existing, form)
+    return m
+
+
+def test_form_hidden_blocks_kept():
+    """A block of the form that the mapping's mode or kind hides is disabled, so it isn't
+    posted: the stored values stay (they come back when the mode is switched back)."""
+    existing = MappingConfig.from_dict({
+        "name": "m", "serial": {"port": "COM7"},
+        "serial_b": {"port": "COM8", "baudrate": 19200, "exclusive": False,
+                     "advanced": {"rs485_enabled": True, "rs485_delay_after_tx_ms": 0.5}},
+        "network": {"mode": "server", "bind_ip": "10.0.0.5", "port": 5000,
+                    "remote_host": "10.0.0.9", "remote_port": 6000, "max_connections": 4,
+                    "kick_old_user": True, "priority_client_ips": ["10.0.0.7"],
+                    "allowed_client_ips": ["10.0.0.0/24"], "tls": True, "tls_cert": "/c.pem",
+                    "tls_key": "/k.pem", "client_queue_max": 8192},
+        "modbus_poll": {"interval_s": 2.5}})
+    base = {"name": "m", "kind": "net", "enabled": "on", "serial_port": "COM7",
+            "serial_rs485_delay_before_tx_ms": "0", "network_protocol": "raw"}
+    # client mode: the listening, admission and server-only blocks are hidden
+    m = _edit(existing, dict(base, network_mode="client", network_remote_host="10.0.0.9",
+                             network_remote_port="6000", network_tls_cert="/c.pem",
+                             network_tls_key="/k.pem", network_tls="on"))
+    n = m.network
+    assert (n.bind_ip, n.port, n.max_connections, n.kick_old_user, n.priority_client_ips,
+            n.allowed_client_ips, n.client_queue_max) == (
+        "10.0.0.5", 5000, 4, True, ["10.0.0.7"], ["10.0.0.0/24"], 8192), n
+    # UDP: the TLS and client blocks are hidden
+    m = _edit(existing, dict(base, network_mode="udp", network_bind_ip="10.0.0.5",
+                             network_port="5000", network_allowed_client_ips="10.0.0.0/24"))
+    n = m.network
+    assert (n.tls, n.tls_cert, n.tls_key, n.remote_host, n.remote_port) == (
+        True, "/c.pem", "/k.pem", "10.0.0.9", 6000), n
+    # a Serial <-> Network mapping keeps its (unused) B side and its Modbus poll interval
+    assert m.serial_b == existing.serial_b and m.modbus_poll.interval_s == 2.5
+    # ...and a posted block still sets them
+    m = _edit(existing, dict(base, network_mode="server", network_bind_ip="0.0.0.0",
+                             network_port="4001", network_max_connections="1",
+                             network_allowed_client_ips="", network_tls_cert="",
+                             network_tls_key="", network_client_queue_max="2048"))
+    n = m.network
+    assert (n.bind_ip, n.port, n.max_connections, n.kick_old_user, n.priority_client_ips,
+            n.allowed_client_ips, n.tls, n.client_queue_max) == (
+        "0.0.0.0", 4001, 1, False, [], [], False, 2048), n
+    print("form: blocks hidden for the mode or kind keep their stored values  OK")
+
+
+def test_form_older_node():
+    """A cluster node running an older version renders the form without the newer fields:
+    what it can't post is kept. Before 2.8.0 its Modbus points have no "writable" (kept by
+    point name while it is still a coil or holding register); 2.6.1/2.6.2 forms have no
+    RS-485 fields."""
+    pts = [{"name": "run", "unit": 1, "fn": 1, "address": 0, "dtype": "bool", "writable": True},
+           {"name": "sp", "unit": 1, "fn": 3, "address": 10, "dtype": "int16", "writable": True},
+           {"name": "temp", "unit": 1, "fn": 4, "address": 0, "dtype": "int16"}]
+    existing = MappingConfig.from_dict({
+        "name": "gw", "serial": {"port": "COM7", "advanced": {
+            "rs485_enabled": True, "rs485_delay_before_tx_ms": 0.5,
+            "rs485_delay_after_tx_ms": 0.5, "rs485_rts_level_for_tx": False}},
+        "network": {"protocol": "modbus", "port": 502}, "modbus_poll": {"points": pts}})
+    base = {"name": "gw", "kind": "net", "enabled": "on", "serial_port": "COM7",
+            "network_mode": "server", "network_protocol": "modbus",
+            "network_bind_ip": "0.0.0.0", "network_port": "502", "modbus_poll_interval_s": "5"}
+    old_points = json.dumps([{k: v for k, v in p.items() if k != "writable"} for p in pts])
+    # a 2.7.1 form: no "writable" in the points, no USB-identity marker
+    m = _edit(existing, dict(base, modbus_points=old_points))
+    assert [p.writable for p in m.modbus_poll.points] == [True, True, False]
+    # ...a point it changed into an input register can't be written
+    changed = json.loads(old_points)
+    changed[1].update(fn=4)
+    m = _edit(existing, dict(base, modbus_points=json.dumps(changed)))
+    assert [p.writable for p in m.modbus_poll.points] == [True, False, False]
+    # a 2.8.0+ form says "writable" itself: left out = not writable
+    m = _edit(existing, dict(base, modbus_points=old_points, serial_usb_match_shown="1"))
+    assert [p.writable for p in m.modbus_poll.points] == [False, False, False]
+    # 2.6.1/2.6.2: no RS-485 fields (2.6.3+: posted, unticked = off)
+    a = _edit(existing, base).serial.advanced
+    assert (a.rs485_enabled, a.rs485_delay_before_tx_ms, a.rs485_delay_after_tx_ms,
+            a.rs485_rts_level_for_tx) == (True, 0.5, 0.5, False), a
+    a = _edit(existing, dict(base, serial_rs485_delay_before_tx_ms="0")).serial.advanced
+    assert (a.rs485_enabled, a.rs485_delay_before_tx_ms) == (False, 0.0), a
+    print("form from an older node: writable kept by point name, RS-485 kept when absent  OK")
+
+
+def test_form_text_input_unchanged():
+    """A close-on string with line breaks (imported from a ser2net configuration) can't be
+    shown in a one-line input: posted back as the browser shows it, the stored value
+    stays; a changed value is taken."""
+    existing = MappingConfig.from_dict({"name": "m", "serial": {"port": "COM7"},
+                                        "options": {"closeon": "BYE\r\n\x00", "banner": "hi\r\n"}})
+    base = {"name": "m", "kind": "net", "enabled": "on", "serial_port": "COM7",
+            "network_mode": "server", "network_protocol": "raw", "network_bind_ip": "0.0.0.0",
+            "network_port": "4001"}
+    m = _edit(existing, dict(base, opt_closeon="BYE\ufffd", opt_banner="hi"))
+    assert (m.options.closeon, m.options.banner) == ("BYE\r\n\x00", "hi\r\n")
+    m = _edit(existing, dict(base, opt_closeon="BYE", opt_banner=""))
+    assert (m.options.closeon, m.options.banner) == ("BYE", "")
+    print("form: a one-line field posted back unchanged keeps line breaks it can't show  OK")
+
+
 def test_web_access_settings():
     cfg = AppConfig.from_dict({"admin_ui": {"bind_ip": "127.0.0.1"}})
     assert cfg.admin_ui.require_login is True, "login must be required by default"
@@ -568,6 +705,10 @@ def main():
     test_form_rfc2217_signature()
     test_form_port_lock_options()
     test_form_udp_reply_fields()
+    test_form_mqtt_client_id()
+    test_form_hidden_blocks_kept()
+    test_form_older_node()
+    test_form_text_input_unchanged()
     test_invalid_admin_bind_ip_rejected()
     test_ldap_validation()
     test_modbus_poll_requires_gateway()

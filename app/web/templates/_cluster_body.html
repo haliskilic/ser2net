@@ -15,6 +15,9 @@
 {% if notes.other_key %}
 <div class="banner warn">{{ _("Nodes on this network broadcast with a different cluster key, so they are not shown or contacted: %(addrs)s. Set the same key on every node (Settings → LAN cluster).", addrs=notes.other_key|join(", ")) }}</div>
 {% endif %}
+{% if notes.versions %}
+<div class="banner warn">{{ _("The cluster nodes run different versions (%(versions)s). Upgrade every node to the same version: a node can’t edit the settings another version doesn’t have (README: Upgrading a cluster).", versions=notes.versions|map("default", "?", true)|join(", ")) }}</div>
+{% endif %}
 {% if notes.legacy %}
 <div class="banner warn">{{ _("Nodes running 2.8.0 or older get the cluster key unsigned in every request: %(addrs)s. Upgrade them, then turn off legacy authentication under Settings → LAN cluster.", addrs=notes.legacy|join(", ")) }}</div>
 {% endif %}
@@ -38,6 +41,9 @@
         {% if n.reported %}<span class="muted">({{ _("its own address: %(addr)s", addr=n.reported) }})</span>{% endif %}
         {% if n.online %}
           <span class="muted"> · {{ _("up %(uptime)s", uptime=n.uptime) }}{% if n.version %} · v{{ n.version }}{% endif %} · {{ _("%(running)s/%(total)s running", running=n.running_count, total=n.mapping_count) }}</span>
+          {% if n.age == 'older' %}<span class="tag tag-warn">{{ _("older version") }}</span>{% elif n.age == 'newer' %}<span class="tag tag-warn">{{ _("newer version") }}</span>{% endif %}
+          {% if not n.self and 'control' not in n.caps %}<span class="tag" title="{{ _('This node runs a version before 2.6.0, which can’t be managed from another node. Upgrade it.') }}">{{ _("view only") }}</span>
+          {% elif not n.self and 'edit' not in n.caps %}<span class="tag" title="{{ _('This node runs a version that can’t be edited from another node (2.6.0). Upgrade it.') }}">{{ _("no remote edit") }}</span>{% endif %}
           {% if n.auth == 'legacy' %}<span class="tag tag-warn" title="{{ _('A node running 2.8.0 or older: it gets the cluster key unsigned in every request. Upgrade it.') }}">{{ _("unsigned key") }}</span>{% endif %}
           {% if n.previous_key %}<span class="tag tag-warn" title="{{ _('It accepts only the previous cluster key: set the new key on it.') }}">{{ _("previous key") }}</span>{% endif %}
         {% elif n.problem == 'key' %}
@@ -73,7 +79,7 @@
       <td data-label="{{ _('Clients') }}">{{ m.client_count }}</td>
       <td class="mono nowrap" data-label="{{ _('In / Out') }}"><span id="{{ rid }}-bytes">{{ m.bytes_in|default('')|bytesize }} / {{ m.bytes_out|default('')|bytesize }}</span></td>
       <td class="col-actions">
-        {% if can_edit and not n.self %}
+        {% if can_edit and not n.self and 'control' in n.caps %}
         <div class="row-actions"><div class="btn-group">
           {# the peer by host + port only: the server looks up its address and scheme #}
           {% set peer = {"host": n.ip, "port": n.port, "mid": m.id} %}
@@ -85,7 +91,7 @@
           {% else %}
             <button class="btn sm" id="{{ rid }}-run" aria-describedby="{{ rid }}-name" hx-post="{{ base }}/api/cluster/control-peer" hx-vals='{{ dict(peer, action="start")|tojson }}' hx-swap="none" hx-disabled-elt="this">{{ _("Start") }}</button>
           {% endif %}
-          <button class="btn sm" id="{{ rid }}-edit" aria-describedby="{{ rid }}-name" hx-get="{{ base }}/api/cluster/peer-form?{{ peer|urlencode }}" hx-target="#form-panel" hx-swap="innerHTML show:top">{{ _("Edit") }}</button>
+          {% if 'edit' in n.caps %}<button class="btn sm" id="{{ rid }}-edit" aria-describedby="{{ rid }}-name" hx-get="{{ base }}/api/cluster/peer-form?{{ peer|urlencode }}" hx-target="#form-panel" hx-swap="innerHTML show:top">{{ _("Edit") }}</button>{% endif %}
         </div></div>
         {% endif %}
       </td>
