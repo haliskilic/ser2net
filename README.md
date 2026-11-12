@@ -624,6 +624,29 @@ içeren bir dosyaya (Docker secret) yönlendirin; ad için `SER2NET_ADMIN_USER` 
   düğümleri listeler. Yalnızca manuel eşlerin kullanıldığı yerlerde *otomatik keşif*
   kapatılabilir.
 
+### Kümeyi yükseltme
+
+- **Önce her düğümü yükseltin, sonra düğümler arasında düzenleyin.** Bir düğüm başka bir
+  düğümün eşlemesini kendi formuyla düzenler; bu yüzden iki sürümden birinde olmayan bir ayar
+  bu yolla düzenlenemez. 2.9.0'dan itibaren filo görünümü **daha eski sürüm** ya da **daha
+  yeni sürüm** çalıştıran bir eşi etiketler, sürümler farklı olduğu sürece bir uyarı onları
+  listeler, böyle bir eşin düzenleme formu bunu söyler ve eski bir eşin saklamadığı ayarları
+  göstermez; bir eşe yalnızca sürümünün yapabildikleri sunulur (2.6.0'dan önce: yalnızca
+  izleme; 2.6.0: başlat, durdur, yeniden başlat, düzenleme yok).
+- **Eski düğümlerden gelen düzenlemeler:** 2.9.0 düğümü, eski bir düğümün formunun
+  gönderemediklerini korur: MQTT client ID'si (2.9.0'dan önce alanı yok), USB kimliği ve
+  Modbus noktalarının `writable` değeri (2.8.0'dan önce), RS-485 (2.6.1 / 2.6.2). Eski bir
+  düğümü düzenlerken o düğümün kendi trace yolunu değiştirmeden geri gönderir; formunun Modbus
+  gateway için göstermediği ayarları da (banner, close-on dizgisi, istemci tamponu) gönderir.
+- **Yayınlanmış sürümler değişmez:** 2.9.0'dan önceki bir düğüm**den** 2.9.0'dan önceki
+  başka bir düğüm**e** yapılan düzenleme hep kaybettiğini kaybeder (böyle her düzenleme MQTT
+  client ID'sini siler; 2.7 düğümünün düzenlemesi bir 2.8 düğümünün Modbus noktalarındaki
+  `writable` işaretlerini siler). Önce o düğümleri yükseltin, o zamana kadar eşlemelerini
+  düğümün kendisinde düzenleyin.
+- **Sıra:** düğümleri birer birer yükseltin; *Eski kimlik doğrulama* açıkken (varsayılan)
+  2.8.0 ya da daha eski düğümler sonuncusu yükseltilene kadar çalışmaya devam eder; ardından
+  bu işareti her düğümde kaldırın (yukarıdaki LAN cluster bölümüne bakın).
+
 ---
 
 ## ⚙️ Servis olarak çalıştırma

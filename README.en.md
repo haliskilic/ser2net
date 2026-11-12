@@ -606,6 +606,27 @@ is no account at all; later starts ignore it.
   rejected** for the nodes not changed yet, and a banner lists the nodes that broadcast with a
   different key. *Auto-discovery* can be switched off where only manual peers are used.
 
+### Upgrading a cluster
+
+- **Upgrade every node, then edit across nodes.** A node edits another node's mapping with
+  its own form, so a setting one of the two versions doesn't have can't be edited that way.
+  From 2.9.0 on the fleet view tags a peer running an **older version** or a **newer
+  version**, a banner lists the versions while they differ, the edit form of such a peer says
+  so and leaves out the settings an older peer doesn't keep, and a peer is offered only what
+  its version can do (before 2.6.0: view only; 2.6.0: start, stop and restart, no edit).
+- **Edits from older nodes:** a 2.9.0 node keeps what an older node's form can't send: the
+  MQTT client ID (no field before 2.9.0), the USB identity and the Modbus points' `writable`
+  (before 2.8.0), RS-485 (2.6.1 / 2.6.2). Editing an older node, it sends that node's own
+  trace path back unchanged and the settings its form leaves out for a Modbus gateway
+  (banner, close-on string, client buffer).
+- **Released versions don't change:** an edit **from** a node before 2.9.0 **to** another
+  node before 2.9.0 loses what it always lost (every such edit clears the MQTT client ID; a
+  2.7 node's edit clears the `writable` flags of a 2.8 node's Modbus points). Upgrade those
+  nodes first, or edit their mappings on the node itself until then.
+- **Order:** upgrade the nodes one at a time; with *Legacy authentication* on (the default)
+  nodes running 2.8.0 or older keep working until the last one is upgraded; then untick it on
+  every node (see LAN cluster above).
+
 ---
 
 ## ⚙️ Run as a service
