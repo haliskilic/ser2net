@@ -1,0 +1,39 @@
+# Template file for 'ser2netweb'
+pkgname=ser2netweb
+version=3.0.0
+revision=1
+build_style=python3-pep517
+hostmakedepends="python3-setuptools"
+depends="python3-h11 python3-Jinja2 python3-MarkupSafe python3-psutil python3-pyserial
+ python3-pyserial-asyncio-fast python3-python-multipart python3-starlette python3-uvicorn
+ python3-websockets"
+checkdepends="${depends}"
+short_desc="Serial-to-network bridge with a web UI"
+maintainer="Halis KILIÇ <mail@haliskilic.com.tr>"
+license="AGPL-3.0-only, 0BSD, MIT"
+homepage="https://github.com/haliskilic/ser2netweb"
+changelog="https://raw.githubusercontent.com/haliskilic/ser2netweb/main/CHANGELOG.md"
+distfiles="https://github.com/haliskilic/ser2netweb/archive/refs/tags/v${version}.tar.gz"
+checksum=b6610d614abce4071895f4a3d829da61cb87ddc7890034584a8ea5d71a60d0e5
+make_dirs="/var/lib/ser2netweb 0700 _ser2netweb _ser2netweb"
+system_accounts="_ser2netweb"
+_ser2netweb_homedir="/var/lib/ser2netweb"
+_ser2netweb_descr="ser2netweb serial-to-network bridge"
+_ser2netweb_groups="dialout"
+
+do_check() {
+	# The whole suite (tests/run_all.py) also compares the pinned versions of the
+	# release files; these run on Void's own: the configuration, sign-in and the REST API
+	local t
+	for t in test_config_validation test_web_auth test_rest_api; do
+		SER2NETWEB_SKIP_PIN_CHECKS=1 python3 tests/${t}.py
+	done
+}
+
+post_install() {
+	vsv ser2netweb
+	vlicense THIRD-PARTY-NOTICES.md
+	vlicense tools/licenses/npm/htmx.org.txt
+	vlicense tools/licenses/npm/xterm.txt
+	vlicense tools/licenses/npm/xterm-addon-fit.txt
+}

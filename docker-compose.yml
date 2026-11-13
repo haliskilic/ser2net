@@ -2,7 +2,8 @@
 #   docker compose up -d
 # Edit `devices` to match the serial port(s) you are bridging and `ports` to match
 # your mappings. More (plain `docker run`, networking, hot-plug): docs/DOCKER.md
-# Coming from 2.9.x's file (service and container "ser2net", image .../ser2net): the volume
+# Coming from 2.9.x's file (service and container "ser2net", image .../ser2net; that image
+# name stops at 3.0.0, later releases are published as .../ser2netweb only): the volume
 # keeps its name, so the data is the same; start this one with
 #   docker compose up -d --remove-orphans
 # so the old container, which holds the ports, is removed (docs/DOCKER.md, "Upgrading").

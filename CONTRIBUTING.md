@@ -219,14 +219,14 @@ pre-release) on the merge commit starts `.github/workflows/release.yml`:
    its standalone build is what gets released, with the `.deb` / `.rpm` packages it makes of
    the Linux binaries and the PyPI sdist and wheel;
 3. the image is built for amd64, arm64 and arm/v7, pushed to GHCR by digest only (no tag)
-   as `ghcr.io/haliskilic/ser2netweb` and, for the 3.x line, as `ghcr.io/haliskilic/ser2net`
-   (its name up to 2.9.x), and that digest is smoke-tested on each (amd64 and arm64
-   natively, arm/v7 under QEMU);
+   as `ghcr.io/haliskilic/ser2netweb` (its only name: `ghcr.io/haliskilic/ser2net`, the
+   name up to 2.9.x, stopped at 3.0.0), and that digest is smoke-tested on each (amd64 and
+   arm64 natively, arm/v7 under QEMU);
 4. only then are the files attested and the GitHub release created with them (by `gh`; the
    jobs that can write releases or attestations run GitHub's own actions only; the files are
    the `ser2netweb-*` ones and this version's four packages, as
    `tools/release_guard.py assets` lists them), and the tested image gets its tags `X.Y.Z`,
-   `X.Y` and `latest` under both names. A pre-release gets only its own image tag, is
+   `X.Y` and `latest`. A pre-release gets only its own image tag, is
    marked as a pre-release and never becomes "Latest";
 5. last, the job `publish to PyPI` uploads the sdist and wheel CI built (environment `pypi`,
    trusted publishing: no token). A pre-release goes up as one too (`X.Y.ZrcN`, which pip
@@ -482,14 +482,14 @@ yazılır; bu birleştirilince merge commit'ine atılan açıklamalı bir `vX.Y.
    kontroller); yayımlanan, onun standalone derlemesi, Linux binary'lerinden yaptığı
    `.deb` / `.rpm` paketleri ve PyPI sdist'i ile wheel'idir;
 3. imaj amd64, arm64 ve arm/v7 için derlenir, GHCR'a yalnızca digest ile (tag'siz)
-   `ghcr.io/haliskilic/ser2netweb` ve 3.x serisi için 2.9.x'e kadarki adıyla
-   `ghcr.io/haliskilic/ser2net` olarak gönderilir ve bu digest her mimaride smoke test'ten
+   `ghcr.io/haliskilic/ser2netweb` olarak gönderilir (tek adı budur: 2.9.x'e kadarki ad
+   `ghcr.io/haliskilic/ser2net` 3.0.0'da kaldı) ve bu digest her mimaride smoke test'ten
    geçer (amd64 ve arm64 emülasyonsuz, arm/v7 QEMU altında);
 4. ancak bundan sonra dosyalar attest edilir ve GitHub release'i onlarla oluşturulur
    (`gh` ile; release ya da attestation yazabilen işlerde yalnızca GitHub'ın kendi
    action'ları çalışır; dosyalar `tools/release_guard.py assets`'in listelediği
-   `ser2netweb-*` dosyaları ve bu sürümün dört paketidir), test edilen imaj da iki adı
-   altında `X.Y.Z`, `X.Y` ve `latest` tag'lerini alır.
+   `ser2netweb-*` dosyaları ve bu sürümün dört paketidir), test edilen imaj da
+   `X.Y.Z`, `X.Y` ve `latest` tag'lerini alır.
    Ön sürüm yalnızca kendi imaj tag'ini alır, ön sürüm olarak işaretlenir ve hiçbir zaman
    "Latest" olmaz;
 5. en son `publish to PyPI` işi CI'ın derlediği sdist ve wheel'i yükler (`pypi` ortamı,

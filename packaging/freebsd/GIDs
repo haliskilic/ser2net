@@ -1,0 +1,2 @@
+ser2netweb:*:407:
+dialer:*:68:aprsd,ser2netweb

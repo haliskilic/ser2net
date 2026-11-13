@@ -1,0 +1,19 @@
+[
+{ type: install
+  message: <<EOM
+ser2netweb runs as the user ser2netweb (a member of the dialer group, which
+may open the serial ports /dev/cua*) with its data in /var/db/ser2netweb:
+
+  sysrc ser2netweb_enable=YES
+  service ser2netweb start
+
+The web UI then listens on 127.0.0.1:8080. To put it elsewhere:
+
+  sysrc ser2netweb_env="SER2NETWEB_BIND_IP=0.0.0.0 SER2NETWEB_PORT=8080"
+
+Set the first admin password in the browser, or as the service user:
+
+  su -m ser2netweb -c '%%PREFIX%%/bin/ser2netweb --data-dir /var/db/ser2netweb --set-password admin'
+EOM
+}
+]

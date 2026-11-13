@@ -1,0 +1,36 @@
+#!/sbin/openrc-run
+# Copyright 2026 Gentoo Authors
+# Distributed under the terms of the GNU General Public License v2
+
+description="ser2netweb serial-to-network bridge"
+extra_started_commands="reload"
+description_reload="Read config.json again without a restart"
+
+: "${SER2NETWEB_DATA_DIR:=/var/lib/ser2netweb}"
+
+command="/usr/bin/ser2netweb"
+command_args="--data-dir ${SER2NETWEB_DATA_DIR} ${SER2NETWEB_OPTS}"
+command_user="ser2netweb:ser2netweb"
+command_background=true
+pidfile="/run/${RC_SVCNAME}.pid"
+output_logger="logger -t ${RC_SVCNAME} -p daemon.info"
+error_logger="logger -t ${RC_SVCNAME} -p daemon.err"
+umask=0077
+
+depend() {
+	need net
+	use logger
+}
+
+start_pre() {
+	checkpath -d -m 0700 -o ser2netweb:ser2netweb "${SER2NETWEB_DATA_DIR}"
+	[ -n "${SER2NETWEB_BIND_IP}" ] && export SER2NETWEB_BIND_IP
+	[ -n "${SER2NETWEB_PORT}" ] && export SER2NETWEB_PORT
+	return 0
+}
+
+reload() {
+	ebegin "Reloading ${RC_SVCNAME}"
+	start-stop-daemon --signal HUP --pidfile "${pidfile}"
+	eend $?
+}

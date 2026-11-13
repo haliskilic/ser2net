@@ -1,0 +1,6 @@
+ser2netweb shares serial ports over the network: raw TCP, telnet, RFC 2217,
+UDP, a Modbus RTU/TCP gateway and MQTT, configured in a web UI or over a REST
+API, with user accounts, an audit log and clustering of several nodes.
+
+ser2netweb is an independent project, unrelated to Corey Minyard's ser2net
+(comms/ser2net); both can be installed.
