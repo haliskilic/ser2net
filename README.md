@@ -402,7 +402,10 @@ düzenlemeye gerek yok.
     pano istemciyi işaretler (durumda `listen_only`). İzin listesi, öncelikli istemciler ve
     **Salt okunur** (kimse yazmaz) eskisi gibi çalışır; bir telnet / RFC 2217 dinleyicisi
     BREAK de gönderemez, hat ayarlarını da değiştiremez. MQTT yazmaları ve web konsolu
-    istemci sayılmaz.
+    istemci sayılmaz. UDP'de bir dinleyicinin datagramı onu yine de cihazın çıktısını alan
+    karşı taraf yapar (liste yokken olduğu gibi son gönderen); yani gönderen bir dinleyici
+    çıktıyı yazandan devralır: böyle bir eşlemeye bir yanıt adresi ya da UDP hedefleri
+    verin.
   - **Seri portu yalnızca bir istemci bağlıyken aç** (`network.open_on_connect`, TCP
     sunucu, raw / telnet / rfc2217): eşleme port kapalıyken dinler (pano *istemci
     bekleniyor* der, durumda `"waiting": true`), portu ilk istemci için açar (istemci port

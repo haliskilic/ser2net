@@ -389,6 +389,9 @@ everything from a **password-protected web UI** — no CLI or hand-edited config
     (`listen_only` in the status). The allow-list, priority clients and **Read-only**
     (nobody writes) work as before; a telnet / RFC 2217 listener can't send a BREAK or
     change the line settings either. MQTT writes and the web console are not clients.
+    Over UDP a listener's datagram still makes it the peer that gets the device's output
+    (the last sender, as without the list), so a listener that sends takes the output
+    over from the writer: give such a mapping a reply address or UDP targets.
   - **Open the serial port only while a client is connected** (`network.open_on_connect`,
     TCP server, raw / telnet / rfc2217): the mapping listens with the port closed (the
     dashboard says *waiting for a client*, `"waiting": true` in the status), opens it for
