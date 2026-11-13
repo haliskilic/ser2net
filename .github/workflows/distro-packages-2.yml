@@ -352,7 +352,7 @@ jobs:
             make DEVELOPER=yes BATCH=yes package
             make DEVELOPER=yes check-plist
             make test
-            pkg add "$(make -V PKGFILE)"
+            pkg add "work/pkg/ser2netweb-$VERSION.pkg"
             pkg info -l ser2netweb | grep -E 'rc.d|bin/'
             ser2netweb --version | grep -Fx "ser2netweb $VERSION"
             ser2netweb --about
