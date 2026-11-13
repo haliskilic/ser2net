@@ -287,10 +287,10 @@ build_alpine() {
     [ "$code" -eq 0 ] || fail "apkbuild-lint: exit $code"
     say "abuild -r (as a user)"
     su -l builder -c "cd '$dir' && abuild -r"
-    find /home/builder/packages -name 'ser2netweb-*.apk' -exec cp {} "$OUT/" \;
+    find /home/builder -name 'ser2netweb-*.apk' -exec cp {} "$OUT/" \;
     ls -l "$OUT"
-    # (the repository abuild made: .../packages/<folder>/<arch>/APKINDEX.tar.gz)
-    repo=$(dirname "$(dirname "$(find /home/builder/packages -name APKINDEX.tar.gz | head -1)")")
+    # (the repository abuild made: its REPODEST, <folder>/<arch>/APKINDEX.tar.gz)
+    repo=$(dirname "$(dirname "$(find /home/builder -name APKINDEX.tar.gz | head -1)")")
     say "install"
     apk add -q --repository "$repo" ser2netweb ser2netweb-openrc
     apk info -a ser2netweb | sed -n '1,40p'
