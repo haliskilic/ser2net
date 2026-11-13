@@ -835,7 +835,7 @@ def test_binary():
         licenses = run.output(["--licenses"])
         for needle in ("AGPL-3.0-only", "CPython", "OpenSSL", "ldap3 2.", "LGPL", "paho-mqtt",
                        "cryptography", "pyinstaller", "starlette", "pyserial",
-                       "htmx.org 2.", "@xterm/xterm 5."):
+                       "htmx.org 2.", "@xterm/xterm 6."):
             assert needle in licenses, f"--licenses does not cover {needle!r}"
         # python-build-standalone's native libraries (the python.org build folded these
         # into its own LICENSE.txt; PBS — now used on Windows too — keeps them apart)

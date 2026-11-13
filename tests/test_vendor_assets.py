@@ -44,7 +44,10 @@ def test_record_matches_the_files():
     assert "xterm" not in doc["dependencies"] and "xterm-addon-fit" not in doc["dependencies"], \
         "the unscoped xterm packages are deprecated"
     assert pkgs["@xterm/xterm"]["purl"] == f"pkg:npm/%40xterm/xterm@{pkgs['@xterm/xterm']['version']}"
-    assert pkgs["@xterm/xterm"]["version"].startswith("5."), "6.x changes the console: plan it"
+    # the console (app.js, app.css, tests/test_ui_layout.py) is written for this pair: a
+    # major of xterm.js changes its options, its DOM and what the addon reads from it
+    assert pkgs["@xterm/xterm"]["version"].startswith("6."), "a new major changes the console: plan it"
+    assert pkgs["@xterm/addon-fit"]["version"].startswith("0."), pkgs["@xterm/addon-fit"]["version"]
     assert pkgs["@xterm/xterm"]["commit"] and \
         pkgs["@xterm/xterm"]["commit"] == pkgs["@xterm/addon-fit"]["commit"], "one xterm.js release"
     assert {p["license"] for p in pkgs.values()} == {"0BSD", "MIT"}
@@ -124,6 +127,10 @@ def test_console_globals():
         app_js = fh.read()
     # UMD bundles: Terminal is copied onto the global object, FitAddon set as e.FitAddon
     assert "e.Terminal=" in xterm and "e.FitAddon=t()" in fit
+    # the scrollbar: xterm.js 6 draws its own and the addon leaves room for it, both as
+    # wide as the option says (app.js passes none: 14 px in both)
+    assert "verticalScrollbarSize:this._optionsService.rawOptions.overviewRuler?.width||14" in xterm
+    assert "this._terminal.options.overviewRuler?.width||14" in fit
     assert "new Terminal(" in app_js and "new FitAddon.FitAddon()" in app_js
     print("xterm.js / addon-fit export the Terminal and FitAddon globals app.js uses  OK")
 

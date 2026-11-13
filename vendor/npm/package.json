@@ -4,8 +4,8 @@
   "description": "The browser libraries vendored in ser2netweb/web/static/ (not installed with npm): tools/refresh_assets.py copies them out of these npm releases, tests/test_vendor_assets.py checks them against the sha256 below, tools/third_party.py lists them in the executables' SBOM and --licenses.",
   "license": "AGPL-3.0-only",
   "dependencies": {
-    "@xterm/addon-fit": "0.10.0",
-    "@xterm/xterm": "5.5.0",
+    "@xterm/addon-fit": "0.11.0",
+    "@xterm/xterm": "6.0.0",
     "htmx.org": "2.0.11"
   },
   "ser2net": {
@@ -18,33 +18,33 @@
       "ser2netweb/web/static/xterm.js": {
         "package": "@xterm/xterm",
         "path": "lib/xterm.js",
-        "sha256": "1f991ac3b4b283ebf96e60ae23a00a52765dd3a2e46fa6fdda9f1aab032f7495"
+        "sha256": "14903579ff54664cd72f8e8699e6961a6272c21863ec1c3b118cdc8af5d4a972"
       },
       "ser2netweb/web/static/xterm.css": {
         "package": "@xterm/xterm",
         "path": "css/xterm.css",
-        "sha256": "ba8e6985669488981ccf40c0cefe3aba80722cb6c92de7ad628b0bd717faf2b6"
+        "sha256": "854a7c0fb70e8b1a083c16797ab827299fb18744f5ad34f227b48337e33293c6"
       },
       "ser2netweb/web/static/xterm-addon-fit.js": {
         "package": "@xterm/addon-fit",
         "path": "lib/addon-fit.js",
-        "sha256": "bdaefa370b1bfc42ee88d46fe6072400902a4d4b2d45cd93438dda9b23c97089"
+        "sha256": "ba3ea256ce0620a0992a197d6c9baea64823fc93d8da07a9e366ca9943c18527"
       }
     },
     "packages": {
       "@xterm/addon-fit": {
-        "version": "0.10.0",
-        "integrity": "sha512-UFYkDm4HUahf2lnEyHvio51TNGiLK66mqP2JoATy7hRZeXaGMRDr00JiSF7m63vR5WKATF605yEggJKsw0JpMQ==",
+        "version": "0.11.0",
+        "integrity": "sha512-jYcgT6xtVYhnhgxh3QgYDnnNMYTcf8ElbxxFzX0IZo+vabQqSPAjC3c1wJrKB5E19VwQei89QCiZZP86DCPF7g==",
         "license": "MIT",
         "license_file": "tools/licenses/npm/xterm-addon-fit.txt",
-        "commit": "9ba6c00a195c95fcf8292a2b9084d91450e5daae"
+        "commit": "f447274f430fd22513f6adbf9862d19524471c04"
       },
       "@xterm/xterm": {
-        "version": "5.5.0",
-        "integrity": "sha512-hqJHYaQb5OptNunnyAnkHyM8aCjZ1MEIDTQu1iIbbTD/xops91NB5yq1ZK/dC2JDbVWtF23zUtl9JE2NqwT87A==",
+        "version": "6.0.0",
+        "integrity": "sha512-TQwDdQGtwwDt+2cgKDLn0IRaSxYu1tSUjgKarSDkUM0ZNiSRXFpjxEsvc/Zgc5kq5omJ+V0a8/kIM2WD3sMOYg==",
         "license": "MIT",
         "license_file": "tools/licenses/npm/xterm.txt",
-        "commit": "9ba6c00a195c95fcf8292a2b9084d91450e5daae"
+        "commit": "f447274f430fd22513f6adbf9862d19524471c04"
       },
       "htmx.org": {
         "version": "2.0.11",

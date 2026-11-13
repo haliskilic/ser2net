@@ -90,6 +90,9 @@ the files and their sha256, and the license texts are in `tools/licenses/npm/` (
 | xterm.js (`xterm.js`, `xterm.css`) | `@xterm/xterm` | MIT |
 | xterm.js fit addon (`xterm-addon-fit.js`) | `@xterm/addon-fit` | MIT |
 
+xterm.js 6 includes parts of Visual Studio Code's base library (its scrollbar and event
+code; Copyright (c) Microsoft Corporation), under the same MIT license.
+
 ## LGPL components
 
 ldap3 is an LGPL library. ser2netweb uses it unmodified through its public API. The LGPL

@@ -69,8 +69,8 @@ Recommends:     python3-cryptography >= 43.0.0
 Recommends:     python3-ldap3 >= 2.9.1
 Recommends:     python3-paho-mqtt >= 1.6.1
 Provides:       bundled(js-htmx) = 2.0.11
-Provides:       bundled(js-xterm) = 5.5.0
-Provides:       bundled(js-xterm-addon-fit) = 0.10.0
+Provides:       bundled(js-xterm) = 6.0.0
+Provides:       bundled(js-xterm-addon-fit) = 0.11.0
 BuildArch:      noarch
 %sysusers_requires
 %{?systemd_ordering}
