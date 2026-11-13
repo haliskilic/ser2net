@@ -1,42 +1,44 @@
 #!/bin/sh
 # Install (or upgrade) the standalone Linux binary of a release as a systemd service.
-# Download ser2netweb-linux-x64 (or -arm64), ser2net-standalone.service, this script and
+# Download ser2netweb-linux-x64 (or -arm64), ser2netweb-standalone.service, this script and
 # SHA256SUMS from the release into one folder, then:
-#   sudo sh ser2net-install.sh                     # 127.0.0.1:8080 until you say otherwise
-#   sudo sh ser2net-install.sh --listen 0.0.0.0:8080
+#   sudo sh ser2netweb-install.sh                     # 127.0.0.1:8080 until you say otherwise
+#   sudo sh ser2netweb-install.sh --listen 0.0.0.0:8080
 # It checks the files against SHA256SUMS (when it is there) and that the binary runs here,
 # then installs (the same names as the README's manual steps):
-#   /usr/local/bin/ser2net                   the binary
-#   /etc/systemd/system/ser2net.service      ser2net-standalone.service
-#   /var/lib/ser2net                         the data directory (0700, user ser2net)
-# and the system user ser2net (its own group; the unit adds dialout for the serial ports),
-# enables the service, (re)starts it and waits until it answers. Run again with a newer
-# release to upgrade: the data directory and the user stay as they are. It refuses to hide
-# another ser2net.service (the classic ser2net daemon's package, or a source install in
-# /opt/ser2net) unless --replace-unit is given.
+#   /usr/local/bin/ser2netweb                   the binary
+#   /etc/systemd/system/ser2netweb.service      ser2netweb-standalone.service
+#   /var/lib/ser2netweb                         the data directory (0700, user ser2netweb)
+# and the system user ser2netweb (its own group; the unit adds dialout for the serial
+# ports), enables the service, (re)starts it and waits until it answers. Run again with a
+# newer release to upgrade: the data directory and the user stay as they are. It refuses to
+# hide another ser2netweb.service (a package's, or a source install in /opt/ser2netweb)
+# unless --replace-unit is given.
 #
 # Options:
 #   --binary FILE     the binary (default: ser2netweb-linux-<x64|arm64> next to this script)
-#   --unit FILE       the unit (default: ser2net-standalone.service next to this script)
-#   --listen IP:PORT  the web UI's address (a drop-in setting SER2NET_BIND_IP / SER2NET_PORT;
-#                     use TLS on a network address, README: Security)
+#   --unit FILE       the unit (default: ser2netweb-standalone.service next to this script)
+#   --listen IP:PORT  the web UI's address (a drop-in setting SER2NETWEB_BIND_IP /
+#                     SER2NETWEB_PORT; use TLS on a network address, README: Security)
 #   --no-start        install and enable, but don't start
-#   --replace-unit    install over another ser2net.service (stop and disable it first)
+#   --replace-unit    install over another ser2netweb.service (stop and disable it first)
 #   --uninstall       stop, disable and remove the service and the binary (the data
 #                     directory and the user stay)
 #   --root DIR        put the files under DIR only (a staged tree: no user is created and
 #                     systemd is left alone; the commands to finish are printed)
 set -eu
 
-BIN_DEST=/usr/local/bin/ser2net
-UNIT_DEST=/etc/systemd/system/ser2net.service
-DROPIN_DIR=/etc/systemd/system/ser2net.service.d
-DATA=/var/lib/ser2net
-USER_NAME=ser2net
+NAME=ser2netweb
+BIN_DEST=/usr/local/bin/$NAME
+UNIT_DEST=/etc/systemd/system/$NAME.service
+DROPIN_DIR=/etc/systemd/system/$NAME.service.d
+DATA=/var/lib/$NAME
+CACHE=/var/cache/$NAME
+USER_NAME=$NAME
 HERE=$(cd "$(dirname "$0")" && pwd)
 
-say() { echo "ser2net-install: $*"; }
-die() { echo "ser2net-install: ERROR: $*" >&2; exit 1; }
+say() { echo "$NAME-install: $*"; }
+die() { echo "$NAME-install: ERROR: $*" >&2; exit 1; }
 usage() { sed -n '2,/^set -eu$/p' "$0" | sed -e '$d' -e 's/^# \{0,1\}//'; exit "${1:-0}"; }
 
 binary="" unit="" listen="" start=1 replace=0 uninstall=0 root=""
@@ -50,7 +52,7 @@ while [ $# -gt 0 ]; do
         --uninstall) uninstall=1 ;;
         --root) [ $# -ge 2 ] || die "--root needs a folder"; root=${2%/}; shift ;;
         -h|--help) usage 0 ;;
-        *) echo "ser2net-install: unknown option: $1" >&2; usage 2 >&2 ;;
+        *) echo "$NAME-install: unknown option: $1" >&2; usage 2 >&2 ;;
     esac
     shift
 done
@@ -76,7 +78,7 @@ else
 fi
 
 # --- what is installed now ----------------------------------------------------------
-ours() {  # the installed ser2net.service is this script's (the binary's unit)
+ours() {  # the installed ser2netweb.service is this script's (the binary's unit)
     [ -f "$root$UNIT_DEST" ] && grep -q "^ExecStart=$BIN_DEST " "$root$UNIT_DEST"
 }
 
@@ -85,7 +87,7 @@ if [ "$uninstall" = 1 ]; then
         die "$UNIT_DEST is not the binary's unit (it doesn't run $BIN_DEST): not removing it"
     fi
     if [ "$live" = 1 ] && [ -e "$UNIT_DEST" ]; then
-        systemctl disable --now ser2net.service || true
+        systemctl disable --now "$NAME.service" || true
     fi
     rm -f "$root$UNIT_DEST" "$root$DROPIN_DIR/listen.conf" "$root$DROPIN_DIR/tmpdir.conf" "$root$BIN_DEST"
     rmdir "$root$DROPIN_DIR" 2>/dev/null || true
@@ -96,18 +98,19 @@ if [ "$uninstall" = 1 ]; then
 fi
 
 if [ -e "$root$UNIT_DEST" ] && ! ours; then
-    if grep -q "/opt/ser2net/ser2net.py" "$root$UNIT_DEST" 2>/dev/null; then
-        what="a source install of ser2net (/opt/ser2net), whose data is in /opt/ser2net/data"
+    if grep -q "/opt/$NAME/$NAME.py" "$root$UNIT_DEST" 2>/dev/null; then
+        what="a source install of $NAME (/opt/$NAME), whose data is in /opt/$NAME/data"
     else
         what="another program"
     fi
-    [ "$replace" = 1 ] || die "$UNIT_DEST is $what. This would replace it; stop it first (systemctl disable --now ser2net), copy its data to $DATA if you want to keep it, then run this again with --replace-unit"
+    [ "$replace" = 1 ] || die "$UNIT_DEST is $what. This would replace it; stop it first (systemctl disable --now $NAME), copy its data to $DATA if you want to keep it, then run this again with --replace-unit"
     say "replacing $UNIT_DEST ($what; a copy is kept as $UNIT_DEST.replaced)"
 fi
-for f in /run/systemd/system/ser2net.service /usr/local/lib/systemd/system/ser2net.service \
-         /usr/lib/systemd/system/ser2net.service /lib/systemd/system/ser2net.service; do
+# (the classic C ser2net daemon's package installs ser2net.service, which no longer clashes)
+for f in /run/systemd/system/$NAME.service /usr/local/lib/systemd/system/$NAME.service \
+         /usr/lib/systemd/system/$NAME.service /lib/systemd/system/$NAME.service; do
     [ -e "$root$f" ] || continue
-    [ "$replace" = 1 ] || die "$f exists: most likely the classic ser2net daemon's package, which uses the same service name. This one would hide it, so both can't run. Stop and disable it first (systemctl disable --now ser2net), then run this again with --replace-unit"
+    [ "$replace" = 1 ] || die "$f exists: most likely the $NAME package (.deb / .rpm), which installs the same service. This one would hide it; use the package's (systemctl enable --now $NAME), or stop and disable it first (systemctl disable --now $NAME), then run this again with --replace-unit"
     say "$f is hidden by $UNIT_DEST from now on"
 done
 
@@ -116,15 +119,15 @@ if [ -z "$binary" ]; then
     case $(uname -m) in
         x86_64|amd64) arch=x64 ;;
         aarch64|arm64) arch=arm64 ;;
-        *) die "there is no standalone binary for $(uname -m); run ser2net from source (README: Install & run) or use the Docker image" ;;
+        *) die "there is no standalone binary for $(uname -m); run $NAME from source (README: Install & run) or use the Docker image" ;;
     esac
     binary=$HERE/ser2netweb-linux-$arch
 fi
 if [ -z "$unit" ]; then
-    unit=$HERE/ser2net-standalone.service
+    unit=$HERE/$NAME-standalone.service
 fi
 [ -f "$binary" ] || die "no binary at $binary (download it from the release next to this script, or name it with --binary)"
-[ -f "$unit" ] || die "no unit at $unit (download ser2net-standalone.service from the release next to this script, or name it with --unit)"
+[ -f "$unit" ] || die "no unit at $unit (download $NAME-standalone.service from the release next to this script, or name it with --unit)"
 grep -q "^ExecStart=$BIN_DEST " "$unit" || die "$unit is not the standalone binary's unit (no ExecStart=$BIN_DEST)"
 
 verify() {  # verify FILE: against the SHA256SUMS next to it, when there is one
@@ -166,18 +169,18 @@ mkdir -p "$root$(dirname "$BIN_DEST")" "$root$(dirname "$UNIT_DEST")"
 # shellcheck disable=SC2086  # (owner: two options or none)
 install -m 0755 $owner "$binary" "$root$BIN_DEST.new"
 if [ "$noexec_tmp" = 1 ]; then
-    scratch=$(mktemp -d /var/cache/ser2net-install.XXXXXX)
+    scratch=$(mktemp -d "/var/cache/$NAME-install.XXXXXX")
 fi
 version=$(TMPDIR=${scratch:-${TMPDIR:-/tmp}} "$root$BIN_DEST.new" --version 2>&1) \
     || die "$binary doesn't run here: $version"
 case $version in
-    "ser2netweb "*|"ser2net "*) say "binary: $version" ;;  # (ser2net: 2.9.x and older)
-    *) die "$binary is not ser2net (--version said: $version)" ;;
+    "$NAME "*) say "binary: $version" ;;
+    *) die "$binary is not $NAME (--version said: $version)" ;;
 esac
 
 # --- the system user ----------------------------------------------------------------
 if [ "$live" = 1 ]; then
-    getent group dialout >/dev/null || die "this system has no 'dialout' group, which the unit gives the service for the serial ports (SupplementaryGroups=dialout); create it, or give the serial devices' group with a drop-in (systemctl edit ser2net)"
+    getent group dialout >/dev/null || die "this system has no 'dialout' group, which the unit gives the service for the serial ports (SupplementaryGroups=dialout); create it, or give the serial devices' group with a drop-in (systemctl edit $NAME)"
     if getent passwd "$USER_NAME" >/dev/null; then
         say "user $USER_NAME exists"
     else
@@ -196,7 +199,7 @@ if [ -e "$root$UNIT_DEST" ] && ! ours; then
 elif [ -e "$root$UNIT_DEST" ] && ! cmp -s "$unit" "$root$UNIT_DEST"; then
     keep=$root$UNIT_DEST.$(date +%Y%m%d%H%M%S)
     cp -p "$root$UNIT_DEST" "$keep"
-    say "the installed unit differs from this release's: the old one is kept as ${keep#"$root"} (put your changes in a drop-in: systemctl edit ser2net)"
+    say "the installed unit differs from this release's: the old one is kept as ${keep#"$root"} (put your changes in a drop-in: systemctl edit $NAME)"
 fi
 # shellcheck disable=SC2086
 install -m 0644 $owner "$unit" "$root$UNIT_DEST"
@@ -206,18 +209,18 @@ if [ -n "$listen" ] || [ "$noexec_tmp" = 1 ]; then
     mkdir -p "$root$DROPIN_DIR"
 fi
 if [ -n "$listen" ]; then
-    printf '%s\n' "# written by ser2net-install.sh --listen (change it with: systemctl edit ser2net)" \
-        "[Service]" "Environment=SER2NET_BIND_IP=$ip SER2NET_PORT=$port" > "$root$DROPIN_DIR/listen.conf"
+    printf '%s\n' "# written by $NAME-install.sh --listen (change it with: systemctl edit $NAME)" \
+        "[Service]" "Environment=SER2NETWEB_BIND_IP=$ip SER2NETWEB_PORT=$port" > "$root$DROPIN_DIR/listen.conf"
     chmod 0644 "$root$DROPIN_DIR/listen.conf"
     say "the web UI listens on $listen ($DROPIN_DIR/listen.conf)"
 fi
 if [ "$noexec_tmp" = 1 ]; then
-    printf '%s\n' "# written by ser2net-install.sh: /tmp is mounted noexec here, and the binary" \
+    printf '%s\n' "# written by $NAME-install.sh: /tmp is mounted noexec here, and the binary" \
         "# unpacks itself on every start (into its cache directory instead)" \
-        "[Service]" "CacheDirectory=ser2net" "CacheDirectoryMode=0700" \
-        "Environment=TMPDIR=/var/cache/ser2net" > "$root$DROPIN_DIR/tmpdir.conf"
+        "[Service]" "CacheDirectory=$NAME" "CacheDirectoryMode=0700" \
+        "Environment=TMPDIR=$CACHE" > "$root$DROPIN_DIR/tmpdir.conf"
     chmod 0644 "$root$DROPIN_DIR/tmpdir.conf"
-    say "/tmp is mounted noexec: the service unpacks into /var/cache/ser2net ($DROPIN_DIR/tmpdir.conf)"
+    say "/tmp is mounted noexec: the service unpacks into $CACHE ($DROPIN_DIR/tmpdir.conf)"
 fi
 
 if [ -d "$root$DATA" ]; then
@@ -234,26 +237,26 @@ if [ "$live" = 0 ]; then
     say "staged in $root. On the target system, finish with:"
     echo "  useradd --system --user-group --home-dir $DATA -M -s /usr/sbin/nologin $USER_NAME"
     echo "  chown $USER_NAME:$USER_NAME $DATA"
-    echo "  systemctl daemon-reload && systemctl enable --now ser2net"
+    echo "  systemctl daemon-reload && systemctl enable --now $NAME"
     exit 0
 fi
 
 # --- systemd ------------------------------------------------------------------------
 systemctl daemon-reload
-systemctl enable ser2net.service
+systemctl enable "$NAME.service"
 if [ "$start" = 0 ]; then
-    say "enabled; (re)start it with: sudo systemctl restart ser2net"
+    say "enabled; (re)start it with: sudo systemctl restart $NAME"
     exit 0
 fi
-systemctl restart ser2net.service
+systemctl restart "$NAME.service"
 say "started; waiting for it to answer ..."
 tmp=/tmp
-[ "$noexec_tmp" = 0 ] || tmp=/var/cache/ser2net
+[ "$noexec_tmp" = 0 ] || tmp=$CACHE
 answer=""
 for _ in $(seq 1 60); do
-    if systemctl is-failed --quiet ser2net.service; then
-        journalctl -u ser2net.service -n 30 --no-pager || true
-        die "the service failed to start (above: journalctl -u ser2net)"
+    if systemctl is-failed --quiet "$NAME.service"; then
+        journalctl -u "$NAME.service" -n 30 --no-pager || true
+        die "the service failed to start (above: journalctl -u $NAME)"
     fi
     if answer=$(runuser -u "$USER_NAME" -- env TMPDIR="$tmp" "$BIN_DEST" --data-dir "$DATA" --healthcheck 2>&1); then
         break
@@ -262,10 +265,10 @@ for _ in $(seq 1 60); do
     sleep 1
 done
 if [ -z "$answer" ]; then
-    journalctl -u ser2net.service -n 30 --no-pager || true
-    die "the service runs but doesn't answer (journalctl -u ser2net)"
+    journalctl -u "$NAME.service" -n 30 --no-pager || true
+    die "the service runs but doesn't answer (journalctl -u $NAME)"
 fi
 say "running: $answer"
 say "set the first password in the browser, or: sudo -u $USER_NAME $BIN_DEST --data-dir $DATA --set-password admin"
 [ -n "$listen" ] || say "another address (the network, with TLS there): sudo sh $0 --listen 0.0.0.0:8080 (README: Run as a service)"
-say "logs: journalctl -u ser2net, and $DATA/all.log"
+say "logs: journalctl -u $NAME, and $DATA/all.log"

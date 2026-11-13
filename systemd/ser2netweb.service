@@ -1,11 +1,14 @@
 [Unit]
-# One instance. For several on one machine, use the template ser2net@.service instead.
-Description=ser2net — serial-to-network bridge with web config UI
+# One instance. For several on one machine, use the template ser2netweb@.service instead.
+# Up to 2.9.x this unit was ser2net.service, with the user ser2net and /opt/ser2net: moving
+# such an install over is in the README ("Upgrading from 2.9.x"). The new name no longer
+# clashes with the classic C ser2net daemon's ser2net.service.
+Description=ser2netweb — serial-to-network bridge with web config UI
 After=network-online.target
 Wants=network-online.target
 # Not After=time-sync.target: on a network without an NTP server the start would wait for
 # good. To wait for the clock, enable systemd-time-wait-sync.service and add
-# After=/Wants=time-sync.target with `systemctl edit ser2net` (README: Time synchronisation).
+# After=/Wants=time-sync.target with `systemctl edit ser2netweb` (README: Time synchronisation).
 
 [Service]
 Type=simple
@@ -14,42 +17,41 @@ Type=simple
 # Ubuntu, Raspberry Pi OS, Fedora, RHEL and openSUSE; uucp on Arch, Manjaro and
 # EndeavourOS, which have no dialout group (the unit then fails with status=216/GROUP).
 # A device says which: stat -L -c %G /dev/ttyUSB0. To set another one without editing this
-# file, run "systemctl edit ser2net" and add:
+# file, run "systemctl edit ser2netweb" and add:
 #   [Service]
 #   SupplementaryGroups=
 #   SupplementaryGroups=uucp
-User=ser2net
+User=ser2netweb
 SupplementaryGroups=dialout
-WorkingDirectory=/opt/ser2net
+WorkingDirectory=/opt/ser2netweb
 # On a headless first boot the console picker is non-interactive and defaults the
 # admin UI to 127.0.0.1:8080 (loopback, never network-exposed without an explicit
-# choice). To expose it on the LAN, run "systemctl edit ser2net" and add
+# choice). To expose it on the LAN, run "systemctl edit ser2netweb" and add
 #   [Service]
 #   Environment=SER2NETWEB_BIND_IP=0.0.0.0 SER2NETWEB_PORT=8080
 # (README: "Run as a service"). Commands run by hand on this data directory go as the
 # service user, never as root (root would own what they write, and the service could no
-# longer read it): sudo -u ser2net python3 /opt/ser2net/ser2net.py --data-dir
-# /opt/ser2net/data --set-password admin
-# The directories ser2net writes to (see ReadWritePaths below) are made for the
+# longer read it): sudo -u ser2netweb python3 /opt/ser2netweb/ser2netweb.py --data-dir
+# /opt/ser2netweb/data --set-password admin
+# The directories ser2netweb writes to (see ReadWritePaths below) are made for the
 # service user on the first start if they are missing ("+": as root, without the
 # sandbox, but with its ReadWritePaths=: see there).
-ExecStartPre=+/bin/sh -c 'test -d /opt/ser2net/data || install -d -o ser2net -g ser2net -m 0700 /opt/ser2net/data'
-ExecStartPre=+/bin/sh -c 'test -d /opt/ser2net/lib || install -d -o ser2net -g ser2net -m 0700 /opt/ser2net/lib'
+ExecStartPre=+/bin/sh -c 'test -d /opt/ser2netweb/data || install -d -o ser2netweb -g ser2netweb -m 0700 /opt/ser2netweb/data'
+ExecStartPre=+/bin/sh -c 'test -d /opt/ser2netweb/lib || install -d -o ser2netweb -g ser2netweb -m 0700 /opt/ser2netweb/lib'
 # Python 3.10 or newer. Where /usr/bin/python3 is older (RHEL / AlmaLinux / Rocky 8 and 9,
 # Debian 11) put a newer one here (RHEL: dnf install python3.11, then /usr/bin/python3.11),
-# or run the standalone binary with systemd/ser2net-standalone.service instead.
-ExecStart=/usr/bin/python3 /opt/ser2net/ser2net.py --data-dir /opt/ser2net/data
+# or run the standalone binary with systemd/ser2netweb-standalone.service instead.
+ExecStart=/usr/bin/python3 /opt/ser2netweb/ser2netweb.py --data-dir /opt/ser2netweb/data
 # Every log line goes to data/all.log (rotated) and to stdout, which the journal keeps too
-# (journalctl -u ser2net), readable by the systemd-journal and adm groups and kept as long
+# (journalctl -u ser2netweb), readable by the systemd-journal and adm groups and kept as long
 # as the journal keeps it. To keep the lines only in all.log, uncomment:
 # Environment=SER2NETWEB_LOG_STDOUT=off
-# `systemctl reload ser2net`: read config.json again without a restart (SIGHUP; ser2net
-# 2.9.0 or newer — an older one ends on SIGHUP, and systemd then leaves it stopped)
+# `systemctl reload ser2netweb`: read config.json again without a restart (SIGHUP)
 ExecReload=/bin/kill -HUP $MAINPID
 Restart=on-failure
 RestartSec=3
 # Open files: each running mapping holds about three (serial port, listener, log) plus
-# one per client. systemd's default soft limit is 1024; ser2net also raises its soft
+# one per client. systemd's default soft limit is 1024; ser2netweb also raises its soft
 # limit at start (toward the hard limit, at most 65536), so an older copy of this unit
 # without the line below works too.
 LimitNOFILE=65536
@@ -57,23 +59,23 @@ LimitNOFILE=65536
 # --- Hardening ---
 NoNewPrivileges=true
 # Writable paths (rest of FS is read-only under ProtectSystem=strict):
-#  - /opt/ser2net/data : config.json + logs (adjust to your --data-dir)
-#  - /opt/ser2net/lib  : where the offline bootstrap installs the bundled wheels, on the
+#  - /opt/ser2netweb/data : config.json + logs (adjust to your --data-dir)
+#  - /opt/ser2netweb/lib  : where the offline bootstrap installs the bundled wheels, on the
 #    first start and once more on the first start after an upgrade changed the pinned
 #    versions. Without it ProtectSystem=strict makes ./lib read-only and the first
 #    start fails to install dependencies. If you instead install them at deploy time
-#    and after each upgrade (sudo -u ser2net python3 /opt/ser2net/bootstrap.py) and add
-#    --no-bootstrap to ExecStart, you can drop /opt/ser2net/lib from this list.
+#    and after each upgrade (sudo -u ser2netweb python3 /opt/ser2netweb/bootstrap.py) and add
+#    --no-bootstrap to ExecStart, you can drop /opt/ser2netweb/lib from this list.
 # The ExecStartPre= lines above make them when they are missing. "-": a missing one is
 # left out instead of stopping the start (status 226/NAMESPACE): systemd applies
 # ReadWritePaths= to the "+" lines too, which run before the directories exist.
-ReadWritePaths=-/opt/ser2net/data -/opt/ser2net/lib
+ReadWritePaths=-/opt/ser2netweb/data -/opt/ser2netweb/lib
 ProtectSystem=strict
 ProtectHome=true
 PrivateTmp=true
 # These hide other users' processes and /proc's other files: a port another program has
-# locked (a UUCP lock file) is then named by its PID only, and ser2net can't tell which
-# program holds a port's flock. Kept for the hardening; ser2net needs neither.
+# locked (a UUCP lock file) is then named by its PID only, and ser2netweb can't tell which
+# program holds a port's flock. Kept for the hardening; ser2netweb needs neither.
 ProtectProc=invisible
 ProcSubset=pid
 ProtectControlGroups=true
@@ -92,12 +94,12 @@ RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
 SystemCallArchitectures=native
 SystemCallFilter=@system-service
 SystemCallFilter=~@privileged @resources
-# A call the filter denies fails with EPERM, which ser2net reports like any other error,
+# A call the filter denies fails with EPERM, which ser2netweb reports like any other error,
 # instead of killing the process with SIGSYS (no traceback, and a restart every 3 s).
 SystemCallErrorNumber=EPERM
 # Ports below 1024 (Modbus/TCP's 502, the web UI on 80 or 443): an unprivileged user
 # can't listen on them. To allow it, uncomment both lines, or better add them with
-# "systemctl edit ser2net" (README: "Ports below 1024"). It works with
+# "systemctl edit ser2netweb" (README: "Ports below 1024"). It works with
 # NoNewPrivileges=true; whoever may edit mappings can then listen on any free port
 # below 1024. (setcap on python3 does not help: NoNewPrivileges ignores file
 # capabilities, and it would give the right to every Python program on the machine.)

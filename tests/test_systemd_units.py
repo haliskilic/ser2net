@@ -1,14 +1,14 @@
 """The systemd units in systemd/ start on a fresh install and keep the sandbox they promise.
 
-Every unit file there is checked (ser2net.service for a source checkout,
-ser2net-standalone.service for the binary, the per-instance template ser2net@.service,
+Every unit file there is checked (ser2netweb.service for a source checkout,
+ser2netweb-standalone.service for the binary, the per-instance template ser2netweb@.service,
 and any other one added later):
 - each writable path the sandbox needs exists when the service starts: a ReadWritePaths=
   entry without '-' that is missing stops the start (status 226/NAMESPACE, again every
   3 s), also of the ExecStartPre=+ lines (systemd applies ReadWritePaths= to them), so it
   is the unit's StateDirectory=, or an ExecStartPre=+ line makes it and the entry has '-';
   and the --data-dir it runs with is writable;
-- the service runs as the unprivileged ser2net user with NoNewPrivileges and no
+- the service runs as the unprivileged ser2netweb user with NoNewPrivileges and no
   capability; CAP_NET_BIND_SERVICE (ports below 1024) is there to uncomment;
 - netlink is allowed, which lists the network interfaces (the bind-IP pickers, the cluster's
   directed broadcasts), and ProcSubset=pid stays;
@@ -17,12 +17,12 @@ and any other one added later):
 - systemd-analyze verify accepts the file, and the template as an instance of it (Linux,
   where systemd-analyze is installed);
 - the release attaches the binary's unit;
-- the template keeps each instance's data in /var/lib/ser2net/<instance> (StateDirectory,
-  0700: never the shared code tree or /opt/ser2net/data, whatever the instance is called),
+- the template keeps each instance's data in /var/lib/ser2netweb/<instance> (StateDirectory,
+  0700: never the shared code tree or /opt/ser2netweb/data, whatever the instance is called),
   starts with --no-bootstrap (the instances share ./lib), reads an optional
-  /etc/ser2net/<instance>.env (SER2NETWEB_BIND_IP / SER2NETWEB_PORT) after naming the instance
+  /etc/ser2netweb/<instance>.env (SER2NETWEB_BIND_IP / SER2NETWEB_PORT) after naming the instance
   by its instance name (SER2NET_NODE_NAME, the old name, which either name in that file
-  overrides), and has every hardening line of ser2net.service.
+  overrides), and has every hardening line of ser2netweb.service.
 What only a real start shows (the sandbox around a running server) is the CI job
 "systemd unit" (tests/systemd_smoke.sh).
 
@@ -77,8 +77,30 @@ def data_dir(unit: dict) -> str:
 
 def test_units_present():
     names = [os.path.basename(u) for u in UNITS]
-    assert "ser2net.service" in names and "ser2net-standalone.service" in names, names
+    assert "ser2netweb.service" in names and "ser2netweb-standalone.service" in names, names
     print(f"units: {', '.join(names)}  OK")
+
+
+def test_new_names_only():
+    """ser2netweb's own names in every directive (ser2net.service, the user ser2net and
+    /opt/ser2net, /var/lib/ser2net, /etc/ser2net up to 2.9.x: the classic C ser2net daemon
+    has the same unit name and account); only the template's SER2NET_NODE_NAME default
+    keeps the old variable name on purpose. The 2.x files are gone."""
+    old = re.compile(r"ser2net(?!web)")
+    dropins = sorted(glob.glob(os.path.join(ROOT, "systemd", "*.service.d", "*.conf")))
+    assert [os.path.relpath(d, ROOT).replace(os.sep, "/") for d in dropins] == [
+        "systemd/ser2netweb.service.d/notify.conf"], dropins
+    for path in UNITS + dropins:
+        unit, name = parse(path), os.path.basename(path)
+        for section, entries in unit.items():
+            for key, value in entries:
+                if (key, value) == ("Environment", "SER2NET_NODE_NAME=%i"):
+                    continue
+                assert not old.search(value), f"{name} [{section}] {key}={value}"
+    left = [n for n in os.listdir(os.path.join(ROOT, "systemd"))
+            if n.endswith((".service", ".service.d")) and old.search(n)]
+    assert not left, f"a 2.x unit file is left: {left}"
+    print(f"{len(UNITS)} units and the drop-in: ser2netweb's unit names, user and paths only  OK")
 
 
 def test_writable_paths_exist_at_start():
@@ -92,7 +114,8 @@ def test_writable_paths_exist_at_start():
             # made at the start, only when missing, by a line run as root ("+")
             pre = next((p for p in values(unit, "ExecStartPre")
                         if p.startswith("+") and f"test -d {path} ||" in p
-                        and re.search(rf"install -d -o ser2net -g ser2net -m 0700 {path}'$", p)),
+                        and re.search(rf"install -d -o ser2netweb -g ser2netweb -m 0700 {path}'$",
+                                      p)),
                        None)
             if pre:  # (that line gets ReadWritePaths= too: before it ran, the path is missing)
                 assert entry.startswith("-"), \
@@ -112,7 +135,7 @@ def test_writable_paths_exist_at_start():
 def test_unprivileged():
     for path in UNITS:
         unit, name = parse(path), os.path.basename(path)
-        assert one(unit, "User") == "ser2net", name
+        assert one(unit, "User") == "ser2netweb", name
         assert one(unit, "NoNewPrivileges") == "true", name
         assert not values(unit, "AmbientCapabilities"), f"{name}: no capability by default"
         # ports below 1024: offered, commented out (README: Ports below 1024)
@@ -122,7 +145,7 @@ def test_unprivileged():
                      "#CapabilityBoundingSet=CAP_NET_BIND_SERVICE"):
             assert re.search(rf"(?m)^{line}$", text), f"{name}: {line}"
         assert one(unit, "Restart") == "on-failure", name
-        print(f"{name}: user ser2net, NoNewPrivileges, no capabilities (the one for ports "
+        print(f"{name}: user ser2netweb, NoNewPrivileges, no capabilities (the one for ports "
               "below 1024 offered, commented out)  OK")
 
 
@@ -156,43 +179,46 @@ def test_reload():
 
 
 def test_template():
-    plain = parse(os.path.join(ROOT, "systemd", "ser2net.service"))
-    tmpl = parse(os.path.join(ROOT, "systemd", "ser2net@.service"))
+    plain = parse(os.path.join(ROOT, "systemd", "ser2netweb.service"))
+    tmpl = parse(os.path.join(ROOT, "systemd", "ser2netweb@.service"))
     assert set(tmpl) == {"Unit", "Service", "Install"}, set(tmpl)
     svc = dict(tmpl["Service"])
-    assert svc["User"] == "ser2net" and svc["SupplementaryGroups"] == "dialout"
-    assert svc["StateDirectory"] == "ser2net/%i" and svc["StateDirectoryMode"] == "0700"
+    assert svc["User"] == "ser2netweb" and svc["SupplementaryGroups"] == "dialout"
+    assert svc["StateDirectory"] == "ser2netweb/%i" and svc["StateDirectoryMode"] == "0700"
     exec_start = svc["ExecStart"].split()
-    assert exec_start[:2] == ["/usr/bin/python3", "/opt/ser2net/ser2net.py"], exec_start
+    assert exec_start[:2] == ["/usr/bin/python3", "/opt/ser2netweb/ser2netweb.py"], exec_start
     assert "--no-bootstrap" in exec_start
-    assert exec_start[exec_start.index("--data-dir") + 1] == "/var/lib/ser2net/%i", exec_start
+    assert exec_start[exec_start.index("--data-dir") + 1] == "/var/lib/ser2netweb/%i", exec_start
     assert "ReadWritePaths" not in svc, "nothing to write but the state directory"
     # the instance's name first, then its own file (which may set another, or none)
     keys = [k for k, _v in tmpl["Service"]]
     assert values(tmpl, "Environment") == ["SER2NET_NODE_NAME=%i"]
-    assert values(tmpl, "EnvironmentFile") == ["-/etc/ser2net/%i.env"]
+    assert values(tmpl, "EnvironmentFile") == ["-/etc/ser2netweb/%i.env"]
     assert keys.index("Environment") < keys.index("EnvironmentFile")
     assert "%i" in dict(tmpl["Unit"])["Description"]
-    # every hardening line of ser2net.service, the same way (not its paths: the template
+    # every hardening line of ser2netweb.service, the same way (not its paths: the template
     # writes only its StateDirectory, so it has no ReadWritePaths to make first)
     skip = {"ExecStart", "ExecStartPre", "ReadWritePaths", "WorkingDirectory"}
     hardening = [(k, v) for k, v in plain["Service"] if k not in skip]
     missing = [kv for kv in hardening if kv not in tmpl["Service"]]
     assert not missing, missing
     assert tmpl["Install"] == plain["Install"]
-    print("ser2net@.service: data in /var/lib/ser2net/<instance> (0700), --no-bootstrap, "
-          "/etc/ser2net/<instance>.env, named by the instance, ser2net.service's hardening  OK")
+    print("ser2netweb@.service: data in /var/lib/ser2netweb/<instance> (0700), --no-bootstrap, "
+          "/etc/ser2netweb/<instance>.env, named by the instance, ser2netweb.service's "
+          "hardening  OK")
 
 
 def test_binary_unit():
-    unit = parse(os.path.join(ROOT, "systemd", "ser2net-standalone.service"))
+    unit = parse(os.path.join(ROOT, "systemd", "ser2netweb-standalone.service"))
     start = one(unit, "ExecStart")
-    assert start.startswith("/usr/local/bin/ser2net ") and data_dir(unit) == "/var/lib/ser2net", start
-    assert "/opt/ser2net" not in " ".join(v for _k, v in unit["Service"]), "no source paths"
+    assert start.startswith("/usr/local/bin/ser2netweb "), start
+    assert data_dir(unit) == "/var/lib/ser2netweb", start
+    assert "/opt/ser2netweb" not in " ".join(v for _k, v in unit["Service"]), "no source paths"
     with open(os.path.join(ROOT, ".github", "workflows", "release.yml"), encoding="utf-8") as fh:
         release = fh.read()
-    assert "cp systemd/ser2net-standalone.service out/ser2netweb-standalone.service" in release
-    print("binary unit: /usr/local/bin/ser2net, data in /var/lib/ser2net, attached to releases  OK")
+    assert "cp systemd/ser2netweb-standalone.service out/ser2netweb-standalone.service" in release
+    print("binary unit: /usr/local/bin/ser2netweb, data in /var/lib/ser2netweb, attached to "
+          "releases  OK")
 
 
 def test_systemd_analyze_verify():
@@ -221,17 +247,18 @@ def test_systemd_analyze_verify():
             print(f"{name}: systemd-analyze verify  OK")
         # the template as systemd runs it: an instance of it, found on the unit path
         env = dict(os.environ, SYSTEMD_UNIT_PATH=tmp + ":")
-        p = subprocess.run([exe, "verify", "--man=no", os.path.join(tmp, "ser2net@line1.service")],
-                           env=env, capture_output=True, text=True, timeout=60)
-        own = [ln for ln in (p.stdout + p.stderr).splitlines() if "ser2net" in ln]
-        assert p.returncode == 0 and not own, f"ser2net@line1.service: {p.stdout}{p.stderr}"
-        print("ser2net@line1.service (an instance of the template): systemd-analyze verify  OK")
+        p = subprocess.run([exe, "verify", "--man=no",
+                            os.path.join(tmp, "ser2netweb@line1.service")], env=env, capture_output=True, text=True, timeout=60)
+        own = [ln for ln in (p.stdout + p.stderr).splitlines() if "ser2netweb" in ln]
+        assert p.returncode == 0 and not own, f"ser2netweb@line1.service: {p.stdout}{p.stderr}"
+        print("ser2netweb@line1.service (an instance of the template): systemd-analyze verify  OK")
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
 
 if __name__ == "__main__":
     test_units_present()
+    test_new_names_only()
     test_writable_paths_exist_at_start()
     test_unprivileged()
     test_interfaces_readable()

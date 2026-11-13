@@ -357,7 +357,7 @@ jobs:
         run: coverage report --format=total --fail-under=87
 
   # The systemd unit as it ships, on a real systemd (the runner's PID 1): a fresh
-  # /opt/ser2net from git archive, the sandbox seen from inside, data through a mapping,
+  # /opt/ser2netweb from git archive, the sandbox seen from inside, data through a mapping,
   # a lib/ left by an older release, a port below 1024 (tests/systemd_smoke.sh). The
   # standalone binary's unit runs in standalone.yml, next to the binary it is built with.
   systemd:
@@ -369,7 +369,7 @@ jobs:
           persist-credentials: false
       - name: socat (the PTY a mapping opens), pip for the system Python
         run: sudo apt-get update && sudo apt-get install -y socat python3-pip
-      - name: Install and run systemd/ser2net.service from a fresh /opt/ser2net
+      - name: Install and run systemd/ser2netweb.service from a fresh /opt/ser2netweb
         timeout-minutes: 10
         run: tests/systemd_smoke.sh
 

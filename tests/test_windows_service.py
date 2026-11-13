@@ -681,9 +681,9 @@ def test_not_windows():
                            text=True, timeout=60, stdin=subprocess.DEVNULL)
         assert p.returncode == 1 and "only on Windows" in p.stderr, (flag, p.stdout, p.stderr)
         # the systemd units: the source checkout's and the binary's
-        assert "systemd/ser2net.service" in p.stderr, p.stderr
-        assert "ser2net-standalone.service" in p.stderr, p.stderr
-        assert "ser2net-install.sh installs" in p.stderr, p.stderr
+        assert "systemd/ser2netweb.service" in p.stderr, p.stderr
+        assert "ser2netweb-standalone.service" in p.stderr, p.stderr
+        assert "ser2netweb-install.sh installs" in p.stderr, p.stderr
     assert not os.path.exists(os.path.join(d, "data")), "nothing may be created on Linux"
     print("Linux: --install-service / --uninstall-service refuse with a systemd hint  OK")
 

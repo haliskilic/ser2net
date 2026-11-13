@@ -900,7 +900,7 @@ is counted there as well).
   `sudo systemctl mask --now serial-getty@ttyS0.service`.
 - **ModemManager** (desktop Ubuntu / Fedora; USB CDC `ttyACM*` devices such as an Arduino):
   tell it to leave the device alone with a udev rule, for example
-  `/etc/udev/rules.d/99-ser2net.rules` with
+  `/etc/udev/rules.d/99-ser2netweb.rules` with
   `ATTRS{idVendor}=="2341", ENV{ID_MM_DEVICE_IGNORE}="1"`, then
   `sudo udevadm control --reload && sudo udevadm trigger`.
 - **Permission denied:** the dashboard names the group the device belongs to and what is
@@ -1460,87 +1460,126 @@ is no account at all; later starts ignore it.
   `stop_grace_period: 30s` (a stop reaches ser2netweb, which finishes within that), `/data`
   volume. A plain `docker run` needs `--restart unless-stopped --init --stop-timeout 30` for
   that (an existing container: `docker update --restart unless-stopped ser2net`).
-- **Linux (systemd):** three units — `ser2net.service` (a source checkout),
-  `ser2net-standalone.service` (the Linux binary) and the template `ser2net@.service`
-  (several instances). All run ser2netweb as a dedicated unprivileged user (`ser2net`, in the
-  `dialout` group for the serial ports), restart it 3 s after a failure and sandbox it
+- **Linux (systemd):** three units — `ser2netweb.service` (a source checkout),
+  `ser2netweb-standalone.service` (the Linux binary) and the template `ser2netweb@.service`
+  (several instances). All run ser2netweb as a dedicated unprivileged user (`ser2netweb`, in
+  the `dialout` group for the serial ports), restart it 3 s after a failure and sandbox it
   (read-only system, own `/tmp`, a system call filter). **Do not run it as root.**
-  `systemctl reload ser2net` (or `ser2net@<name>`) reads `config.json` again (see
-  Configuration & state files). On Arch, Manjaro and EndeavourOS the serial group is `uucp`
-  and there is no `dialout` group (the unit would fail with `status=216/GROUP`): set it with
-  `systemctl edit ser2net` (`[Service]`, `SupplementaryGroups=`, then
-  `SupplementaryGroups=uucp`; `ser2net.service`'s comment has it). `ser2net-install.sh`
+  `systemctl reload ser2netweb` (or `ser2netweb@<name>`) reads `config.json` again (see
+  Configuration & state files). Up to 2.9.x the units, the user and the folders were called
+  `ser2net` (`ser2net.service`, `/opt/ser2net`, `/var/lib/ser2net`), as the classic ser2net
+  daemon's package names its own: *Upgrading from 2.9.x* below moves such an install over.
+  On Arch, Manjaro and EndeavourOS the serial group is `uucp` and there is no `dialout`
+  group (the unit would fail with `status=216/GROUP`): set it with
+  `systemctl edit ser2netweb` (`[Service]`, `SupplementaryGroups=`, then
+  `SupplementaryGroups=uucp`; `ser2netweb.service`'s comment has it). `ser2netweb-install.sh`
   stops on such a system (it needs a `dialout` group): install the binary by hand there.
   When a port doesn't open: [`docs/LINUX-SERIAL.md`](docs/LINUX-SERIAL.md).
-  - *Source checkout* in `/opt/ser2net`: `systemd/ser2net.service`.
+  - *Source checkout* in `/opt/ser2netweb`: `systemd/ser2netweb.service`.
     ```bash
-    sudo useradd --system --user-group --home-dir /opt/ser2net -M -s /usr/sbin/nologin ser2net
-    sudo git clone https://github.com/haliskilic/ser2netweb.git /opt/ser2net
-    sudo cp /opt/ser2net/systemd/ser2net.service /etc/systemd/system/
-    sudo systemctl daemon-reload && sudo systemctl enable --now ser2net
+    sudo useradd --system --user-group --home-dir /opt/ser2netweb -M -s /usr/sbin/nologin ser2netweb
+    sudo git clone https://github.com/haliskilic/ser2netweb.git /opt/ser2netweb
+    sudo cp /opt/ser2netweb/systemd/ser2netweb.service /etc/systemd/system/
+    sudo systemctl daemon-reload && sudo systemctl enable --now ser2netweb
     ```
-    The first start makes `data/` and `lib/` for the `ser2net` user and installs the
+    The first start makes `data/` and `lib/` for the `ser2netweb` user and installs the
     bundled dependencies into `lib/` (offline). It needs Python 3.10 or newer as
     `/usr/bin/python3`: on RHEL / AlmaLinux / Rocky 8 and 9 and Debian 11 point
     `ExecStart=` at a newer interpreter (RHEL: `dnf install python3.11`, then
     `/usr/bin/python3.11`) or use the binary.
-  - *Standalone binary*: `ser2net-standalone.service` (attached to every release, and in
-    `systemd/`), installed as `ser2net.service`; its data is in `/var/lib/ser2net`, which
-    systemd makes. `ser2net-install.sh` (attached to every release too) does it all:
-    download `ser2netweb-linux-x64` (or `-arm64`), `ser2net-standalone.service`,
-    `ser2net-install.sh` and `SHA256SUMS` into one folder, then
+  - *Standalone binary*: `ser2netweb-standalone.service` (attached to every release, and in
+    `systemd/`), installed as `ser2netweb.service`; its data is in `/var/lib/ser2netweb`,
+    which systemd makes. `ser2netweb-install.sh` (attached to every release too) does it all:
+    download `ser2netweb-linux-x64` (or `-arm64`), `ser2netweb-standalone.service`,
+    `ser2netweb-install.sh` and `SHA256SUMS` into one folder, then
     ```bash
-    sudo sh ser2net-install.sh                         # the web UI on 127.0.0.1:8080
-    sudo sh ser2net-install.sh --listen 0.0.0.0:8080   # or on the network (use TLS there)
+    sudo sh ser2netweb-install.sh                         # the web UI on 127.0.0.1:8080
+    sudo sh ser2netweb-install.sh --listen 0.0.0.0:8080   # or on the network (use TLS there)
     ```
     It checks the files against `SHA256SUMS` and that the binary runs on this machine,
-    creates the `ser2net` user and `/var/lib/ser2net`, installs the binary as
-    `/usr/local/bin/ser2net` and the unit as `/etc/systemd/system/ser2net.service`, enables
-    and starts the service and waits until it answers. Run it again with a newer release to
-    upgrade (the data stays); `--uninstall` removes the service and the binary (the data
-    and the user stay). It won't hide another `ser2net.service` (the classic ser2net
-    daemon's package, a source install in `/opt/ser2net`) unless you stop that one and pass
+    creates the `ser2netweb` user and `/var/lib/ser2netweb`, installs the binary as
+    `/usr/local/bin/ser2netweb` and the unit as `/etc/systemd/system/ser2netweb.service`,
+    enables and starts the service and waits until it answers. Run it again with a newer
+    release to upgrade (the data stays); `--uninstall` removes the service and the binary
+    (the data and the user stay). It won't hide another `ser2netweb.service` (a package's, a
+    source install in `/opt/ser2netweb`) unless you stop that one and pass
     `--replace-unit`; where `/tmp` is mounted `noexec` it has the binary unpack itself in
-    `/var/cache/ser2net` instead (a drop-in). `--root DIR` only stages the files under DIR.
+    `/var/cache/ser2netweb` instead (a drop-in). `--root DIR` only stages the files under DIR.
     The same by hand:
     ```bash
-    sudo install -m 0755 ser2netweb-linux-x64 /usr/local/bin/ser2net
-    sudo useradd --system --user-group --home-dir /var/lib/ser2net -M -s /usr/sbin/nologin ser2net
-    sudo cp ser2net-standalone.service /etc/systemd/system/ser2net.service
-    sudo systemctl daemon-reload && sudo systemctl enable --now ser2net
+    sudo install -m 0755 ser2netweb-linux-x64 /usr/local/bin/ser2netweb
+    sudo useradd --system --user-group --home-dir /var/lib/ser2netweb -M -s /usr/sbin/nologin ser2netweb
+    sudo cp ser2netweb-standalone.service /etc/systemd/system/ser2netweb.service
+    sudo systemctl daemon-reload && sudo systemctl enable --now ser2netweb
     ```
   - The web UI listens on `127.0.0.1:8080` until you say otherwise. To reach it from the
-    network, run `sudo systemctl edit ser2net`, add the lines below (use TLS on a network
-    address, see Security) and `sudo systemctl restart ser2net`:
+    network, run `sudo systemctl edit ser2netweb`, add the lines below (use TLS on a network
+    address, see Security) and `sudo systemctl restart ser2netweb`:
     ```ini
     [Service]
     Environment=SER2NETWEB_BIND_IP=0.0.0.0 SER2NETWEB_PORT=8080
     ```
     Set the first password in the browser, or with `--set-password` (the table under
-    Security). Run such commands as the `ser2net` user (`sudo -u ser2net …`): the account
-    commands (`--set-password`, `--sign-out-all`, `--reload`) switch to the data
+    Security). Run such commands as the `ser2netweb` user (`sudo -u ser2netweb …`): the
+    account commands (`--set-password`, `--sign-out-all`, `--reload`) switch to the data
     directory's owner by themselves when run as root, but a start or `--reconfigure` as
     root would leave files the service can't read. Logs:
-    `journalctl -u ser2net` and `all.log` in the data directory.
-  - Several instances: the template `systemd/ser2net@.service` (below).
-  - Optional: the drop-in `systemd/ser2net.service.d/notify.conf` (`Type=notify`,
+    `journalctl -u ser2netweb` and `all.log` in the data directory.
+  - Several instances: the template `systemd/ser2netweb@.service` (below).
+  - Optional: the drop-in `systemd/ser2netweb.service.d/notify.conf` (`Type=notify`,
     `WatchdogSec=120`) makes systemd count ser2netweb as started only once its mappings run
     and its UI listens (or tries again to), and restart it when its event loop stops
-    answering. Neither unit nor `ser2net-install.sh` installs it, and it is not a release
+    answering. Neither unit nor `ser2netweb-install.sh` installs it, and it is not a release
     file (take it from the source tree):
     ```bash
-    sudo mkdir -p /etc/systemd/system/ser2net.service.d
-    sudo cp systemd/ser2net.service.d/notify.conf /etc/systemd/system/ser2net.service.d/
-    sudo systemctl daemon-reload && sudo systemctl restart ser2net
+    sudo mkdir -p /etc/systemd/system/ser2netweb.service.d
+    sudo cp systemd/ser2netweb.service.d/notify.conf /etc/systemd/system/ser2netweb.service.d/
+    sudo systemctl daemon-reload && sudo systemctl restart ser2netweb
     ```
-    (an instance: `ser2net@.service.d`). Remove it before going back to a version before
+    (an instance: `ser2netweb@.service.d`). Remove it before going back to a version before
     2.9.0, which never reports ready.
+  - *Upgrading from 2.9.x*: the units, the user and the folders have new names; the data
+    stays as it is (the Prometheus metric names, `config.json` and the cluster protocol are
+    unchanged too). Leave the classic ser2net daemon's `ser2net.service` alone (its package
+    lives in `/usr/lib/systemd/system`), and remove only what an old install of this
+    project put in `/etc/systemd/system`.
+    - *A source checkout in `/opt/ser2net` with `ser2net.service`*: either keep it as it is
+      (`ser2net.py` still starts 3.x, so `sudo git -C /opt/ser2net pull` and
+      `sudo systemctl restart ser2net` upgrade it under the old names), or move it over:
+      ```bash
+      sudo systemctl disable --now ser2net
+      sudo useradd --system --user-group --home-dir /opt/ser2netweb -M -s /usr/sbin/nologin ser2netweb
+      sudo mv /opt/ser2net /opt/ser2netweb && sudo git -C /opt/ser2netweb pull
+      sudo chown -R ser2netweb:ser2netweb /opt/ser2netweb/data /opt/ser2netweb/lib
+      sudo rm /etc/systemd/system/ser2net.service      # this checkout's unit only
+      sudo cp /opt/ser2netweb/systemd/ser2netweb.service /etc/systemd/system/
+      sudo systemctl daemon-reload && sudo systemctl enable --now ser2netweb
+      ```
+      Drop-ins made with `systemctl edit ser2net` (a listen address, `uucp`, ports below
+      1024) are in `/etc/systemd/system/ser2net.service.d/`: move them first
+      (`sudo mv /etc/systemd/system/ser2net.service.d /etc/systemd/system/ser2netweb.service.d`).
+    - *Instances of `ser2net@.service`*, for each instance (here `line1`):
+      ```bash
+      sudo systemctl disable --now ser2net@line1
+      sudo mkdir -p /var/lib/ser2netweb /etc/ser2netweb
+      sudo mv /var/lib/ser2net/line1 /var/lib/ser2netweb/line1
+      sudo mv /etc/ser2net/line1.env /etc/ser2netweb/line1.env    # if it has one
+      sudo cp /opt/ser2netweb/systemd/ser2netweb@.service /etc/systemd/system/
+      sudo systemctl daemon-reload && sudo systemctl enable --now ser2netweb@line1
+      ```
+      systemd hands the moved folder to the `ser2netweb` user at the first start
+      (`StateDirectory=`). `/etc/ser2net/` is also the classic daemon's folder: move only
+      the `<name>.env` files. Once no instance is left, `sudo rm
+      /etc/systemd/system/ser2net@.service`.
+    - The old `ser2net` user can go once nothing runs as it any more (`sudo userdel
+      ser2net`), unless the classic ser2net daemon is installed: its package may use an
+      account of that name too.
 - **Ports below 1024** (Modbus/TCP's 502, the web UI on 80 or 443): Linux lets only root,
   or a process with the `CAP_NET_BIND_SERVICE` capability, listen on them, and both units
   run ser2netweb as an unprivileged user. A mapping on such a port then fails with a hint on
   the dashboard, and an admin UI port below 1024 gets a start-up warning (the web UI can't
   start). To allow them, give the service that one capability with
-  `sudo systemctl edit ser2net`, then `sudo systemctl restart ser2net`:
+  `sudo systemctl edit ser2netweb`, then `sudo systemctl restart ser2netweb`:
   ```ini
   [Service]
   AmbientCapabilities=CAP_NET_BIND_SERVICE
@@ -1648,18 +1687,19 @@ profiles.
 - **Windows:** `ser2netweb-windows-x64.exe --install-service --service-name ser2net-line2
   --data-dir C:\ProgramData\ser2net-line2` (and a firewall rule per service:
   [docs/WINDOWS.md](docs/WINDOWS.md)).
-- **Linux (systemd):** the template `systemd/ser2net@.service` runs one instance per name,
-  with its data in `/var/lib/ser2net/<name>` and its address in `/etc/ser2net/<name>.env`
-  (`SER2NETWEB_BIND_IP=0.0.0.0`, `SER2NETWEB_PORT=8081`); the instance name is its name in
-  notifications. Install the unit and the bundled dependencies once, and the dependencies
-  again after each upgrade (the instances start with `--no-bootstrap`, and their start-up
-  log warns while `lib/` is out of date):
+- **Linux (systemd):** the template `systemd/ser2netweb@.service` runs one instance per
+  name, with its data in `/var/lib/ser2netweb/<name>` and its address in
+  `/etc/ser2netweb/<name>.env` (`SER2NETWEB_BIND_IP=0.0.0.0`, `SER2NETWEB_PORT=8081`); the
+  instance name is its name in notifications. Install the unit and the bundled
+  dependencies once, and the dependencies again after each upgrade (the instances start
+  with `--no-bootstrap`, and their start-up log warns while `lib/` is out of date):
   ```bash
-  sudo cp /opt/ser2net/systemd/ser2net@.service /etc/systemd/system/ && sudo systemctl daemon-reload
-  sudo install -d -o ser2net -g ser2net /opt/ser2net/lib
-  sudo -u ser2net python3 /opt/ser2net/bootstrap.py        # again after each upgrade
-  sudo systemctl enable --now ser2net@line1 ser2net@line2
+  sudo cp /opt/ser2netweb/systemd/ser2netweb@.service /etc/systemd/system/ && sudo systemctl daemon-reload
+  sudo install -d -o ser2netweb -g ser2netweb /opt/ser2netweb/lib
+  sudo -u ser2netweb python3 /opt/ser2netweb/bootstrap.py        # again after each upgrade
+  sudo systemctl enable --now ser2netweb@line1 ser2netweb@line2
   ```
+  (2.9.x's `ser2net@.service` instances: *Upgrading from 2.9.x* under Run as a service.)
 - **Docker:** one container per instance, each with its own volume, `container_name` and
   published ports (`8081:8080`), and `SER2NETWEB_NODE_NAME` (or `hostname:`) for its name
   ([docs/DOCKER.md](docs/DOCKER.md)).
@@ -1692,7 +1732,7 @@ times, the cluster's peer list) is measured with a clock that no clock step chan
 - **Waiting for the clock at boot:** the systemd unit waits for the network, not for time
   sync, because on a network without an NTP server ser2netweb would then never start. To
   wait anyway, enable `systemd-time-wait-sync.service` and add `After=time-sync.target`
-  and `Wants=time-sync.target` with `systemctl edit ser2net`.
+  and `Wants=time-sync.target` with `systemctl edit ser2netweb`.
 - **What ser2netweb checks:** the start-up log has a WARNING when the clock reads earlier
   than the newest configuration backup, the last change to `config.json` or the making of
   this version. Settings → *Admin interface* shows the server's time (UTC, and local with

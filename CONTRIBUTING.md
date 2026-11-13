@@ -49,10 +49,10 @@ and `tests/test_release_pipeline.py` fail on a tag reference.
 machine whose firewall matters. The standalone executable checks need a build
 (`SER2NETWEB_STANDALONE_BIN=dist/ser2netweb python tests/test_standalone.py`).
 `tests/systemd_smoke.sh` (CI jobs `systemd unit` and `systemd unit (binary)`) installs the
-systemd units as the README says and runs them on the runner's systemd: it adds a `ser2net`
-user, `/opt/ser2net` and the service, so run it only on a throwaway VM. A change to a unit in
+systemd units as the README says and runs them on the runner's systemd: it adds a `ser2netweb`
+user, `/opt/ser2netweb` and the service, so run it only on a throwaway VM. A change to a unit in
 `systemd/` goes into every unit there (`tests/test_systemd_units.py` checks them all).
-`systemd/ser2net-install.sh` is tested staged under a scratch folder (`--root`,
+`systemd/ser2netweb-install.sh` is tested staged under a scratch folder (`--root`,
 `tests/test_install_script.py`) and for real by `tests/install_smoke.sh <binary>` (CI job
 `install script (binary)`), which installs the binary system-wide and remounts `/tmp`: a
 throwaway VM only, too.
@@ -256,10 +256,10 @@ Dependabot günceller, tag ile verilen bir referansta zizmor ve
 ya da sanal makinede çalıştırın. Standalone binary denetimleri bir derleme ister
 (`SER2NETWEB_STANDALONE_BIN=dist/ser2netweb python tests/test_standalone.py`). `tests/systemd_smoke.sh` (CI'daki `systemd unit` ve
 `systemd unit (binary)` işleri) systemd unit'lerini README'deki gibi kurar ve runner'ın
-systemd'sinde çalıştırır: bir `ser2net` kullanıcısı, `/opt/ser2net` ve servisi ekler; bu
+systemd'sinde çalıştırır: bir `ser2netweb` kullanıcısı, `/opt/ser2netweb` ve servisi ekler; bu
 yüzden yalnızca silinebilir bir sanal makinede çalıştırın. `systemd/` altındaki bir unit'te
 yapılan değişiklik oradaki her unit'e uygulanır (`tests/test_systemd_units.py` hepsini denetler).
-`systemd/ser2net-install.sh` geçici bir klasör altında hazırlanarak (`--root`,
+`systemd/ser2netweb-install.sh` geçici bir klasör altında hazırlanarak (`--root`,
 `tests/test_install_script.py`) ve gerçekten `tests/install_smoke.sh <binary>` ile (CI'daki
 `install script (binary)` işi) test edilir; o, binary'yi sisteme kurar ve `/tmp`'yi yeniden
 bağlar: onu da yalnızca silinebilir bir sanal makinede çalıştırın.
