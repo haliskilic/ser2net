@@ -53,6 +53,7 @@ everything from a **password-protected web UI** — no CLI or hand-edited config
 - Bridge two serial ports together (serial↔serial)
 
 **Guides** (in `docs/`): [Docker](docs/DOCKER.md) · [Windows](docs/WINDOWS.md) ·
+[Linux package repositories](docs/PACKAGES.md) ·
 [Linux serial ports](docs/LINUX-SERIAL.md) · [reverse proxy](docs/REVERSE-PROXY.md) ·
 [MQTT, Modbus points and Sparkplug B](docs/MODBUS-MQTT.md) ·
 [LDAP / AD and OIDC sign-in](docs/SSO.md) ·
@@ -580,7 +581,12 @@ everything from a **password-protected web UI** — no CLI or hand-edited config
 | Way | Runs on | Needs |
 |---|---|---|
 | [Standalone binary](#standalone-binary-nothing-else-to-install) | Windows x64; Linux x86_64 and arm64 with glibc ≥ 2.28 (Raspberry Pi 3/4/5 with a 64-bit OS) | nothing |
+| [winget](#windows-package-managers-winget-scoop-chocolatey) (`winget install haliskilic.ser2netweb`) | Windows 10/11, Windows Server 2016 or newer (x64) | winget; data in `%LOCALAPPDATA%\ser2netweb` |
+| [Scoop](#windows-package-managers-winget-scoop-chocolatey) (bucket `haliskilic/scoop-bucket`) | Windows 10/11, Windows Server 2016 or newer (x64) | Scoop; data in `~\scoop\persist\ser2netweb\data` |
+| [Chocolatey](#windows-package-managers-winget-scoop-chocolatey) (`choco install ser2netweb`) | Windows 10/11, Windows Server 2016 or newer (x64) | Chocolatey; data in `%LOCALAPPDATA%\ser2netweb` |
 | [`.deb` / `.rpm` package](#linux-packages-deb--rpm) (apt / dnf) | Debian 11+, Ubuntu 20.04+, 64-bit Raspberry Pi OS; Fedora, RHEL / AlmaLinux / Rocky 8+ (x86_64, arm64) | nothing; data in `/var/lib/ser2netweb` |
+| [APT repository](#package-repositories-apt-dnf-zypper) | Debian 11+, Ubuntu 20.04+, 64-bit Raspberry Pi OS (amd64, arm64) | nothing; updates come with `apt upgrade` |
+| [DNF / YUM repository](#package-repositories-apt-dnf-zypper) (zypper too) | Fedora, RHEL / AlmaLinux / Rocky 8+, openSUSE Leap 15.6+ (x86_64, aarch64) | nothing; updates come with `dnf upgrade` / `zypper update` |
 | [Docker](#docker) (GHCR, Docker Hub) | Linux hosts: amd64, arm64, arm/v7 (32-bit Raspberry Pi OS) | Docker |
 | [pipx / pip](#pipx--pip) (PyPI) | any OS and CPU | Python 3.10+, pipx; data in the user's data folder |
 | [Homebrew](#homebrew-macos-linux) (`brew install haliskilic/tap/ser2netweb`) | macOS (Apple silicon, Intel), Linux | Homebrew; data in `$(brew --prefix)/var/ser2netweb` |
@@ -677,6 +683,31 @@ Change the bind IP later:
 python3 ser2netweb.py --reconfigure
 ```
 
+### Windows package managers (winget, Scoop, Chocolatey)
+The same `ser2netweb-windows-x64.exe` of each release (checked against its SHA-256), put on
+`PATH` as `ser2netweb` and kept up to date by the package manager:
+```powershell
+winget install haliskilic.ser2netweb        # later: winget upgrade haliskilic.ser2netweb
+scoop bucket add haliskilic https://github.com/haliskilic/scoop-bucket
+scoop install haliskilic/ser2netweb         # later: scoop update ser2netweb
+choco install ser2netweb                    # (elevated) later: choco upgrade ser2netweb
+```
+The package manager owns the program's folder, so ser2netweb keeps its data out of it
+(`ser2netweb --about` names the package manager, `ser2netweb --help` the data folder;
+`--data-dir` chooses another):
+
+| | Data (`config.json`, backups, logs) |
+|---|---|
+| winget | `%LOCALAPPDATA%\ser2netweb` (3.0.0: `data\` in winget's package folder, which upgrades keep and later versions go on using) |
+| Scoop | `~\scoop\persist\ser2netweb\data`, the folder Scoop keeps across updates (`scoop uninstall --purge ser2netweb` deletes it) |
+| Chocolatey | `%LOCALAPPDATA%\ser2netweb` (from the first release that recognises Chocolatey's folder; 3.0.0 isn't pushed there) |
+
+As a service: `ser2netweb --install-service` from an elevated prompt copies the exe to
+`C:\Program Files\ser2netweb\` (data in `C:\ProgramData\ser2netweb\`), as with the
+downloaded exe, so the package manager's upgrades don't reach the service: after one, run
+`ser2netweb --install-service` again; before removing the package,
+`ser2netweb --uninstall-service` ([`docs/WINDOWS.md`](docs/WINDOWS.md#winget-scoop-and-chocolatey)).
+
 ### Linux packages (.deb / .rpm)
 Every release also has the Linux binary as a package, for x86_64 and arm64:
 `ser2netweb_X.Y.Z_amd64.deb` / `ser2netweb_X.Y.Z_arm64.deb` (Debian 11+, Ubuntu 20.04+, 64-bit
@@ -705,6 +736,34 @@ was built. The package doesn't move a 2.9.x install (`ser2net.service`, `/var/li
 does (*Upgrading from 2.9.x* under *Run as a service*). A binary installed by
 `ser2netweb-install.sh` has its unit in `/etc/systemd/system`, which hides the package's:
 switch with `sudo sh ser2netweb-install.sh --uninstall` (the data stays), then the package.
+
+### Package repositories (apt, dnf, zypper)
+The same packages also come from signed repositories on GitHub Pages,
+<https://haliskilic.github.io/ser2netweb/>, so the package manager keeps them updated (the
+newest three releases, x86_64 and arm64; [docs/PACKAGES.md](docs/PACKAGES.md) has updating,
+removing and how they are checked):
+```bash
+# Debian, Ubuntu, Raspberry Pi OS (64-bit)
+sudo curl -fsSLo /usr/share/keyrings/ser2netweb-archive-keyring.gpg https://haliskilic.github.io/ser2netweb/ser2netweb-archive-keyring.gpg
+sudo curl -fsSLo /etc/apt/sources.list.d/ser2netweb.sources https://haliskilic.github.io/ser2netweb/ser2netweb.sources
+sudo apt update
+sudo apt install ser2netweb
+# Fedora, RHEL, AlmaLinux, Rocky
+sudo curl -fsSLo /etc/yum.repos.d/ser2netweb.repo https://haliskilic.github.io/ser2netweb/ser2netweb.repo
+sudo dnf install ser2netweb
+# openSUSE
+sudo rpm --import https://haliskilic.github.io/ser2netweb/ser2netweb-archive-keyring.asc
+sudo zypper addrepo https://haliskilic.github.io/ser2netweb/ser2netweb.repo
+sudo zypper refresh
+sudo zypper install ser2netweb
+sudo systemctl enable --now ser2netweb             # installing it doesn't start it
+```
+They are signed with the key `B587 60E7 C0B0 515E 81D2  50F9 8164 D694 711B B799` (RSA
+4096, until 2031-11-12; `ser2netweb-archive-keyring.asc` / `.gpg` on the site and
+[`packaging/ser2netweb-archive-keyring.asc`](packaging/ser2netweb-archive-keyring.asc)):
+dnf shows it on the first install, accept it only with this fingerprint. The `.rpm` files themselves aren't signed;
+dnf and zypper check the signed repository metadata, which holds the SHA-256 of every
+package (`repo_gpgcheck=1`, `gpgcheck=0`).
 
 ### pipx / pip
 The PyPI package `ser2netweb`, for any OS and CPU with Python 3.10 or newer:
@@ -800,7 +859,7 @@ works and runs the same, so units and scripts that name it need no change:
 
 | Option | What it does |
 |---|---|
-| `--data-dir DIR` | where `config.json`, its backups, the logs and traces live (default: `data/` next to `ser2netweb.py` or the binary; `/var/lib/ser2netweb` for the `.deb` / `.rpm` / AUR package's; the user's data folder for a pip / pipx install, see *pipx / pip*; `$(brew --prefix)/var/ser2netweb` for Homebrew's; `/var/snap/ser2netweb/common/data` for the snap's, as root); give ser2netweb a folder of its own |
+| `--data-dir DIR` | where `config.json`, its backups, the logs and traces live (default: `data/` next to `ser2netweb.py` or the binary, for Scoop's in its persist folder; `/var/lib/ser2netweb` for the `.deb` / `.rpm` / AUR package's; the user's data folder for a pip / pipx, winget or Chocolatey install, see *pipx / pip* and *Windows package managers*; `$(brew --prefix)/var/ser2netweb` for Homebrew's; `/var/snap/ser2netweb/common/data` for the snap's, as root); give ser2netweb a folder of its own |
 | `--config FILE` | a `config.json` elsewhere; its folder is the data directory then |
 | `--reconfigure` | ask again for the admin UI's address and port on the console, then start |
 | `--online` | let the dependency bootstrap fall back to PyPI for a wheel `vendor/wheels/` lacks (source installs) |

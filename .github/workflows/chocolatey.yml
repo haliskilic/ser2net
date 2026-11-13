@@ -1,0 +1,138 @@
+name: Chocolatey
+
+# Chocolatey's community repository. packaging/chocolatey is packed (for a release, or a
+# release tag given by hand, with that release's version and the SHA-256 of its
+# ser2netweb-windows-x64.exe from its SHA256SUMS: nothing rebuilt), installed from the packed
+# file on a Windows runner (the command through Chocolatey's shim, --version, the folder
+# ser2netweb recognises), uninstalled, and then pushed to community.chocolatey.org with the
+# CHOCOLATEY_API_KEY secret. Without that secret, or when the release's ser2netweb doesn't
+# know Chocolatey's folder (3.0.0: its data would be kept in the package's lib folder,
+# which an upgrade replaces), the push is skipped with a notice. A pull request that
+# changes the package gets the pack / install / uninstall test.
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: The release to pack, test and push (vX.Y.Z)
+        required: true
+        type: string
+  pull_request:
+    paths:
+      - packaging/chocolatey/**
+      - tools/windows_channels.py
+      - .github/workflows/chocolatey.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: chocolatey-${{ github.event.pull_request.number || inputs.tag || github.event.release.tag_name }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  package:
+    name: pack, install and uninstall
+    # (Chocolatey gets no pre-releases)
+    if: github.event_name != 'release' || !github.event.release.prerelease
+    runs-on: windows-latest
+    outputs:
+      version: ${{ steps.pack.outputs.version }}
+      aware: ${{ steps.install.outputs.aware }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7.1.0
+        with:
+          python-version: "3.12"
+      - name: The release's version and download (a pull request tests the committed ones)
+        if: github.event_name != 'pull_request'
+        env:
+          TAG: ${{ inputs.tag || github.event.release.tag_name }}
+        run: python tools/windows_channels.py chocolatey "$env:TAG"
+      - name: choco pack
+        id: pack
+        run: |
+          [xml]$nuspec = Get-Content -Raw packaging/chocolatey/ser2netweb.nuspec
+          $version = $nuspec.package.metadata.version
+          choco pack packaging/chocolatey/ser2netweb.nuspec --outputdirectory out --no-progress
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if (-not (Test-Path "out/ser2netweb.$version.nupkg")) { throw "choco pack made no out/ser2netweb.$version.nupkg" }
+          "version=$version" >> $env:GITHUB_OUTPUT
+      - name: Install it from the packed file; the command, its shim, the folder
+        id: install
+        env:
+          VERSION: ${{ steps.pack.outputs.version }}
+        run: |
+          choco install ser2netweb --version $env:VERSION --source "$((Resolve-Path out).Path)" -y --no-progress
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $shim = Join-Path $env:ChocolateyInstall 'bin\ser2netweb.exe'
+          $exe = Join-Path $env:ChocolateyInstall 'lib\ser2netweb\tools\ser2netweb.exe'
+          foreach ($f in $shim, $exe) { if (-not (Test-Path $f)) { throw "not installed: $f" } }
+          $found = (Get-Command ser2netweb).Source
+          if ($found -ne $shim) { throw "ser2netweb on PATH is $found, not the shim $shim" }
+          $got = (& ser2netweb --version | Out-String).Trim()
+          if ($got -ne "ser2netweb $env:VERSION") { throw "ser2netweb --version printed: $got" }
+          Write-Output "$got, through $shim"
+          $build = @((& ser2netweb --about | Out-String) -split "`r?`n" | Where-Object { $_ -like 'Build:*' })
+          Write-Output "ser2netweb --about: $build"
+          if ($build -contains 'Build: standalone executable, Chocolatey package') {
+            "aware=true" >> $env:GITHUB_OUTPUT
+          } else {
+            Write-Output "::warning title=Chocolatey::ser2netweb $env:VERSION doesn't recognise Chocolatey's folder: it would keep its data in the package's lib folder, which an upgrade replaces. This version is not pushed."
+            "aware=false" >> $env:GITHUB_OUTPUT
+          }
+      - name: Uninstall; nothing left behind
+        run: |
+          choco uninstall ser2netweb -y --no-progress
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          foreach ($f in (Join-Path $env:ChocolateyInstall 'bin\ser2netweb.exe'), (Join-Path $env:ChocolateyInstall 'lib\ser2netweb')) {
+            if (Test-Path $f) { throw "left behind: $f" }
+          }
+          if (Get-Command ser2netweb -ErrorAction SilentlyContinue) { throw "ser2netweb is still on PATH" }
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
+        if: github.event_name != 'pull_request'
+        with:
+          name: chocolatey-package
+          path: out/*.nupkg
+          if-no-files-found: error
+
+  push:
+    name: push to community.chocolatey.org
+    needs: package
+    if: github.event_name != 'pull_request'
+    runs-on: windows-latest
+    # (where the maintainer can keep CHOCOLATEY_API_KEY, and limit it to release tags and main)
+    environment: chocolatey
+    steps:
+      - name: Without the CHOCOLATEY_API_KEY secret, or for a release that doesn't know Chocolatey's folder, skip
+        id: check
+        env:
+          CHOCOLATEY_API_KEY: ${{ secrets.CHOCOLATEY_API_KEY }}
+          AWARE: ${{ needs.package.outputs.aware }}
+          VERSION: ${{ needs.package.outputs.version }}
+        run: |
+          if (-not $env:CHOCOLATEY_API_KEY) {
+            Write-Output "::notice title=Chocolatey::The CHOCOLATEY_API_KEY secret is not set, so ser2netweb $env:VERSION is not pushed (the package is this run's chocolatey-package artifact)."
+            "push=false" >> $env:GITHUB_OUTPUT
+          } elseif ($env:AWARE -ne 'true') {
+            Write-Output "::notice title=Chocolatey::ser2netweb $env:VERSION doesn't recognise Chocolatey's folder, so it is not pushed."
+            "push=false" >> $env:GITHUB_OUTPUT
+          } else {
+            "push=true" >> $env:GITHUB_OUTPUT
+          }
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8.0.2
+        if: steps.check.outputs.push == 'true'
+        with:
+          name: chocolatey-package
+          path: out
+      - name: choco push
+        if: steps.check.outputs.push == 'true'
+        env:
+          CHOCOLATEY_API_KEY: ${{ secrets.CHOCOLATEY_API_KEY }}
+          VERSION: ${{ needs.package.outputs.version }}
+        run: |
+          choco push "out/ser2netweb.$env:VERSION.nupkg" --source https://push.chocolatey.org/ --api-key $env:CHOCOLATEY_API_KEY --no-progress
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

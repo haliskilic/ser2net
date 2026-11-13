@@ -41,6 +41,53 @@ leaves the folder's permissions as they are. A new service won't take over a dat
 that holds files owned by another account (a standard user can create folders in
 `C:\ProgramData`): check and delete it, or take it over, and install again.
 
+## winget, Scoop and Chocolatey
+
+The package managers install the same `ser2netweb-windows-x64.exe` of each release
+(checked against the SHA-256 in the release's `SHA256SUMS`), put it on `PATH` as
+`ser2netweb` and update it:
+
+```powershell
+winget install haliskilic.ser2netweb          # winget upgrade haliskilic.ser2netweb
+scoop bucket add haliskilic https://github.com/haliskilic/scoop-bucket
+scoop install haliskilic/ser2netweb           # scoop update ser2netweb
+choco install ser2netweb                      # choco upgrade ser2netweb (elevated, as choco is)
+```
+
+The program's folder belongs to the package manager: Chocolatey replaces it on every
+upgrade, and a machine-wide one (`winget install --scope machine`, Chocolatey's) is
+for administrators only. So ser2netweb recognises it (`ser2netweb --about` says
+`Build: standalone executable, winget package`, or Scoop, or Chocolatey) and keeps its data
+elsewhere, `ser2netweb --help` names where; `--data-dir` chooses another folder as always:
+
+| | Program | Data (`config.json`, backups, logs, traces) |
+|---|---|---|
+| winget | `%LOCALAPPDATA%\Microsoft\WinGet\Packages\haliskilic.ser2netweb_Microsoft.Winget.Source_8wekyb3d8bbwe\` | `%LOCALAPPDATA%\ser2netweb\` of the account that runs it |
+| Scoop | `~\scoop\apps\ser2netweb\current\` | `~\scoop\persist\ser2netweb\data\`: the manifest persists `data\` next to the exe, so updates keep it; `scoop uninstall --purge ser2netweb` deletes it |
+| Chocolatey | `C:\ProgramData\chocolatey\lib\ser2netweb\tools\` | `%LOCALAPPDATA%\ser2netweb\` of the account that runs it |
+
+- **ser2netweb 3.0.0**, the first version in winget, predates this and keeps its data in
+  `data\` next to the exe, in winget's package folder. winget's upgrades leave that folder
+  as it is, and a later version goes on using a `data\` there that holds a `config.json`;
+  to switch to `%LOCALAPPDATA%\ser2netweb`, move the folder there while ser2netweb is
+  stopped. (`winget uninstall --purge` deletes the package folder, data included.)
+  Chocolatey gets the first version that recognises its folder; 3.0.0 isn't pushed there.
+- **As a Windows service:** `ser2netweb --install-service`, from an elevated prompt,
+  works as with the downloaded exe: it copies the exe to `C:\Program Files\ser2netweb\`
+  and runs the service from there, with its data in `C:\ProgramData\ser2netweb\`. The
+  package manager's upgrades don't reach that copy, so after `winget upgrade`,
+  `scoop update` or `choco upgrade` run `ser2netweb --install-service` again (it upgrades
+  the service in place, see *Upgrading the service*; Chocolatey's install reminds you
+  when a `ser2netweb` service exists). Before uninstalling the package, run
+  `ser2netweb --uninstall-service` (its data directory is kept). The elevated prompt
+  needs `ser2netweb` on its `PATH`: winget and Scoop put it on your account's, so elevate
+  the same account, or give the exe's full path.
+- **Chocolatey's upgrade or uninstall** stops a `ser2netweb` started from the package (in a
+  console window), as Windows keeps a running program's file; the service, which runs its
+  own copy, is not touched.
+- The package managers download the exe themselves and check its SHA-256; it is the
+  release's unsigned exe all the same (*Unsigned builds and SmartScreen* below).
+
 ## In a console window or as a service
 
 The exe also runs in a console window (double-click, or from a prompt), which is handy to
