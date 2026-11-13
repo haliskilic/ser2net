@@ -581,6 +581,9 @@ everything from a **password-protected web UI** — no CLI or hand-edited config
 | Way | Runs on | Needs |
 |---|---|---|
 | [Standalone binary](#standalone-binary-nothing-else-to-install) | Windows x64; Linux x86_64 and arm64 with glibc ≥ 2.28 (Raspberry Pi 3/4/5 with a 64-bit OS) | nothing |
+| [winget](#windows-package-managers-winget-scoop-chocolatey) (`winget install haliskilic.ser2netweb`) | Windows 10/11, Windows Server 2016 or newer (x64) | winget; data in `%LOCALAPPDATA%\ser2netweb` |
+| [Scoop](#windows-package-managers-winget-scoop-chocolatey) (bucket `haliskilic/scoop-bucket`) | Windows 10/11, Windows Server 2016 or newer (x64) | Scoop; data in `~\scoop\persist\ser2netweb\data` |
+| [Chocolatey](#windows-package-managers-winget-scoop-chocolatey) (`choco install ser2netweb`) | Windows 10/11, Windows Server 2016 or newer (x64) | Chocolatey; data in `%LOCALAPPDATA%\ser2netweb` |
 | [`.deb` / `.rpm` package](#linux-packages-deb--rpm) (apt / dnf) | Debian 11+, Ubuntu 20.04+, 64-bit Raspberry Pi OS; Fedora, RHEL / AlmaLinux / Rocky 8+ (x86_64, arm64) | nothing; data in `/var/lib/ser2netweb` |
 | [APT repository](#package-repositories-apt-dnf-zypper) | Debian 11+, Ubuntu 20.04+, 64-bit Raspberry Pi OS (amd64, arm64) | nothing; updates come with `apt upgrade` |
 | [DNF / YUM repository](#package-repositories-apt-dnf-zypper) (zypper too) | Fedora, RHEL / AlmaLinux / Rocky 8+, openSUSE Leap 15.6+ (x86_64, aarch64) | nothing; updates come with `dnf upgrade` / `zypper update` |
@@ -677,6 +680,31 @@ Change the bind IP later:
 python3 ser2netweb.py --reconfigure
 ```
 
+### Windows package managers (winget, Scoop, Chocolatey)
+The same `ser2netweb-windows-x64.exe` of each release (checked against its SHA-256), put on
+`PATH` as `ser2netweb` and kept up to date by the package manager:
+```powershell
+winget install haliskilic.ser2netweb        # later: winget upgrade haliskilic.ser2netweb
+scoop bucket add haliskilic https://github.com/haliskilic/scoop-bucket
+scoop install haliskilic/ser2netweb         # later: scoop update ser2netweb
+choco install ser2netweb                    # (elevated) later: choco upgrade ser2netweb
+```
+The package manager owns the program's folder, so ser2netweb keeps its data out of it
+(`ser2netweb --about` names the package manager, `ser2netweb --help` the data folder;
+`--data-dir` chooses another):
+
+| | Data (`config.json`, backups, logs) |
+|---|---|
+| winget | `%LOCALAPPDATA%\ser2netweb` (3.0.0: `data\` in winget's package folder, which upgrades keep and later versions go on using) |
+| Scoop | `~\scoop\persist\ser2netweb\data`, the folder Scoop keeps across updates (`scoop uninstall --purge ser2netweb` deletes it) |
+| Chocolatey | `%LOCALAPPDATA%\ser2netweb` (from the first release that recognises Chocolatey's folder; 3.0.0 isn't pushed there) |
+
+As a service: `ser2netweb --install-service` from an elevated prompt copies the exe to
+`C:\Program Files\ser2netweb\` (data in `C:\ProgramData\ser2netweb\`), as with the
+downloaded exe, so the package manager's upgrades don't reach the service: after one, run
+`ser2netweb --install-service` again; before removing the package,
+`ser2netweb --uninstall-service` ([`docs/WINDOWS.md`](docs/WINDOWS.md#winget-scoop-and-chocolatey)).
+
 ### Linux packages (.deb / .rpm)
 Every release also has the Linux binary as a package, for x86_64 and arm64:
 `ser2netweb_X.Y.Z_amd64.deb` / `ser2netweb_X.Y.Z_arm64.deb` (Debian 11+, Ubuntu 20.04+, 64-bit
@@ -766,7 +794,7 @@ works and runs the same, so units and scripts that name it need no change:
 
 | Option | What it does |
 |---|---|
-| `--data-dir DIR` | where `config.json`, its backups, the logs and traces live (default: `data/` next to `ser2netweb.py` or the binary; `/var/lib/ser2netweb` for the `.deb` / `.rpm` package's; the user's data folder for a pip / pipx install, see *pipx / pip*); give ser2netweb a folder of its own |
+| `--data-dir DIR` | where `config.json`, its backups, the logs and traces live (default: `data/` next to `ser2netweb.py` or the binary, for Scoop's in its persist folder; `/var/lib/ser2netweb` for the `.deb` / `.rpm` package's; the user's data folder for a pip / pipx, winget or Chocolatey install, see *pipx / pip* and *Windows package managers*); give ser2netweb a folder of its own |
 | `--config FILE` | a `config.json` elsewhere; its folder is the data directory then |
 | `--reconfigure` | ask again for the admin UI's address and port on the console, then start |
 | `--online` | let the dependency bootstrap fall back to PyPI for a wheel `vendor/wheels/` lacks (source installs) |
