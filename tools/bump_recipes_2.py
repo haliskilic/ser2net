@@ -20,8 +20,8 @@ it) and each recipe gets the checksums its distribution records:
     (rmd160, sha256, size).
 
 The revisions start again (Void revision=1, FreeBSD without PORTREVISION, MacPorts revision 0).
-The dependency recipes next to them (pyserial-asyncio-fast and the like) keep their own
-versions. --dry-run prints the checksums and changes nothing; --check compares the recipes
+The dependency recipe next to them (Void's python3-python-multipart) keeps its own
+version. --dry-run prints the checksums and changes nothing; --check compares the recipes
 with what they would be (distinfo's TIMESTAMP aside) and exits 1 when one differs, which
 distro-packages-2.yml runs against the tag's real tarball. Afterwards: git diff, then
 `python3 tests/test_distro_recipes_2.py`; CI's distro-packages-2.yml builds each recipe.

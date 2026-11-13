@@ -8,26 +8,17 @@
 
 python3Packages.buildPythonApplication (finalAttrs: {
   pname = "ser2netweb";
-  version = "3.0.0";
+  version = "3.0.1";
   pyproject = true;
 
   src = fetchFromGitHub {
     owner = "haliskilic";
     repo = "ser2netweb";
     tag = "v${finalAttrs.version}";
-    hash = "sha256-PCpVDgP3qh4bhL/nLICKd/TngFC0ECbj9tbCHeQAuaQ=";
+    hash = "sha256-0i6yjA66dE7Ah75QUjg7EdgQA04IA9/n50YmxHZvGb4=";
   };
 
   build-system = with python3Packages; [ setuptools ];
-
-  # the release's pyproject.toml asks for newer releases of these than nixpkgs has;
-  # ser2netweb works with nixpkgs' (docs/PACKAGING.md)
-  pythonRelaxDeps = [
-    "python-multipart"
-    "starlette"
-    "uvicorn"
-    "websockets"
-  ];
 
   dependencies = with python3Packages; [
     h11
@@ -70,7 +61,14 @@ python3Packages.buildPythonApplication (finalAttrs: {
     '';
     homepage = "https://github.com/haliskilic/ser2netweb";
     changelog = "https://github.com/haliskilic/ser2netweb/blob/${finalAttrs.src.tag}/CHANGELOG.md";
-    license = lib.licenses.agpl3Only;
+    # htmx (0BSD) and xterm.js (MIT) in the web UI; code copied from pyserial-asyncio-fast
+    # and Starlette (BSD-3-Clause)
+    license = with lib.licenses; [
+      agpl3Only
+      bsd0
+      bsd3
+      mit
+    ];
     maintainers = [ ];
     mainProgram = "ser2netweb";
   };
