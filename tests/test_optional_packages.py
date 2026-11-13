@@ -16,6 +16,7 @@ The fake packages come in through sys.path / SER2NETWEB_LIB_OVERRIDE, so this ru
 the real ones. Run: python3 tests/test_optional_packages.py
 """
 import contextlib
+import importlib.util
 import os
 import shutil
 import subprocess
@@ -179,7 +180,10 @@ def test_about():
         assert "2.0.0-test" in lines["authlib"], out
         for name in ("pyserial", "pyserial-asyncio-fast", "starlette", "uvicorn", "pyasn1"):
             assert name in lines, out
-        assert "0.16" in lines["pyserial-asyncio-fast"], out
+        # (without it, as on a distribution that doesn't package it: the built-in copy)
+        fast = lines["pyserial-asyncio-fast"]
+        assert ("0.16" in fast if importlib.util.find_spec("serial_asyncio_fast") else
+                fast.endswith("not installed (its transport is built in)")), out
         assert lines["paho-mqtt"].split(None, 1)[1] == ("failed to import: ModuleNotFoundError: "
                                                         "No module named "
                                                         "'s2n_test_missing_dependency'"), out

@@ -247,7 +247,10 @@ def print_about() -> int:
         if problem is not None:
             # "not installed" only when it really isn't; else the error importing it raised
             lines.append(f"  {dist:{width}} " + ("not installed" if problem.missing else
-                                                 f"failed to import: {problem.error}"))
+                                                 f"failed to import: {problem.error}")
+                         # (serial ports then use ser2netweb's copy of its transport)
+                         + (" (its transport is built in)" if problem.missing and
+                            dist == "pyserial-asyncio-fast" else ""))
             continue
         version = getattr(mod, "__version__", None)
         if not isinstance(version, str):

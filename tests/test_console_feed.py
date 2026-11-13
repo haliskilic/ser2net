@@ -544,7 +544,14 @@ def test_live():
         for conn in socks:
             assert closed(conn) == (4001, "mapping stopped or restarted")
             conn.close()
-        assert "[Raw] console closed (127.0.0.1): mapping stopped or restarted" in srv.output()
+        # (logged once the server's close returned: with uvicorn's websockets
+        # implementation before 0.51, after the client's TCP close, which may come after
+        # the client saw the close frame)
+        line = "[Raw] console closed (127.0.0.1): mapping stopped or restarted"
+        end = time.monotonic() + 5
+        while line not in srv.output() and time.monotonic() < end:
+            time.sleep(0.05)
+        assert line in srv.output(), srv.output()[-2000:]
         print("live: 4004 for no such mapping, the not-running notice, 1013 past the limit, "
               "4001 when the mapping is stopped  OK")
 
