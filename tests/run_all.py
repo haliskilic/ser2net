@@ -111,6 +111,7 @@ PORTABLE = [
     "test_install_layout.py",   # default data folder per installation (source, binary, package, pip)
     "test_packages.py",         # .deb / .rpm: packaging/, the unit, the scripts (CI installs them)
     "test_pyproject.py",        # the PyPI package: ranges hold the pins, package data, build tools
+    "test_homebrew_formula.py",  # the Homebrew formula's generator (PyPI stand-ins, no network)
     "test_single_instance.py",
     "test_notifications.py",
     "test_ports_usb_identity.py",
