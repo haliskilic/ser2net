@@ -10,9 +10,10 @@
 #       licences in place; the system account ser2netweb (home /var/lib/ser2netweb, no
 #       shell) and /var/lib/ser2netweb (0700, the account's); the service not enabled; no
 #       package named but its own (Provides / Conflicts / Replaces / Breaks / Obsoletes);
-#       --about says it is the package's; --set-password as root without --data-dir
-#       writes into /var/lib/ser2netweb as the account. Removed: the executable and the
-#       unit are gone, the data and the account stay; installed again over them.
+#       --about says it is the package's, --help that its default data directory is
+#       /var/lib/ser2netweb, and --set-password without --data-dir, run as the account
+#       (su), writes config.json there. Removed: the executable and the unit are gone, the
+#       data and the account stay; installed again over them.
 #   tests/package_smoke.sh --host
 #       The .deb on the runner itself (systemd as PID 1, passwordless sudo: a throwaway
 #       machine only): neither enabled nor started; systemctl enable --now answers on
@@ -90,8 +91,13 @@ inside() {  # inside PACKAGE VERSION [systemd]: in the container, as root
     [ -z "$others" ] || fail "the package names another: $others"
     ser2netweb --about | grep -qxF "Build: standalone executable, .deb / .rpm package" ||
         fail "--about: $(ser2netweb --about | grep Build:)"
-    # (as root: the account commands switch to the data directory's owner)
-    printf '%s\n' package-smoke-pass-1 | ser2netweb --set-password admin
+    COLUMNS=500 ser2netweb --help | grep -qF "here: /var/lib/ser2netweb." ||
+        fail "--help names another default data directory"
+    if ! command -v su >/dev/null; then  # (util-linux; a minimal image may lack it)
+        if command -v dnf >/dev/null; then dnf install -y -q util-linux >/dev/null; fi
+    fi
+    printf '%s\n' package-smoke-pass-1 |
+        su -s /bin/sh -c 'ser2netweb --set-password admin' ser2netweb
     owner=$(stat -c %U /var/lib/ser2netweb/config.json)
     [ "$owner" = ser2netweb ] || fail "config.json belongs to $owner"
 
