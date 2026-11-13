@@ -208,8 +208,8 @@ service, set Trusted proxies in Settings rather than environment variables.
 
 ```yaml
 services:
-  ser2net:
-    image: ghcr.io/haliskilic/ser2net:latest
+  ser2netweb:
+    image: ghcr.io/haliskilic/ser2netweb:latest
     environment:
       SER2NETWEB_PUBLIC_URL: https://ser2netweb.example.com
       SER2NETWEB_TRUSTED_PROXIES: 172.30.0.0/24       # the network below
@@ -218,7 +218,7 @@ services:
     # devices:, volumes: as in docker-compose.yml
   caddy:
     image: caddy:2
-    command: caddy reverse-proxy --from ser2netweb.example.com --to ser2net:8080
+    command: caddy reverse-proxy --from ser2netweb.example.com --to ser2netweb:8080
     ports: ["80:80", "443:443"]
     networks: [web]
 networks:

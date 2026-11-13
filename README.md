@@ -792,8 +792,11 @@ Compose olmadan [`docs/DOCKER.md`](docs/DOCKER.md#plain-docker-run) içindeki `d
 komutunu kullanın (hazır imaj, `--restart unless-stopped`, `--init`, eşleme portları,
 `/dev/serial/by-id` cihaz yolu, log sınırı).
 Hazır imaj (her sürümde; amd64, arm64 ve 32-bit Raspberry Pi OS gibi 32-bit ARM için
-arm/v7): `docker pull ghcr.io/haliskilic/ser2net:latest`
-(ya da `:2.9`, `:2.9.0`); `docker-compose.yml` bunu kullanır. Sürümler arasında Debian/Python
+arm/v7): `docker pull ghcr.io/haliskilic/ser2netweb:latest`
+(ya da `:2.9`, `:2.9.0`); `docker-compose.yml` bunu kullanır. 2.9.x'e kadar imaj
+`ghcr.io/haliskilic/ser2net` idi; 3.x sürümleri oraya da (aynı imaj olarak) yayımlanır.
+2.9.x'ten kalan bir container'ı ya da compose dosyasını taşımak:
+[`docs/DOCKER.md`](docs/DOCKER.md#upgrading-from-29x). Sürümler arasında Debian/Python
 tabanı değişince `:latest` ve `:X.Y` yeni tabanla yeniden derlenir (haftalık kontrol;
 `:X.Y.Z` yayımlandığı gibi kalır) — bkz. [`docs/DOCKER.md`](docs/DOCKER.md).
 Container'da arayüz `0.0.0.0`'a bağlanır (`SER2NETWEB_BIND_IP` / `SER2NETWEB_PORT` env ile
@@ -801,7 +804,7 @@ ayarlanır — başsız ortamda interaktif seçici çalışamaz; `SER2NETWEB_BIN
 tüm arayüzler demektir). Her eşlemenin portunu da yayınlayın
 (yeni bir eşleme 4001 alır) ya da host ağını kullanın. Seri cihazın grubu cihazın kendisinden
 alınır; olağan cihaz adlarında `--group-add` gerekmez. Süreç hiçbir zaman root olarak
-çalışmaz: `ser2net` kullanıcısıyla (uid 10001) ya da bind mount edilen `/data` klasörünün
+çalışmaz: `ser2netweb` kullanıcısıyla (uid 10001) ya da bind mount edilen `/data` klasörünün
 sahibiyle (veya verilen `--user` ile) çalışır; eski (root ile çalışan) imajların yazdığı `/data`
 volume'u ilk açılışta otomatik devralınır, bind mount edilen bir klasörde eski imajın root
 olarak yazdığı dosyalar klasörün sahibine verilir; yükseltmede elle bir şey yapmak gerekmez
@@ -1519,7 +1522,7 @@ içeren bir dosyaya (Docker secret) yönlendirin; ad için `SER2NETWEB_ADMIN_USE
   `stop_grace_period: 30s` (durdurma isteği ser2netweb'e ulaşır, ser2netweb bu süre içinde
   kapanır), `/data` volume. Düz `docker run` ile çalıştırıyorsanız
   `--restart unless-stopped --init --stop-timeout 30` ekleyin (var olan bir container için:
-  `docker update --restart unless-stopped ser2net`).
+  `docker update --restart unless-stopped ser2netweb`).
 - **Linux (systemd):** üç unit var — `ser2netweb.service` (kaynak kurulum),
   `ser2netweb-standalone.service` (Linux binary) ve şablon `ser2netweb@.service` (birden çok
   kurulum). Hepsi ser2netweb'i ayrı, yetkisiz bir kullanıcıyla (`ser2netweb`; seri portlar

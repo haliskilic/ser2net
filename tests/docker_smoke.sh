@@ -1,11 +1,14 @@
 #!/usr/bin/env bash
 # Smoke test of the Docker image (CI job "docker"; needs Docker):
-#   tests/docker_smoke.sh <image>
+#   tests/docker_smoke.sh <image> [<the same image under another name> ...]
+# 0. every other name given is the very same image (release.yml: the image of a release is
+#    published as ghcr.io/<owner>/ser2netweb and, for 3.x, also under its 2.9.x name
+#    ghcr.io/<owner>/ser2net, by the same digest);
 # 1. a fresh volume: the container gets healthy, runs as uid 10001, keeps a
 #    --group-add group but not root's group, and the first-run setup works; a restart
 #    rewrites nothing;
 # 2. upgrade: a volume written as root (as by the images before v2.8) holding a
-#    v2.7.1 config.json is taken over by the ser2net user and the old admin
+#    v2.7.1 config.json is taken over by the ser2netweb user (uid 10001) and the old admin
 #    password still signs in;
 # 3. a bind mount owned by another uid keeps its owner (the server runs as it);
 # 4. a config.json with a setting this version rejects still starts: the setting is
@@ -37,7 +40,8 @@
 # (CI: linux/arm/v7), much slower: DOCKER_SMOKE_WAIT (seconds, default 60) is how long a
 # container may take to get healthy or to stop.
 set -euo pipefail
-IMAGE=${1:?usage: docker_smoke.sh <image>}
+IMAGE=${1:?usage: docker_smoke.sh <image> [<the same image under another name> ...]}
+shift
 WAIT=${DOCKER_SMOKE_WAIT:-60}
 HERE=$(cd "$(dirname "$0")" && pwd)
 PORT=18080
@@ -54,6 +58,18 @@ cleanup() {
 }
 trap cleanup EXIT
 cleanup
+
+if [ $# -gt 0 ]; then
+    echo "== 0. the image's other names"
+    want=$(docker image inspect -f '{{.Id}}' "$IMAGE")
+    for alias in "$@"; do
+        docker image inspect "$alias" >/dev/null 2>&1 || docker pull -q "$alias" >/dev/null \
+            || fail "could not pull $alias"
+        got=$(docker image inspect -f '{{.Id}}' "$alias")
+        [ "$got" = "$want" ] || fail "$alias is $got, not the tested $IMAGE ($want)"
+        echo "$alias is the same image ($want)  OK"
+    done
+fi
 
 wait_healthy() {
     for _ in $(seq 1 "$WAIT"); do
@@ -123,7 +139,7 @@ wait_healthy
 # read the whole log first: with pipefail, `docker logs | grep -q` fails when grep exits at the
 # match while docker logs is still writing (SIGPIPE), which made this check flaky
 logs=$(docker logs s2n-smoke 2>&1)
-grep -q "handing it to user ser2net" <<<"$logs" || fail "no takeover message"
+grep -q "handing it to user ser2netweb (uid 10001)" <<<"$logs" || fail "no takeover message"
 docker exec s2n-smoke sh -c 'find /data ! -uid 10001 | head -5'
 docker exec s2n-smoke sh -c '[ -z "$(find /data ! -uid 10001 | head -n 1)" ]' || fail "root-owned files left"
 code=$(sign_in admin old-admin-pass-1)
@@ -219,11 +235,11 @@ docker run -d --name s2n-smoke -p 127.0.0.1:$PORT:8080 --health-interval=1s \
     -v "$host_dir:/data" "$IMAGE" >/dev/null
 wait_healthy
 logs=$(docker logs s2n-smoke 2>&1)
-grep -q "handing the files an image wrote there (owned by root or ser2net) to 4321:4321" <<<"$logs" \
+grep -q "handing the files an image wrote there (owned by root or ser2netweb) to 4321:4321" <<<"$logs" \
     || fail "no takeover message"
 proc_status | grep -q -E "^Uid:\s+4321\s" || fail "should run as the folder's owner 4321"
 left=$(sudo find "$host_dir" \( -uid 0 -o -uid 10001 \) -print)
-[ -z "$left" ] || fail "files still owned by root / ser2net: $left"
+[ -z "$left" ] || fail "files still owned by root / ser2netweb: $left"
 [ "$(sudo stat -c %u "$host_dir")" = 4321 ] || fail "host folder owner changed"
 code=$(sign_in admin old-admin-pass-1)
 [ "$code" = 303 ] || fail "old admin password did not sign in ($code)"
@@ -232,7 +248,7 @@ sudo grep -q "AUDIT .* login" "$host_dir/all.log" || fail "all.log not written a
 docker rm -f s2n-smoke >/dev/null
 sudo rm -rf "$host_dir"
 host_dir=""
-echo "bind mount upgrade: root / ser2net files handed to the folder's owner, old password, logs and audit work  OK"
+echo "bind mount upgrade: root / ser2netweb files handed to the folder's owner, old password, logs and audit work  OK"
 
 echo "== 7. serial device groups"
 dev_dir=$(mktemp -d)

@@ -44,5 +44,5 @@ jobs:
         env:
           DOCKER_DEFAULT_PLATFORM: ""
       - name: docker build ${{ matrix.platform && format('--platform {0}', matrix.platform) || '' }}
-        run: docker build ${DOCKER_DEFAULT_PLATFORM:+--platform "$DOCKER_DEFAULT_PLATFORM"} -t ser2net:test .
-      - run: tests/docker_smoke.sh ser2net:test
+        run: docker build ${DOCKER_DEFAULT_PLATFORM:+--platform "$DOCKER_DEFAULT_PLATFORM"} -t ser2netweb:test .
+      - run: tests/docker_smoke.sh ser2netweb:test

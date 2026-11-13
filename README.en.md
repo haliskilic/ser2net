@@ -766,8 +766,10 @@ Without compose, use the `docker run` command in
 `--restart unless-stopped`, `--init`, the mapping ports, a `/dev/serial/by-id` device, log
 limits).
 Published image (every release; amd64, arm64, and arm/v7 for 32-bit ARM such as 32-bit
-Raspberry Pi OS): `docker pull ghcr.io/haliskilic/ser2net:latest`
-(or `:2.9`, `:2.9.0`); `docker-compose.yml` uses it. Between releases `:latest` and `:X.Y`
+Raspberry Pi OS): `docker pull ghcr.io/haliskilic/ser2netweb:latest`
+(or `:2.9`, `:2.9.0`); `docker-compose.yml` uses it. Up to 2.9.x the image was
+`ghcr.io/haliskilic/ser2net`, where the 3.x releases are published too (the same image);
+moving a 2.9.x container or compose file over: [`docs/DOCKER.md`](docs/DOCKER.md#upgrading-from-29x). Between releases `:latest` and `:X.Y`
 are rebuilt on a newer Debian/Python base when it changes (weekly check; `:X.Y.Z` stays as
 released) — see [`docs/DOCKER.md`](docs/DOCKER.md).
 Inside the container the UI binds to `0.0.0.0` (set via `SER2NETWEB_BIND_IP` /
@@ -775,7 +777,7 @@ Inside the container the UI binds to `0.0.0.0` (set via `SER2NETWEB_BIND_IP` /
 interface, IPv4 and IPv6). Publish each mapping's port
 too (a new mapping gets 4001), or use the host network. A serial device's group is taken
 from the device itself, so `--group-add` isn't needed for the usual device names. The
-process never runs as root: as the `ser2net` user (uid 10001), or as the owner of a
+process never runs as root: as the `ser2netweb` user (uid 10001), or as the owner of a
 bind-mounted `/data` folder (or the `--user` given); a `/data` volume written by an older (root-running)
 image is taken over on the first start, and in a bind-mounted folder the files an older
 image wrote as root are handed to the folder's owner, so upgrading needs no manual step
@@ -1459,7 +1461,7 @@ is no account at all; later starts ignore it.
   [`docs/DOCKER.md`](docs/DOCKER.md)) — `restart: unless-stopped`, `init: true` and
   `stop_grace_period: 30s` (a stop reaches ser2netweb, which finishes within that), `/data`
   volume. A plain `docker run` needs `--restart unless-stopped --init --stop-timeout 30` for
-  that (an existing container: `docker update --restart unless-stopped ser2net`).
+  that (an existing container: `docker update --restart unless-stopped ser2netweb`).
 - **Linux (systemd):** three units — `ser2netweb.service` (a source checkout),
   `ser2netweb-standalone.service` (the Linux binary) and the template `ser2netweb@.service`
   (several instances). All run ser2netweb as a dedicated unprivileged user (`ser2netweb`, in
