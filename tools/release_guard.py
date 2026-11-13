@@ -23,9 +23,10 @@ with an unsupported or mismatched crypto stack:
 
   assets OUT
       Run once release.yml has named the release files: OUT holds exactly the files a
-      release has (RELEASE_ASSETS: the executables with their SBOMs and license texts, the
-      install script, the unit, SHA256SUMS), none under another name (the ser2net-* names
-      of 2.9.x and older included), and SHA256SUMS lists every other one of them.
+      release has (release_assets(): the executables with their SBOMs and license texts,
+      the install script, the unit, the .deb / .rpm packages of this version, SHA256SUMS),
+      none under another name (the ser2net-* names of 2.9.x and older included), and
+      SHA256SUMS lists every other one of them.
 
 Standard library only.
 """
@@ -116,12 +117,28 @@ RELEASE_EXECUTABLES = ("ser2netweb-linux-x64", "ser2netweb-linux-arm64",
                        "ser2netweb-windows-x64.exe")
 RELEASE_FILES = ("ser2netweb-install.sh", "ser2netweb-standalone.service")
 CHECKSUMS = "SHA256SUMS"
+# The .deb / .rpm packages of the Linux executables (tools/build_packages.py), for each
+# executable's architecture: (Debian's name, RPM's name) of it
+PACKAGE_ARCHES = {"ser2netweb-linux-x64": ("amd64", "x86_64"),
+                  "ser2netweb-linux-arm64": ("arm64", "aarch64")}
 
 
-def release_assets() -> list[str]:
+def release_packages(version: str | None = None, root: str = ROOT) -> list[str]:
+    """The file names of the packages of `version` (default: ser2netweb.__version__):
+    ser2netweb_<version>_<arch>.deb and ser2netweb-<version>-1.<arch>.rpm, as each format
+    names its packages, with the version as tagged (3.0.0-rc.1, never 3.0.0~rc.1 as it is
+    inside the packages: GitHub would rename a release file with a "~")."""
+    v = app_version(root) if version is None else version
+    names = []
+    for deb, rpm in PACKAGE_ARCHES.values():
+        names += [f"ser2netweb_{v}_{deb}.deb", f"ser2netweb-{v}-1.{rpm}.rpm"]
+    return names
+
+
+def release_assets(version: str | None = None, root: str = ROOT) -> list[str]:
     """Every file a release has: each executable with its SBOM and license texts, the
-    other files and SHA256SUMS."""
-    names = [CHECKSUMS, *RELEASE_FILES]
+    other files, the packages of `version` (default: this tree's) and SHA256SUMS."""
+    names = [CHECKSUMS, *RELEASE_FILES, *release_packages(version, root)]
     for exe in RELEASE_EXECUTABLES:
         stem = exe[:-len(".exe")] if exe.endswith(".exe") else exe
         names += [exe, f"{stem}.cdx.json", f"{stem}.THIRD-PARTY-LICENSES.txt"]
