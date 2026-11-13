@@ -1,6 +1,6 @@
 #!/bin/sh
 # Install (or upgrade) the standalone Linux binary of a release as a systemd service.
-# Download ser2net-linux-x64 (or -arm64), ser2net-standalone.service, this script and
+# Download ser2netweb-linux-x64 (or -arm64), ser2net-standalone.service, this script and
 # SHA256SUMS from the release into one folder, then:
 #   sudo sh ser2net-install.sh                     # 127.0.0.1:8080 until you say otherwise
 #   sudo sh ser2net-install.sh --listen 0.0.0.0:8080
@@ -16,7 +16,7 @@
 # /opt/ser2net) unless --replace-unit is given.
 #
 # Options:
-#   --binary FILE     the binary (default: ser2net-linux-<x64|arm64> next to this script)
+#   --binary FILE     the binary (default: ser2netweb-linux-<x64|arm64> next to this script)
 #   --unit FILE       the unit (default: ser2net-standalone.service next to this script)
 #   --listen IP:PORT  the web UI's address (a drop-in setting SER2NET_BIND_IP / SER2NET_PORT;
 #                     use TLS on a network address, README: Security)
@@ -118,7 +118,7 @@ if [ -z "$binary" ]; then
         aarch64|arm64) arch=arm64 ;;
         *) die "there is no standalone binary for $(uname -m); run ser2net from source (README: Install & run) or use the Docker image" ;;
     esac
-    binary=$HERE/ser2net-linux-$arch
+    binary=$HERE/ser2netweb-linux-$arch
 fi
 if [ -z "$unit" ]; then
     unit=$HERE/ser2net-standalone.service

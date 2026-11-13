@@ -47,7 +47,7 @@ and `tests/test_release_pipeline.py` fail on a tag reference.
 `tests/test_dead_peer.py` blackholes a loopback flow with iptables; run it with
 `SER2NETWEB_BLACKHOLE_TESTS=1` only in a throwaway network namespace or VM, never on a
 machine whose firewall matters. The standalone executable checks need a build
-(`SER2NETWEB_STANDALONE_BIN=dist/ser2net python tests/test_standalone.py`).
+(`SER2NETWEB_STANDALONE_BIN=dist/ser2netweb python tests/test_standalone.py`).
 `tests/systemd_smoke.sh` (CI jobs `systemd unit` and `systemd unit (binary)`) installs the
 systemd units as the README says and runs them on the runner's systemd: it adds a `ser2net`
 user, `/opt/ser2net` and the service, so run it only on a throwaway VM. A change to a unit in
@@ -254,7 +254,7 @@ Dependabot günceller, tag ile verilen bir referansta zizmor ve
 `tests/test_dead_peer.py` iptables ile loopback trafiği kestiği için
 `SER2NETWEB_BLACKHOLE_TESTS=1` ile yalnızca silinebilir bir ağ ad alanında (network namespace)
 ya da sanal makinede çalıştırın. Standalone binary denetimleri bir derleme ister
-(`SER2NETWEB_STANDALONE_BIN=dist/ser2net python tests/test_standalone.py`). `tests/systemd_smoke.sh` (CI'daki `systemd unit` ve
+(`SER2NETWEB_STANDALONE_BIN=dist/ser2netweb python tests/test_standalone.py`). `tests/systemd_smoke.sh` (CI'daki `systemd unit` ve
 `systemd unit (binary)` işleri) systemd unit'lerini README'deki gibi kurar ve runner'ın
 systemd'sinde çalıştırır: bir `ser2net` kullanıcısı, `/opt/ser2net` ve servisi ekler; bu
 yüzden yalnızca silinebilir bir sanal makinede çalıştırın. `systemd/` altındaki bir unit'te

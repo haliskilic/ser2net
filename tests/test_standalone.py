@@ -11,7 +11,7 @@ refreshed (modification times kept) and, on Linux, the directory is locked, so t
 real systemd-tmpfiles (242+, when installed) skips it even at age 0 while it still
 removes a directory a killed run left behind.
 
-Binary part — opt-in: SER2NETWEB_STANDALONE_BIN=<built ser2net or ser2net.exe> (the
+Binary part — opt-in: SER2NETWEB_STANDALONE_BIN=<built ser2netweb or ser2netweb.exe> (the
 CI 'standalone' jobs build the executables and set it):
   1. bundle: every ELF/PE inside needs only libraries that are bundled or part of
      the OS base (glibc; Windows system DLLs) — Linux: no glibc symbol newer than
@@ -145,9 +145,10 @@ def posix_path(path):
     return os.path.normpath(path).replace(os.sep, "/")
 
 
-def spec_datas():
+def spec_datas(exe=None):
     """The data entries ser2netweb.spec hands PyInstaller, without PyInstaller: the spec
-    runs with stand-ins for collect_all() and the build steps."""
+    runs with stand-ins for collect_all() and the build steps (``exe``: a dict that gets
+    the executable's EXE() keywords)."""
     hooks = types.ModuleType("PyInstaller.utils.hooks")
     hooks.collect_all = lambda package: ([], [], [])
     fakes = {"PyInstaller": types.ModuleType("PyInstaller"),
@@ -165,7 +166,8 @@ def spec_datas():
     try:
         with open(os.path.join(ROOT, "ser2netweb.spec"), encoding="utf-8") as fh:
             exec(compile(fh.read(), "ser2netweb.spec", "exec"),
-                 {"Analysis": analysis, "PYZ": lambda *a, **k: None, "EXE": lambda *a, **k: None})
+                 {"Analysis": analysis, "PYZ": lambda *a, **k: None,
+                  "EXE": lambda *a, **k: (exe if exe is not None else {}).update(k)})
     finally:
         for name, module in saved.items():
             if module is None:
@@ -218,6 +220,27 @@ def test_spec_bundles_app_data():
                          "the executables:\n  " + "\n  ".join(missing))
     print(f"ser2netweb.spec bundles all {len(needed)} data files under ser2netweb/ "
           "(templates, static assets, translations)  OK")
+
+
+def test_spec_names_the_executable():
+    """The build makes dist/ser2netweb(.exe), the name the build scripts, standalone.yml
+    and release.yml take it by (ser2net up to 2.9.x), with the ser2netweb icon."""
+    exe = {}
+    spec_datas(exe)
+    assert exe["name"] == "ser2netweb", exe
+    assert os.path.isfile(os.path.join(ROOT, "tools", "ser2netweb.ico"))
+    for script in ("build_standalone_linux.sh", "build_standalone_windows.ps1"):
+        text = read(os.path.join(ROOT, "tools", script))
+        assert "dist/ser2netweb --version" in text.replace("\\", "/").replace(".exe", ""), script
+        assert "sbom build/ser2netweb.cdx.json" in text.replace("\\", "/"), script
+    workflow = read(os.path.join(ROOT, ".github", "workflows", "standalone.yml"))
+    for name in ("dist/ser2netweb\n", "dist/ser2netweb.exe\n", "build/ser2netweb.cdx.json\n",
+                 "name: ser2netweb-linux-${{ matrix.arch }}\n", "name: ser2netweb-windows-x64\n"):
+        assert name in workflow, name
+    assert not re.search(r"ser2net(?!web)[-.](?:exe|cdx|linux|windows)|dist/ser2net\b(?!web)",
+                         workflow), "an old asset name in standalone.yml"
+    print("ser2netweb.spec builds dist/ser2netweb(.exe) with its icon; the build scripts and "
+          "standalone.yml take it by that name  OK")
 
 
 def assert_locked(path):
@@ -537,9 +560,9 @@ class Launch:
         pts = [] if WINDOWS else ["-v", "/dev/pts:/dev/hostpts"]  # the PTY mapping's device
         return ["docker", "run", "--rm", "--init", "--name", self.name, "--network", "host", *user,
                 *pts, "-e", "HOME=/work", "-e", "TMPDIR=/work/tmp", "-e", "PATH=/work/emptybin",
-                "-v", f"{self.work}:/work", "-v", f"{BIN}:/opt/ser2net/ser2net:ro",
+                "-v", f"{self.work}:/work", "-v", f"{BIN}:/opt/ser2netweb/ser2netweb:ro",
                 "-v", f"{self.pki['ca.pem']}:{self.ca_path}:ro",
-                IMAGE, "/opt/ser2net/ser2net"] + [a.replace(self.work, "/work") for a in args]
+                IMAGE, "/opt/ser2netweb/ser2netweb"] + [a.replace(self.work, "/work") for a in args]
 
     def env(self):
         if IMAGE:
@@ -689,8 +712,8 @@ def check_version_resource(exe):
                    getattr(e, "id", None) == 14  # RT_GROUP_ICON
                    for e in pe.DIRECTORY_ENTRY_RESOURCE.entries)
     pe.close()
-    assert strings.get("ProductName") == "ser2net", strings
-    assert strings.get("OriginalFilename") == "ser2net.exe", strings
+    assert strings.get("ProductName") == "ser2netweb", strings
+    assert strings.get("OriginalFilename") == "ser2netweb.exe", strings
     assert strings.get("ProductVersion") == __version__, strings
     assert strings.get("FileVersion", "").startswith(__version__), strings
     assert has_icon, "no RT_GROUP_ICON resource (custom icon not embedded)"
@@ -819,7 +842,7 @@ def test_binary():
         print(f"{where}: --licenses covers ser2netweb, CPython/OpenSSL and every bundled package  OK")
 
         # the build's SBOM (next to the executable after a build; not in the distro jobs)
-        sbom = os.path.join(ROOT, "build", "ser2net.cdx.json")
+        sbom = os.path.join(ROOT, "build", "ser2netweb.cdx.json")
         if os.path.isfile(sbom) and not IMAGE:
             with open(sbom, encoding="utf-8") as fh:
                 comps = json.load(fh)["components"]
@@ -1005,6 +1028,7 @@ def check_custom_baud(pty, port, data, where):
 def main():
     test_ca_bundle_choice()
     test_spec_bundles_app_data()
+    test_spec_names_the_executable()
     test_unpacked_dir_kept()
     test_binary()
 

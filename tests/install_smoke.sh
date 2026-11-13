@@ -2,7 +2,7 @@
 # The Linux install script for real (CI job "install script (binary)"). It needs systemd as
 # PID 1 and passwordless sudo, as on GitHub's ubuntu runners, and it installs a user,
 # /usr/local/bin/ser2net, /var/lib/ser2net and a service: run it only on a throwaway machine.
-#   tests/install_smoke.sh <ser2net-linux-x64 or -arm64>
+#   tests/install_smoke.sh <ser2netweb-linux-x64 or -arm64>
 # With the files as a release download has them (the binary, ser2net-standalone.service,
 # ser2net-install.sh, SHA256SUMS):
 # 1. a fresh install with --listen: the user, the unit, /var/lib/ser2net (0700, ser2net's),
@@ -34,9 +34,9 @@ getent passwd ser2net >/dev/null && fail "a ser2net user exists already: not a t
 [ -e "$UNIT" ] && fail "$UNIT exists already: not a throwaway machine?"
 
 rel=$(mktemp -d)
-cp "$BINARY" "$rel/ser2net-linux-$arch"
+cp "$BINARY" "$rel/ser2netweb-linux-$arch"
 cp "$REPO/systemd/ser2net-standalone.service" "$REPO/systemd/ser2net-install.sh" "$rel/"
-(cd "$rel" && sha256sum ser2net-linux-$arch ser2net-standalone.service ser2net-install.sh > SHA256SUMS)
+(cd "$rel" && sha256sum ser2netweb-linux-$arch ser2net-standalone.service ser2net-install.sh > SHA256SUMS)
 
 echo "== 1. a fresh install"
 sudo sh "$rel/ser2net-install.sh" --listen 127.0.0.1:18092 || fail "the install failed"

@@ -191,7 +191,7 @@ def test_binary_unit():
     assert "/opt/ser2net" not in " ".join(v for _k, v in unit["Service"]), "no source paths"
     with open(os.path.join(ROOT, ".github", "workflows", "release.yml"), encoding="utf-8") as fh:
         release = fh.read()
-    assert "cp systemd/ser2net-standalone.service out/ser2net-standalone.service" in release
+    assert "cp systemd/ser2net-standalone.service out/ser2netweb-standalone.service" in release
     print("binary unit: /usr/local/bin/ser2net, data in /var/lib/ser2net, attached to releases  OK")
 
 

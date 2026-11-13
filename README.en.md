@@ -599,9 +599,13 @@ run; config/logs are written to `data/` next to the binary.
 
 | File | Runs on |
 |---|---|
-| `ser2net-windows-x64.exe` | Windows 10/11, Windows Server 2016 or newer (x64) |
-| `ser2net-linux-x64` | x86_64 Linux with glibc ≥ 2.28: RHEL / AlmaLinux / Rocky 8+, Debian 11+, Ubuntu 20.04+, Fedora, openSUSE Leap 15 (not musl/Alpine — use Docker there) |
-| `ser2net-linux-arm64` | 64-bit ARM Linux with glibc ≥ 2.28: Raspberry Pi 3/4/5 (64-bit Raspberry Pi OS 11+ or Ubuntu), ARM industrial gateways, AWS Graviton, the same distributions |
+| `ser2netweb-windows-x64.exe` | Windows 10/11, Windows Server 2016 or newer (x64) |
+| `ser2netweb-linux-x64` | x86_64 Linux with glibc ≥ 2.28: RHEL / AlmaLinux / Rocky 8+, Debian 11+, Ubuntu 20.04+, Fedora, openSUSE Leap 15 (not musl/Alpine — use Docker there) |
+| `ser2netweb-linux-arm64` | 64-bit ARM Linux with glibc ≥ 2.28: Raspberry Pi 3/4/5 (64-bit Raspberry Pi OS 11+ or Ubuntu), ARM industrial gateways, AWS Graviton, the same distributions |
+
+Up to 2.9.x these files were called `ser2net-*` (`ser2net-linux-x64`, …); from 3.0.0 on a
+release has them under the `ser2netweb-*` names only, so a download script that names the
+old ones needs the new names.
 
 Other platforms — 32-bit ARM (32-bit Raspberry Pi OS, armv7 gateways), macOS, Windows on ARM:
 run from source (`python3 ser2netweb.py`), which works offline there too (see *Offline install*),
@@ -613,7 +617,7 @@ license texts, `ser2net-standalone.service`, the systemd unit for the Linux bina
 `ser2net-install.sh`, which installs a binary with it (see *Run as a service*), and the
 binaries carry GitHub build provenance:
 `sha256sum -c SHA256SUMS --ignore-missing`,
-`gh attestation verify ser2net-linux-x64 -R haliskilic/ser2netweb`. The Windows exe is **not
+`gh attestation verify ser2netweb-linux-x64 -R haliskilic/ser2netweb`. The Windows exe is **not
 code-signed yet** (it will be once a signing service is configured —
 [`docs/SIGNING.md`](docs/SIGNING.md)), so SmartScreen may warn on first run; verify it on
 Windows with `Get-FileHash` against `SHA256SUMS` and `gh attestation verify`, then *More
@@ -626,7 +630,7 @@ work with an empty `PATH` (no Python, no `openssl`), and the Linux one must run 
 AlmaLinux 8/9, Debian 11/12, Ubuntu 20.04/22.04/24.04/26.04, openSUSE Leap 15.6 and Fedora
 containers, including a serial port at a rate without a termios constant (250000 baud).
 
-Linux notes: `chmod +x ser2net-linux-x64`; serial ports need the devices' group
+Linux notes: `chmod +x ser2netweb-linux-x64`; serial ports need the devices' group
 (`dialout`; `uucp` on Arch, see Requirements). The binary unpacks itself to `$TMPDIR`
 (default `/tmp`) on start — if `/tmp` is mounted `noexec`, point `TMPDIR` at a directory
 that isn't (`ser2net-install.sh` does that for the service). While it runs it keeps that
@@ -668,7 +672,7 @@ python3 ser2netweb.py --reconfigure
 ```
 
 ### Command-line options
-`python3 ser2netweb.py [options]`, `ser2net-linux-x64 [options]`, `ser2net-windows-x64.exe
+`python3 ser2netweb.py [options]`, `ser2netweb-linux-x64 [options]`, `ser2netweb-windows-x64.exe
 [options]` (`--help` lists them). `ser2net.py`, the start script's name up to 2.9.x, still
 works and runs the same, so units and scripts that name it need no change:
 
@@ -1374,8 +1378,8 @@ directory's owner by itself):
 
 | Install | Command |
 |---|---|
-| source / Linux binary (systemd) | `sudo -u ser2net python3 /opt/ser2net/ser2netweb.py --data-dir /opt/ser2net/data --set-password admin` (binary with `ser2net-standalone.service`: `sudo -u ser2net /usr/local/bin/ser2net --data-dir /var/lib/ser2net --set-password admin`; started by hand: `./ser2net-linux-x64 --set-password admin`) |
-| Windows (elevated prompt, also while the service runs) | `ser2net-windows-x64.exe --data-dir C:\ProgramData\ser2net --set-password admin` (the service's data directory: `sc qc ser2net` shows it) |
+| source / Linux binary (systemd) | `sudo -u ser2net python3 /opt/ser2net/ser2netweb.py --data-dir /opt/ser2net/data --set-password admin` (binary with `ser2net-standalone.service`: `sudo -u ser2net /usr/local/bin/ser2net --data-dir /var/lib/ser2net --set-password admin`; started by hand: `./ser2netweb-linux-x64 --set-password admin`) |
+| Windows (elevated prompt, also while the service runs) | `ser2netweb-windows-x64.exe --data-dir C:\ProgramData\ser2net --set-password admin` (the service's data directory: `sc qc ser2net` shows it) |
 | an instance of `ser2net@.service` | `sudo -u ser2net python3 /opt/ser2net/ser2netweb.py --no-bootstrap --data-dir /var/lib/ser2net/<name> --set-password admin` |
 | Docker | `docker exec -it ser2net python /app/ser2netweb.py --no-bootstrap --data-dir /data --set-password admin` |
 
@@ -1483,7 +1487,7 @@ is no account at all; later starts ignore it.
   - *Standalone binary*: `ser2net-standalone.service` (attached to every release, and in
     `systemd/`), installed as `ser2net.service`; its data is in `/var/lib/ser2net`, which
     systemd makes. `ser2net-install.sh` (attached to every release too) does it all:
-    download `ser2net-linux-x64` (or `-arm64`), `ser2net-standalone.service`,
+    download `ser2netweb-linux-x64` (or `-arm64`), `ser2net-standalone.service`,
     `ser2net-install.sh` and `SHA256SUMS` into one folder, then
     ```bash
     sudo sh ser2net-install.sh                         # the web UI on 127.0.0.1:8080
@@ -1500,7 +1504,7 @@ is no account at all; later starts ignore it.
     `/var/cache/ser2net` instead (a drop-in). `--root DIR` only stages the files under DIR.
     The same by hand:
     ```bash
-    sudo install -m 0755 ser2net-linux-x64 /usr/local/bin/ser2net
+    sudo install -m 0755 ser2netweb-linux-x64 /usr/local/bin/ser2net
     sudo useradd --system --user-group --home-dir /var/lib/ser2net -M -s /usr/sbin/nologin ser2net
     sudo cp ser2net-standalone.service /etc/systemd/system/ser2net.service
     sudo systemctl daemon-reload && sudo systemctl enable --now ser2net
@@ -1549,7 +1553,7 @@ is no account at all; later starts ignore it.
   `SER2NETWEB_LOW_PORTS=1` ([`docs/DOCKER.md`](docs/DOCKER.md#ports-and-networking)).
 - **Windows:** nothing else needed. From an elevated ("Run as administrator") prompt:
   ```bat
-  ser2net-windows-x64.exe --install-service
+  ser2netweb-windows-x64.exe --install-service
   ```
   The exe copies itself to `C:\Program Files\ser2net\` (admin-only, so a standard user
   can't replace the file the service runs as SYSTEM) and keeps its data in
@@ -1641,7 +1645,7 @@ The browser keeps each instance's sign-in apart when they are on different ports
 reach those under different host names (the IP address and the name) or in separate browser
 profiles.
 
-- **Windows:** `ser2net-windows-x64.exe --install-service --service-name ser2net-line2
+- **Windows:** `ser2netweb-windows-x64.exe --install-service --service-name ser2net-line2
   --data-dir C:\ProgramData\ser2net-line2` (and a firewall rule per service:
   [docs/WINDOWS.md](docs/WINDOWS.md)).
 - **Linux (systemd):** the template `systemd/ser2net@.service` runs one instance per name,

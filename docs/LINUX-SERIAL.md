@@ -155,7 +155,7 @@ re-plug the adapter. `journalctl -k` shows `usbfs: interface 0 claimed by ch341 
 - The Pi 5 has a PL011 on the GPIO header and a separate debug UART connector
   (`ttyAMA10`), with no Bluetooth swap; check `ls -l /dev/serial0` there too.
 - Turn the serial console off first ([above](#console-and-login-prompt)).
-- The standalone `ser2net-linux-arm64` needs a 64-bit OS; 32-bit Raspberry Pi OS runs from
+- The standalone `ser2netweb-linux-arm64` needs a 64-bit OS; 32-bit Raspberry Pi OS runs from
   source or with the Docker image (`linux/arm/v7`).
 
 ## Still stuck

@@ -621,9 +621,13 @@ MQTT / LDAP / OIDC desteği. Python, `openssl` ya da başka bir paket gerekmez. 
 
 | Dosya | Çalıştığı sistemler |
 |---|---|
-| `ser2net-windows-x64.exe` | Windows 10/11, Windows Server 2016 ve sonrası (x64) |
-| `ser2net-linux-x64` | glibc ≥ 2.28 olan x86_64 Linux: RHEL / AlmaLinux / Rocky 8+, Debian 11+, Ubuntu 20.04+, Fedora, openSUSE Leap 15 (musl/Alpine değil — orada Docker kullanın) |
-| `ser2net-linux-arm64` | glibc ≥ 2.28 olan 64-bit ARM Linux: Raspberry Pi 3/4/5 (64-bit Raspberry Pi OS 11+ veya Ubuntu), ARM endüstriyel gateway'ler, AWS Graviton, aynı dağıtımlar |
+| `ser2netweb-windows-x64.exe` | Windows 10/11, Windows Server 2016 ve sonrası (x64) |
+| `ser2netweb-linux-x64` | glibc ≥ 2.28 olan x86_64 Linux: RHEL / AlmaLinux / Rocky 8+, Debian 11+, Ubuntu 20.04+, Fedora, openSUSE Leap 15 (musl/Alpine değil — orada Docker kullanın) |
+| `ser2netweb-linux-arm64` | glibc ≥ 2.28 olan 64-bit ARM Linux: Raspberry Pi 3/4/5 (64-bit Raspberry Pi OS 11+ veya Ubuntu), ARM endüstriyel gateway'ler, AWS Graviton, aynı dağıtımlar |
+
+2.9.x'e kadar bu dosyaların adı `ser2net-*` idi (`ser2net-linux-x64`, …); 3.0.0'dan itibaren
+bir sürümde yalnızca `ser2netweb-*` adlarıyla bulunurlar. Eski adları kullanan bir indirme
+script'inin yeni adlara geçmesi gerekir.
 
 Diğer platformlar — 32-bit ARM (32-bit Raspberry Pi OS, armv7 gateway'ler), macOS, ARM
 üzerinde Windows: kaynaktan çalıştırın (`python3 ser2netweb.py`); orada da offline çalışır (bkz.
@@ -633,7 +637,7 @@ Her sürümde ayrıca `SHA256SUMS`, her binary için CycloneDX SBOM (`*.cdx.json
 metinleri, Linux binary'leri için systemd unit'i `ser2net-standalone.service` ve bir binary'yi
 onunla kuran `ser2net-install.sh` (bkz. *Servis olarak çalıştırma*) yayımlanır; binary'ler GitHub'ın derleme kaynağı imzasıyla (build provenance)
 doğrulanabilir: `sha256sum -c SHA256SUMS --ignore-missing`,
-`gh attestation verify ser2net-linux-x64 -R haliskilic/ser2netweb`. Windows exe'si **henüz
+`gh attestation verify ser2netweb-linux-x64 -R haliskilic/ser2netweb`. Windows exe'si **henüz
 imzalanmıyor** (bir imzalama servisi tanımlanınca imzalanacak —
 [`docs/SIGNING.md`](docs/SIGNING.md)); bu yüzden ilk çalıştırmada SmartScreen uyarabilir.
 Windows'ta `Get-FileHash` ile `SHA256SUMS`'a karşı ve `gh attestation verify` ile
@@ -648,7 +652,7 @@ Bu, her PR'da ve her sürümde test edilir (`tests/test_standalone.py`):
   (250000 baud) bir seri port da açabilmeli.
 
 Linux notları:
-- `chmod +x ser2net-linux-x64`; seri portlar cihazların grubunu gerektirir (`dialout`;
+- `chmod +x ser2netweb-linux-x64`; seri portlar cihazların grubunu gerektirir (`dialout`;
   Arch'ta `uucp`, bkz. Gereklilikler).
 - Binary açılışta kendini `$TMPDIR`'e (varsayılan `/tmp`) açar. `/tmp` `noexec` ile
   bağlıysa `TMPDIR`'i öyle olmayan bir klasöre yönlendirin (`ser2net-install.sh` bunu servis
@@ -693,8 +697,8 @@ python3 ser2netweb.py --reconfigure
 ```
 
 ### Komut satırı seçenekleri
-`python3 ser2netweb.py [seçenekler]`, `ser2net-linux-x64 [seçenekler]`,
-`ser2net-windows-x64.exe [seçenekler]` (`--help` hepsini listeler). Başlatma script'inin
+`python3 ser2netweb.py [seçenekler]`, `ser2netweb-linux-x64 [seçenekler]`,
+`ser2netweb-windows-x64.exe [seçenekler]` (`--help` hepsini listeler). Başlatma script'inin
 2.9.x'e kadarki adı `ser2net.py` da çalışmaya devam eder ve aynısını yapar; onu kullanan
 unit'ler ve script'ler değişiklik gerektirmez:
 
@@ -1428,8 +1432,8 @@ sahibine geçer):
 
 | Kurulum | Komut |
 |---|---|
-| kaynak / Linux binary (systemd) | `sudo -u ser2net python3 /opt/ser2net/ser2netweb.py --data-dir /opt/ser2net/data --set-password admin` (`ser2net-standalone.service` ile binary: `sudo -u ser2net /usr/local/bin/ser2net --data-dir /var/lib/ser2net --set-password admin`; elle başlatılan: `./ser2net-linux-x64 --set-password admin`) |
-| Windows (yönetici komut istemi; servis çalışırken de) | `ser2net-windows-x64.exe --data-dir C:\ProgramData\ser2net --set-password admin` (servisin veri klasörü: `sc qc ser2net` gösterir) |
+| kaynak / Linux binary (systemd) | `sudo -u ser2net python3 /opt/ser2net/ser2netweb.py --data-dir /opt/ser2net/data --set-password admin` (`ser2net-standalone.service` ile binary: `sudo -u ser2net /usr/local/bin/ser2net --data-dir /var/lib/ser2net --set-password admin`; elle başlatılan: `./ser2netweb-linux-x64 --set-password admin`) |
+| Windows (yönetici komut istemi; servis çalışırken de) | `ser2netweb-windows-x64.exe --data-dir C:\ProgramData\ser2net --set-password admin` (servisin veri klasörü: `sc qc ser2net` gösterir) |
 | bir `ser2net@.service` örneği | `sudo -u ser2net python3 /opt/ser2net/ser2netweb.py --no-bootstrap --data-dir /var/lib/ser2net/<ad> --set-password admin` |
 | Docker | `docker exec -it ser2net python /app/ser2netweb.py --no-bootstrap --data-dir /data --set-password admin` |
 
@@ -1543,7 +1547,7 @@ içeren bir dosyaya (Docker secret) yönlendirin; ad için `SER2NETWEB_ADMIN_USE
   - *Standalone binary*: `ser2net-standalone.service` (her release'e eklenir, `systemd/`
     altında da var), `ser2net.service` adıyla kurulur; verisi systemd'nin oluşturduğu
     `/var/lib/ser2net` içindedir. Hepsini `ser2net-install.sh` (o da her release'e eklenir)
-    yapar: `ser2net-linux-x64` (ya da `-arm64`), `ser2net-standalone.service`,
+    yapar: `ser2netweb-linux-x64` (ya da `-arm64`), `ser2net-standalone.service`,
     `ser2net-install.sh` ve `SHA256SUMS` dosyalarını bir klasöre indirin, sonra
     ```bash
     sudo sh ser2net-install.sh                         # web arayüzü 127.0.0.1:8080'de
@@ -1559,7 +1563,7 @@ içeren bir dosyaya (Docker secret) yönlendirin; ad için `SER2NETWEB_ADMIN_USE
     bağlı olduğu yerde binary'nin kendini `/var/cache/ser2net`'e açmasını sağlar (bir
     drop-in). `--root DIR` dosyaları yalnızca DIR altına hazırlar. Elle aynısı:
     ```bash
-    sudo install -m 0755 ser2net-linux-x64 /usr/local/bin/ser2net
+    sudo install -m 0755 ser2netweb-linux-x64 /usr/local/bin/ser2net
     sudo useradd --system --user-group --home-dir /var/lib/ser2net -M -s /usr/sbin/nologin ser2net
     sudo cp ser2net-standalone.service /etc/systemd/system/ser2net.service
     sudo systemctl daemon-reload && sudo systemctl enable --now ser2net
@@ -1609,7 +1613,7 @@ içeren bir dosyaya (Docker secret) yönlendirin; ad için `SER2NETWEB_ADMIN_USE
   `SER2NETWEB_LOW_PORTS=1` ([`docs/DOCKER.md`](docs/DOCKER.md#ports-and-networking)).
 - **Windows:** ek bir program gerekmez. Yönetici olarak açılmış bir komut isteminde:
   ```bat
-  ser2net-windows-x64.exe --install-service
+  ser2netweb-windows-x64.exe --install-service
   ```
   Exe kendini `C:\Program Files\ser2net\` altına kopyalar (yalnızca yöneticilerin
   değiştirebildiği bir yer; böylece sıradan bir kullanıcı, servisin SYSTEM olarak
@@ -1705,7 +1709,7 @@ Tarayıcı, farklı portlardaki kurulumların (`http://host:8080`, `http://host:
 oturumlarını ayrı tutar; 2.8 ve öncesi bir host adı başına tek oturum paylaşıyordu, onlara
 farklı host adlarıyla (IP adresi ve ad) ya da ayrı tarayıcı profilleriyle girin.
 
-- **Windows:** `ser2net-windows-x64.exe --install-service --service-name ser2net-line2
+- **Windows:** `ser2netweb-windows-x64.exe --install-service --service-name ser2net-line2
   --data-dir C:\ProgramData\ser2net-line2` (ve her servis için bir güvenlik duvarı
   kuralı: [docs/WINDOWS.md](docs/WINDOWS.md)).
 - **Linux (systemd):** `systemd/ser2net@.service` şablonu her ad için bir kurulum çalıştırır;

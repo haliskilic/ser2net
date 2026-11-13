@@ -1,6 +1,6 @@
 # ser2netweb on Windows
 
-Running the standalone `ser2net-windows-x64.exe`, as a background service or
+Running the standalone `ser2netweb-windows-x64.exe`, as a background service or
 interactively. The exe bundles everything (Python, OpenSSL, the VC++ runtime, MQTT /
 LDAP / OIDC) — no Python install is needed.
 
@@ -47,7 +47,7 @@ line says how many); `all.log` in the data directory has every line.
 From an elevated (**Run as administrator**) Command Prompt or PowerShell:
 
 ```bat
-ser2net-windows-x64.exe --install-service
+ser2netweb-windows-x64.exe --install-service
 ```
 
 The service starts at boot as LocalSystem, restarts 5 s after a failure, and the console
@@ -59,7 +59,7 @@ named service gets `C:\Program Files\ser2net\NAME.exe` and `C:\ProgramData\ser2n
 itself (from a source checkout give each its own `--data-dir`). Remove one with `--uninstall-service` (the data directory is kept):
 
 ```bat
-ser2net-windows-x64.exe --uninstall-service
+ser2netweb-windows-x64.exe --uninstall-service
 ```
 
 ### When the service doesn't start
@@ -84,11 +84,11 @@ Look in the data directory (`C:\ProgramData\ser2net\` by default):
 
 ### Upgrading the service
 
-Download the new `ser2net-windows-x64.exe` and, from an elevated prompt, run
+Download the new `ser2netweb-windows-x64.exe` and, from an elevated prompt, run
 `--install-service` again (same `--service-name`):
 
 ```bat
-ser2net-windows-x64.exe --install-service
+ser2netweb-windows-x64.exe --install-service
 ```
 
 It stops the service, replaces the copy in `C:\Program Files\ser2net\`, and starts it
@@ -163,7 +163,7 @@ environment variables for it ([REVERSE-PROXY.md](REVERSE-PROXY.md)).
 From an elevated prompt (same `--service-name` if you gave one):
 
 ```bat
-ser2net-windows-x64.exe --install-service --reconfigure
+ser2netweb-windows-x64.exe --install-service --reconfigure
 ```
 
 It stops the service, asks for the address on the console, saves it and starts the
@@ -210,13 +210,13 @@ Verify the download before trusting it:
 
 - **Checksum** (PowerShell) — compare with the `SHA256SUMS` file attached to the release:
   ```powershell
-  Get-FileHash .\ser2net-windows-x64.exe -Algorithm SHA256
+  Get-FileHash .\ser2netweb-windows-x64.exe -Algorithm SHA256
   ```
   (`sha256sum` is not present on Windows by default; use `Get-FileHash`.)
 - **Build provenance** (needs the GitHub CLI) — proves GitHub Actions built it from this
   repository:
   ```powershell
-  gh attestation verify .\ser2net-windows-x64.exe -R haliskilic/ser2netweb
+  gh attestation verify .\ser2netweb-windows-x64.exe -R haliskilic/ser2netweb
   ```
 
 Once verified, run it past SmartScreen with **More info → Run anyway**. Signing will be
