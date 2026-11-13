@@ -12,13 +12,16 @@ DESCRIPTION="Serial-to-network bridge with a web UI"
 HOMEPAGE="https://github.com/haliskilic/ser2netweb"
 SRC_URI="https://github.com/haliskilic/${PN}/archive/refs/tags/v${PV}.tar.gz -> ${P}.gh.tar.gz"
 
-# the web UI's static files carry htmx (0BSD) and xterm.js (MIT)
-LICENSE="AGPL-3 0BSD MIT"
+# the web UI's static files carry htmx (0BSD) and xterm.js (MIT); two modules hold code
+# copied from pyserial-asyncio-fast and Starlette (BSD)
+LICENSE="AGPL-3 BSD 0BSD MIT"
 SLOT="0"
 KEYWORDS="~amd64"
 IUSE="test"
 RESTRICT="!test? ( test )"
 
+# pyserial-asyncio-fast is not in ::gentoo or GURU: ser2netweb runs on its built-in
+# copy of that library's serial transport (ser2netweb/engine/serial_transport.py)
 RDEPEND="
 	acct-group/ser2netweb
 	acct-user/ser2netweb
@@ -27,7 +30,6 @@ RDEPEND="
 	dev-python/markupsafe[${PYTHON_USEDEP}]
 	dev-python/psutil[${PYTHON_USEDEP}]
 	dev-python/pyserial[${PYTHON_USEDEP}]
-	dev-python/pyserial-asyncio-fast[${PYTHON_USEDEP}]
 	dev-python/python-multipart[${PYTHON_USEDEP}]
 	dev-python/starlette[${PYTHON_USEDEP}]
 	dev-python/uvicorn[${PYTHON_USEDEP}]

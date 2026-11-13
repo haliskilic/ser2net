@@ -168,7 +168,7 @@ jobs:
       - name: xlint
         working-directory: /void-packages
         run: |
-          for t in ser2netweb python3-pyserial-asyncio-fast python3-python-multipart; do
+          for t in ser2netweb python3-python-multipart; do
             xlint "srcpkgs/$t/template"
           done
       - name: xbps-src binary-bootstrap
@@ -177,8 +177,10 @@ jobs:
       - name: xbps-src pkg, with the check phase (as void-packages' CI on x86_64)
         working-directory: /void-packages
         run: |
-          for p in python3-python-multipart python3-pyserial-asyncio-fast ser2netweb; do
-            sudo -Eu builder ./xbps-src -Q pkg "$p"
+          # (-s: strict, as void-packages' CI builds: a python dependency of the metadata
+          # that no package in depends provides fails the build)
+          for p in python3-python-multipart ser2netweb; do
+            sudo -Eu builder ./xbps-src -s -Q pkg "$p"
           done
       - name: xbps-install, run the runit service
         working-directory: /void-packages
@@ -417,9 +419,9 @@ jobs:
           conf=/opt/local/etc/macports/sources.conf
           { echo "file://$local [nosync]"; cat "$conf"; } > "$RUNNER_TEMP/sources.conf"
           sudo cp "$RUNNER_TEMP/sources.conf" "$conf"
-          port info ser2netweb py314-pyserial-asyncio-fast
+          port info ser2netweb
       - name: port lint --nitpick
-        run: port lint --nitpick ser2netweb py-pyserial-asyncio-fast
+        run: port lint --nitpick ser2netweb
       - name: port install ser2netweb
         run: sudo port -N -v install ser2netweb
       - name: Run it, and its launchd startup item

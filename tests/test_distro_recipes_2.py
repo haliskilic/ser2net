@@ -7,7 +7,9 @@ tools/bump_recipes_2.py and .github/workflows/distro-packages-2.yml, which build
     and with it the tarball the checksums are of, exists; the weekly run then warns);
   * the dependencies each names are pyproject.toml's, by the distribution's names, and the
     extras' packages are offered (an option, a variant, an optional feature) or named as
-    missing in that distribution; a dependency the distribution lacks has its recipe here;
+    missing in that distribution; pyserial-asyncio-fast, which Void, Gentoo and MacPorts
+    don't package, is left out there with its reason (ser2netweb runs on its built-in copy of
+    the transport); Void's too old python-multipart has its update here;
   * none provides, replaces or conflicts with ser2net, Corey Minyard's unrelated program:
     the command, the service and the account are ser2netweb's, and "ser2net" on its own
     appears only in the sentences that say so;
@@ -56,6 +58,12 @@ MISSING_EXTRAS = {
     "void": {"authlib"},
     "macports": {"authlib", "paho-mqtt"},  # (no py-authlib; py-paho-mqtt stops at 3.13)
 }
+# the dependency a package may leave out (the built-in transport stands in), and the
+# recipes of the distributions that don't package it
+LEFT_OUT = "pyserial-asyncio-fast"
+LEFT_OUT_IN = {"void": os.path.join(VOID, "ser2netweb", "template"),
+               "gentoo": os.path.join(GENTOO, "net-misc", "ser2netweb"),
+               "macports": os.path.join(MACPORTS, "net", "ser2netweb", "Portfile")}
 
 
 def text(*parts: str) -> str:
@@ -190,9 +198,15 @@ def test_one_release_from_its_tag():
     assert re.search(r"(?m)^github\.tarball_from archive$", portfile), "macports: archive"
     # the PyPI name, the command and the licence
     assert 'pname = "ser2netweb";' in package and 'mainProgram = "ser2netweb";' in package
-    assert "license = lib.licenses.agpl3Only;" in package and "maintainers = [ ];" in package
+    # (htmx: 0BSD, xterm.js: MIT; the code copied from pyserial-asyncio-fast and Starlette:
+    # BSD-3-Clause)
+    assert re.search(r"license = with lib\.licenses; \[\s+agpl3Only\s+bsd0\s+bsd3\s+mit\s+\];",
+                     package) and "maintainers = [ ];" in package
     assert "pkgname=ser2netweb\n" in template and "PORTNAME=\tser2netweb\n" in makefile
-    assert 'LICENSE="AGPL-3 0BSD MIT"' in ebuild
+    assert 'license="AGPL-3.0-only, BSD-3-Clause, 0BSD, MIT"' in template
+    assert 'LICENSE="AGPL-3 BSD 0BSD MIT"' in ebuild
+    assert "LICENSE=\tAGPLv3 BSD0CLAUSE BSD3CLAUSE MIT\n" in makefile
+    assert re.search(r"(?m)^license\s+AGPL-3 BSD MIT Permissive$", portfile)
     note = "" if version == current else (f" (ser2netweb/__init__.py is at {current}: "
                                           f"tools/bump_recipes_2.py {current} once its tag is out)")
     print(f"the five recipes build v{version} from its tag's tarball{note}  OK")
@@ -202,6 +216,9 @@ def test_dependencies_are_pyprojects():
     required, extras = pyproject()
     for target, read_recipe in RECIPES.items():
         _version, needs, offers = read_recipe()
+        if target in LEFT_OUT_IN:
+            needs = needs | {LEFT_OUT}
+            assert LEFT_OUT not in read_recipe()[1], f"{target}: {LEFT_OUT} is left out"
         assert needs == required, (
             f"{target}: dependencies {sorted(needs)} are not pyproject.toml's {sorted(required)}"
             f" (missing {sorted(required - needs)}, extra {sorted(needs - required)})")
@@ -209,18 +226,26 @@ def test_dependencies_are_pyprojects():
         assert offers | missing == extras and not offers & missing, (
             f"{target}: the extras' packages {sorted(offers)} + missing {sorted(missing)} are "
             f"not pyproject.toml's {sorted(extras)}")
-    # pyserial-asyncio-fast, where the distribution has none, comes with the recipes
-    assert os.path.isfile(os.path.join(VOID, "python3-pyserial-asyncio-fast", "template"))
-    gentoo_dep = os.path.join(GENTOO, "dev-python", "pyserial-asyncio-fast")
-    assert [n for n in os.listdir(gentoo_dep) if n.endswith(".ebuild")]
-    assert os.path.isfile(os.path.join(gentoo_dep, "Manifest"))
-    assert os.path.isfile(os.path.join(MACPORTS, "python", "py-pyserial-asyncio-fast",
-                                       "Portfile"))
+    # where it is left out, the recipe says why; no recipe of it is kept here
+    for target, path in LEFT_OUT_IN.items():
+        if os.path.isdir(path):
+            path = os.path.join(path, [n for n in os.listdir(path) if n.endswith(".ebuild")][0])
+        assert re.search(rf"(?m)^# (py-)?{LEFT_OUT} is .*not in .*built-in", text(path)), (
+            f"{target}: {os.path.relpath(path, ROOT)} says why {LEFT_OUT} is left out")
+    for base, dirs, _found in os.walk(PKG):
+        assert not [d for d in dirs if LEFT_OUT in d], (base, dirs)
+    # Void's build checks the installed metadata's dependencies against depends (strict in
+    # its CI): its template takes the line out of pyproject.toml, as Fedora's %prep does
+    assert re.search(r"(?m)^post_patch\(\) \{\n\tvsed -i '/\"pyserial-asyncio-fast>=/d' "
+                     r"pyproject\.toml\n\}$", text(LEFT_OUT_IN["void"])), "void: post_patch"
+    assert one(r'(?m)^ *"(pyserial-asyncio-fast>=[^"]*)",', text(ROOT, "pyproject.toml"),
+               "pyproject.toml"), "the line Void's vsed takes out"
     # Void's python-multipart (0.0.9) is below every floor: the update comes with them
     multipart = text(VOID, "python3-python-multipart", "template")
     assert version_tuple(one(r"^version=(.*)$", multipart, "multipart")) >= (0, 0, 20)
-    print(f"each recipe needs pyproject.toml's {len(required)} dependencies and offers its "
-          f"extras' {len(extras)} packages (or names the missing ones)  OK")
+    print(f"each recipe needs pyproject.toml's {len(required)} dependencies ({LEFT_OUT} left "
+          f"out in {', '.join(LEFT_OUT_IN)}) and offers its extras' {len(extras)} packages (or "
+          f"names the missing ones)  OK")
 
 
 def _descriptive(path: str, body: str) -> str:
@@ -463,7 +488,7 @@ def test_workflow():
     assert len(re.findall(r"sum=[0-9a-f]{64} ;;", all_jobs["macports"])) >= 2
     assert 'shasum -a 256 -c -' in all_jobs["macports"]
     for target, call in (("nixpkgs", "callPackage ./packaging/nix/package.nix {}"),
-                         ("void", "./xbps-src -Q pkg"), ("gentoo", "emerge --oneshot"),
+                         ("void", "./xbps-src -s -Q pkg"), ("gentoo", "emerge --oneshot"),
                          ("gentoo", "pkgcheck scan"), ("freebsd", "portlint -AC"),
                          ("freebsd", "make DEVELOPER=yes BATCH=yes package"),
                          ("macports", "port lint --nitpick"),

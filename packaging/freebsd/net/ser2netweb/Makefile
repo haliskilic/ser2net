@@ -1,13 +1,13 @@
 PORTNAME=	ser2netweb
 DISTVERSIONPREFIX=	v
-DISTVERSION=	3.0.0
+DISTVERSION=	3.0.1
 CATEGORIES=	net comms python
 
 MAINTAINER=	mail@haliskilic.com.tr
 COMMENT=	Serial-to-network bridge with a web UI
 WWW=		https://github.com/haliskilic/ser2netweb
 
-LICENSE=	AGPLv3 BSD0CLAUSE MIT
+LICENSE=	AGPLv3 BSD0CLAUSE BSD3CLAUSE MIT
 LICENSE_COMB=	multi
 LICENSE_FILE_AGPLv3=	${WRKSRC}/LICENSE
 LICENSE_FILE_BSD0CLAUSE=	${WRKSRC}/tools/licenses/npm/htmx.org.txt

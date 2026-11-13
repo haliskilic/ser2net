@@ -255,9 +255,9 @@ the changelog entries (Debian, Fedora, openSUSE), writes the checksums of the ta
 (Arch's sha256, Alpine's sha512) and Arch's `.SRCINFO`; commit the result.
 `tests/test_distro_recipes.py` checks the recipes against `pyproject.toml` (the dependencies
 and floors), `ser2netweb/__init__.py` (the version) and the `.deb` / `.rpm`'s unit, so a
-changed dependency or unit fails there until the recipes follow. **3.0.0 itself cannot be
-submitted:** its tag has the old, narrow dependency ranges and no built-in transport. The
-first release after it is the first a distribution can build.
+changed dependency or unit fails there until the recipes follow. **3.0.1 is the first
+release to submit:** 3.0.0's tag still had the old, narrow dependency ranges and no
+built-in transport, so no distribution can build it with its own packages.
 
 What a recipe's check step leaves out: `tests/test_dependency_internals.py` and
 `tests/test_serial_compat.py` ask for pyserial's Windows backend, which openSUSE's package
@@ -374,13 +374,12 @@ installed side by side.
   the revisions again; `--check` only compares. `tests/test_distro_recipes_2.py` (in the
   suite) checks that the recipes name one release, at or before `ser2netweb/__init__.py`'s
   version, pyproject.toml's dependencies, one SHA-256 and size, and nothing of `ser2net`.
-- **3.0.0 and the floors:** the recipes build 3.0.0, whose `pyproject.toml` still had the
-  ranges from before the floors above (Starlette 1.10, uvicorn 0.54, websockets 17.4,
-  python-multipart 0.0.33, pyserial-asyncio-fast required). nixpkgs' recipe relaxes those
-  four (`pythonRelaxDeps`); the other distributions don't check the ranges when they build.
-  3.0.0 has no built-in serial transport yet, so where a distribution lacks
-  pyserial-asyncio-fast, its recipe comes along (Void, Gentoo, MacPorts). From the first
-  release with the floors on, `pythonRelaxDeps` can go.
+- **The floors and the built-in transport:** the recipes build 3.0.1, the first release
+  with the floors above, so nixpkgs' recipe needs no `pythonRelaxDeps`. Where a
+  distribution lacks pyserial-asyncio-fast (Void, Gentoo, MacPorts), its recipe leaves the
+  dependency out and ser2netweb runs on its built-in copy of the transport; nixpkgs and
+  FreeBSD have it and depend on it. Two modules hold code copied from
+  pyserial-asyncio-fast and Starlette (BSD-3-Clause), which each recipe's licence names.
 
 The versions of the three distributions the table above doesn't have (2026-11-13; ✗: below
 the floor):
@@ -417,7 +416,7 @@ paho-mqtt 2.1.0 only up to Python 3.13, and no Authlib. FreeBSD's `devel/py-setu
   1. `maintainers: add haliskilic`: in `maintainers/maintainer-list.nix`, in alphabetical
      order, `haliskilic = { name = "Halis KILIÇ"; github = "haliskilic"; githubId = 16972550; };`
      (no e-mail is needed);
-  2. `ser2netweb: init at 3.0.0`: `package.nix` as `pkgs/by-name/se/ser2netweb/package.nix`
+  2. `ser2netweb: init at 3.0.1`: `package.nix` as `pkgs/by-name/se/ser2netweb/package.nix`
      with `maintainers = with lib.maintainers; [ haliskilic ];`;
   3. `nixos/ser2netweb: init`: `module.nix` and `test.nix` at the paths above (their
      `meta.maintainers` likewise), the module in `nixos/modules/module-list.nix`, the test in
@@ -432,23 +431,24 @@ paho-mqtt 2.1.0 only up to Python 3.13, and no Authlib. FreeBSD's `devel/py-setu
 ### Void Linux
 
 - **Files:** `srcpkgs/ser2netweb/template` (`build_style=python3-pep517`, the system
-  account `_ser2netweb` in `dialout`, `/var/lib/ser2netweb` 0700, a `do_check` running three
-  of the tests), its runit service `files/ser2netweb/run` (`conf` there may export
-  `SER2NETWEB_BIND_IP` / `SER2NETWEB_PORT` or set `OPTS`) and `INSTALL.msg`;
-  `srcpkgs/python3-pyserial-asyncio-fast` (new, with a patch that lets its test run on
-  Python 3.14) and `srcpkgs/python3-python-multipart` (an update from 0.0.9).
-- **Status:** builds with `xbps-src -Q` (checks included) at void-packages' master of
-  2026-11-13, xlint clean, installs and runs under runit. **Missing in Void:**
-  `python3-pyserial-asyncio-fast` (in this pull request) and python-multipart newer than
-  0.0.9 (updated in it); Authlib (the OIDC extra) isn't packaged, ldap3 is 2.8.1.
+  account `_ser2netweb` in `dialout`, `/var/lib/ser2netweb` 0700, a `post_patch` that takes
+  pyserial-asyncio-fast out of `pyproject.toml`, as xbps-src checks the installed metadata's
+  dependencies against `depends`, a `do_check` running three of the tests), its runit
+  service `files/ser2netweb/run` (`conf` there may export `SER2NETWEB_BIND_IP` /
+  `SER2NETWEB_PORT` or set `OPTS`) and `INSTALL.msg`; `srcpkgs/python3-python-multipart`
+  (an update from 0.0.9).
+- **Status:** builds with `xbps-src -s -Q` (strict, as Void's CI; checks included) at
+  void-packages' master of 2026-11-13, xlint clean, installs and runs under runit.
+  **Missing in Void:** python-multipart newer than 0.0.9 (updated with it) and
+  `python3-pyserial-asyncio-fast` (left out: the built-in transport); Authlib (the OIDC
+  extra) isn't packaged, ldap3 is 2.8.1.
 - **Build it:** `git clone https://github.com/void-linux/void-packages`, copy
   `packaging/void/srcpkgs/*` into its `srcpkgs/`, then `./xbps-src binary-bootstrap`,
   `./xbps-src -Q pkg ser2netweb`, `sudo xbps-install -R hostdir/binpkgs ser2netweb` and
   `sudo ln -s /etc/sv/ser2netweb /var/service/`.
 - **Submit** (a pull request to void-linux/void-packages from a fork): one commit per
   package, in this order, with Void's subjects: `python3-python-multipart: update to
-  0.0.33.`, `New package: python3-pyserial-asyncio-fast-0.16`, `New package:
-  ser2netweb-3.0.0`. Void asks that new packages be runtime tested (state how) and prefers
+  0.0.33.` and `New package: ser2netweb-3.0.1`. Void asks that new packages be runtime tested (state how) and prefers
   them submitted by someone other than the software's author: the pull request should say
   why ser2netweb fits ("System": a system service), and a Void user may be the better
   maintainer. The `maintainer=` lines name the maintainer of this project; change them if
@@ -461,8 +461,8 @@ paho-mqtt 2.1.0 only up to Python 3.13, and no Authlib. FreeBSD's `devel/py-setu
   `optfeature` for the extras, `metadata.xml`, `Manifest` with the DIST line),
   `acct-user/ser2netweb` (home `/var/lib/ser2netweb` 0700, groups `dialout` and `uucp`, the
   serial ports' groups under systemd's and other udev rules) and `acct-group/ser2netweb`
-  (dynamic ids, as GURU's accounts have), and `dev-python/pyserial-asyncio-fast` (neither
-  ::gentoo nor GURU has it).
+  (dynamic ids, as GURU's accounts have). pyserial-asyncio-fast, which neither ::gentoo nor
+  GURU has, is left out (the built-in transport).
 - **Status:** `emerge --oneshot net-misc/ser2netweb` (USE=-test) from the overlay in
   `gentoo/stage3` with the portage snapshot of 2026-11-12; `pkgcheck scan` without errors or warnings; the OpenRC
   service starts, reloads and stops. GURU is `~amd64` only; so are Gentoo's Starlette,
@@ -477,10 +477,9 @@ paho-mqtt 2.1.0 only up to Python 3.13, and no Authlib. FreeBSD's `devel/py-setu
   contributors](https://wiki.gentoo.org/wiki/Project:GURU/Information_for_Contributors),
   ask for access in `#gentoo-guru` (Libera.Chat) or on the gentoo-guru mailing list with an
   SSH key, sign commits with an OpenPGP key and a `Signed-off-by:` line under the real name
-  (GLEP 76), then commit the four packages to `dev` (`acct-group/ser2netweb: new package,
-  add 0`, `acct-user/ser2netweb: new package, add 0`, `dev-python/pyserial-asyncio-fast: new
-  package, add 0.16`, `net-misc/ser2netweb: new package, add 3.0.0`) after `pkgcheck scan
-  --commits` and `pkgdev manifest`. The metadata names the maintainer of this project.
+  (GLEP 76), then commit the three packages to `dev` (`acct-group/ser2netweb: new package,
+  add 0`, `acct-user/ser2netweb: new package, add 0`, `net-misc/ser2netweb: new package, add
+  3.0.1`) after `pkgcheck scan --commits` and `pkgdev manifest`. The metadata names the maintainer of this project.
 
 ### FreeBSD ports
 
@@ -513,18 +512,17 @@ paho-mqtt 2.1.0 only up to Python 3.13, and no Authlib. FreeBSD's `devel/py-setu
 - **Files:** `net/ser2netweb/Portfile` (the github and python PortGroups,
   `python.default_version 314`, `depends_lib` on the py314 ports, the user `_ser2netweb`,
   `/opt/local/var/db/ser2netweb` 0700, a launchd startup item running as that user, the
-  `ldap` and `tls` variants) and `python/py-pyserial-asyncio-fast/Portfile`.
-- **Status:** `port lint --nitpick` clean (both), `port install` on macOS 26 (arm64) with
+  `ldap` and `tls` variants).
+- **Status:** `port lint --nitpick` clean, `port install` on macOS 26 (arm64) with
   MacPorts 2.12.7, `port load` starts it under launchd. **Missing in MacPorts:**
-  `py-pyserial-asyncio-fast` (its Portfile is here, submitted with it); `py-authlib` (no OIDC
+  `py-pyserial-asyncio-fast` (left out: the built-in transport); `py-authlib` (no OIDC
   variant); `py314-paho-mqtt` (`py-paho-mqtt` has Python 3.10 to 3.13 only: no MQTT
   variant until it gets 3.14).
 - **Build it:** install MacPorts, put `file:///path/to/packaging/macports` above the
   `rsync://…` line in `/opt/local/etc/macports/sources.conf`, run `portindex` in that
   folder, then `port lint --nitpick ser2netweb`, `sudo port install ser2netweb` and `sudo
   port load ser2netweb`.
-- **Submit** (a pull request to macports/macports-ports from a fork): two commits,
-  `py-pyserial-asyncio-fast: new port, version 0.16` and `ser2netweb: new port, version
-  3.0.0`, with the Portfiles at the same paths; the pull request's template asks for the
+- **Submit** (a pull request to macports/macports-ports from a fork): one commit,
+  `ser2netweb: new port, version 3.0.1`, with the Portfile at the same path; the pull request's template asks for the
   macOS and Xcode versions tested on and `port lint --nitpick` / `sudo port -vst install`.
   The maintainer is given by GitHub handle (`@haliskilic`) with `openmaintainer`.

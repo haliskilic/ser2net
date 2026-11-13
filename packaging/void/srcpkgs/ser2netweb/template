@@ -1,25 +1,31 @@
 # Template file for 'ser2netweb'
 pkgname=ser2netweb
-version=3.0.0
+version=3.0.1
 revision=1
 build_style=python3-pep517
 hostmakedepends="python3-setuptools"
+# pyserial-asyncio-fast is not in Void: ser2netweb runs on its built-in copy of that
+# library's serial transport (ser2netweb/engine/serial_transport.py); post_patch takes it
+# out of pyproject.toml, so the python dependency check agrees
 depends="python3-h11 python3-Jinja2 python3-MarkupSafe python3-psutil python3-pyserial
- python3-pyserial-asyncio-fast python3-python-multipart python3-starlette python3-uvicorn
- python3-websockets"
+ python3-python-multipart python3-starlette python3-uvicorn python3-websockets"
 checkdepends="${depends}"
 short_desc="Serial-to-network bridge with a web UI"
 maintainer="Halis KILIÇ <mail@haliskilic.com.tr>"
-license="AGPL-3.0-only, 0BSD, MIT"
+license="AGPL-3.0-only, BSD-3-Clause, 0BSD, MIT"
 homepage="https://github.com/haliskilic/ser2netweb"
 changelog="https://raw.githubusercontent.com/haliskilic/ser2netweb/main/CHANGELOG.md"
 distfiles="https://github.com/haliskilic/ser2netweb/archive/refs/tags/v${version}.tar.gz"
-checksum=b6610d614abce4071895f4a3d829da61cb87ddc7890034584a8ea5d71a60d0e5
+checksum=23dce72d41f2dddba7793aed0b31721c0608b2b3d8ce2e8347f2ee26e1a4c20b
 make_dirs="/var/lib/ser2netweb 0700 _ser2netweb _ser2netweb"
 system_accounts="_ser2netweb"
 _ser2netweb_homedir="/var/lib/ser2netweb"
 _ser2netweb_descr="ser2netweb serial-to-network bridge"
 _ser2netweb_groups="dialout"
+
+post_patch() {
+	vsed -i '/"pyserial-asyncio-fast>=/d' pyproject.toml
+}
 
 do_check() {
 	# The whole suite (tests/run_all.py) also compares the pinned versions of the

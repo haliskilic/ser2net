@@ -3,7 +3,7 @@
 # it in an Arch Linux container: .github/workflows/distro-packages.yml;
 # tools/bump_recipes.py moves it to a release and writes .SRCINFO).
 pkgname=ser2netweb
-pkgver=3.0.0
+pkgver=3.0.1
 pkgrel=1
 pkgdesc='Serial-to-network bridge with a web UI: raw TCP, telnet, RFC 2217, UDP, Modbus, MQTT'
 arch=('any')
@@ -35,7 +35,7 @@ source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz"
         'ser2netweb.service'
         'ser2netweb.sysusers'
         'ser2netweb.tmpfiles')
-sha256sums=('b6610d614abce4071895f4a3d829da61cb87ddc7890034584a8ea5d71a60d0e5'
+sha256sums=('23dce72d41f2dddba7793aed0b31721c0608b2b3d8ce2e8347f2ee26e1a4c20b'
             'ea1533c52dce4fec4766e55fd4edb6acaf499326d3fdab43bee75312bfbff11c'
             'ce8f251e7a9eaa83b45f3385087507969c348a5588355e3f537b31a133b61585'
             '2efcad1f7d0286c4555d9538f6f88d261e48ab1dd0308c3a63007084ac2cbefd')
