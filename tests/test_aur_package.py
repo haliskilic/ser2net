@@ -38,7 +38,9 @@ COMMITTED = os.path.join(ROOT, "packaging", "aur", "ser2netweb-bin")
 
 
 def _text(*parts: str) -> str:
-    with open(os.path.join(ROOT, *parts), encoding="utf-8", newline="") as fh:
+    # (universal newlines: a Windows checkout with core.autocrlf has CRLF line ends; the
+    # AUR files and their sha256 are the LF texts)
+    with open(os.path.join(ROOT, *parts), encoding="utf-8") as fh:
         return fh.read()
 
 
