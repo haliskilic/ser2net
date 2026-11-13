@@ -353,8 +353,9 @@ def test_release_starts_it():
                                    "needs.verify.outputs.prerelease != 'true'"), channels
     assert permissions(channels) == {"actions": "write"}, permissions(channels)
     assert "uses:" not in channels and "actions/checkout" not in channels
-    assert "for workflow in package-repo.yml; do" in channels
-    assert 'gh workflow run "$workflow" --ref main' in channels
+    loop = next(line for line in channels.splitlines() if "for workflow in" in line)
+    assert "package-repo.yml" in loop.split(), loop
+    assert 'gh workflow run "$workflow" --ref main -f tag="$GITHUB_REF_NAME"' in channels
     assert "channels" not in {n for job in release for n in needs(release[job])}
     # what it starts: on main, which the github-pages environment allows
     assert "\n  workflow_dispatch:\n" in read("package-repo.yml").split("\npermissions:", 1)[0]
