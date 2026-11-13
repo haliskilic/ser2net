@@ -9,7 +9,8 @@
   the latest release from its tag for the platforms :latest has (2.9.0 added linux/arm/v7,
   which an older tag can't build), pushes it by digest, smoke-tests that digest on each of
   them (arm/v7 under QEMU), and only then attests it and moves X.Y and latest (never X.Y.Z)
-  to it.
+  to it — under every name the release has: ghcr.io/<owner>/ser2netweb, and for the 3.x
+  line also ghcr.io/<owner>/ser2net (2.9.x and older: that one only).
 
 Run: python3 tests/test_image_refresh.py   (stdlib only)
 """
@@ -89,6 +90,8 @@ def test_refresh_workflow():
     assert 'echo "${GRYPE_SHA256}  grype.tar.gz" | sha256sum -c -' in scan
     assert "--only-fixed" in scan and "select(.level == \"error\")" in scan, "fixed HIGH/CRITICAL"
     assert "github/codeql-action/upload-sarif@" in scan
+    assert needs(scan) == ["check"] and "IMAGE: ${{ needs.check.outputs.image }}" in scan, \
+        "the latest release's image, under its own name"
 
     check = wf["check"]
     assert "write" not in permissions(check).values(), permissions(check)
@@ -104,6 +107,9 @@ def test_refresh_workflow():
     assert permissions(build) == {"contents": "read", "packages": "write"}, permissions(build)
     assert "ref: ${{ needs.check.outputs.tag }}" in build, "rebuilt from the release tag"
     assert "push-by-digest=true" in build and "\n          tags: ${{" not in build
+    assert 'type=image,"name=${{ needs.check.outputs.names }}",push-by-digest=true' in build
+    assert 'for image in ${NAMES//,/ }; do' in build, "the dry run covers every name"
+    assert 'echo "old-image=$old_image"; echo "names=$image${old_image:+,$old_image}"' in check
     assert "build-args: BASE_IMAGE=${{ needs.check.outputs.base }}@${{ needs.check.outputs.base-digest }}" in build
     assert "platforms: ${{ needs.check.outputs.platforms }}" in build, "what :latest has"
 
@@ -112,7 +118,8 @@ def test_refresh_workflow():
     assert "{ arch: amd64, runner: ubuntu-latest, platform: linux/amd64 }" in test
     assert "{ arch: arm64, runner: ubuntu-24.04-arm, platform: linux/arm64 }" in test
     assert "{ arch: arm/v7, runner: ubuntu-latest, platform: linux/arm/v7, qemu: true }" in test
-    assert 'tests/docker_smoke.sh "$REF"' in test and "ref: ${{ needs.check.outputs.tag }}" in test
+    assert 'tests/docker_smoke.sh "$REF" ${OLD_REF:+"$OLD_REF"}' in test
+    assert "ref: ${{ needs.check.outputs.tag }}" in test
     # a leg runs exactly when the rebuild has its platform
     assert ("BUILT: ${{ contains(format(',{0},', needs.check.outputs.platforms), "
             "format(',{0},', matrix.platform)) }}") in test
@@ -121,7 +128,10 @@ def test_refresh_workflow():
 
     tag = wf["tag"]
     assert {"build", "test"} <= transitive_needs(wf, "tag"), needs(tag)
-    assert "actions/attest-build-provenance@" in tag
+    assert tag.count("actions/attest-build-provenance@") == 2, "each name attested"
+    assert "subject-name: ${{ needs.check.outputs.old-image }}" in tag
+    assert "      - if: needs.check.outputs.old-image != ''\n" in tag, "(none before 3.0)"
+    assert 'for image in ${NAMES//,/ }; do' in tag, "the tags move under every name"
     assert '[ "$got" = "$DIGEST" ]' in tag, "the tags must point at the tested digest"
     for job, block in wf.items():
         if job != "build" and "packages" in permissions(block):

@@ -1,5 +1,5 @@
 # ser2netweb — serial-to-network bridge with a web admin UI.
-# Build:  docker build -t ser2net .
+# Build:  docker build -t ser2netweb .
 # Run:    docker compose up -d (docker-compose.yml), or the `docker run` command in
 #         docs/DOCKER.md: restart policy, mapping ports, serial devices, log limits.
 # The base: CPython 3.12 on Debian 13 "trixie" (what python:3.12-slim points at today). The
@@ -42,11 +42,12 @@ RUN set -e; \
 # ser2netweb runs as this unprivileged account (tools/docker-entrypoint.sh drops to it;
 # it also takes over a /data volume that an older, root-running image wrote). /data is
 # private from the start, so a new volume is that also with a folder mounted inside it
-# (ser2netweb locks only a data directory that holds nothing but its own files).
-RUN groupadd --system --gid 10001 ser2net \
- && useradd --system --uid 10001 --gid ser2net --home-dir /data --no-create-home \
-      --shell /usr/sbin/nologin ser2net \
- && mkdir -p /data && chown ser2net:ser2net /data && chmod 0700 /data
+# (ser2netweb locks only a data directory that holds nothing but its own files). Up to 2.9.x
+# the account was called ser2net; its uid/gid 10001 is the same, so volumes keep working.
+RUN groupadd --system --gid 10001 ser2netweb \
+ && useradd --system --uid 10001 --gid ser2netweb --home-dir /data --no-create-home \
+      --shell /usr/sbin/nologin ser2netweb \
+ && mkdir -p /data && chown ser2netweb:ser2netweb /data && chmod 0700 /data
 
 # (.dockerignore lets in only what the image runs, plus the license texts)
 COPY . .
