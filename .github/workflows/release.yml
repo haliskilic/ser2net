@@ -6,16 +6,16 @@ name: Release
 # test suites, the dependency audit, the Docker image and the standalone executables for
 # Linux x86_64 + arm64 and Windows x64 with every check on them — bundle contents,
 # empty-PATH run, clean AlmaLinux/Debian/Ubuntu/Fedora/openSUSE containers, the Windows
-# service) and push the Docker image (amd64, arm64, arm/v7) to GHCR by digest only, without
-# a tag, and smoke-test that digest on each architecture (arm/v7 under QEMU). Only when all
-# of it
-# passed publish: the release assets with SHA256SUMS, SBOMs, license texts and build
-# provenance, then the tags of the tested image (X.Y.Z, X.Y and latest; a pre-release,
-# vX.Y.Z-rc.N, only its own and marked as a pre-release). The image is
-# ghcr.io/<owner>/ser2netweb; the 3.x line also gets the same digest and tags under the
-# image's name up to 2.9.x, ghcr.io/<owner>/ser2net, so composes and auto-updaters on that
-# path keep getting releases. The write permissions belong to the publish jobs alone (and
-# the untagged push).
+# service, the .deb / .rpm packages of the Linux ones installed in clean containers) and
+# push the Docker image (amd64, arm64, arm/v7) to GHCR by digest only, without a tag, and
+# smoke-test that digest on each architecture (arm/v7 under QEMU). Only when all of it
+# passed publish: the release assets (the executables, the packages) with SHA256SUMS,
+# SBOMs, license texts and build provenance, then the tags of the tested image (X.Y.Z, X.Y
+# and latest; a pre-release, vX.Y.Z-rc.N, only its own and marked as a pre-release). The
+# image is ghcr.io/<owner>/ser2netweb; the 3.x line also gets the same digest and tags
+# under the image's name up to 2.9.x, ghcr.io/<owner>/ser2net, so composes and
+# auto-updaters on that path keep getting releases. The write permissions belong to the
+# publish jobs alone (and the untagged push).
 #
 # Actions -> Release -> Run workflow is a dry run on any branch: the same jobs check the
 # tag the current version gets, run CI, build, push and test the image, and assemble the
@@ -253,6 +253,11 @@ jobs:
         with:
           pattern: meta-*
           path: artifacts
+      # the .deb / .rpm packages standalone.yml built from these binaries (and tested)
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8.0.2
+        with:
+          name: packages-linux
+          path: artifacts/packages
       # (ser2net-* up to 2.9.x; a release has no file under the old names)
       - name: Name the release assets, SHA256SUMS
         run: |
@@ -271,6 +276,9 @@ jobs:
           # (README: Run as a service)
           cp systemd/ser2netweb-standalone.service out/ser2netweb-standalone.service
           cp systemd/ser2netweb-install.sh out/ser2netweb-install.sh
+          # ser2netweb_X.Y.Z_<arch>.deb, ser2netweb-X.Y.Z-1.<arch>.rpm (the guard below
+          # checks they are exactly this version's four)
+          cp artifacts/packages/* out/
           cd out
           sha256sum * > SHA256SUMS
           cat SHA256SUMS
@@ -286,6 +294,8 @@ jobs:
             out/ser2netweb-linux-x64
             out/ser2netweb-linux-arm64
             out/ser2netweb-windows-x64.exe
+            out/ser2netweb_*.deb
+            out/ser2netweb-*.rpm
       - name: SBOM attestation (Linux x64)
         if: github.event_name == 'push'
         uses: actions/attest-sbom@c604332985a26aa8cf1bdc465b92731239ec6b9e  # v4.1.0

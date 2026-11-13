@@ -20,9 +20,10 @@
 * a manual run (workflow_dispatch) is a dry run: it checks, builds and tests the same way
   but attests, releases and tags nothing, and neither waits for nor blocks a release.
 * the release files are the ser2netweb-* names tools/release_guard.py lists (ser2net-* up
-  to 2.9.x, none of which a release has any more), checked by its `assets` and `sboms`
+  to 2.9.x, none of which a release has any more) and the .deb / .rpm packages
+  standalone.yml built from the released binaries, checked by its `assets` and `sboms`
   guards before anything is attested; every executable gets its provenance and SBOM
-  attestation.
+  attestation, every package its provenance.
 
 Run: python3 tests/test_release_pipeline.py   (stdlib only)
 """
@@ -225,6 +226,12 @@ def test_release_files_named():
     name_step = next(st for st in steps(attest) if "Name the release assets" in st)
     made = set(re.findall(r'(?m)^\s+cp \S+ "?out/([^"\s]+)"?$', name_step))
     made = {m.replace("$arch", arch) for m in made for arch in ("x64", "arm64")}
+    # the packages: as standalone.yml's packages job names them (its artifact, whole)
+    assert "\n          cp artifacts/packages/* out/\n" in name_step, name_step
+    made |= set(release_guard.release_packages())
+    download = next(st for st in steps(attest) if "name: packages-linux" in st)
+    assert "path: artifacts/packages\n" in download, download
+    assert "name: packages-linux\n" in jobs(read("standalone.yml"))["packages"]
     want = set(release_guard.release_assets())
     assert made | {"SHA256SUMS"} == want, sorted(made ^ want)
     assert "sha256sum * > SHA256SUMS" in name_step, name_step
@@ -237,11 +244,13 @@ def test_release_files_named():
     provenance = next(st for st in order if "actions/attest-build-provenance@" in st)
     for exe in release_guard.RELEASE_EXECUTABLES:
         assert f"            out/{exe}\n" in provenance, exe
+    for pattern in ("out/ser2netweb_*.deb", "out/ser2netweb-*.rpm"):
+        assert f"            {pattern}\n" in provenance, pattern
         stem = exe.removesuffix(".exe")
         assert any(f"subject-path: out/{exe}\n          sbom-path: out/{stem}.cdx.json\n" in st
                    for st in order), f"no SBOM attestation for {exe}"
-    print(f"the release files are release_guard's {len(want)} ser2netweb-* names, checked "
-          "before they are attested; every executable has both attestations  OK")
+    print(f"the release files are release_guard's {len(want)} names, checked before they are "
+          "attested; every executable has both attestations, every package its provenance  OK")
 
 
 if __name__ == "__main__":
