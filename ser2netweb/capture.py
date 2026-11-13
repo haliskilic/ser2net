@@ -9,8 +9,10 @@ The end time is stored in the mapping's options (trace_until, Unix seconds), so 
 goes on after a restart and ends on time; one whose time passed while ser2netweb was not
 running ends before the mappings start. While this process runs the time left is counted
 on the monotonic clock: a step of the system clock neither cuts a capture short nor keeps
-it going. However trace_until was set (a REST PUT, an import, a restored backup), a
-capture never lasts longer than CAPTURE_MAX_S from when this process first saw it.
+it going. trace_until is no setting: the edits (the form, a REST POST / PUT / PATCH, an
+import, a Copy) keep a mapping's own and give a new one none. However it was set anyway (by
+hand in config.json, a restored backup), a capture never lasts longer than CAPTURE_MAX_S
+from when this process first saw it.
 
 Only a mapping whose trace is off can be captured: its traffic goes to
 traces/<id>-capture.log. A mapping that traces already (a trace file name in its

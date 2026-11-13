@@ -1221,8 +1221,9 @@ siler (açık bir trace yeni bir dosyada sürer). `{"minutes": n}` (1 - 1440) g�
 `POST /mappings/{id}/capture`, Trace panelindeki gibi süreli bir kayıt başlatır; kayıt
 sürerken yeniden gönderilirse yeni bitiş zamanı geçerli olur, `DELETE .../capture` kaydı
 bitirir; `trace_both` ile zaten kaydedilen bir eşleme `409` yanıtı verir.
-`options.trace_until` alanını içermeyen bir `PUT`, süren kaydı bitirir (ve her değişiklik
-gibi eşlemeyi yeniden başlatır); başka alanların `PATCH`'i kaydı korur.
+`options.trace_until` (kaydın bitiş zamanı) salt okunurdur: `PUT`, `PATCH` ya da
+`POST /mappings` gövdesindeki değeri yok sayar (onu içermeyen bir `PUT` kaydı korur), içe
+aktarmalar da öyle; bir eşlemenin kopyasında süreli kayıt olmaz.
 `GET /mappings/{id}` eşlemenin revizyonunu `ETag` olarak verir: bunu bir `PUT` ya da
 `DELETE` ile `If-Match` olarak geri gönderirsen eşleme yalnızca o zamandan beri kimse
 değiştirmediyse değişir (yoksa `412`, `precondition_failed`); `If-Match` olmadan eskisi gibi

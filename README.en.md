@@ -1172,8 +1172,9 @@ too, and a viewer gets no Trace panel in the web UI either (`403` for a viewer t
 that is on goes on in a new file). `POST /mappings/{id}/capture` with `{"minutes": n}`
 (1 to 1440) starts a timed recording as the Trace panel does, again while one runs sets a
 new end, `DELETE .../capture` ends it; a mapping that is traced by its `trace_both` answers
-`409`. A `PUT` that leaves `options.trace_until` out ends a running capture (and restarts the
-mapping, like any change); a `PATCH` of other fields keeps it.
+`409`. `options.trace_until` (when the capture ends) is read-only: a `PUT`, `PATCH` or
+`POST /mappings` ignores what its body has there (a `PUT` without it keeps the capture),
+and so do imports; a copy of a mapping has no capture.
 `GET /mappings/{id}` answers the mapping's revision in `ETag`: send it back in `If-Match`
 with a `PUT` or `DELETE` to change the mapping only if nobody changed it since (else `412`,
 `precondition_failed`); without `If-Match` they work as before.

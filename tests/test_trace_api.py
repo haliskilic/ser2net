@@ -14,8 +14,11 @@ Checks:
     file is closed, trace_until cleared, audited as trace_capture_end); one whose time
     passed while the server was down is ended before the mapping starts (no file); the
     end of a capture never turns off a trace that is on by its trace file name;
-  * a config.json without trace_until loads as before, and an edit form saved while a
-    capture runs keeps it.
+  * a config.json without trace_until loads as before; it is no setting: an edit form
+    saved while a capture runs, a REST PUT (of what a GET answered, without it or with
+    another value) and a PATCH that names it keep the stored one (and the runner), a REST
+    create, a Copy and a new mapping of an import have none, an import keeps a mapping's
+    own.
 
 Run: python3 tests/test_trace_api.py
 """
@@ -29,9 +32,10 @@ import time
 import urllib.error
 import urllib.request
 
+from _formsubmit import browser_post
 from _server import Browser, Server, free_port
 
-from ser2netweb import capture
+from ser2netweb import capture, importer
 from ser2netweb.config import CAPTURE_MAX_S, MappingConfig, mapping_revision
 from ser2netweb.engine import bridge
 from ser2netweb.engine.supervisor import Supervisor
@@ -206,14 +210,43 @@ def test_capture_live():
         # again: the new end replaces the old
         st, _, body = api(srv, "POST", f"/mappings/{B}/capture", body={"minutes": 60})
         assert st == 200 and json.loads(body)["capture_until"] > time.time() + 3500
+        st, _, body = api(srv, "PATCH", f"/mappings/{B}", body={"name": "B2"})
+        assert st == 200 and json.loads(body)["options"]["trace_until"] > time.time() + 3500
+        wait(lambda: os.path.isfile(capture_file), "traced again after the edit")
+        until = stored(srv, B)["trace_until"]
         # an edit form saved meanwhile keeps the capture
         op = Browser(srv.base)
         op.login("op", PW)
         st, _, form = op.get(f"/api/mappings/{B}/form")
-        assert st == 200
-        st, _, body = api(srv, "PATCH", f"/mappings/{B}", body={"name": "B2"})
-        assert st == 200 and json.loads(body)["options"]["trace_until"] > time.time() + 3500
-        wait(lambda: os.path.isfile(capture_file), "traced again after the edit")
+        assert st == 200 and "trace_until" not in form
+        st, _, body = op.post("/api/mappings/save", dict(browser_post(form)), htmx=True)
+        assert st == 200 and stored(srv, B)["trace_until"] == until, (st, body[:300])
+        # trace_until is no setting: a PUT of what a GET answered, one without it or with
+        # another value, and a PATCH that names it keep the stored one and the runner
+        got = json.loads(api(srv, "GET", f"/mappings/{B}")[2])
+        got.pop("status")
+        for value in (0, until + 9999, None):
+            sent = json.loads(json.dumps(got))
+            if value is None:
+                del sent["options"]["trace_until"]
+            else:
+                sent["options"]["trace_until"] = value
+            st, _, body = api(srv, "PUT", f"/mappings/{B}", body=sent)
+            assert st == 200 and json.loads(body)["changed"] is False, (value, st, body[:300])
+            assert stored(srv, B)["trace_until"] == until, value
+        st, _, body = api(srv, "PATCH", f"/mappings/{B}", body={"options": {"trace_until": 0}})
+        assert st == 200 and json.loads(body)["changed"] is False, body[:300]
+        assert stored(srv, B)["trace_until"] == until and os.path.isfile(capture_file)
+        # ... and a new mapping (REST create, the dashboard's Copy) has none
+        st, _, body = api(srv, "POST", "/mappings", body={
+            **mapping("x", "made", trace_until=until), "enabled": False})
+        made = json.loads(body)
+        assert st == 201 and made["options"]["trace_until"] == 0, (st, body[:300])
+        assert api(srv, "DELETE", f"/mappings/{made['id']}")[0] == 200
+        assert op.post(f"/api/mappings/{B}/duplicate", htmx=True)[0] == 200
+        copy = next(m for m in srv.saved_config()["mappings"] if m["name"] == "B2 (copy)")
+        assert copy["options"]["trace_until"] == 0, copy["options"]
+        assert api(srv, "DELETE", f"/mappings/{copy['id']}")[0] == 200
         st, _, body = api(srv, "DELETE", f"/mappings/{B}/capture", VIEW)
         assert st == 403
         st, _, body = api(srv, "DELETE", f"/mappings/{B}/capture")
@@ -430,6 +463,19 @@ def test_units():
             assert await sup.retrace("nosuch") is False
 
     asyncio.run(another_object())
+
+    # an import keeps a mapping's own capture end and brings none for a new one
+    when = 4102444800.0
+    current = [MappingConfig.from_dict({"id": "k1", "name": "k1",
+                                        "options": {"trace_until": when}})]
+    incoming = [MappingConfig.from_dict({"id": "k1", "name": "k1"}),
+                MappingConfig.from_dict({"id": "k2", "name": "k2",
+                                         "options": {"trace_until": when}})]
+    for mode in importer.MODES:
+        result, touched = importer.apply_import(current, incoming, mode)
+        assert {m.id: m.options.trace_until for m in result} == {"k1": when, "k2": 0}, mode
+        if mode == "merge":
+            assert [m.id for m in touched] == ["k2"], "k1 is unchanged: its runner stays"
     print("units: trace_until loads leniently and is no part of the revision; a capture "
           "is bounded and counted on the monotonic clock; the trace is hot-swapped  OK")
 

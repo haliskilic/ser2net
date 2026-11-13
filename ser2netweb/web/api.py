@@ -172,6 +172,7 @@ def build_api_routes(state: AppState) -> list[Route]:
         body.pop("id", None)         # the server assigns the id
         try:
             mapping = MappingConfig.from_dict(body)
+            mapping.options.trace_until = 0.0  # (no setting: POST .../capture begins one)
             mapping.validate()
             mapping.validate_input()
             await _check_tls_files(mapping)
@@ -227,6 +228,8 @@ def build_api_routes(state: AppState) -> list[Route]:
                     raise ops.StaleRevision(mid)
                 if existing and mapping.mqtt.password == REDACTED:  # what a viewer token reads
                     mapping.mqtt.password = existing.mqtt.password
+                if existing:  # a timed capture's end is no setting: .../capture changes it
+                    mapping.options.trace_until = existing.options.trace_until
                 # the same settings again: nothing to save, its runner stays as it is
                 if existing and existing.to_dict() != mapping.to_dict():
                     state.config.mappings[state.config.mappings.index(existing)] = mapping
@@ -282,6 +285,8 @@ def build_api_routes(state: AppState) -> list[Route]:
                         mapping.network.tls_key_password = existing.network.tls_key_password
                     if mapping.mqtt.client_key_password == REDACTED:
                         mapping.mqtt.client_key_password = existing.mqtt.client_key_password
+                    # a timed capture's end is no setting: .../capture changes it
+                    mapping.options.trace_until = existing.options.trace_until
                     mapping.validate()
                     mapping.validate_input()
                     await _check_tls_files(mapping)
@@ -585,8 +590,10 @@ _NOTES = {
     ("MappingConfig", "id"): "Assigned by the server (1-64 letters, digits or _); "
                              "ignored in a request body.",
     ("MappingConfig", "enabled"): "Run the mapping. Left out of a POST or PUT: true.",
-    ("MappingOptions", "trace_until"): "When a timed capture ends (Unix time; 0 = none): "
-                                       "set by POST /mappings/{mid}/capture.",
+    ("MappingOptions", "trace_until"): "When a timed capture ends (Unix time; 0 = none). "
+                                       "Read-only: POST and DELETE /mappings/{mid}/capture "
+                                       "change it; a value in a POST, PUT or PATCH body is "
+                                       "ignored (the stored one stays).",
     ("MappingConfig", "serial_b"): "The second serial port of a serialbridge mapping.",
     ("MappingConfig", "network"): "The network side of a net mapping.",
     ("SerialSettings", "port"): "The serial device (COM3, /dev/ttyUSB0, ...); required. "
@@ -607,6 +614,8 @@ _NOTES = {
                                              "******** for a viewer token; sent back so in a "
                                              "PUT or PATCH, the stored one stays.",
 }
+# fields the server sets: what a request body has for them is ignored
+_READ_ONLY = {("MappingOptions", "trace_until")}
 _JSON_TYPES = {str: "string", int: "integer", float: "number", bool: "boolean"}
 
 
@@ -633,6 +642,8 @@ def _field_schema(cls, f, hint) -> dict:
         out["enum"] = list(_ENUMS[cls.__name__, f.name])
     if (cls.__name__, f.name) in _NOTES:
         out["description"] = _NOTES[cls.__name__, f.name]
+    if (cls.__name__, f.name) in _READ_ONLY:
+        out["readOnly"] = True
     return out
 
 
