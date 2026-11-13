@@ -137,11 +137,21 @@ def service_command(name: str, data_dir: str, config: Optional[str] = None,
     executable = executable or sys.executable
     parts = [executable]
     if not frozen:
-        parts.append(script or os.path.abspath(sys.argv[0]))
+        parts.append(script or start_script(sys.argv[0]))
     parts += ["--service", "--service-name", check_name(name), "--data-dir", data_dir]
     if config:
         parts += ["--config", config]
     return " ".join(_quote(p) for p in parts)
+
+
+def start_script(argv0: str) -> str:
+    """The script a source checkout's service runs: the one this process started from
+    (ser2netweb.py, or ser2net.py, its 2.9.x name), but ser2netweb.py next to the package for
+    `python -m ser2netweb`, whose ser2netweb/__main__.py doesn't run as a script."""
+    path = os.path.abspath(argv0)
+    if os.path.basename(path) == "__main__.py":
+        return os.path.join(os.path.dirname(os.path.dirname(path)), "ser2netweb.py")
+    return path
 
 
 def display_name(name: str) -> str:

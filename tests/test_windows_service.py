@@ -62,6 +62,12 @@ def test_command_line():
     assert cmd == ('C:\\Python312\\python.exe C:\\src\\ser2netweb.py --service --service-name plant-2 '
                    '--data-dir D:\\s2n\\ --config "D:\\cfg dir\\c.json"'), cmd
     assert winservice._quote('a "b"\\') == '"a \\"b\\"\\\\"'
+    # python -m ser2netweb: the service runs ser2netweb.py beside the package, not __main__.py
+    src = os.path.abspath(os.path.join(os.sep, "src"))
+    assert winservice.start_script(os.path.join(src, "ser2netweb", "__main__.py")) == \
+        os.path.join(src, "ser2netweb.py")
+    for script in ("ser2netweb.py", "ser2net.py"):
+        assert winservice.start_script(os.path.join(src, script)) == os.path.join(src, script)
     for bad in ("", "a b", "x" * 65, "a/b", "ser2netweb;calc"):
         try:
             winservice.check_name(bad)
