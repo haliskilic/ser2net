@@ -323,7 +323,7 @@ paho-mqtt 2.1.0 only up to Python 3.13, and no Authlib. FreeBSD's `devel/py-setu
   (dynamic ids, as GURU's accounts have), and `dev-python/pyserial-asyncio-fast` (neither
   ::gentoo nor GURU has it).
 - **Status:** `emerge --oneshot net-misc/ser2netweb` (USE=-test) from the overlay in
-  `gentoo/stage3` with the portage snapshot of 2026-11-12; `pkgcheck scan` clean; the OpenRC
+  `gentoo/stage3` with the portage snapshot of 2026-11-12; `pkgcheck scan` without errors or warnings; the OpenRC
   service starts, reloads and stops. GURU is `~amd64` only; so are Gentoo's Starlette,
   websockets and python-multipart.
 - **Build it:** make `packaging/gentoo` an overlay (`profiles/repo_name`,
