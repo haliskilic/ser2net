@@ -824,7 +824,7 @@ Without compose, use the `docker run` command in
 limits).
 Published image (every release; amd64, arm64, and arm/v7 for 32-bit ARM such as 32-bit
 Raspberry Pi OS): `docker pull ghcr.io/haliskilic/ser2netweb:latest`
-(or `:2.9`, `:2.9.0`); `docker-compose.yml` uses it. Up to 2.9.x the image was
+(or `:3.0`, `:3.0.0`); `docker-compose.yml` uses it. Up to 2.9.x the image was
 `ghcr.io/haliskilic/ser2net`, where the 3.x releases are published too (the same image);
 moving a 2.9.x container or compose file over: [`docs/DOCKER.md`](docs/DOCKER.md#upgrading-from-29x). Between releases `:latest` and `:X.Y`
 are rebuilt on a newer Debian/Python base when it changes (weekly check; `:X.Y.Z` stays as

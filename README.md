@@ -853,7 +853,7 @@ komutunu kullanın (hazır imaj, `--restart unless-stopped`, `--init`, eşleme p
 `/dev/serial/by-id` cihaz yolu, log sınırı).
 Hazır imaj (her sürümde; amd64, arm64 ve 32-bit Raspberry Pi OS gibi 32-bit ARM için
 arm/v7): `docker pull ghcr.io/haliskilic/ser2netweb:latest`
-(ya da `:2.9`, `:2.9.0`); `docker-compose.yml` bunu kullanır. 2.9.x'e kadar imaj
+(ya da `:3.0`, `:3.0.0`); `docker-compose.yml` bunu kullanır. 2.9.x'e kadar imaj
 `ghcr.io/haliskilic/ser2net` idi; 3.x sürümleri oraya da (aynı imaj olarak) yayımlanır.
 2.9.x'ten kalan bir container'ı ya da compose dosyasını taşımak:
 [`docs/DOCKER.md`](docs/DOCKER.md#upgrading-from-29x). Sürümler arasında Debian/Python
