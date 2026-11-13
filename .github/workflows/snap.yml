@@ -6,7 +6,7 @@ name: Snap
 # (snapcore/action-build), and the snap is installed on the runner and tested
 # (tests/snap_smoke.sh: the command, the service off until enabled, the interfaces, /healthz,
 # snap set). Then it is uploaded to the Snap Store and released to a channel with the secret
-# SNAPCRAFT_STORE_CREDENTIALS (snapcraft export-login, README: Snap); without it the upload
+# SNAPCRAFT_STORE_CREDENTIALS (made with snapcraft export-login, below); without it the upload
 # is skipped with a notice. To set it up: register the name once (snapcraft login, snapcraft
 # register ser2netweb, on an account of https://snapcraft.io), then
 #   snapcraft export-login --snaps=ser2netweb \
