@@ -37,8 +37,10 @@ def test_detect():
     pkg = os.path.join(ROOT, "ser2netweb")
     assert layout.detect(False, sys.executable, pkg) == layout.SOURCE
     assert layout.kind() == layout.SOURCE, "this checkout"
-    assert layout.detect(True, "/usr/bin/ser2netweb", "/tmp/_MEI1/ser2netweb",
-                         platform="linux") == layout.PACKAGE
+    # (Linux paths: the same answer on every OS the test runs on)
+    for exe in ("/usr/bin/ser2netweb", "/usr/bin/../bin/ser2netweb"):
+        assert layout.detect(True, exe, "/tmp/_MEI1/ser2netweb", platform="linux") == \
+            layout.PACKAGE, exe
     for exe, plat in (("/usr/local/bin/ser2netweb", "linux"), ("/opt/x/ser2netweb", "linux"),
                       ("/usr/bin/ser2netweb", "darwin"),
                       (r"C:\Program Files\ser2netweb\ser2netweb.exe", "win32")):

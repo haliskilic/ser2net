@@ -53,7 +53,9 @@ def detect(frozen: bool, executable: str, package_dir: str,
     """The kind of installation (SOURCE, STANDALONE, PACKAGE or PIP) of a copy whose package
     is `package_dir`, run by `executable`."""
     if frozen:
-        if platform.startswith("linux") and os.path.abspath(executable) == PACKAGE_EXECUTABLE:
+        # (a Linux path, compared as one whatever OS this runs on; a frozen executable's
+        # sys.executable is absolute)
+        if platform.startswith("linux") and posixpath.normpath(executable) == PACKAGE_EXECUTABLE:
             return PACKAGE
         return STANDALONE
     parent = os.path.dirname(os.path.abspath(package_dir))
