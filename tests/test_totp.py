@@ -1,12 +1,12 @@
 """Two-factor sign-in (TOTP) for local accounts.
 
-  * app/web/totp.py gives the RFC 4226 / RFC 6238 test vectors (stdlib only), accepts the
+  * ser2netweb/web/totp.py gives the RFC 4226 / RFC 6238 test vectors (stdlib only), accepts the
     current time step and one either side, never a step at or before the last one accepted
     (replay guard), takes a code typed with spaces, and matches nothing for a bad secret;
   * config: totp_secret is written only when set (a config.json without it stays as it
     was), a hand-edited one is normalized, an unusable one is noted at start-up (the account
     can't sign in: fail closed);
-  * `ser2net --set-password NAME` (the recovery command, also while ser2net runs) turns the
+  * `ser2netweb --set-password NAME` (the recovery command, also while ser2netweb runs) turns the
     account's two-factor sign-in off with the new password; undone if saving fails;
   * sign-in: the right password of an account with two-factor sign-in gives no session but
     the code step (/auth/totp); a wrong code is refused (and recorded), the right one gives
@@ -29,10 +29,10 @@ import time
 
 from _server import ROOT, Browser, Server
 
-from app import accounts
-from app.config import AppConfig, User
-from app.web import totp
-from app.web.auth import hash_password
+from ser2netweb import accounts
+from ser2netweb.config import AppConfig, User
+from ser2netweb.web import totp
+from ser2netweb.web.auth import hash_password
 
 PW = "totp-pass-1"
 NEW_PW = "totp-pass-2"
@@ -69,8 +69,8 @@ def test_algorithm():
     fresh = totp.new_secret()
     assert totp.is_secret(fresh) and len(fresh) == 32, fresh
     uri = totp.otpauth_uri(fresh, "jo smith")
-    assert uri.startswith("otpauth://totp/ser2net%3Ajo%20smith?secret=" + fresh), uri
-    assert "issuer=ser2net" in uri and "period=30" in uri and "digits=6" in uri
+    assert uri.startswith("otpauth://totp/ser2netweb%3Ajo%20smith?secret=" + fresh), uri
+    assert "issuer=ser2netweb" in uri and "period=30" in uri and "digits=6" in uri
     assert totp.grouped("ABCDEFGHIJ") == "ABCD EFGH IJ"
     print("totp: RFC 4226 / 6238 vectors, ±1 step, replay guard, spaces, bad secrets  OK")
 
@@ -237,8 +237,8 @@ def test_live():
         print("sign-in: 5 wrong codes for an account -> refused for a while, even the right "
               "code  OK")
 
-        # ---- recovery: --set-password turns it off, while ser2net runs ----
-        p = subprocess.run([sys.executable, "ser2net.py", "--no-bootstrap", "--data-dir", srv.data,
+        # ---- recovery: --set-password turns it off, while ser2netweb runs ----
+        p = subprocess.run([sys.executable, "ser2netweb.py", "--no-bootstrap", "--data-dir", srv.data,
                             "--set-password", "admin"], cwd=ROOT, capture_output=True, text=True,
                            timeout=120, input=NEW_PW + "\n", env=srv.env)
         assert p.returncode == 0 and "two-factor sign-in was turned off" in p.stdout, p.stdout + p.stderr
@@ -248,7 +248,7 @@ def test_live():
         fresh.login("admin", NEW_PW)   # no code step any more
         assert b.get("/")[0] == 303, "the admin's sessions were ended"
         assert "two-factor sign-in off" in open(srv.data + "/audit.log", encoding="utf-8").read()
-        print("recovery: ser2net --set-password turns two-factor sign-in off (running "
+        print("recovery: ser2netweb --set-password turns two-factor sign-in off (running "
               "instance), the new password alone signs in  OK")
         assert json.dumps(srv.saved_config()).count("totp_secret") == 0
 

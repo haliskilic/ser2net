@@ -1,4 +1,4 @@
-# ser2net — serial-to-network bridge with a web admin UI.
+# ser2netweb — serial-to-network bridge with a web admin UI.
 # Build:  docker build -t ser2net .
 # Run:    docker compose up -d (docker-compose.yml), or the `docker run` command in
 #         docs/DOCKER.md: restart policy, mapping ports, serial devices, log limits.
@@ -39,10 +39,10 @@ RUN set -e; \
         pip install --no-cache-dir --require-hashes --only-binary=:all: -r requirements-lock.txt; \
     fi
 
-# ser2net runs as this unprivileged account (tools/docker-entrypoint.sh drops to it;
+# ser2netweb runs as this unprivileged account (tools/docker-entrypoint.sh drops to it;
 # it also takes over a /data volume that an older, root-running image wrote). /data is
 # private from the start, so a new volume is that also with a folder mounted inside it
-# (ser2net locks only a data directory that holds nothing but its own files).
+# (ser2netweb locks only a data directory that holds nothing but its own files).
 RUN groupadd --system --gid 10001 ser2net \
  && useradd --system --uid 10001 --gid ser2net --home-dir /data --no-create-home \
       --shell /usr/sbin/nologin ser2net \
@@ -53,9 +53,9 @@ COPY . .
 # Compile the app once here: the server runs as an unprivileged user that can't write
 # /app, so it would otherwise compile every module in memory at each start. checked-hash
 # .pyc files stay valid whatever timestamps the layers keep, and are checked against the
-# source, so sources mounted over /app/app are still used.
+# source, so sources mounted over /app/ser2netweb are still used.
 RUN chmod 0755 /app/tools/docker-entrypoint.sh \
- && python -m compileall -q -j0 --invalidation-mode checked-hash /app/app
+ && python -m compileall -q -j0 --invalidation-mode checked-hash /app/ser2netweb
 
 # Config + logs live on a volume so they survive container recreation.
 VOLUME ["/data"]
@@ -64,11 +64,14 @@ EXPOSE 8080
 # Bind the admin UI to all interfaces inside the container (the container network
 # boundary + the published port are the real perimeter). Always set an admin
 # password on first access, and put TLS in front for untrusted networks.
+# These defaults use the variables' names up to 2.9.x on purpose: SER2NETWEB_BIND_IP /
+# SER2NETWEB_PORT win over them, and a SER2NET_BIND_IP / SER2NET_PORT set with
+# `docker run -e` or in a compose file replaces them, so a setting under either name works.
 ENV SER2NET_BIND_IP=0.0.0.0 \
     SER2NET_PORT=8080
 
 # "healthy" once the web UI answers on /healthz (also before the first-run setup)
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
-  CMD ["python", "/app/ser2net.py", "--no-bootstrap", "--data-dir", "/data", "--healthcheck"]
+  CMD ["python", "/app/ser2netweb.py", "--no-bootstrap", "--data-dir", "/data", "--healthcheck"]
 
 ENTRYPOINT ["/app/tools/docker-entrypoint.sh"]

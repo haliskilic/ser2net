@@ -1,4 +1,4 @@
-"""What ser2net keeps on disk (app/storage.py):
+"""What ser2netweb keeps on disk (ser2netweb/storage.py):
   * the clock retention goes by never runs ahead of the time the process has run, so a
     clock stepped ahead deletes nothing early;
   * the data disk's free space (shutil.disk_usage faked: no disk is filled): going below
@@ -23,11 +23,11 @@ from _server import Browser, Server
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "lib"))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-import app.state as state_mod
-from app import notify, storage
-from app.config import AppConfig, ConfigStore, MappingConfig, NotificationSettings
-from app.web.auth import hash_password
-from app.state import AppState
+import ser2netweb.state as state_mod
+from ser2netweb import notify, storage
+from ser2netweb.config import AppConfig, ConfigStore, MappingConfig, NotificationSettings
+from ser2netweb.web.auth import hash_password
+from ser2netweb.state import AppState
 
 YEAR = 365 * 86400
 
@@ -144,7 +144,7 @@ async def _disk_watch():
 
 
 def notify_default():
-    from app.config import NOTIFY_DEFAULT_EVENTS
+    from ser2netweb.config import NOTIFY_DEFAULT_EVENTS
     assert "disk_low" not in NOTIFY_DEFAULT_EVENTS
     return NOTIFY_DEFAULT_EVENTS
 

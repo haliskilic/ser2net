@@ -43,9 +43,9 @@ import urllib.request
 from _optional import need
 from _server import Browser, Server, _NoRedirect, free_port, ui_cookie
 
-from app.config import OidcSettings
-from app.web import auth, oidc_auth
-from app.web.auth import hash_password
+from ser2netweb.config import OidcSettings
+from ser2netweb.web import auth, oidc_auth
+from ser2netweb.web.auth import hash_password
 
 PW = "proxy-pass-1"
 MID = "m1"
@@ -77,14 +77,14 @@ def test_matcher() -> None:
     assert auth.cross_site(headers(origin="https://s2n.example.com",
                                    host="s2n.example.com:443")) == ""
     assert auth.cross_site(headers(origin="http://[::1]:8080", host="[::1]:8080")) == ""
-    assert auth.cross_site(headers(origin="https://s2n.example.com", host="ser2net:8080",
+    assert auth.cross_site(headers(origin="https://s2n.example.com", host="ser2netweb:8080",
                                    x_forwarded_host="s2n.example.com")) == ""
     assert auth.cross_site(headers(origin="https://gw.example.com:8443", host="127.0.0.1:8080",
                                    forwarded='for=10.0.0.9;host="gw.example.com:8443"')) == ""
     assert auth.cross_site(headers(origin="https://gw.example.com:8443", host="gw.example.com"))
     # the browser's word: same-origin (also behind a proxy that rewrites Host) / none
     assert auth.cross_site(headers(sec_fetch_site="same-origin", origin="https://a.example",
-                                   host="ser2net:8080")) == ""
+                                   host="ser2netweb:8080")) == ""
     assert auth.cross_site(headers(sec_fetch_site="cross-site", origin="http://h:1", host="h:1"))
     assert auth.cross_site(headers(sec_fetch_site="same-site", origin="http://h:1", host="h:1"))
     # an address the UI is published under (also=): that origin only
@@ -124,10 +124,10 @@ def test_websockets(srv) -> None:
             ("same origin", {"Origin": "http://" + own}),
             ("no Origin (a script)", {}),
             ("browser says same-origin, Host rewritten",
-             {"Host": "ser2net:8080", "Origin": "https://s2n.example.com",
+             {"Host": "ser2netweb:8080", "Origin": "https://s2n.example.com",
               "Sec-Fetch-Site": "same-origin"}),
             ("Host rewritten, X-Forwarded-Host",
-             {"Host": "ser2net:8080", "Origin": "https://s2n.example.com",
+             {"Host": "ser2netweb:8080", "Origin": "https://s2n.example.com",
               "X-Forwarded-Host": "s2n.example.com", "X-Forwarded-Proto": "https"}),
             ("Host rewritten, Forwarded host=",
              {"Host": "127.0.0.1:8080", "Origin": "https://gw.example.com:8443",
@@ -141,10 +141,10 @@ def test_websockets(srv) -> None:
             ("another port", {"Origin": f"http://127.0.0.1:{srv.port + 1}"}),
             ("another host", {"Origin": "http://attacker.example"}),
             ("Origin null", {"Origin": "null"}),
-            ("Host rewritten, no X-Forwarded-Host", {"Host": "ser2net:8080",
+            ("Host rewritten, no X-Forwarded-Host", {"Host": "ser2netweb:8080",
                                                     "Origin": "https://s2n.example.com"}),
             ("X-Forwarded-Host without the public port",
-             {"Host": "ser2net:8080", "Origin": "https://gw.example.com:8443",
+             {"Host": "ser2netweb:8080", "Origin": "https://gw.example.com:8443",
               "X-Forwarded-Host": "gw.example.com"}),
             ("Sec-Fetch-Site cross-site", {"Origin": "http://" + own,
                                            "Sec-Fetch-Site": "cross-site"}),
@@ -181,13 +181,13 @@ DERIVED = (
     ({"Host": "127.0.0.1:8080"}, "http", "http://127.0.0.1:8080/auth/oidc/callback"),
     ({}, "http", "http://10.0.0.5:8080/auth/oidc/callback"),
     ({"Host": "s2n.example.com"}, "https", "https://s2n.example.com/auth/oidc/callback"),
-    ({"Host": "ser2net:8080", "X-Forwarded-Proto": "https",
+    ({"Host": "ser2netweb:8080", "X-Forwarded-Proto": "https",
       "X-Forwarded-Host": "s2n.example.com"}, "http",
      "https://s2n.example.com/auth/oidc/callback"),
     ({"Host": "s2n.example.com:8443", "X-Forwarded-Proto": "https"}, "http",
      "https://s2n.example.com:8443/auth/oidc/callback"),
     # proxies in a row: the first value (the whole list made no usable address)
-    ({"Host": "ser2net:8080", "X-Forwarded-Proto": "https, http",
+    ({"Host": "ser2netweb:8080", "X-Forwarded-Proto": "https, http",
       "X-Forwarded-Host": "s2n.example.com, gw.internal:8080"}, "http",
      "https://s2n.example.com/auth/oidc/callback"),
     # not read: X-Forwarded-Port, Forwarded
@@ -503,7 +503,7 @@ def main():
     srv = Server()
     tls = None
     if need("cryptography", what="TLS at the test's reverse proxy (it then speaks plain HTTP)"):
-        from app.web.selfsigned import generate
+        from ser2netweb.web.selfsigned import generate
         tls = (os.path.join(srv.tmp, "cert.pem"), os.path.join(srv.tmp, "key.pem"))
         generate(*tls)
     proxied = Proxy(srv.port, "/ser2net", tls=tls)

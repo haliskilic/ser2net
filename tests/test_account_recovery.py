@@ -1,6 +1,6 @@
-"""Account recovery and the first admin without the web UI (app/accounts.py).
+"""Account recovery and the first admin without the web UI (ser2netweb/accounts.py).
 
-  * `ser2net --set-password NAME` on a stopped install changes config.json (backed up,
+  * `ser2netweb --set-password NAME` on a stopped install changes config.json (backed up,
     audited): the new password works, the old sessions end; NAME is created as an admin
     when missing — on a fresh data directory, too (headless set-up); LDAP/OIDC accounts,
     bad names and short passwords are refused; nothing secret is printed;
@@ -12,11 +12,11 @@
     old one is not applied;
   * the data directory's lock decides: held by a running instance -> handed to it
     (also when its web UI can't be reached); free -> the command holds it (marked brief)
-    while it changes config.json, so a ser2net that starts meanwhile waits and then
+    while it changes config.json, so a ser2netweb that starts meanwhile waits and then
     loads the change; an instance that stops before taking the request -> the command
     makes the change itself; another account command busy -> refused, saying so; where
     the lock can't be used, /healthz decides as before;
-  * SER2NET_ADMIN_PASSWORD_FILE (+ SER2NET_ADMIN_USER) creates the first admin at start
+  * SER2NETWEB_ADMIN_PASSWORD_FILE (+ SER2NETWEB_ADMIN_USER) creates the first admin at start
     and is ignored once accounts exist; problems are logged, the password never;
   * as root on a data directory owned by someone else, the command first becomes that
     user (checked with stand-ins for the os calls).
@@ -34,16 +34,16 @@ import types
 
 from _server import ROOT, Browser, Server
 
-from app import accounts, datalock
-from app.config import AppConfig
-from app.web.auth import hash_password, verify_password
+from ser2netweb import accounts, datalock
+from ser2netweb.config import AppConfig
+from ser2netweb.web.auth import hash_password, verify_password
 
 PW = "recovery-pass-1"
 NEW = "brand-new-pass-2"
 
 
 def cli(data_dir, *args, password=None, env=None):
-    p = subprocess.run([sys.executable, "ser2net.py", "--no-bootstrap", "--data-dir", data_dir,
+    p = subprocess.run([sys.executable, "ser2netweb.py", "--no-bootstrap", "--data-dir", data_dir,
                         *args], cwd=ROOT, capture_output=True, text=True, timeout=120,
                        input="" if password is None else password + "\n",
                        env=dict(os.environ, **(env or {})))
@@ -131,11 +131,11 @@ def test_request_files():
 
 
 # Another process holding the data directory's lock for argv[4] seconds: "serve" takes
-# and answers requests (a running ser2net), "silent" doesn't, "brief" marks the lock as
+# and answers requests (a running ser2netweb), "silent" doesn't, "brief" marks the lock as
 # an account command's.
 _HOLDER = (
     "import sys, time; sys.path.insert(0, sys.argv[2])\n"
-    "from app import accounts, datalock\n"
+    "from ser2netweb import accounts, datalock\n"
     "d, kind = sys.argv[1], sys.argv[3]\n"
     "assert datalock.acquire(d, brief=kind == 'brief') is None\n"
     "print('held', flush=True)\n"
@@ -150,7 +150,7 @@ _HOLDER = (
 # account command), then read config.json.
 _START = (
     "import sys, time; sys.path.insert(0, sys.argv[2])\n"
-    "from app import runtime\n"
+    "from ser2netweb import runtime\n"
     "print('starting', flush=True)\n"
     "runtime.hold_data_dir(sys.argv[1])\n"
     "print(open(sys.argv[1], encoding='utf-8').read(), flush=True)\n"
@@ -158,7 +158,7 @@ _START = (
 
 _PROBE = (
     "import sys; sys.path.insert(0, sys.argv[2])\n"
-    "from app import datalock\n"
+    "from ser2netweb import datalock\n"
     "try:\n"
     "    datalock.acquire(sys.argv[1])\n"
     "    print('FREE')\n"
@@ -204,7 +204,7 @@ def test_lock_decides():
         accounts.healthcheck.check = healthcheck(False)
         p = holder(d, "serve", 30)
         out = set_password()
-        assert out == "taken by the holder (done by the running ser2net)", out
+        assert out == "taken by the holder (done by the running ser2netweb)", out
         assert pwd_version() == 1 and not probes, "the holder decides, not the healthcheck"
         assert not datalock.holds(d)
         p.kill()
@@ -229,7 +229,7 @@ def test_lock_decides():
         accounts.apply_here = apply_here_while_starting
         t = time.monotonic()
         out = set_password()
-        assert "new password set for 'admin'" in out and "running ser2net" not in out, out
+        assert "new password set for 'admin'" in out and "running ser2netweb" not in out, out
         assert seen["probe"].strip() == f"HELD {os.getpid()} True", seen["probe"]
         loaded = json.loads(seen["start"].communicate(timeout=60)[0])
         assert account(loaded, "admin")["pwd_version"] == 2, "the start loaded config.json too early"
@@ -243,7 +243,7 @@ def test_lock_decides():
         # the holder stops before it takes the request: the command makes the change itself
         p = holder(d, "silent", 1.5)
         out = set_password()
-        assert "new password set for 'admin'" in out and "running ser2net" not in out, out
+        assert "new password set for 'admin'" in out and "running ser2netweb" not in out, out
         assert pwd_version() == 3
         assert os.listdir(os.path.join(d, accounts.REQUEST_DIR)) == [], "the request was withdrawn"
         p.wait(10)
@@ -271,7 +271,7 @@ def test_lock_decides():
         assert pwd_version() == 3
         print("another account command busy, or an instance that doesn't take it: refused  OK")
 
-        # a ser2net from before the lock answers /healthz but holds no lock
+        # a ser2netweb from before the lock answers /healthz but holds no lock
         accounts.healthcheck.check = healthcheck(True)
         try:
             set_password()
@@ -296,7 +296,7 @@ def test_lock_decides():
 
 
 def test_provision():
-    env = {"SER2NET_ADMIN_PASSWORD_FILE": "", "SER2NET_ADMIN_USER": ""}
+    env = {"SER2NETWEB_ADMIN_PASSWORD_FILE": "", "SER2NETWEB_ADMIN_USER": ""}
     assert accounts.provision_from_env(AppConfig(), env) == (None, None)
     d = tempfile.mkdtemp(prefix="s2n_env_")
     try:
@@ -304,24 +304,24 @@ def test_provision():
         with open(pwfile, "w") as fh:
             fh.write(PW + "\n")
         cfg = AppConfig()
-        name, note = accounts.provision_from_env(cfg, {"SER2NET_ADMIN_PASSWORD_FILE": pwfile})
+        name, note = accounts.provision_from_env(cfg, {"SER2NETWEB_ADMIN_PASSWORD_FILE": pwfile})
         assert name == "admin" and "created" in note and PW not in note
         assert verify_password(PW, cfg.get_user("admin").password_hash), "trailing newline is not part of it"
-        assert accounts.provision_from_env(cfg, {"SER2NET_ADMIN_PASSWORD_FILE": pwfile})[0] is None
-        for env, problem in (({"SER2NET_ADMIN_PASSWORD_FILE": pwfile + ".missing"}, "cannot read"),
-                             ({"SER2NET_ADMIN_USER": "boss"}, "SER2NET_ADMIN_PASSWORD_FILE is not"),
-                             ({"SER2NET_ADMIN_PASSWORD_FILE": pwfile, "SER2NET_ADMIN_USER": "a b"},
-                              "SER2NET_ADMIN_USER")):
+        assert accounts.provision_from_env(cfg, {"SER2NETWEB_ADMIN_PASSWORD_FILE": pwfile})[0] is None
+        for env, problem in (({"SER2NETWEB_ADMIN_PASSWORD_FILE": pwfile + ".missing"}, "cannot read"),
+                             ({"SER2NETWEB_ADMIN_USER": "boss"}, "SER2NETWEB_ADMIN_PASSWORD_FILE is not"),
+                             ({"SER2NETWEB_ADMIN_PASSWORD_FILE": pwfile, "SER2NETWEB_ADMIN_USER": "a b"},
+                              "SER2NETWEB_ADMIN_USER")):
             cfg = AppConfig()
             name, note = accounts.provision_from_env(cfg, env)
             assert name is None and not cfg.users and note.startswith("ERROR") and problem in note, note
         with open(pwfile, "w") as fh:
             fh.write("short\n")
-        name, note = accounts.provision_from_env(AppConfig(), {"SER2NET_ADMIN_PASSWORD_FILE": pwfile})
+        name, note = accounts.provision_from_env(AppConfig(), {"SER2NETWEB_ADMIN_PASSWORD_FILE": pwfile})
         assert name is None and "at least 8" in note, note
     finally:
         shutil.rmtree(d, ignore_errors=True)
-    print("SER2NET_ADMIN_PASSWORD_FILE: first admin only, newline stripped, problems reported  OK")
+    print("SER2NETWEB_ADMIN_PASSWORD_FILE: first admin only, newline stripped, problems reported  OK")
 
 
 def test_become_owner():
@@ -388,7 +388,7 @@ def test_running():
         b = Browser(srv.base)
         b.login("admin", PW)
         code, out = cli(srv.data, "--set-password", "admin", password=NEW)
-        assert code == 0 and "done by the running ser2net" in out, out
+        assert code == 0 and "done by the running ser2netweb" in out, out
         st, h, _ = b.get("/settings")
         assert st == 303 and h.get("Location") == "/login?next=%2Fsettings", \
             "the old session must end at once"
@@ -406,8 +406,8 @@ def test_running():
         assert not [n for n in os.listdir(os.path.join(srv.data, accounts.REQUEST_DIR))
                     if not n.startswith(".")], "request files left behind"
         # its web UI out of the command's reach (another network namespace): still found
-        code, out = cli(srv.data, "--sign-out-all", env={"SER2NET_PORT": "1"})
-        assert code == 0 and "done by the running ser2net" in out, out
+        code, out = cli(srv.data, "--sign-out-all", env={"SER2NETWEB_PORT": "1"})
+        assert code == 0 and "done by the running ser2netweb" in out, out
     print("running install: the instance applies it at once (old session refused, new password "
           "works, audited), --sign-out-all too  OK")
 
@@ -428,25 +428,25 @@ def test_env_admin():
         pwfile = os.path.join(d, "secret")
         with open(pwfile, "w") as fh:
             fh.write(PW + "\n")
-        env = {"SER2NET_ADMIN_PASSWORD_FILE": pwfile, "SER2NET_ADMIN_USER": "ops"}
+        env = {"SER2NETWEB_ADMIN_PASSWORD_FILE": pwfile, "SER2NETWEB_ADMIN_USER": "ops"}
         with Server(None, env=env) as srv:
             Browser(srv.base).login("ops", PW)
             assert Browser(srv.base).get("/setup")[0] == 303
             out = srv.output()
-            assert "admin account 'ops' created from SER2NET_ADMIN_PASSWORD_FILE" in out
+            assert "admin account 'ops' created from SER2NETWEB_ADMIN_PASSWORD_FILE" in out
             assert PW not in out and PW not in read(os.path.join(srv.data, "all.log"))
-            assert "first_run_setup\tSER2NET_ADMIN_PASSWORD_FILE\tops" in read(os.path.join(srv.data, "audit.log"))
+            assert "first_run_setup\tSER2NETWEB_ADMIN_PASSWORD_FILE\tops" in read(os.path.join(srv.data, "audit.log"))
             data = srv.data
             srv.stop()
             with open(pwfile, "w") as fh:
                 fh.write("another-pass-9\n")
             srv.start()  # accounts exist now: the variable is ignored, the password stays
             Browser(srv.base).login("ops", PW)
-            assert "SER2NET_ADMIN_PASSWORD_FILE is ignored" in srv.output()
+            assert "SER2NETWEB_ADMIN_PASSWORD_FILE is ignored" in srv.output()
             assert len(config_of(data)["users"]) == 1
     finally:
         shutil.rmtree(d, ignore_errors=True)
-    print("SER2NET_ADMIN_PASSWORD_FILE: first admin at start (no password in the logs), "
+    print("SER2NETWEB_ADMIN_PASSWORD_FILE: first admin at start (no password in the logs), "
           "ignored once accounts exist  OK")
 
 

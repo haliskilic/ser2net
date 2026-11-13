@@ -10,7 +10,8 @@
 # 3. a bind mount owned by another uid keeps its owner (the server runs as it);
 # 4. a config.json with a setting this version rejects still starts: the setting is
 #    logged and kept, and other changes can still be saved from the UI;
-# 5. an unusable SER2NET_BIND_IP stops the start with one line, not a traceback;
+# 5. an unusable SER2NETWEB_BIND_IP (or SER2NET_BIND_IP, its 2.9.x name, which the image's
+#    own default uses) stops the start with one line that names it, not a traceback;
 # 6. a host user's folder that a 2.7 image wrote to as root (bind mount): the files
 #    the image left are handed to the folder's owner and the old config signs in;
 #    mounted read-only, the start stops with the chown command to run on the host;
@@ -23,13 +24,15 @@
 # 10. a host folder mounted inside /data (certificates, say) is never taken over, and a new
 #    volume with one is private (0700) without a warning;
 # 11. the first admin without the browser: `docker exec ... --set-password` on the running
-#    container of 1. (run as root, it writes as the /data owner) and SER2NET_ADMIN_PASSWORD_FILE;
+#    container of 1. (run as root, it writes as the /data owner) and
+#    SER2NETWEB_ADMIN_PASSWORD_FILE;
 # 12. upgrade: a volume a v2.8.0 image left (owned by uid 10001: config.json, backups with a
 #    -2 name, audit.log, traces) starts as it is, keeps its owner and the 2.8.0 settings, and
 #    the accounts 2.8.0 made sign in.
 # 13. ports below 1024 on the host network: the server has no capability (the admin UI on
-#    502 can't start, and the log says why) unless SER2NET_LOW_PORTS=1 keeps
-#    CAP_NET_BIND_SERVICE for it (then 502 answers); --cap-drop NET_BIND_SERVICE wins.
+#    502 can't start, and the log says why) unless SER2NETWEB_LOW_PORTS=1 (or the 2.9.x
+#    SER2NET_LOW_PORTS=1) keeps CAP_NET_BIND_SERVICE for it (then 502 answers); --cap-drop
+#    NET_BIND_SERVICE wins. SER2NETWEB_PORT=502 wins over the image's SER2NET_PORT=8080.
 # An image of another architecture runs emulated (QEMU) when DOCKER_DEFAULT_PLATFORM names it
 # (CI: linux/arm/v7), much slower: DOCKER_SMOKE_WAIT (seconds, default 60) is how long a
 # container may take to get healthy or to stop.
@@ -102,9 +105,9 @@ after=$(docker exec s2n-smoke stat -c '%i %Y' /data/config.json)
 backups_after=$(docker exec s2n-smoke sh -c 'ls -A /data/backups 2>/dev/null || true')
 [ "$backups_before" = "$backups_after" ] \
     || fail "a restart made a backup ($backups_before -> $backups_after)"
-out=$(printf 'smoke-pass-1\n' | docker exec -i s2n-smoke python /app/ser2net.py --no-bootstrap \
+out=$(printf 'smoke-pass-1\n' | docker exec -i s2n-smoke python /app/ser2netweb.py --no-bootstrap \
     --data-dir /data --set-password admin 2>&1) || fail "docker exec --set-password: $out"
-grep -q "done by the running ser2net" <<<"$out" || fail "not handed to the running server: $out"
+grep -q "done by the running ser2netweb" <<<"$out" || fail "not handed to the running server: $out"
 docker exec s2n-smoke sh -c '[ -z "$(find /data ! -uid 10001 | head -n 1)" ]' || fail "files not owned by 10001"
 [ "$(sign_in admin smoke-pass-1)" = 303 ] || fail "the admin made with docker exec did not sign in"
 docker rm -f s2n-smoke >/dev/null
@@ -175,16 +178,18 @@ sys.exit(0 if m["id"] == "aaaa00000001" and m["enabled"] is False else 1)' \
 docker rm -f s2n-smoke >/dev/null
 echo "rejected setting: logged and kept, healthy, the UI signs in and saves other changes  OK"
 
-echo "== 5. an unusable SER2NET_BIND_IP"
-docker run -d --name s2n-smoke -e SER2NET_BIND_IP=not-an-ip "$IMAGE" >/dev/null
-code=$(timeout "$WAIT" docker wait s2n-smoke) || fail "did not stop"
-logs=$(docker logs s2n-smoke 2>&1)
-echo "$logs" | tail -3
-[ "$code" = 1 ] || fail "exit code $code"
-grep -q "SER2NET_BIND_IP must be an IP address" <<<"$logs" || fail "no clear message"
-grep -q "Traceback" <<<"$logs" && fail "traceback instead of a message"
-docker rm -f -v s2n-smoke >/dev/null
-echo "bad SER2NET_BIND_IP: exit 1 with one line, no traceback  OK"
+echo "== 5. an unusable SER2NETWEB_BIND_IP / SER2NET_BIND_IP"
+for var in SER2NETWEB_BIND_IP SER2NET_BIND_IP; do
+    docker run -d --name s2n-smoke -e "$var=not-an-ip" "$IMAGE" >/dev/null
+    code=$(timeout "$WAIT" docker wait s2n-smoke) || fail "did not stop"
+    logs=$(docker logs s2n-smoke 2>&1)
+    echo "$logs" | tail -3
+    [ "$code" = 1 ] || fail "exit code $code"
+    grep -q "$var must be an IP address" <<<"$logs" || fail "no clear message naming $var"
+    grep -q "Traceback" <<<"$logs" && fail "traceback instead of a message"
+    docker rm -f -v s2n-smoke >/dev/null
+done
+echo "bad SER2NETWEB_BIND_IP / SER2NET_BIND_IP: exit 1 with one line, no traceback  OK"
 
 echo "== 6. bind mount of a host user's folder that a 2.7 image wrote to as root"
 host_dir=$(mktemp -d)
@@ -259,16 +264,16 @@ echo "== 8. image contents"
 docker run --rm --entrypoint python "$IMAGE" -c '
 import glob, os, sys
 os.chdir("/app")
-need = ["ser2net.py", "bootstrap.py", "requirements.txt", "requirements-optional.txt",
-        "requirements-lock.txt",
+need = ["ser2netweb.py", "ser2net.py", "bootstrap.py", "requirements.txt",
+        "requirements-optional.txt", "requirements-lock.txt",
         "LICENSE", "NOTICE", "COMMERCIAL_LICENSE.md", "THIRD-PARTY-NOTICES.md",
         "tools/docker-entrypoint.sh", "tools/licenses/pyserial.txt", "tools/licenses/npm/xterm.txt",
-        "app/locale/tr.json",
-        "app/web/templates/base.html", "app/web/static/app.css"]
+        "ser2netweb/locale/tr.json",
+        "ser2netweb/web/templates/base.html", "ser2netweb/web/static/app.css"]
 missing = [f for f in need if not os.path.isfile(f)]
 extra = [d for d in ("tests", "vendor", "docs", ".github", "Dockerfile") if os.path.exists(d)]
-sources = glob.glob("app/**/*.py", recursive=True)
-pycs = glob.glob("app/**/__pycache__/*.pyc", recursive=True)
+sources = glob.glob("ser2netweb/**/*.py", recursive=True)
+pycs = glob.glob("ser2netweb/**/__pycache__/*.pyc", recursive=True)
 unhashed = [p for p in pycs if open(p, "rb").read(8)[4] != 3]  # 3 = checked-hash
 print(f"{len(sources)} modules, {len(pycs)} compiled; missing {missing}, extra {extra}")
 sys.exit(1 if missing or extra or len(pycs) < len(sources) or unhashed else 0)' \
@@ -300,7 +305,7 @@ wait_healthy
 docker exec s2n-smoke sh -c '[ "$(stat -c %u /data/stray)" = 10001 ]' || fail "the stray file was not taken over"
 [ "$(sudo stat -c %u "$host_dir")" = 0 ] && [ "$(sudo stat -c %u "$host_dir/key.pem")" = 0 ] \
     || fail "the host folder mounted at /data/certs changed owner"
-# ser2net leaves a folder holding other files as it is: the new volume is private already
+# ser2netweb leaves a folder holding other files as it is: the new volume is private already
 [ "$(docker exec s2n-smoke stat -c %a /data)" = 700 ] || fail "/data is not 0700"
 docker logs s2n-smoke 2>&1 | grep -q "WARNING: /data" && fail "a warning about /data"
 docker rm -f s2n-smoke >/dev/null
@@ -308,21 +313,21 @@ sudo rm -rf "$host_dir"
 host_dir=""
 echo "nested mount: the volume taken over, the host folder mounted inside it untouched  OK"
 
-echo "== 11. first admin from SER2NET_ADMIN_PASSWORD_FILE"
+echo "== 11. first admin from SER2NETWEB_ADMIN_PASSWORD_FILE"
 secret_dir=$(mktemp -d)
 printf 'env-pass-123\n' > "$secret_dir/pw"
 chmod 644 "$secret_dir/pw"
 docker run -d --name s2n-smoke -p 127.0.0.1:$PORT:8080 --health-interval=1s \
-    -e SER2NET_ADMIN_USER=ops -e SER2NET_ADMIN_PASSWORD_FILE=/run/secrets/pw \
+    -e SER2NETWEB_ADMIN_USER=ops -e SER2NETWEB_ADMIN_PASSWORD_FILE=/run/secrets/pw \
     -v "$secret_dir/pw:/run/secrets/pw:ro" "$IMAGE" >/dev/null
 wait_healthy
 logs=$(docker logs s2n-smoke 2>&1)
-grep -q "admin account 'ops' created from SER2NET_ADMIN_PASSWORD_FILE" <<<"$logs" || fail "no admin from the env"
+grep -q "admin account 'ops' created from SER2NETWEB_ADMIN_PASSWORD_FILE" <<<"$logs" || fail "no admin from the env"
 grep -q "env-pass-123" <<<"$logs" && fail "the password is in the log"
-[ "$(sign_in ops env-pass-123)" = 303 ] || fail "the admin from SER2NET_ADMIN_PASSWORD_FILE did not sign in"
+[ "$(sign_in ops env-pass-123)" = 303 ] || fail "the admin from SER2NETWEB_ADMIN_PASSWORD_FILE did not sign in"
 docker rm -f -v s2n-smoke >/dev/null  # -v: its anonymous /data volume too
 rm -rf "$secret_dir"
-echo "SER2NET_ADMIN_PASSWORD_FILE: the first admin signs in, the password is not logged  OK"
+echo "SER2NETWEB_ADMIN_PASSWORD_FILE: the first admin signs in, the password is not logged  OK"
 
 echo "== 12. upgrade from a v2.8.0 volume (owned by uid 10001)"
 docker run --rm --user 0 --entrypoint python -v s2n-smoke-f:/data -v "$HERE/fixtures:/fx:ro" "$IMAGE" -c '
@@ -365,14 +370,15 @@ sys.exit(0 if n["enabled"] and n["smtp_password"] == "dummy-smtp-pass-2.8.0"
 docker rm -f s2n-smoke >/dev/null
 echo "v2.8.0 volume: starts as it is, owner kept, 2.8.0 file and its -2 backup kept, settings and accounts work  OK"
 
-echo "== 13. ports below 1024 on the host network (SER2NET_LOW_PORTS)"
+echo "== 13. ports below 1024 on the host network (SER2NETWEB_LOW_PORTS / SER2NET_LOW_PORTS)"
+# (SER2NETWEB_PORT wins over the image's SER2NET_PORT=8080, for the server and its HEALTHCHECK)
 low() { docker run -d --name s2n-smoke --network host --health-interval=1s \
-            -e SER2NET_BIND_IP=127.0.0.1 -e SER2NET_PORT=502 "$@" -v s2n-smoke-g:/data "$IMAGE" >/dev/null; }
+            -e SER2NETWEB_BIND_IP=127.0.0.1 -e SER2NETWEB_PORT=502 "$@" -v s2n-smoke-g:/data "$IMAGE" >/dev/null; }
 caps() { docker exec s2n-smoke sh -c 'grep -E "^Cap(Eff|Amb):" /proc/1/status' | tr -s '\t ' ' '; }
-low -e SER2NET_LOW_PORTS=1
+low -e SER2NETWEB_LOW_PORTS=1
 wait_healthy
 caps
-caps | grep -q "^CapAmb: 0000000000000400$" || fail "CAP_NET_BIND_SERVICE not kept with SER2NET_LOW_PORTS=1"
+caps | grep -q "^CapAmb: 0000000000000400$" || fail "CAP_NET_BIND_SERVICE not kept with SER2NETWEB_LOW_PORTS=1"
 caps | grep -q "^CapEff: 0000000000000400$" || fail "more than CAP_NET_BIND_SERVICE kept"
 curl -fsS "http://127.0.0.1:502/healthz" | grep -q ok || fail "the admin UI on 502 does not answer"
 docker rm -f s2n-smoke >/dev/null
@@ -385,14 +391,15 @@ done
 grep -q "admin UI port 502 is below 1024" <<<"$logs" || fail "no warning for the admin UI on 502"
 grep -q "CAP_NET_BIND_SERVICE" <<<"$logs" || fail "the warning doesn't say what is missing"
 docker rm -f s2n-smoke >/dev/null
-low -e SER2NET_LOW_PORTS=1 --cap-drop NET_BIND_SERVICE
+low -e SER2NET_LOW_PORTS=1 --cap-drop NET_BIND_SERVICE   # (the 2.9.x name)
 for _ in $(seq 1 $((WAIT / 2))); do
     logs=$(docker logs s2n-smoke 2>&1 || true)
     grep -q "admin UI port 502 is below 1024" <<<"$logs" && break
     sleep 1
 done
-grep -q "no CAP_NET_BIND_SERVICE to keep" <<<"$logs" || fail "--cap-drop NET_BIND_SERVICE not reported"
+grep -q "SER2NET_LOW_PORTS=1, but this container has no CAP_NET_BIND_SERVICE" <<<"$logs" \
+    || fail "--cap-drop NET_BIND_SERVICE not reported"
 docker rm -f s2n-smoke >/dev/null
-echo "ports below 1024: none without SER2NET_LOW_PORTS=1 (the log says why), 502 answers with it, --cap-drop wins  OK"
+echo "ports below 1024: none without SER2NETWEB_LOW_PORTS=1 (the log says why), 502 answers with it, --cap-drop wins  OK"
 echo
 echo "PASS: Docker image smoke test"

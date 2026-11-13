@@ -1,6 +1,6 @@
 """The READMEs and docs/ point at what exists.
 
-  * every command-line option of ser2net.py (but the hidden --service) is in both READMEs;
+  * every command-line option (ser2netweb/cli.py; but the hidden --service) is in both READMEs;
   * every guide in docs/ is linked from both READMEs;
   * every relative link in the READMEs, docs/*.md, CONTRIBUTING.md and SECURITY.md leads to
     a file of the repository, and a link to a heading of a Markdown file (#anchor) to a
@@ -32,8 +32,9 @@ def read(rel: str) -> str:
 
 
 def cli_options() -> list[str]:
-    """The options ser2net.py's parser defines, as written in its add_argument calls."""
-    src = read("ser2net.py")
+    """The options the command line (ser2netweb/cli.py) defines, as written in its
+    add_argument calls."""
+    src = read(os.path.join("ser2netweb", "cli.py"))
     out = []
     for m in re.finditer(r"add_argument\(\s*\"(--[a-z][a-z-]*)\"(.*?)\)\n", src, re.S):
         if "argparse.SUPPRESS" not in m.group(2):

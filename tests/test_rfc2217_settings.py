@@ -36,10 +36,10 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import serial
 from serial.serialutil import SerialBase
 
-from app.config import MappingConfig
-from app.engine import bridge
-from app.engine.protocols.base import ProtocolError
-from app.engine.protocols.rfc2217 import Rfc2217Session
+from ser2netweb.config import MappingConfig
+from ser2netweb.engine import bridge
+from ser2netweb.engine.protocols.base import ProtocolError
+from ser2netweb.engine.protocols.rfc2217 import Rfc2217Session
 
 IAC, SB, SE = 255, 250, 240
 COM_PORT_OPTION = 44

@@ -34,11 +34,11 @@ from contextlib import suppress
 
 from _server import ROOT, free_port  # noqa: F401  (sys.path setup)
 
-from app.config import ConfigError, MappingConfig
-from app.engine import modbus, sparkplug
-from app.engine.modbus_gateway import (UNIT_OFFLINE_AFTER, ModbusGatewayRunner, decode_point,
+from ser2netweb.config import ConfigError, MappingConfig
+from ser2netweb.engine import modbus, sparkplug
+from ser2netweb.engine.modbus_gateway import (UNIT_OFFLINE_AFTER, ModbusGatewayRunner, decode_point,
                                        plan_blocks)
-from app.engine.sparkplug_node import SparkplugNode
+from ser2netweb.engine.sparkplug_node import SparkplugNode
 
 TIMEOUT = 0.2
 

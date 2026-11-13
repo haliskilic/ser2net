@@ -1,0 +1,13 @@
+{#- The footer of every page: the licence and where the source code is (AGPL-3.0 section 13;
+    ser2netweb/licences.py). `signed_in`: the version and the licences page too (they name what
+    this copy runs, which a page before the sign-in doesn't show). Import it with context. #}
+{% macro site_footer(signed_in) %}
+<footer class="site-footer">
+  <span>ser2netweb{% if signed_in %} {{ app_version }}{% endif %}</span>
+  <span>{{ _("AGPL-3.0 or a commercial licence") }}</span>
+  <a href="{{ source_url }}" rel="noopener noreferrer">{{ _("Source code") }}</a>
+  {%- if signed_in %}
+  <a href="{{ base }}/licenses">{{ _("Licences") }}</a>
+  {%- endif %}
+</footer>
+{% endmacro %}

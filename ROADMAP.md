@@ -1,4 +1,4 @@
-# ser2net — Roadmap
+# ser2netweb — Roadmap
 
 > Current release: **v2.9.0**. CI is green across Linux + Windows × Python 3.10–3.14.
 
@@ -73,7 +73,7 @@
 
 ### v2.3 — UX & access polish
 - **OIDC single sign-on** (authorization-code flow + issuer discovery; claim→role
-  mapping, shadow accounts) — `app/web/oidc_auth.py`, optional `authlib`
+  mapping, shadow accounts) — `ser2netweb/web/oidc_auth.py`, optional `authlib`
 - **REST API token roles** (`admin` / `operator` / `viewer`; `viewer` is read-only)
 - **Light / dark theme toggle** (persisted in `localStorage`); xterm fit-to-window addon
 - _(i18n was dropped — the UI stays English by decision.)_
@@ -117,7 +117,7 @@
   via pyserial `rs485_mode`. Edit-preservation updated so the form owns the RS-485 fields
   while still carrying over the two it doesn't expose (`hangup_when_done`, `nobreak`).
 
-### v2.7 — connection lifecycle & optional login ([#24](https://github.com/haliskilic/ser2net/issues/24))
+### v2.7 — connection lifecycle & optional login ([#24](https://github.com/haliskilic/ser2netweb/issues/24))
 - **Fix: dead TCP peers are detected.** A client (or connect-out remote / Modbus master)
   that vanished without a FIN/RST — power cut, cable pull, Wi-Fi/VPN/NAT drop — stayed
   `ESTABLISHED` forever on a quiet raw bridge and, with `max_connections=1`, locked
@@ -142,7 +142,7 @@
   / dead Modbus master / SYN to a silent host / legacy Windows path, plus a keepalive-off
   control that reproduces the original bug; timer and open-access e2e tests.
 
-### v2.7.1 — long names in the UI, truly standalone binaries ([#26](https://github.com/haliskilic/ser2net/issues/26))
+### v2.7.1 — long names in the UI, truly standalone binaries ([#26](https://github.com/haliskilic/ser2netweb/issues/26))
 - **Web UI:** long mapping names, `/dev/serial/by-id/...` paths, host names and error
   messages no longer push the row buttons out of the panel (they sat up to ~1000 px
   outside it and the page scrolled sideways). Tables wrap long text at separators, row
@@ -160,7 +160,7 @@
   process loads, and clean AlmaLinux 8/9, Debian 11/12, Ubuntu 20.04/22.04/24.04,
   openSUSE and Fedora containers; release assets are published only after that passes.
 
-### v2.8.0 — maintenance, security, distribution, features, Turkish UI (issues [#28](https://github.com/haliskilic/ser2net/issues/28)–[#32](https://github.com/haliskilic/ser2net/issues/32))
+### v2.8.0 — maintenance, security, distribution, features, Turkish UI (issues [#28](https://github.com/haliskilic/ser2netweb/issues/28)–[#32](https://github.com/haliskilic/ser2netweb/issues/32))
 - **Maintenance (#28):** `routes.py` split into per-area modules; mypy, coverage, pip-audit
   and Dependabot in CI; dependencies updated (Python 3.10 keeps its last compatible line);
   GitHub Actions on Node 24 and no duplicate push+PR runs; `SECURITY.md`,
@@ -179,7 +179,7 @@
 - **Turkish UI (#32):** the web UI in Turkish and English (reverses the v2.3 decision); logs,
   audit log and REST API stay English.
 
-### v2.8.1 — security release (PRs [#42](https://github.com/haliskilic/ser2net/pull/42)–[#46](https://github.com/haliskilic/ser2net/pull/46))
+### v2.8.1 — security release (PRs [#42](https://github.com/haliskilic/ser2netweb/pull/42)–[#46](https://github.com/haliskilic/ser2netweb/pull/46))
 - **Engine inputs (#42):** mapping ids validated wherever they enter (completes 2.8.0's trace
   confinement), serial ports must be devices, read-only enforced for Modbus masters and
   MQTT / Sparkplug, single-point MQTT writes, bounded UDP queue and RFC 2217 subnegotiations,
@@ -200,7 +200,7 @@
   setting and keeps mounted folders' owners; the standalone executables have the Turkish UI
   again and survive temp cleaners.
 
-### v2.9.0 — the rest of the 2.8.0 review (issues [#48](https://github.com/haliskilic/ser2net/issues/48)–[#90](https://github.com/haliskilic/ser2net/issues/90), PRs [#91](https://github.com/haliskilic/ser2net/pull/91)–[#98](https://github.com/haliskilic/ser2net/pull/98))
+### v2.9.0 — the rest of the 2.8.0 review (issues [#48](https://github.com/haliskilic/ser2netweb/issues/48)–[#90](https://github.com/haliskilic/ser2netweb/issues/90), PRs [#91](https://github.com/haliskilic/ser2netweb/pull/91)–[#98](https://github.com/haliskilic/ser2netweb/pull/98))
 - **Serial and network (#91):** ser2net's own serial classes (paced Windows writes), listeners
   that bind before the device opens and retry, the configured adapter among identical USB
   adapters, IPv4 + IPv6 listeners, per-mapping TLS checks (CA, pins, client certificates, key

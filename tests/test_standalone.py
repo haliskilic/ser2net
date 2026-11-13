@@ -1,21 +1,21 @@
 """The standalone executables must run with nothing else installed (#26).
 
-Portable part (always runs): app.standalone points a frozen Linux build's
+Portable part (always runs): ser2netweb.standalone points a frozen Linux build's
 bundled OpenSSL at the distribution's CA bundle (Debian/Ubuntu, RHEL/Fedora,
 openSUSE, Alpine layouts), leaves an admin's SSL_CERT_FILE / SSL_CERT_DIR alone,
 warns when there is none, and does nothing for source runs or on Windows.
-ser2net.spec bundles every data file the app reads at run time (each non-Python
-file under app/: templates, static assets, translations), read without PyInstaller.
+ser2netweb.spec bundles every data file the app reads at run time (each non-Python
+file under ser2netweb/: templates, static assets, translations), read without PyInstaller.
 A one-file build keeps its unpacked directory from temp cleaners: access times are
 refreshed (modification times kept) and, on Linux, the directory is locked, so the
 real systemd-tmpfiles (242+, when installed) skips it even at age 0 while it still
 removes a directory a killed run left behind.
 
-Binary part — opt-in: SER2NET_STANDALONE_BIN=<built ser2net or ser2net.exe> (the
+Binary part — opt-in: SER2NETWEB_STANDALONE_BIN=<built ser2net or ser2net.exe> (the
 CI 'standalone' jobs build the executables and set it):
   1. bundle: every ELF/PE inside needs only libraries that are bundled or part of
      the OS base (glibc; Windows system DLLs) — Linux: no glibc symbol newer than
-     SER2NET_MAX_GLIBC (default 2.28); Windows: VC++ runtime and Python inside;
+     SER2NETWEB_MAX_GLIBC (default 2.28); Windows: VC++ runtime and Python inside;
   2. run with an EMPTY PATH (no python, no openssl, nothing to borrow) and no
      PYTHON* variables: --version; it boots and serves the UI; a raw TCP mapping
      accepts a client; MQTT, LDAP and OIDC libraries are inside and import (no "not
@@ -31,11 +31,11 @@ CI 'standalone' jobs build the executables and set it):
      rate from a binary built for glibc 2.28) opens and relays the device's data;
   3. every shared library the running processes mapped comes from the bundle or
      the OS base (Linux /proc/<pid>/maps, Windows module list);
-  4. SER2NET_STANDALONE_IMAGE=<docker image> runs part 2 inside a clean container
+  4. SER2NETWEB_STANDALONE_IMAGE=<docker image> runs part 2 inside a clean container
      of that distribution (no Python, no openssl, empty PATH) instead (the host's
      /dev/pts is mounted at /dev/hostpts for the PTY mapping). The test CA
      is mounted over the CA bundle the image has (or, for base images that ship
-     without ca-certificates, at SER2NET_STANDALONE_CA=<the distribution's path>),
+     without ca-certificates, at SER2NETWEB_STANDALONE_CA=<the distribution's path>),
      so the OIDC check also proves the binary found it on its own.
 Test-side needs: cryptography; pyelftools (Linux) or pefile (Windows); docker for 4.
 
@@ -68,14 +68,15 @@ ROOT = os.path.join(os.path.dirname(__file__), "..")
 sys.path.insert(0, os.path.join(ROOT, "lib"))
 sys.path.insert(0, ROOT)
 
-from app import __version__, standalone
-from app.web.auth import hash_password
+from ser2netweb import __version__, envvars, standalone
+from ser2netweb.web.auth import hash_password
 from _server import ui_cookie
 
-BIN = os.path.abspath(os.environ["SER2NET_STANDALONE_BIN"]) if os.environ.get("SER2NET_STANDALONE_BIN") else ""
-IMAGE = os.environ.get("SER2NET_STANDALONE_IMAGE", "")
-IMAGE_CA = os.environ.get("SER2NET_STANDALONE_CA", "")
-MAX_GLIBC = tuple(int(x) for x in os.environ.get("SER2NET_MAX_GLIBC", "2.28").split("."))
+_BIN = envvars.get("SER2NETWEB_STANDALONE_BIN")
+BIN = os.path.abspath(_BIN) if _BIN else ""
+IMAGE = envvars.get("SER2NETWEB_STANDALONE_IMAGE", "")
+IMAGE_CA = envvars.get("SER2NETWEB_STANDALONE_CA", "")
+MAX_GLIBC = tuple(int(x) for x in envvars.get("SER2NETWEB_MAX_GLIBC", "2.28").split("."))
 WINDOWS = os.name == "nt"
 PASSWORD = "standalone-pass-1"
 
@@ -145,7 +146,7 @@ def posix_path(path):
 
 
 def spec_datas():
-    """The data entries ser2net.spec hands PyInstaller, without PyInstaller: the spec
+    """The data entries ser2netweb.spec hands PyInstaller, without PyInstaller: the spec
     runs with stand-ins for collect_all() and the build steps."""
     hooks = types.ModuleType("PyInstaller.utils.hooks")
     hooks.collect_all = lambda package: ([], [], [])
@@ -162,8 +163,8 @@ def spec_datas():
     saved = {name: sys.modules.get(name) for name in fakes}
     sys.modules.update(fakes)
     try:
-        with open(os.path.join(ROOT, "ser2net.spec"), encoding="utf-8") as fh:
-            exec(compile(fh.read(), "ser2net.spec", "exec"),
+        with open(os.path.join(ROOT, "ser2netweb.spec"), encoding="utf-8") as fh:
+            exec(compile(fh.read(), "ser2netweb.spec", "exec"),
                  {"Analysis": analysis, "PYZ": lambda *a, **k: None, "EXE": lambda *a, **k: None})
     finally:
         for name, module in saved.items():
@@ -191,10 +192,10 @@ def bundled_files(datas):
 
 
 def app_data_files():
-    """Every file under app/ that isn't Python source or bytecode — what the code reads
+    """Every file under ser2netweb/ that isn't Python source or bytecode — what the code reads
     next to itself at run time (in a frozen build: inside the bundle)."""
     out = set()
-    for d, dirs, files in os.walk(os.path.join(ROOT, "app")):
+    for d, dirs, files in os.walk(os.path.join(ROOT, "ser2netweb")):
         dirs[:] = [x for x in dirs if x != "__pycache__" and not x.startswith(".")]
         out.update(posix_path(os.path.relpath(os.path.join(d, f), ROOT)) for f in files
                    if not f.startswith(".") and not f.endswith((".py", ".pyc", ".pyo")))
@@ -202,20 +203,20 @@ def app_data_files():
 
 
 def test_spec_bundles_app_data():
-    from app import i18n
-    from app.web import server
+    from ser2netweb import i18n
+    from ser2netweb.web import server
 
     datas = spec_datas()
     for src, _ in datas:
-        assert glob.glob(os.path.join(ROOT, src)), f"ser2net.spec bundles {src}, which doesn't exist"
+        assert glob.glob(os.path.join(ROOT, src)), f"ser2netweb.spec bundles {src}, which doesn't exist"
     needed = app_data_files()
     for d in (server.TEMPLATES_DIR, server.STATIC_DIR, i18n.LOCALE_DIR):
         rel = posix_path(os.path.relpath(d, ROOT))
         assert any(p.startswith(rel + "/") for p in needed), f"no files found in {rel}"
     missing = sorted(needed - bundled_files(datas))
-    assert not missing, ("the app reads these at run time, but ser2net.spec leaves them out of "
+    assert not missing, ("the app reads these at run time, but ser2netweb.spec leaves them out of "
                          "the executables:\n  " + "\n  ".join(missing))
-    print(f"ser2net.spec bundles all {len(needed)} data files under app/ "
+    print(f"ser2netweb.spec bundles all {len(needed)} data files under ser2netweb/ "
           "(templates, static assets, translations)  OK")
 
 
@@ -250,8 +251,8 @@ def sweep_with_tmpfiles(tmp):
     if tmpfiles_version() < 242:
         return False
     left = os.path.join(tmp, "_MEI_left_behind")
-    os.makedirs(os.path.join(left, "app"))
-    with open(os.path.join(left, "app", "base.html"), "w") as fh:
+    os.makedirs(os.path.join(left, "ser2netweb"))
+    with open(os.path.join(left, "ser2netweb", "base.html"), "w") as fh:
         fh.write("x")
     conf = tmp + ".tmpfiles.conf"
     with open(conf, "w") as fh:
@@ -270,13 +271,13 @@ def test_unpacked_dir_kept():
     try:
         tmp = os.path.join(work, "tmp")
         bundle = os.path.join(tmp, "_MEI0000beefcafe00")
-        catalog = os.path.join(bundle, "app", "locale", "tr.json")
+        catalog = os.path.join(bundle, "ser2netweb", "locale", "tr.json")
         os.makedirs(os.path.dirname(catalog))
         with open(catalog, "w") as fh:
             fh.write("{}")
-        entries = [bundle, os.path.join(bundle, "app"), os.path.dirname(catalog), catalog]
+        entries = [bundle, os.path.join(bundle, "ser2netweb"), os.path.dirname(catalog), catalog]
         if not WINDOWS:  # PyInstaller links shared libraries on Linux
-            os.symlink(os.path.join("app", "locale", "tr.json"), os.path.join(bundle, "libssl.so.3"))
+            os.symlink(os.path.join("ser2netweb", "locale", "tr.json"), os.path.join(bundle, "libssl.so.3"))
             entries.append(os.path.join(bundle, "libssl.so.3"))
         month_ago = (int(time.time()) - 30 * 86400) * 10**9  # whole seconds: exact on NTFS too
         follow = os.utime not in os.supports_follow_symlinks
@@ -366,7 +367,7 @@ def make_test_pki(d):
         return b.sign(signer, hashes.SHA256())
 
     ca_key = ec.generate_private_key(ec.SECP256R1())
-    ca_name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "ser2net test CA")])
+    ca_name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "ser2netweb test CA")])
     ca = build(ca_name, ca_name, ca_key.public_key(), ca_key, True)
     key = ec.generate_private_key(ec.SECP256R1())
     cert = build(x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "127.0.0.1")]), ca_name,
@@ -507,13 +508,13 @@ def write_config(data_dir, ui, raw_port, issuer, mqtt_port, pty=None, baud_port=
 def image_ca_path():
     """Where the binary should find the CA bundle in IMAGE: the first of
     standalone.CA_BUNDLES the image has (some carry several — current Fedora has the
-    Debian path too), else SER2NET_STANDALONE_CA for images without ca-certificates."""
+    Debian path too), else SER2NETWEB_STANDALONE_CA for images without ca-certificates."""
     script = ("for f in " + " ".join(standalone.CA_BUNDLES) +
               '; do if [ -f "$f" ]; then echo "$f"; exit 0; fi; done')
     out = subprocess.run(["docker", "run", "--rm", "--entrypoint", "sh", IMAGE, "-c", script],
                          capture_output=True, text=True, timeout=300)
     found = out.stdout.strip()
-    assert found or IMAGE_CA, f"{IMAGE} has no CA bundle and SER2NET_STANDALONE_CA is not set"
+    assert found or IMAGE_CA, f"{IMAGE} has no CA bundle and SER2NETWEB_STANDALONE_CA is not set"
     return found or IMAGE_CA
 
 
@@ -670,7 +671,7 @@ def bundle_problems_windows(bundle):
 
 
 def check_version_resource(exe):
-    """The Windows exe carries a VS_VERSIONINFO built from app.__version__ (ser2net.spec
+    """The Windows exe carries a VS_VERSIONINFO built from ser2netweb.__version__ (ser2netweb.spec
     + tools/win_version_info.py), so Explorer shows a version/publisher instead of nothing
     and the exe no longer uses PyInstaller's default console icon."""
     import pefile
@@ -688,7 +689,7 @@ def check_version_resource(exe):
                    getattr(e, "id", None) == 14  # RT_GROUP_ICON
                    for e in pe.DIRECTORY_ENTRY_RESOURCE.entries)
     pe.close()
-    assert strings.get("ProductName") == "ser2net", strings
+    assert strings.get("ProductName") == "ser2netweb", strings
     assert strings.get("OriginalFilename") == "ser2net.exe", strings
     assert strings.get("ProductVersion") == __version__, strings
     assert strings.get("FileVersion", "").startswith(__version__), strings
@@ -778,7 +779,7 @@ def read(path):
 
 def test_binary():
     if not BIN:
-        print("SKIP standalone executable checks: set SER2NET_STANDALONE_BIN=<built binary> "
+        print("SKIP standalone executable checks: set SER2NETWEB_STANDALONE_BIN=<built binary> "
               "(the CI 'standalone' jobs do)")
         return
     where = f"in a clean {IMAGE} container" if IMAGE else "natively"
@@ -793,7 +794,7 @@ def test_binary():
     run = Launch(work, pki)
     try:
         version = run.version()
-        assert version == f"ser2net {__version__}", f"--version printed {version!r}"
+        assert version == f"ser2netweb {__version__}", f"--version printed {version!r}"
         print(f"{where}: --version -> {version}  OK")
 
         # both platforms now ship a python-build-standalone interpreter with a supported
@@ -815,7 +816,7 @@ def test_binary():
             assert f"LICENSE.{lib} " in licenses, f"--licenses misses {lib}"
         if not WINDOWS:
             assert "LICENSE.mpdecimal " in licenses, "--licenses misses mpdecimal"
-        print(f"{where}: --licenses covers ser2net, CPython/OpenSSL and every bundled package  OK")
+        print(f"{where}: --licenses covers ser2netweb, CPython/OpenSSL and every bundled package  OK")
 
         # the build's SBOM (next to the executable after a build; not in the distro jobs)
         sbom = os.path.join(ROOT, "build", "ser2net.cdx.json")
@@ -839,10 +840,10 @@ def test_binary():
             assert re.search(r"ldap3\s+2\.\d", about), f"bundled ldap3 not found:\n{about}"
             assert re.search(r"pyasn1\s+0\.\d", about), f"bundled pyasn1 not found:\n{about}"
             assert "not installed" not in about and "failed to import" not in about, about
-            about = run.output(["--about"], {"SER2NET_LIB_OVERRIDE": override})
+            about = run.output(["--about"], {"SER2NETWEB_LIB_OVERRIDE": override})
             assert re.search(r"ldap3\s+0\.0-override-test", about), \
-                f"SER2NET_LIB_OVERRIDE did not replace ldap3:\n{about}"
-            print(f"{where}: SER2NET_LIB_OVERRIDE loads a replacement ldap3 (LGPL)  OK")
+                f"SER2NETWEB_LIB_OVERRIDE did not replace ldap3:\n{about}"
+            print(f"{where}: SER2NETWEB_LIB_OVERRIDE loads a replacement ldap3 (LGPL)  OK")
 
         # the ports picked just before the start: the runs above take a while, and a port
         # freed that long is anyone's
@@ -892,7 +893,7 @@ def test_binary():
 
         # (before the certificate below: once TLS is configured, new cookies are Secure-only)
         import markupsafe
-        with open(os.path.join(ROOT, "app", "locale", "tr.json"), encoding="utf-8") as fh:
+        with open(os.path.join(ROOT, "ser2netweb", "locale", "tr.json"), encoding="utf-8") as fh:
             tr = json.load(fh)
         st, headers, _ = s.request("/lang/tr?next=/settings")
         assert st == 303 and headers and headers.get("Location") == "/settings", f"/lang/tr: {st}"

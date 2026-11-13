@@ -22,7 +22,7 @@ executables — and the openssl command is only a fallback for source installs.
      Settings → Admin TLS shows it, and generating while the server's clock reads
      earlier than it can warns (generated all the same)
 Parts 1, 3 and 4 need cryptography (pip install cryptography) and are skipped without (a
-SKIP line, which tests/run_all.py repeats), or fail with SER2NET_OPTIONAL_TESTS=1.
+SKIP line, which tests/run_all.py repeats), or fail with SER2NETWEB_OPTIONAL_TESTS=1.
 
 Run: python3 tests/test_tls_selfsigned.py
 """
@@ -54,9 +54,9 @@ from _clock import WallClock
 from _optional import need
 from _server import ui_cookie
 
-from app import clock, config, runtime
-from app.web import certinfo, selfsigned
-from app.web.auth import hash_password
+from ser2netweb import clock, config, runtime
+from ser2netweb.web import certinfo, selfsigned
+from ser2netweb.web.auth import hash_password
 
 
 class EmptyPath:
@@ -184,7 +184,7 @@ def test_web_button_with_empty_path():
     empty = tempfile.mkdtemp()
     env = dict(os.environ, PATH=empty)
     log = open(os.path.join(tmp, "server.log"), "wb")  # never an unread pipe
-    srv = subprocess.Popen([sys.executable, os.path.abspath(os.path.join(ROOT, "ser2net.py")),
+    srv = subprocess.Popen([sys.executable, os.path.abspath(os.path.join(ROOT, "ser2netweb.py")),
                             "--no-bootstrap", "--config", cfg_path],
                            cwd=ROOT, env=env, stdin=subprocess.DEVNULL, stdout=log,
                            stderr=subprocess.STDOUT)
@@ -304,7 +304,7 @@ def test_certificate_info():
         cert, key = os.path.join(d, "cert.pem"), os.path.join(d, "key.pem")
         selfsigned.generate(cert, key)
         info = certinfo.read(cert)
-        assert info.subject == "ser2net" and info.self_signed, info
+        assert info.subject == "ser2netweb" and info.self_signed, info
         assert {"localhost", "127.0.0.1", "::1"} <= set(info.names), info.names
         assert info.state() == "valid" and 823 <= info.days_left() <= 824, info
         with NoCryptography():
@@ -372,13 +372,13 @@ def test_certificate_info():
         try:
             assert certinfo.read(os.path.join("tls", "cert.pem")) == info
             assert runtime.tls_certificate_note(os.path.join("tls", "cert.pem")).startswith(
-                "admin UI TLS certificate: ser2net, self-signed")
+                "admin UI TLS certificate: ser2netweb, self-signed")
         finally:
             config.set_data_dir(None)
         print("certinfo: a relative certificate path is read from the data directory  OK")
 
         line = runtime.tls_certificate_note(cert)
-        assert line.startswith("admin UI TLS certificate: ser2net, self-signed, valid ") and \
+        assert line.startswith("admin UI TLS certificate: ser2netweb, self-signed, valid ") and \
             re.search(r"\b\d+ days left$", line), line
         line = runtime.tls_certificate_note(paths["old"])
         assert line.startswith("WARNING: admin UI TLS certificate: old, self-signed, valid ") \
@@ -421,11 +421,11 @@ async def _call(app, method, path, cookie, body=b""):
 
 
 def test_settings_shows_certificate():
-    from app.config import AppConfig, ConfigStore
-    from app.state import AppState
-    from app.web import auth
-    from app.web.routes import settings as settings_routes
-    from app.web.server import build_app
+    from ser2netweb.config import AppConfig, ConfigStore
+    from ser2netweb.state import AppState
+    from ser2netweb.web import auth
+    from ser2netweb.web.routes import settings as settings_routes
+    from ser2netweb.web.server import build_app
 
     now = datetime.datetime.now(datetime.timezone.utc)
     tmp = tempfile.mkdtemp(prefix="ser2net_certinfo_")
@@ -467,7 +467,7 @@ def test_settings_shows_certificate():
         page = settings_page()
         assert "Self-signed certificate generated" in page, page[:400]
         assert "which can’t be right" in page, page[page.find("banner"):][:600]
-        assert certinfo.read(cfg.admin_ui.tls_cert).subject == "ser2net"
+        assert certinfo.read(cfg.admin_ui.tls_cert).subject == "ser2netweb"
         page = settings_page()
         assert "self-signed</span>" in page and re.search(r">\d+ days left<", page), page
         status, _ = asyncio.run(_call(app, "POST", "/settings/tls/generate", cookie, form))

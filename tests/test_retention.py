@@ -6,7 +6,7 @@
     first record is older than N days; audit.log then keeps up to 5 older files, which
     the audit page reads; backups named for an older time go, the newest 5 never; a
     mapping's log keeps at most N of its 15 days, with no floor of lines;
-  * a clock set ahead while ser2net runs deletes nothing early (storage.now());
+  * a clock set ahead while ser2netweb runs deletes nothing early (storage.now());
   * a hand-edited value out of range is read as 0 or 3650, with a load note.
 No server: AppState on a temporary data folder.
 
@@ -25,9 +25,9 @@ from unittest import mock
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "lib"))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-import app.state as state_mod
-from app.config import AppConfig, ConfigStore, MappingConfig
-from app.state import AppState, RetainingFileHandler, write_audit_record
+import ser2netweb.state as state_mod
+from ser2netweb.config import AppConfig, ConfigStore, MappingConfig
+from ser2netweb.state import AppState, RetainingFileHandler, write_audit_record
 
 DAY = 86400
 

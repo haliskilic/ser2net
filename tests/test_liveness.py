@@ -5,7 +5,7 @@ Checks:
     stack to hang.log (naming the blocking call), a line to all.log, and exits 70;
   * a process that was frozen as a whole (sleep, docker pause, a suspended VM) is not
     ended for it: the watchdog measures anew; without heartbeats it still fires later;
-  * SER2NET_LOOP_WATCHDOG: seconds, 0 = off, anything else: the default and a warning;
+  * SER2NETWEB_LOOP_WATCHDOG: seconds, 0 = off, anything else: the default and a warning;
   * the next start keeps the previous hang.log as hang.log.1 and says so in all.log;
   * sd_notify does nothing without NOTIFY_SOCKET; with it a real server sends READY=1
     (with a STATUS) once its UI listens, WATCHDOG=1 pings under WatchdogSec=, STOPPING=1
@@ -26,13 +26,13 @@ import time
 
 from _server import ROOT, Browser, Server, free_port, wait_port
 
-from app import runtime, sdnotify, watchdog
-from app.web.auth import hash_password
+from ser2netweb import runtime, sdnotify, watchdog
+from ser2netweb.web.auth import hash_password
 
 BLOCKING_SCRIPT = r'''
 import asyncio, sys, time
 sys.path.insert(0, sys.argv[1])
-from app import watchdog
+from ser2netweb import watchdog
 watchdog.CHECK_S = 0.2
 
 async def main():
@@ -62,7 +62,7 @@ def test_blocked_loop_exits():
         assert "the event loop did not run for" in hang.splitlines()[0], hang[:200]
         assert "Thread" in hang and "<string>" in hang, hang  # the blocked main thread's stack
         with open(os.path.join(d, "all.log"), encoding="utf-8") as fh:
-            assert "ser2net exits (70) to be started again" in fh.read()
+            assert "ser2netweb exits (70) to be started again" in fh.read()
         assert "the event loop did not run for" in p.stderr
         print(f"blocked event loop: hang.log with the stacks, all.log line, exit 70 after "
               f"{took:.1f} s  OK")
@@ -130,7 +130,7 @@ def test_settings_and_previous_hang():
         assert os.path.exists(os.path.join(d, "hang.log.1"))
     finally:
         shutil.rmtree(d, ignore_errors=True)
-    print("SER2NET_LOOP_WATCHDOG parsed (0 = off, bad -> default + warning); previous "
+    print("SER2NETWEB_LOOP_WATCHDOG parsed (0 = off, bad -> default + warning); previous "
           "hang.log kept as .1  OK")
 
 

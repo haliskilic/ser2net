@@ -1,6 +1,6 @@
 """The dashboard's self-refreshing tables are answered cheaply, and off the event loop.
 
-No server, no sockets: LiveTable (app/web/routes/common.py) and the snapshots the mappings
+No server, no sockets: LiveTable (ser2netweb/web/routes/common.py) and the snapshots the mappings
 table and the fleet view give it.
 
   * the hash is "<shape>.<counters>"; asking with the current one gets 204, with only
@@ -32,12 +32,12 @@ ROOT = os.path.join(os.path.dirname(__file__), "..")
 sys.path.insert(0, os.path.join(ROOT, "lib"))
 sys.path.insert(0, ROOT)
 
-from app.config import MappingConfig
-from app.engine.bridge import RunnerStatus
-from app.web.routes.cluster import _fleet_snapshot
-from app.web.routes.common import Ctx, LiveTable
-from app.web.routes.mappings import _SHOWN, _in_out, _row_shape, _steady
-from app.web.server import make_templates
+from ser2netweb.config import MappingConfig
+from ser2netweb.engine.bridge import RunnerStatus
+from ser2netweb.web.routes.cluster import _fleet_snapshot
+from ser2netweb.web.routes.common import Ctx, LiveTable
+from ser2netweb.web.routes.mappings import _SHOWN, _in_out, _row_shape, _steady
+from ser2netweb.web.server import make_templates
 
 
 class Request:
@@ -158,7 +158,7 @@ def _mappings_shape():
     assert _steady(status(one).as_dict()) != _steady(dict(a, state="error"))
     assert _steady(dict(a, reconnects=7, queue_overflows=3)) == _steady(a), "not shown: not the shape"
     assert _in_out(b) == "4.0 KB / 20 B" and _in_out(None) == "0 B / 0 B"
-    src = open(os.path.join(ROOT, "app", "web", "templates", "_mappings_body.html"),
+    src = open(os.path.join(ROOT, "ser2netweb", "web", "templates", "_mappings_body.html"),
                encoding="utf-8").read()
     used = set(re.findall(r"\bst\.(\w+)", src))
     assert used <= set(_SHOWN) | {"bytes_in", "bytes_out", "clients"}, \

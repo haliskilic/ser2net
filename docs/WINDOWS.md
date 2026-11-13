@@ -1,4 +1,4 @@
-# ser2net on Windows
+# ser2netweb on Windows
 
 Running the standalone `ser2net-windows-x64.exe`, as a background service or
 interactively. The exe bundles everything (Python, OpenSSL, the VC++ runtime, MQTT /
@@ -27,7 +27,7 @@ run the downloaded exe from anywhere. A new service keeps its data in
 Both folders end up owned by *Administrators*, with only SYSTEM and Administrators able to
 change them (Users may read and run the program) — not even your own account outside an
 elevated prompt, since a program you run unelevated must not be able to change what the
-service runs as SYSTEM. So run ser2net against the service's data directory only from an
+service runs as SYSTEM. So run ser2netweb against the service's data directory only from an
 elevated prompt, with the service stopped (or `--set-password`, also while it runs); it
 leaves the folder's permissions as they are. A new service won't take over a data folder
 that holds files owned by another account (a standard user can create folders in
@@ -38,7 +38,7 @@ that holds files owned by another account (a standard user can create folders in
 The exe also runs in a console window (double-click, or from a prompt), which is handy to
 try it out. For production install the service: it starts at boot and needs nobody signed
 in. In a console window, a click into it (QuickEdit mode, on by default) or *Edit → Mark*
-pauses the window's output until you press Esc or Enter; ser2net keeps forwarding
+pauses the window's output until you press Esc or Enter; ser2netweb keeps forwarding
 meanwhile, only its console lines wait (and past a limit are dropped and counted, the next
 line says how many); `all.log` in the data directory has every line.
 
@@ -68,11 +68,11 @@ The service is *Starting* until its mappings were started and its admin UI liste
 *Running* from then on, so `--install-service` waits for that and reports a service that
 stops while it starts (its exit code, and where to look) instead of success. A service
 whose event loop is stuck for 90 s writes `hang.log` and exits, and is started again 5 s
-later (`SER2NET_LOOP_WATCHDOG`, a system environment variable, sets the limit; `0` = off).
+later (`SER2NETWEB_LOOP_WATCHDOG`, a system environment variable, sets the limit; `0` = off).
 
 Look in the data directory (`C:\ProgramData\ser2net\` by default):
 
-- `all.log` — ser2net's log, with the reason a start failed (a `config.json` that can't be
+- `all.log` — ser2netweb's log, with the reason a start failed (a `config.json` that can't be
   read, an admin UI address that is in use or not on this machine, a TLS file that can't
   be loaded).
 - `service.log` — what Python itself reports (a traceback no handler took, a crash
@@ -109,7 +109,7 @@ current one has one is refused, so an upgrade can't start over empty.)
 
 A source checkout can't copy itself to an admin-only folder, so `--install-service`
 refuses while an account other than SYSTEM and Administrators can change the interpreter,
-the checkout, `app\` or `lib\` — your own account included when it owns the folder. Put
+the checkout, `ser2netweb\` or `lib\` — your own account included when it owns the folder. Put
 the checkout and Python under `C:\Program Files\` (or another admin-only folder) owned by
 Administrators; for a folder you already have, from an elevated prompt:
 
@@ -146,13 +146,13 @@ A named service (`--service-name NAME`) needs a rule of its own for its exe,
 `C:\Program Files\ser2net\NAME.exe`; `--install-service` prints it with the rule name it
 uses.
 
-Two environment variables change how ser2net uses Windows (for the service: system
-environment variables, then restart it): `SER2NET_WINDOWS_LOOP=proactor` lifts the
-512-socket limit of the default event loop, and `SER2NET_WINDOWS_SERIAL=pyserial` goes back
+Two environment variables change how ser2netweb uses Windows (for the service: system
+environment variables, then restart it): `SER2NETWEB_WINDOWS_LOOP=proactor` lifts the
+512-socket limit of the default event loop, and `SER2NETWEB_WINDOWS_SERIAL=pyserial` goes back
 to pyserial's own serial writes if a virtual COM driver misbehaves with the paced ones
 (README → *Run as a service*).
 
-ser2net does not open the firewall for you (secure by default). Prefer binding the admin
+ser2netweb does not open the firewall for you (secure by default). Prefer binding the admin
 UI to `127.0.0.1` and reaching it over SSH / a reverse proxy if you don't need it on the
 LAN; the mapping ports still need the rule to be reachable from other hosts. Behind a
 reverse proxy (IIS ARR, nginx), set **Settings → Reverse proxy** — the service needs no
@@ -191,7 +191,7 @@ paths is read by a reload too. A new admin UI address needs the reinstall above.
 
 ## One instance per data directory
 
-ser2net locks its data directory (`ser2net.lock`) while it runs, so a second instance on
+ser2netweb locks its data directory (`ser2net.lock`) while it runs, so a second instance on
 the **same** data directory refuses to start rather than two processes overwriting each
 other's `config.json` — a plain `--reconfigure` while the service runs, too.
 `--set-password`, `--sign-out-all` (account recovery) and `--reload` are not refused: while
@@ -216,7 +216,7 @@ Verify the download before trusting it:
 - **Build provenance** (needs the GitHub CLI) — proves GitHub Actions built it from this
   repository:
   ```powershell
-  gh attestation verify .\ser2net-windows-x64.exe -R haliskilic/ser2net
+  gh attestation verify .\ser2net-windows-x64.exe -R haliskilic/ser2netweb
   ```
 
 Once verified, run it past SmartScreen with **More info → Run anyway**. Signing will be

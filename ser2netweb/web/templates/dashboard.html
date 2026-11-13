@@ -1,0 +1,72 @@
+{% extends "_shell.html" %}
+{% block title %}{% if node_name %}{{ node_name }} · {% endif %}{{ _("Mappings") }} — ser2netweb{% endblock %}
+{# the Monitor console (_console.html) opens only here, in #form-panel #}
+{% block head %}
+  <link rel="stylesheet" href="{{ base }}/static/xterm.css?v={{ asset_version }}">
+  <script src="{{ base }}/static/xterm.js?v={{ asset_version }}" defer></script>
+  <script src="{{ base }}/static/xterm-addon-fit.js?v={{ asset_version }}" defer></script>
+{% endblock %}
+{% block main %}
+<section class="panel">
+  <div class="panel-head">
+    <h2>{{ _("Serial → Network mappings") }}</h2>
+    {% if can_edit %}<button class="btn primary" id="add-mapping" hx-get="{{ base }}/api/mappings/form" hx-target="#form-panel" hx-swap="innerHTML show:top">{{ _("+ Add mapping") }}</button>{% endif %}
+  </div>
+  <div id="form-panel"></div>
+  <div class="toolbar" data-mapping-tools>
+    <input type="search" data-filter-text placeholder="{{ _('Search name, port, address…') }}" aria-label="{{ _('Search mappings') }}">
+    <select data-filter-state aria-label="{{ _('Show') }}">
+      <option value="">{{ _("All states") }}</option>
+      <option value="running">{{ _("Running") }}</option>
+      <option value="stopped">{{ _("Stopped") }}</option>
+      <option value="problem">{{ _("Problems") }}</option>
+    </select>
+    <select data-sort aria-label="{{ _('Sort by') }}">
+      <option value="">{{ _("Configured order") }}</option>
+      <option value="name">{{ _("Name") }}</option>
+      <option value="state">{{ _("State") }}</option>
+      <option value="port">{{ _("Network port") }}</option>
+    </select>
+    {% if can_edit %}
+    {# ticks / unticks every row the search and the state filter show (only those) #}
+    <label class="chk select-shown"><input type="checkbox" id="select-shown" data-select-shown> {{ _("Select all shown") }}</label>
+    <span class="bulk" data-bulk hidden>
+      <span class="muted" data-bulk-count aria-live="polite"></span>
+      <button class="btn sm" type="button" data-bulk-action="start" hx-disabled-elt="this">{{ _("Start") }}</button>
+      <button class="btn sm" type="button" data-bulk-action="stop" hx-disabled-elt="this">{{ _("Stop") }}</button>
+      <button class="btn sm" type="button" data-bulk-action="restart" hx-disabled-elt="this">{{ _("Restart") }}</button>
+      <button class="link" type="button" data-bulk-clear>{{ _("clear") }}</button>
+    </span>
+    {% endif %}
+    <span class="muted" data-filter-count role="status"></span>
+  </div>
+  <div id="mappings"
+       hx-get="{{ base }}/api/status"
+       hx-trigger="load, every 2s, refreshMappings from:body"
+       hx-swap="innerHTML">
+    <p class="muted">{{ _("Loading…") }}</p>
+  </div>
+</section>
+
+{% if cluster_on %}
+<section class="panel">
+  <div class="panel-head">
+    <h2>{{ _("Cluster — all nodes on the LAN") }}</h2>
+    <span class="muted">{{ _("read-only · auto-discovered · each row shows its host (name + IP)") }}</span>
+  </div>
+  <div id="cluster" hx-get="{{ base }}/api/cluster/status" hx-trigger="load, every 5s, refreshCluster from:body" hx-swap="innerHTML">
+    <p class="muted">{{ _("Discovering nodes…") }}</p>
+  </div>
+</section>
+{% endif %}
+
+<section class="panel">
+  <div class="panel-head">
+    <h2>{{ _("Detected serial ports") }}</h2>
+    <button class="btn" hx-get="{{ base }}/api/ports/table" hx-target="#ports-table" hx-swap="innerHTML">{{ _("↻ Refresh") }}</button>
+  </div>
+  <div id="ports-table" hx-get="{{ base }}/api/ports/table" hx-trigger="load, every 5s, refreshPorts" hx-swap="innerHTML">
+    <p class="muted">{{ _("Scanning…") }}</p>
+  </div>
+</section>
+{% endblock %}

@@ -20,9 +20,9 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "lib"))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from app.engine import modbus, sparkplug
-from app.engine.sparkplug import DataType as T
-from app.engine.sparkplug import Metric, Payload
+from ser2netweb.engine import modbus, sparkplug
+from ser2netweb.engine.sparkplug import DataType as T
+from ser2netweb.engine.sparkplug import Metric, Payload
 
 
 def expect_value_error(fn, *args, match="", **kwargs):
@@ -477,8 +477,8 @@ NODE_POINTS = [
 def edge_node(**network):
     """A SparkplugNode for NODE_POINTS whose writes are recorded instead of reaching a bus,
     and whose births are counted instead of published (no broker, no gateway)."""
-    from app.config import MappingConfig
-    from app.engine.sparkplug_node import SparkplugNode
+    from ser2netweb.config import MappingConfig
+    from ser2netweb.engine.sparkplug_node import SparkplugNode
     m = MappingConfig.from_dict({
         "name": "edge", "serial": {"port": "COM3"},
         "network": dict({"protocol": "modbus", "port": 502}, **network),
@@ -533,7 +533,7 @@ def test_command_limits():
     (decoding stops at the one too many), an NCMD more than NCMD_MAX_METRICS, neither more
     than CMD_MAX_BYTES; one NCMD rebirths once; the log says what a command leaves out in
     one line, at most once a minute for one kind and device."""
-    from app.engine import sparkplug_node
+    from ser2netweb.engine import sparkplug_node
     node, command, writes, logs, births = edge_node()
     # unit1 has two points: three metrics are refused, the first two not written either
     command("DCMD", "unit1", Metric("pump", T.Boolean, True), Metric("pump", T.Boolean, False),
@@ -579,7 +579,7 @@ def test_rebirth_spacing():
     """A rebirth asked for sooner than REBIRTH_EVERY_S after the last births goes out once,
     when that time is up, for all the requests that came meanwhile; one asked for later
     goes out at once. Births for another reason (a reconnect) answer a pending request."""
-    from app.engine import sparkplug_node
+    from ser2netweb.engine import sparkplug_node
     node, command, _writes, logs, _births = edge_node()
     del node.birth                            # the real births, to a recording publisher
     sent = []

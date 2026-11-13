@@ -43,10 +43,10 @@ from unittest import mock
 
 from _server import Browser, Server, free_port
 
-from app import config as config_module
-from app.config import BACKUPS_KEPT, AppConfig, ConfigError, ConfigStore, MappingConfig
-from app.importer import _overlay, apply_import, parse_mappings_file, plan_rows
-from app.web.auth import hash_password, verify_password
+from ser2netweb import config as config_module
+from ser2netweb.config import BACKUPS_KEPT, AppConfig, ConfigError, ConfigStore, MappingConfig
+from ser2netweb.importer import _overlay, apply_import, parse_mappings_file, plan_rows
+from ser2netweb.web.auth import hash_password, verify_password
 
 PW = "backup-pass-1"
 
@@ -114,7 +114,7 @@ def test_store_start_stop_and_clock():
     """A start / stop takes no backup of its own; a save that changes nothing writes
     nothing; a new backup is the newest also when the clock went back; a backup that can't
     be written is reported."""
-    import app.config as config_module
+    import ser2netweb.config as config_module
 
     d = tempfile.mkdtemp(prefix="s2n_bk2_")
     real_now = config_module.now
@@ -279,7 +279,7 @@ def test_planner():
     rows = [r["action"] for r in plan_rows(cur, incoming, "replace")]
     assert rows.count("remove") == 2 and rows.count("add") == 3, rows
     plan = parse_mappings_file(json.dumps({"users": [], "mappings": [mapping("x" * 12, "X", 1)]}).encode())
-    assert plan.source == "ser2net config.json" and plan.warnings
+    assert plan.source == "ser2netweb config.json" and plan.warnings
     for raw in (b"\xff\xfe", b"not json", b'{"no": "mappings"}', b'{"mappings": [1]}'):
         try:
             parse_mappings_file(raw)
@@ -374,7 +374,7 @@ def test_classic_merge():
     assert (merged[1].network.mode, merged[1].network.protocol) == ("udp", "raw")
     merged[1].network.validate()
 
-    # a ser2net export or config.json still replaces the mapping (as before)
+    # a ser2netweb export or config.json still replaces the mapping (as before)
     export = json.dumps({"mappings": [dict(m.to_dict(), id="ffffffffff09") for m in first]})
     plan4 = parse_mappings_file(export.encode())
     assert not plan4.classic
@@ -584,7 +584,7 @@ def main():
 def test_start_stop_backups():
     """Starting and stopping mappings (REST API, bulk) takes no backup of its own, so the
     backups of real changes stay; an import whose backup can't be written says so."""
-    from app.web.auth import hash_token
+    from ser2netweb.web.auth import hash_token
 
     token = "s2n_backup-start-stop"
     users = [{"username": "admin", "password_hash": hash_password(PW), "role": "admin",
@@ -756,7 +756,7 @@ def audit_detail(srv, action):
 def test_cluster_setting_changes():
     """What a restore without the accounts takes from the backup's cluster settings is
     listed (preview, banner, audit log) like the sign-in settings."""
-    from app.web.routes.settings import _setting_changes
+    from ser2netweb.web.routes.settings import _setting_changes
 
     old = AppConfig()
     new = AppConfig.from_dict({"cluster": {

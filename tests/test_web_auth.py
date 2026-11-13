@@ -28,7 +28,7 @@ BASE = f"http://127.0.0.1:{UI}"
 
 from _server import ui_cookie
 
-from app.web import auth
+from ser2netweb.web import auth
 
 # the UI's cookie names at that port
 SESSION, CSRF = ui_cookie("ser2net_session", UI), ui_cookie("ser2net_csrf", UI)
@@ -68,7 +68,7 @@ def main():
     with open(cfg, "w") as fh:
         json.dump({"admin_ui": {"bind_ip": "127.0.0.1", "port": UI}}, fh)
     out = server_log(tmp)  # the server's output: a file, never an unread pipe
-    srv = subprocess.Popen([sys.executable, "ser2net.py", "--no-bootstrap", "--config", cfg],
+    srv = subprocess.Popen([sys.executable, "ser2netweb.py", "--no-bootstrap", "--config", cfg],
                            cwd=ROOT, stdin=subprocess.DEVNULL,
                            stdout=out, stderr=subprocess.STDOUT)
     out.close()  # (the server has its own copy)

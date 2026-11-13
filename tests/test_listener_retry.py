@@ -31,14 +31,14 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from _server import Browser, Server
 
-from app import notify
-from app.config import MappingConfig
-from app.engine import mqtt_pub, netguard, serial_io, supervisor
-from app.engine.bridge import MappingRunner
-from app.engine.modbus_gateway import ModbusGatewayRunner
-from app.engine.serial_link import Backoff
-from app.engine.supervisor import Supervisor
-from app.web.auth import hash_password
+from ser2netweb import notify
+from ser2netweb.config import MappingConfig
+from ser2netweb.engine import mqtt_pub, netguard, serial_io, supervisor
+from ser2netweb.engine.bridge import MappingRunner
+from ser2netweb.engine.modbus_gateway import ModbusGatewayRunner
+from ser2netweb.engine.serial_link import Backoff
+from ser2netweb.engine.supervisor import Supervisor
+from ser2netweb.web.auth import hash_password
 
 MISSING_IP = "192.0.2.1"  # TEST-NET-1: never an address of this machine
 

@@ -39,9 +39,9 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from _mqtt_broker import MqttBroker
 from _optional import need
 
-from app.config import MqttSettings
-from app.engine import mqtt_pub
-from app.engine.mqtt_pub import MqttPublisher, PollSelect, use_poll
+from ser2netweb.config import MqttSettings
+from ser2netweb.engine import mqtt_pub
+from ser2netweb.engine.mqtt_pub import MqttPublisher, PollSelect, use_poll
 
 
 class FakeClient:
@@ -641,10 +641,10 @@ def test_aclose_does_not_hold_up_the_loop():
 
 
 async def _runner_stop_checks():
-    from app.config import MappingConfig
-    from app.engine.bridge import MappingRunner
-    from app.engine.modbus_gateway import ModbusGatewayRunner
-    from app.engine.sparkplug_node import SparkplugNode
+    from ser2netweb.config import MappingConfig
+    from ser2netweb.engine.bridge import MappingRunner
+    from ser2netweb.engine.modbus_gateway import ModbusGatewayRunner
+    from ser2netweb.engine.sparkplug_node import SparkplugNode
 
     ticks = 0
 

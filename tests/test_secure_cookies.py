@@ -27,8 +27,8 @@ import types
 
 from _asgi import App, cookies, header
 
-from app.config import AppConfig
-from app.web import auth, oidc_auth
+from ser2netweb.config import AppConfig
+from ser2netweb.web import auth, oidc_auth
 
 PW = "secure-cookie-pass-1"
 CSRF = "secure-cookies-csrf"
@@ -171,7 +171,7 @@ def test_proxy_hsts() -> None:
 
 
 def main() -> None:
-    for name in ("SER2NET_TRUSTED_PROXIES", "FORWARDED_ALLOW_IPS", "SER2NET_PUBLIC_URL"):
+    for name in ("SER2NETWEB_TRUSTED_PROXIES", "FORWARDED_ALLOW_IPS", "SER2NETWEB_PUBLIC_URL"):
         os.environ.pop(name, None)
     test_cookies()
     test_proxy_hsts()

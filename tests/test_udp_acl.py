@@ -31,10 +31,10 @@ import time
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "lib"))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from app.config import ConfigError, MappingConfig
-from app.engine import bridge as bridge_mod
-from app.engine import netguard
-from app.engine.bridge import UDP_BACKLOG_MAX, MappingRunner, _UdpBridge, _UdpPeer
+from ser2netweb.config import ConfigError, MappingConfig
+from ser2netweb.engine import bridge as bridge_mod
+from ser2netweb.engine import netguard
+from ser2netweb.engine.bridge import UDP_BACKLOG_MAX, MappingRunner, _UdpBridge, _UdpPeer
 
 
 class _FakeWriter:
@@ -474,7 +474,7 @@ def test_targets_validation():
     else:
         raise AssertionError("a malformed target was accepted at start")
     # the form: kept when the form doesn't have it (another mode, an older peer's form)
-    from app.web.routes.forms import _build_mapping_dict, _preserve_unmanaged_fields
+    from ser2netweb.web.routes.forms import _build_mapping_dict, _preserve_unmanaged_fields
     existing = mapping(udp_targets=["10.0.0.255:10110"], udp_broadcast=True)
     base = {"name": "u", "kind": "net", "enabled": "on", "serial_port": "COM3",
             "serial_baudrate": "9600", "network_mode": "udp", "network_protocol": "raw",
@@ -521,7 +521,7 @@ async def test_targets_end_to_end():
     'device' that sends one NMEA sentence."""
     from unittest import mock
 
-    from app.engine import serial_io
+    from ser2netweb.engine import serial_io
 
     async def device(reader, writer):
         writer.write(b"$GPGGA,1*00\r\n")

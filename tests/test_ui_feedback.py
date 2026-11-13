@@ -30,12 +30,12 @@ import urllib.parse
 
 from _server import ROOT, Browser, Server, free_port
 
-from app.web.auth import hash_password
+from ser2netweb.web.auth import hash_password
 
 PW = "feedback-pass-1"
 # a taken port in the OS's own words: POSIX, Windows (WSAEADDRINUSE)
 IN_USE = ("address already in use", "only one usage of each socket address")
-with open(os.path.join(ROOT, "app", "locale", "tr.json"), encoding="utf-8") as _fh:
+with open(os.path.join(ROOT, "ser2netweb", "locale", "tr.json"), encoding="utf-8") as _fh:
     TR = json.load(_fh)
 USERS = [{"username": "admin", "password_hash": hash_password(PW), "role": "admin",
           "pwd_version": 1},

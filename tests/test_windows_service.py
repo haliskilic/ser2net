@@ -12,14 +12,14 @@ Portable part (any OS):
     checkpoints until then), so --install-service reports a start that fails;
   * the service's stderr goes to service.log, and a service that stops on an error says
     why in all.log and the Application event log (the entry itself on Windows only).
-Windows part (SER2NET_SERVICE_TESTS=1, as Administrator; CI runs it): install a
+Windows part (SER2NETWEB_SERVICE_TESTS=1, as Administrator; CI runs it): install a
 service on a throwaway data directory, wait until the UI answers, set the admin's
 password with --set-password while it runs (the service applies it; the request folder
 leaves SYSTEM read and delete, and no other account an entry), kill the process
 and see the SCM restart it, stop it (clean shutdown in the log), set the password again
 while it is stopped (the data directory stays SYSTEM's and Administrators' only), start
-it with that password, remove it. Uses SER2NET_STANDALONE_BIN when set (the frozen exe),
-else python + ser2net.py.
+it with that password, remove it. Uses SER2NETWEB_STANDALONE_BIN when set (the frozen exe),
+else python + ser2netweb.py.
 
 Run: python3 tests/test_windows_service.py
 """
@@ -38,8 +38,8 @@ from types import SimpleNamespace
 
 from _server import ROOT, Browser, free_port, wait_port
 
-from app import runtime, winservice
-from app.web.auth import hash_password
+from ser2netweb import envvars, runtime, winservice
+from ser2netweb.web.auth import hash_password
 
 WINDOWS = os.name == "nt"
 
@@ -51,11 +51,11 @@ def test_command_line():
                    '--data-dir "C:\\Program Files\\ser2net\\data"'), cmd
     cmd = winservice.service_command("plant-2", "D:\\s2n\\", config="D:\\cfg dir\\c.json",
                                      frozen=False, executable="C:\\Python312\\python.exe",
-                                     script="C:\\src\\ser2net.py")
-    assert cmd == ('C:\\Python312\\python.exe C:\\src\\ser2net.py --service --service-name plant-2 '
+                                     script="C:\\src\\ser2netweb.py")
+    assert cmd == ('C:\\Python312\\python.exe C:\\src\\ser2netweb.py --service --service-name plant-2 '
                    '--data-dir D:\\s2n\\ --config "D:\\cfg dir\\c.json"'), cmd
     assert winservice._quote('a "b"\\') == '"a \\"b\\"\\\\"'
-    for bad in ("", "a b", "x" * 65, "a/b", "ser2net;calc"):
+    for bad in ("", "a b", "x" * 65, "a/b", "ser2netweb;calc"):
         try:
             winservice.check_name(bad)
         except winservice.ServiceError:
@@ -242,7 +242,7 @@ def test_registered_command_read_back():
          r"C:\ser2net\data"],                                                  # 2.8.0, frozen
         [r"C:\Program Files\ser2net\plant-2.exe", "--service", "--service-name", "plant-2",
          "--data-dir", r"C:\ProgramData\ser2net\plant 2" "\\", "--config", r'D:\cfg "x"\c.json'],
-        [r"C:\Python312\python.exe", r"C:\src dir\ser2net.py", "--service", "--service-name",
+        [r"C:\Python312\python.exe", r"C:\src dir\ser2netweb.py", "--service", "--service-name",
          "s", "--data-dir", "D:\\s2n\\"],                                       # source
     ]
     for parts in cases:
@@ -252,7 +252,7 @@ def test_registered_command_read_back():
     assert got == {"executable": cases[1][0], "script": None, "service_name": "plant-2",
                    "data_dir": cases[1][5], "config": cases[1][7]}, got
     got = w.parse_service_command(" ".join(w._quote(p) for p in cases[2]))
-    assert got["script"] == r"C:\src dir\ser2net.py" and got["data_dir"] == "D:\\s2n\\", got
+    assert got["script"] == r"C:\src dir\ser2netweb.py" and got["data_dir"] == "D:\\s2n\\", got
     assert w.parse_service_command(r'"C:\Windows\System32\svchost.exe" -k netsvcs') is None
     assert w.split_command_line("  ") == []
     print("registered command line read back: data dir / config / exe, any quoting  OK")
@@ -508,7 +508,7 @@ def test_install_flow_with_a_fake_scm():
 
         # 4. loading the configuration stops the install: the service is started again
         def broken(path):
-            raise SystemExit("ser2net: config.json is not a valid configuration")
+            raise SystemExit("ser2netweb: config.json is not a valid configuration")
         scm = FakeSCM([], existing_cmd=old_cmd)
         try:
             run(scm, prepare=broken)
@@ -642,9 +642,9 @@ def test_run_reports_running_when_ready():
 
 
 def test_cli_leaves_the_choice_to_install():
-    """ser2net.py no longer refuses before install() (which stops a running service
+    """ser2netweb.py no longer refuses before install() (which stops a running service
     first), and tells it whether --data-dir was given at all."""
-    import ser2net as cli
+    from ser2netweb import cli
 
     w = winservice
     saved = (w.require_windows, w.install)
@@ -654,7 +654,7 @@ def test_cli_leaves_the_choice_to_install():
     d = tempfile.mkdtemp(prefix="s2n_cli_")
     holder = subprocess.Popen(
         [sys.executable, "-c", "import sys,time; sys.path.insert(0, sys.argv[2]); "
-         "from app import datalock; assert datalock.acquire(sys.argv[1]) is None; "
+         "from ser2netweb import datalock; assert datalock.acquire(sys.argv[1]) is None; "
          "print('held', flush=True); time.sleep(60)", d, ROOT],
         stdout=subprocess.PIPE, text=True)
     try:
@@ -676,7 +676,7 @@ def test_not_windows():
         return
     d = tempfile.mkdtemp(prefix="s2n_svc_")
     for flag in ("--install-service", "--uninstall-service"):
-        p = subprocess.run([sys.executable, "ser2net.py", "--no-bootstrap", "--data-dir",
+        p = subprocess.run([sys.executable, "ser2netweb.py", "--no-bootstrap", "--data-dir",
                             os.path.join(d, "data"), flag], cwd=ROOT, capture_output=True,
                            text=True, timeout=60, stdin=subprocess.DEVNULL)
         assert p.returncode == 1 and "only on Windows" in p.stderr, (flag, p.stdout, p.stderr)
@@ -853,13 +853,13 @@ def test_stop_progress():
 
 
 def test_real_service():
-    if not WINDOWS or os.environ.get("SER2NET_SERVICE_TESTS") != "1":
-        print("SKIP real Windows service test (Windows + Administrator + SER2NET_SERVICE_TESTS=1)")
+    if not WINDOWS or envvars.get("SER2NETWEB_SERVICE_TESTS") != "1":
+        print("SKIP real Windows service test (Windows + Administrator + SER2NETWEB_SERVICE_TESTS=1)")
         return
     import psutil
 
-    exe = os.environ.get("SER2NET_STANDALONE_BIN")
-    base = [os.path.abspath(exe)] if exe else [sys.executable, os.path.join(ROOT, "ser2net.py")]
+    exe = envvars.get("SER2NETWEB_STANDALONE_BIN")
+    base = [os.path.abspath(exe)] if exe else [sys.executable, os.path.join(ROOT, "ser2netweb.py")]
     name = "s2n-test-" + uuid.uuid4().hex[:6]
     work = tempfile.mkdtemp(prefix="s2n svc ")  # a space in the path, on purpose
     data = os.path.join(work, "data dir")
@@ -887,7 +887,7 @@ def test_real_service():
 
         p = subprocess.run(base + ["--data-dir", data, "--set-password", "admin"],
                            input="svc-pass-2\n", capture_output=True, text=True, timeout=120)
-        assert p.returncode == 0 and "done by the running ser2net" in p.stdout, p.stdout + p.stderr
+        assert p.returncode == 0 and "done by the running ser2netweb" in p.stdout, p.stdout + p.stderr
         Browser(f"http://127.0.0.1:{port}").login("admin", "svc-pass-2")
         # the request folder the (elevated) command made: SYSTEM may read and delete what
         # is in it, no other account has an entry (its owner is whatever the token gives)
@@ -941,7 +941,7 @@ def test_real_service():
         p = subprocess.run(base + ["--data-dir", data, "--set-password", "admin"],
                            input="svc-pass-3\n", capture_output=True, text=True, timeout=120)
         assert p.returncode == 0 and "new password set" in p.stdout, p.stdout + p.stderr
-        assert "done by the running ser2net" not in p.stdout, p.stdout
+        assert "done by the running ser2netweb" not in p.stdout, p.stdout
         sec = winservice.read_security(data)
         assert sec is not None and winservice.service_folder(*sec), read_security_text(data)
         for path in (os.path.join(data, "config.json"), os.path.join(data, "backups")):

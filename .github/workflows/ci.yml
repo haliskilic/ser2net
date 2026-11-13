@@ -92,7 +92,7 @@ jobs:
 
   # Everything derived from the pins: the offline wheels, the build locks and the vendored
   # browser libraries (vendor/npm/package.json). The test legs skip these checks
-  # (SER2NET_SKIP_PIN_CHECKS), so a Dependabot bump fails here alone while the matrix shows
+  # (SER2NETWEB_SKIP_PIN_CHECKS), so a Dependabot bump fails here alone while the matrix shows
   # whether the new versions work. On a failure, the refreshed files are attached (artifact
   # "refreshed-pins") and the summary says how to apply them; on Dependabot's branches
   # .github/workflows/refresh-pins.yml pushes them.
@@ -132,7 +132,7 @@ jobs:
           python tools/refresh_locks.py --verify || python tools/refresh_locks.py || true
           python tools/refresh_assets.py --check || python tools/refresh_assets.py || true
           paths=(vendor/wheels requirements-lock.txt requirements-build.txt vendor/npm
-                 app/web/static tools/licenses/npm)
+                 ser2netweb/web/static tools/licenses/npm)
           git add --intent-to-add "${paths[@]}"
           git diff --binary -- "${paths[@]}" > refreshed-pins.patch
           git diff --stat -- "${paths[@]}"
@@ -173,8 +173,8 @@ jobs:
           python -m playwright install --with-deps chromium
       - name: Long names stay inside their panels (desktop, half-screen, tablet, phone)
         env:
-          SER2NET_UI_TESTS: "1"          # a missing browser fails here instead of skipping
-          SER2NET_UI_ARTIFACTS: ui-screenshots
+          SER2NETWEB_UI_TESTS: "1"          # a missing browser fails here instead of skipping
+          SER2NETWEB_UI_ARTIFACTS: ui-screenshots
         run: python tests/test_ui_layout.py
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
         if: always()
@@ -193,7 +193,7 @@ jobs:
         python-version: ["3.10", "3.11", "3.12", "3.13", "3.14"]
         # The py3.12 legs (the binaries' and the image's Python) also install the pinned
         # optional packages, so the LDAP / OIDC / MQTT code paths run with ldap3, authlib
-        # and paho-mqtt; the other legs keep testing ser2net without them.
+        # and paho-mqtt; the other legs keep testing ser2netweb without them.
         include:
           - python-version: "3.12"
             optional: true
@@ -201,15 +201,15 @@ jobs:
       # tests/test_dead_peer.py: run the real half-open-connection scenarios (they
       # blackhole a loopback flow — iptables via passwordless sudo on Linux, WinDivert
       # as Administrator on Windows). Set in CI, a missing backend fails, not skips.
-      SER2NET_BLACKHOLE_TESTS: "1"
+      SER2NETWEB_BLACKHOLE_TESTS: "1"
       # tests/test_windows_service.py: install / restart / remove a real service
-      # (python + ser2net.py) on the Windows runner (Administrator)
-      SER2NET_SERVICE_TESTS: "1"
+      # (python + ser2netweb.py) on the Windows runner (Administrator)
+      SER2NETWEB_SERVICE_TESTS: "1"
       # tests/_optional.py: where the optional packages are installed, a test that
       # needs a missing one fails instead of skipping
-      SER2NET_OPTIONAL_TESTS: ${{ matrix.optional && '1' || '' }}
+      SER2NETWEB_OPTIONAL_TESTS: ${{ matrix.optional && '1' || '' }}
       # the wheels / locks against the pins: the vendor job's (one red check on a bump)
-      SER2NET_SKIP_PIN_CHECKS: "1"
+      SER2NETWEB_SKIP_PIN_CHECKS: "1"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
@@ -226,10 +226,10 @@ jobs:
         run: |
           python bootstrap.py
           python -c "import os, sys; sys.path[:0] = ['lib', '.']
-          import serial, starlette, uvicorn, app.runtime, app.web.server
+          import serial, starlette, uvicorn, ser2netweb.runtime, ser2netweb.web.server
           lib = os.path.abspath('lib')
           assert all(os.path.abspath(m.__file__).startswith(lib) for m in (serial, starlette, uvicorn))"
-          python ser2net.py --about
+          python ser2netweb.py --about
           rm -rf lib
       - name: Install dependencies (+ cryptography for the in-process certificate tests)
         run: pip install -r requirements.txt cryptography
@@ -269,9 +269,9 @@ jobs:
       matrix:
         os: [ubuntu-latest, windows-latest]
     env:
-      SER2NET_BLACKHOLE_TESTS: "1"
-      SER2NET_SERVICE_TESTS: "1"
-      SER2NET_SKIP_PIN_CHECKS: "1"
+      SER2NETWEB_BLACKHOLE_TESTS: "1"
+      SER2NETWEB_SERVICE_TESTS: "1"
+      SER2NETWEB_SKIP_PIN_CHECKS: "1"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
@@ -300,7 +300,7 @@ jobs:
     name: MQTT with paho-mqtt 1.6
     runs-on: ubuntu-latest
     env:
-      SER2NET_OPTIONAL_TESTS: "1"   # a missing paho-mqtt fails these tests instead of skipping
+      SER2NETWEB_OPTIONAL_TESTS: "1"   # a missing paho-mqtt fails these tests instead of skipping
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
@@ -320,9 +320,9 @@ jobs:
     name: coverage (Linux, full suite)
     runs-on: ubuntu-latest
     env:
-      SER2NET_BLACKHOLE_TESTS: "1"
-      SER2NET_OPTIONAL_TESTS: "1"
-      SER2NET_SKIP_PIN_CHECKS: "1"
+      SER2NETWEB_BLACKHOLE_TESTS: "1"
+      SER2NETWEB_OPTIONAL_TESTS: "1"
+      SER2NETWEB_SKIP_PIN_CHECKS: "1"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
@@ -393,7 +393,7 @@ jobs:
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7.1.0
         with:
           python-version: ${{ matrix.python-version }}
-      - name: bootstrap.py from vendor/wheels, then ser2net from ./lib
+      - name: bootstrap.py from vendor/wheels, then ser2netweb from ./lib
         timeout-minutes: 10
         run: tests/offline_first_start.sh python
 
@@ -414,7 +414,7 @@ jobs:
       - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1  # v4.4.0
         with:
           platforms: arm
-      - name: bootstrap.py from vendor/wheels, then ser2net from ./lib (armv7l, emulated)
+      - name: bootstrap.py from vendor/wheels, then ser2netweb from ./lib (armv7l, emulated)
         timeout-minutes: 30
         env:
           IMAGE: ${{ matrix.image }}

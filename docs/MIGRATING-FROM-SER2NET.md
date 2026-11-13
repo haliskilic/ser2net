@@ -1,14 +1,15 @@
 # Moving from the classic ser2net
 
-This ser2net is a separate program with the same purpose as the classic `ser2net` daemon
-(Corey Minyard's C program, the `ser2net` package of Debian, Ubuntu, Fedora and others). It
-reads the classic configuration — `/etc/ser2net/ser2net.yaml` (ser2net 4.x) or
-`/etc/ser2net.conf` (3.x) — and turns each connection into a mapping. This page is what to
-do and what works differently, before you switch.
+ser2netweb (called ser2net up to 2.9.x) is a separate program with the same purpose as the
+classic `ser2net` daemon (Corey Minyard's C program, the `ser2net` package of Debian, Ubuntu,
+Fedora and others); it is not derived from it. It reads the classic configuration —
+`/etc/ser2net/ser2net.yaml` (ser2net 4.x) or `/etc/ser2net.conf` (3.x) — and turns each
+connection into a mapping. This page is what to do and what works differently, before you
+switch.
 
 ## Steps
 
-1. **Install this ser2net** (standalone binary, Docker or source: README → *Install & run*)
+1. **Install ser2netweb** (standalone binary, Docker or source: README → *Install & run*)
    and open its web UI. Don't start its service on the classic ports yet.
 2. **Import the classic file with a preview.** In **Settings → Mappings export / import**,
    choose the file and **Preview import**: every connection shows as the mapping it
@@ -44,7 +45,7 @@ do and what works differently, before you switch.
    remove` keeps `/etc/ser2net/ser2net.yaml`, `purge` deletes it. To keep both installed,
    run this one as an instance of `ser2net@.service` (README → *Several instances on one
    machine*).
-5. **Ports below 1024.** The classic daemon usually ran as root; this ser2net's systemd
+5. **Ports below 1024.** The classic daemon usually ran as root; ser2netweb's systemd
    units run as the unprivileged `ser2net` user, which can't listen on a port below 1024
    (the preview names such ports). Give the service the `CAP_NET_BIND_SERVICE` capability
    (README → *Ports below 1024*) or move the mapping to port 1024 or above.
@@ -74,7 +75,7 @@ not turned off).
   listening port that appears twice is imported once.
 - **Locking carries over:** 4.x `flock` (on by default) becomes **Lock the port (flock)**
   plus **Keep other programs out while the port is open** (`TIOCEXCL`), `uucplock` becomes
-  **Don't open a port another program has locked with a UUCP lock file**; ser2net here
+  **Don't open a port another program has locked with a UUCP lock file**; ser2netweb
   makes no lock files of its own.
 - **TLS:** `ssl` with its certificate and key on this host keeps TLS; client certificates
   (`clientauth`) are checked against the CA file it names (`CA=`). UDP has no TLS here.
@@ -123,7 +124,7 @@ not turned off).
 | `trace-both` / `trace-read` / `trace-write`, `trace-*-hexdump`, `-timestamp` | **Trace file name**, **Trace as hex dump** |
 | LEDs, rotators, mDNS, `chardelay` | not imported |
 | `enable: off` / `port:off:` | imported disabled |
-| `default:` (and classes), `define`, `*(name)` | applied to each connection as ser2net applies them |
+| `default:` (and classes), `define`, `*(name)` | applied to each connection as the classic ser2net applies them |
 
 Every connection that comes in can be edited, started and exported like any other mapping;
 the classic file itself is never changed.

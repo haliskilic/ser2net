@@ -33,11 +33,11 @@ from contextlib import suppress
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "lib"))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from app import notify
-from app.config import MappingConfig
-from app.engine import modbus, serial_io
-from app.engine.bridge import FROM_DEVICE, open_tracer
-from app.engine.modbus_gateway import (
+from ser2netweb import notify
+from ser2netweb.config import MappingConfig
+from ser2netweb.engine import modbus, serial_io
+from ser2netweb.engine.bridge import FROM_DEVICE, open_tracer
+from ser2netweb.engine.modbus_gateway import (
     GUARD_S, SILENCE_S, TURNAROUND_S, ModbusGatewayRunner, NoReply,
 )
 

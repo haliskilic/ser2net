@@ -1,4 +1,4 @@
-"""The Windows branch of ser2net's serial transport, driven by stand-in ports (a helper of
+"""The Windows branch of ser2netweb's serial transport, driven by stand-in ports (a helper of
 tests/test_serial_compat.py, which runs it in a child process: python _windows_transport.py).
 
 pyserial-asyncio-fast polls a Windows port on event-loop timers (no file descriptors), and
@@ -18,7 +18,7 @@ Checked (each prints one OK line):
     quiet for POLL_IDLE_AFTER_S, fast again at once on a write or on data; a port that
     fails while it is polled is closed, not polled again;
   - a measurement, printed: read polls per second and CPU time with 1, 8 and 32 idle ports,
-    upstream's transport and ser2net's (on Windows' selector loop, as ser2net runs: what
+    upstream's transport and ser2netweb's (on Windows' selector loop, as ser2netweb runs: what
     the 0.5 ms poll really costs there, at the system's timer resolution).
 """
 import asyncio
@@ -33,7 +33,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 
 import serial  # with the real os.name: it picks its backend by it
 
-import app.engine  # noqa: F401
+import ser2netweb.engine  # noqa: F401
 from _fake_win32 import FakeWin32
 
 SIMULATED = os.name != "nt"
@@ -46,13 +46,13 @@ if SIMULATED:
         os.name = real_name
     sys.platform = "win32"
     try:
-        from app.engine import serial_compat
+        from ser2netweb.engine import serial_compat
     finally:
         sys.platform = real_platform
 else:
     import serial_asyncio_fast as saf
 
-    from app.engine import serial_compat
+    from ser2netweb.engine import serial_compat
 
 assert hasattr(serial_compat.Transport, "_poll_write"), "not the Windows branch"
 HIGH_WATER = 64 * 1024  # the transport's default
@@ -294,10 +294,10 @@ async def main():
 
 
 def run(coro):
-    """On Windows the selector loop ser2net runs on (runtime.loop_factory)."""
+    """On Windows the selector loop ser2netweb runs on (runtime.loop_factory)."""
     if SIMULATED:
         return asyncio.run(coro)
-    from app import runtime
+    from ser2netweb import runtime
     choice, _note = runtime.event_loop_choice()
     loop = runtime.loop_factory(choice)()
     try:

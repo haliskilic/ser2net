@@ -1,0 +1,55 @@
+{% extends "_shell.html" %}
+{% block title %}{% if node_name %}{{ node_name }} · {% endif %}{{ _("Audit log") }} — ser2netweb{% endblock %}
+{% block main %}
+<section class="panel">
+  <div class="panel-head">
+    <h2>{{ _("Audit log") }}</h2>
+    <div class="actions">
+      <a class="btn sm" href="{{ base }}/settings/audit.csv{% if qs %}?{{ qs }}{% endif %}">⤓ CSV</a>
+      <a class="btn sm" href="{{ base }}/settings/audit.csv?{% if qs %}{{ qs }}&amp;{% endif %}excel=1" title="{{ _('UTF-16 text with tabs between the columns: Excel opens it by double-click with every letter and column, whatever the regional settings') }}">⤓ {{ _("CSV for Excel") }}</a>
+      <a class="btn sm" href="{{ base }}/settings">{{ _("← Settings") }}</a>
+    </div>
+  </div>
+  <p class="muted mb-sm">{{ _('Sign-ins and every change to the configuration, newest first: who (user), from where (IP), what (action) and on what (detail). Times are the server’s local time with its offset from UTC (the server is at %(zone)s now; records written before version 2.9 have no offset). Kept in the data folder’s <span class="mono">audit.log</span> (rotated at 5 MB, one older file kept).', zone=server_zone()) }}{% if log_days %} {{ _("With the retention set under Settings → Retention, up to five older files are kept and records older than %(days)s days are deleted.", days=log_days) }}{% endif %}</p>
+  <form method="get" action="{{ base }}/settings/audit" class="filters">
+    <input type="search" name="q" value="{{ filters.q }}" placeholder="{{ _('Search (name, IP, detail…)') }}" aria-label="{{ _('Search (name, IP, detail…)') }}">
+    <select name="action" aria-label="{{ _('Action') }}">
+      <option value="">{{ _("All actions") }}</option>
+      {% for a in actions %}<option value="{{ a }}" {% if a == filters.action %}selected{% endif %}>{{ a }}</option>{% endfor %}
+    </select>
+    <select name="user" aria-label="{{ _('User') }}">
+      <option value="">{{ _("All users") }}</option>
+      {% for u in users %}<option value="{{ u }}" {% if u == filters.user %}selected{% endif %}>{{ u }}</option>{% endfor %}
+    </select>
+    <button class="btn" type="submit">{{ _("Filter") }}</button>
+    {% if qs %}<a class="btn" href="{{ base }}/settings/audit">{{ _("Reset") }}</a>{% endif %}
+  </form>
+  <p class="muted">{{ ngettext("%(num)s record", "%(num)s records", total) }}{% if pages > 1 %} · {{ _("page %(page)s of %(pages)s", page=page, pages=pages) }}{% endif %}</p>
+  {% if rows %}
+  <div class="table-scroll">
+  <table class="grid audit stackable">
+    <thead><tr><th>{{ _("Time") }}</th><th>{{ _("User") }}</th><th>IP</th><th>{{ _("Action") }}</th><th>{{ _("Detail") }}</th></tr></thead>
+    <tbody>
+    {% for r in rows %}
+      <tr>
+        <td class="mono nowrap col-name">{{ r.time }}</td>
+        <td data-label="{{ _('User') }}">{{ r.user or '—' }}</td>
+        <td class="mono" data-label="IP">{{ r.ip }}</td>
+        <td class="mono" data-label="{{ _('Action') }}">{{ r.action }}</td>
+        <td data-label="{{ _('Detail') }}">{{ r.detail|softbreak }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  {% if pages > 1 %}
+  <div class="pager">
+    {% if page > 1 %}<a class="btn sm" href="{{ base }}/settings/audit?{{ qs }}{% if qs %}&amp;{% endif %}page={{ page - 1 }}">{{ _("← Newer") }}</a>{% endif %}
+    {% if page < pages %}<a class="btn sm" href="{{ base }}/settings/audit?{{ qs }}{% if qs %}&amp;{% endif %}page={{ page + 1 }}">{{ _("Older →") }}</a>{% endif %}
+  </div>
+  {% endif %}
+  {% else %}
+  <p class="muted">{% if qs %}{{ _("No audit records match the filter.") }}{% else %}{{ _("No audit records.") }}{% endif %}</p>
+  {% endif %}
+</section>
+{% endblock %}

@@ -19,14 +19,14 @@ import urllib.request
 
 from _server import Browser, Server, free_port
 
-from app import __version__
-from app.web.auth import hash_password
-from app.web.routes import system
+from ser2netweb import __version__
+from ser2netweb.web.auth import hash_password
+from ser2netweb.web.routes import system
 
 
 def test_exposition():
     text = system.exposition([
-        "# ser2net metrics",
+        "# ser2netweb metrics",
         "ser2net_up 1",
         'ser2net_mapping_running{id="a"} 1',
         'ser2net_mapping_clients{id="a"} 0',
@@ -36,8 +36,8 @@ def test_exposition():
     ])
     assert text.endswith("\n")
     assert text.splitlines() == [
-        "# ser2net metrics",
-        "# HELP ser2net_up 1 while ser2net answers",
+        "# ser2netweb metrics",
+        "# HELP ser2net_up 1 while ser2netweb answers",
         "# TYPE ser2net_up gauge",
         "ser2net_up 1",
         "# HELP ser2net_mapping_running 1 while the mapping runs",

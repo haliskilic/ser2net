@@ -1,4 +1,4 @@
-"""Shared helpers for the end-to-end tests that boot a real ser2net server.
+"""Shared helpers for the end-to-end tests that boot a real ser2netweb server.
 
     from _server import Server, Browser, free_port
     with Server(config_dict) as srv:          # data dir in a temp folder, UI on 127.0.0.1
@@ -6,7 +6,7 @@
         b.login("admin", "pw")
         status, headers, body = b.post("/settings/access", {...})
 
-The server runs as a subprocess (`ser2net.py --no-bootstrap`) with SER2NET_BIND_IP set,
+The server runs as a subprocess (`ser2netweb.py --no-bootstrap`) with SER2NETWEB_BIND_IP set,
 like a Docker / headless boot, and logs to a file (never an unread pipe).
 """
 from __future__ import annotations
@@ -153,7 +153,9 @@ def closed_by_server(raw: socket.socket, seconds: float) -> float:
 
 
 class Server:
-    def __init__(self, config: dict | None = None, data_dir: str | None = None, env=None):
+    def __init__(self, config: dict | None = None, data_dir: str | None = None, env=None,
+                 script: str = "ser2netweb.py"):
+        self.script = script  # (ser2net.py: the start script's name up to 2.9.x)
         self.tmp = tempfile.mkdtemp(prefix="s2n_e2e_")
         self.data = data_dir or os.path.join(self.tmp, "data")
         os.makedirs(self.data, exist_ok=True)
@@ -162,7 +164,7 @@ class Server:
         if config is not None:
             with open(self.config_path, "w", encoding="utf-8") as fh:
                 json.dump(config, fh, indent=2)
-        self.env = dict(os.environ, SER2NET_BIND_IP="127.0.0.1", SER2NET_PORT=str(self.port),
+        self.env = dict(os.environ, SER2NETWEB_BIND_IP="127.0.0.1", SER2NETWEB_PORT=str(self.port),
                         **(env or {}))
         self.base = f"http://127.0.0.1:{self.port}"
 
@@ -172,7 +174,7 @@ class Server:
         self.log_path = os.path.join(self.tmp, "server.log")
         self._log = open(self.log_path, "wb")
         self.proc = subprocess.Popen(
-            [sys.executable, "ser2net.py", "--no-bootstrap", "--data-dir", self.data],
+            [sys.executable, self.script, "--no-bootstrap", "--data-dir", self.data],
             cwd=ROOT, env=self.env, stdin=subprocess.DEVNULL, stdout=self._log,
             stderr=subprocess.STDOUT)
         if not (wait_served(self.port) if served else wait_port(self.port)):
@@ -218,8 +220,8 @@ class Server:
 def ui_cookie(name: str, port, scheme: str = "http", path: str = "/") -> str:
     """The name the web UI gives its cookie `name` (ser2net_session, ser2net_csrf, ...) at
     scheme://127.0.0.1:`port`: tagged by the port unless it is 8080, with __Host- over https
-    (app/web/proxy.cookie_name; test_cookie_names pins the scheme)."""
-    from app.web import proxy
+    (ser2netweb/web/proxy.cookie_name; test_cookie_names pins the scheme)."""
+    from ser2netweb.web import proxy
 
     host = "127.0.0.1" + ("" if port is None else f":{port}")
     scope = {"type": "http", "scheme": scheme, "path": "/", "headers": [(b"host", host.encode())]}

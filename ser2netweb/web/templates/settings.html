@@ -1,0 +1,830 @@
+{% extends "_shell.html" %}
+{% block title %}{% if node_name %}{{ node_name }} · {% endif %}{{ _("Settings") }} — ser2netweb{% endblock %}
+{% block main %}
+{% set is_admin = me and me.role == 'admin' %}
+{% set is_operator = me and me.role in ['operator', 'admin'] %}
+{% set is_anonymous = me and me.source == 'anonymous' %}
+{% set my_name = me.username if me and not is_anonymous else none %}
+{% set unchanged = _('•••••• (unchanged)') %}
+{% macro group_warning(w) -%}
+{%- set setting = {'admin_group': _('Admin group'), 'operator_group': _('Operator group'), 'viewer_group': _('Viewer group')}[w.setting] -%}
+<div class="banner warn">{% if w.got %}{{ _('At a sign-in at %(time)s, the %(setting)s “%(value)s” matched the group “%(group)s” of %(user)s only as part of its name. That no longer counts, so %(user)s got %(got)s instead of %(was)s. Enter the group’s whole name, such as “%(name)s”, and save.', time=w.time, setting=setting, value=w.value, group=w.group, user=w.user, got=w.got, was=w.was, name=w.name) }}{% else %}{{ _('At a sign-in at %(time)s, the %(setting)s “%(value)s” matched the group “%(group)s” of %(user)s only as part of its name. That no longer counts, so %(user)s could not sign in (before, they got %(was)s). Enter the group’s whole name, such as “%(name)s”, and save.', time=w.time, setting=setting, value=w.value, group=w.group, user=w.user, was=w.was, name=w.name) }}{% endif %}</div>
+{%- endmacro %}
+{% macro tls_problem(p) -%}
+<div class="banner warn">{% if p.kind == 'ca_file' and p.unreadable %}{{ _('At a sign-in at %(time)s, the CA certificate file %(file)s could not be read, so LDAP sign-in failed. Correct “CA certificate file” below and save.', time=p.time, file=p.ca_file) }}{% elif p.kind == 'ca_file' %}{{ _('At a sign-in at %(time)s, the CA certificate file %(file)s held no certificate (PEM or DER), so LDAP sign-in failed. Correct “CA certificate file” below and save.', time=p.time, file=p.ca_file) }}{% elif p.kind == 'name' %}{{ _('At a sign-in at %(time)s, the certificate of the directory server %(uri)s was not accepted (%(reason)s): it was issued for another name, so LDAP sign-in failed; nothing was sent over that connection. Use a name the certificate was issued for in the server URI (an IP address only if the certificate lists it) and save.', time=p.time, uri=p.uri, reason=p.reason) }}{% elif p.ca_file %}{{ _('At a sign-in at %(time)s, the certificate of the directory server %(uri)s was not accepted (%(reason)s), so LDAP sign-in failed; nothing was sent over that connection. The CA certificate file %(file)s doesn’t hold the CA that issued it: enter a file with that CA’s certificate (PEM or DER) and save.', time=p.time, uri=p.uri, reason=p.reason, file=p.ca_file) }}{% else %}{{ _('At a sign-in at %(time)s, the certificate of the directory server %(uri)s was not accepted (%(reason)s), so LDAP sign-in failed; nothing was sent over that connection. If the directory’s certificates come from your own CA (such as Active Directory Certificate Services) or are self-signed, enter the file with that CA’s certificate (PEM or DER) as “CA certificate file” below and save.', time=p.time, uri=p.uri, reason=p.reason) }}{% endif %}</div>
+{%- endmacro %}
+{#- what a form did, or why not: in the section that has the form (`section`, the id
+    of its <section>; another one, at the top), which takes the keyboard focus (app.js);
+    `submitted`: what a refused form had, shown again in it #}
+{% macro feedback(name) -%}
+{%- set where = section if section in ['account', 'admin-interface', 'access', 'audit-log', 'retention', 'users', 'ldap', 'oidc', 'cluster-settings', 'notifications', 'tls', 'reverse-proxy', 'api-token', 'import', 'backups'] else 'account' -%}
+{%- if where == name -%}
+{% if ok %}<div class="banner ok" role="status" tabindex="-1" data-feedback>{{ ok }}</div>{% endif %}
+{% if error %}<div class="banner error" role="alert" tabindex="-1" data-feedback>{{ error }}</div>{% endif %}
+{%- endif -%}
+{%- endmacro %}
+{#- a role as the role selects offer it: its name (as the REST API, the audit log and the
+    docs write it) and what it may do, in the page's language #}
+{% macro role_label(r) -%}
+{{ r }} ({% if r == 'admin' %}{{ _("everything") }}{% elif r == 'operator' %}{{ _("manage mappings") }}{% else %}{{ _("read-only") }}{% endif %})
+{%- endmacro %}
+{% macro package_problem(p, what) -%}
+<div class="banner warn">{% if p.missing and p.frozen %}{{ _('%(what)s is on, but <span class="mono">%(package)s</span> is missing from this executable, which should contain it; please report this. Local accounts still work.', what=what, package=p.dist) }}{% elif p.missing %}{{ _('%(what)s is on, but <span class="mono">%(package)s</span> is not installed, so it won’t work until you install it: <span class="mono">%(command)s</span>. Local accounts still work.', what=what, package=p.dist, command=p.hint) }}{% else %}{{ _('%(what)s is on, but <span class="mono">%(package)s</span> is installed and failed to import, so it won’t work until that is fixed and ser2netweb restarted. Local accounts still work. The error: <span class="mono">%(error)s</span>', what=what, package=p.dist, error=p.error) }}{% if p.override %} {{ _('%(name)s loads modules from <span class="mono">%(folder)s</span> first; check the copy there.', name=p.override_env, folder=p.override) }}{% endif %}{% endif %}</div>
+{%- endmacro %}
+
+<section class="panel panel-narrow" id="account">
+  {% if is_anonymous %}
+  <div class="panel-head"><h2>{{ _("Signed out (open access)") }}</h2></div>
+  {{ feedback('account') }}
+  <p>{{ _('Login is switched off for this UI, so you are using it without an account, with the <span class="mono">%(role)s</span> role. <a href="%(url)s">Sign in</a> for your own role (or to change your password).', role=me.role, url=base ~ '/login') }}</p>
+  {% else %}
+  <div class="panel-head"><h2>{{ _("Change your password") }}</h2></div>
+  {{ feedback('account') }}
+  <form method="post" action="{{ base }}/settings/password" class="authform">
+    <input type="hidden" name="_csrf" value="{{ request.state.csrf_token }}">
+    <label>{{ _("Current password") }} <input type="password" name="current" autocomplete="current-password" required></label>
+    <label>{{ _("New password (min 8 chars)") }} <input type="password" name="password" autocomplete="new-password" required></label>
+    <label>{{ _("Confirm new password") }} <input type="password" name="password2" autocomplete="new-password" required></label>
+    <button class="btn primary" type="submit">{{ _("Update password") }}</button>
+  </form>
+  <form method="post" action="{{ base }}/settings/sessions/signout-others" class="authform mt-sm">
+    <input type="hidden" name="_csrf" value="{{ request.state.csrf_token }}">
+    <p class="muted mb-sm">{{ _("Ends your sign-ins in other browsers and on other devices; this one stays signed in.") }}</p>
+    <button class="btn" type="submit">{{ _("Sign out my other sessions") }}</button>
+  </form>
+  {% if me and me.source == 'local' %}
+  <h3 class="mt-sm">{{ _("Two-factor sign-in") }}</h3>
+  <p class="mb-sm">{% if me.totp_on %}<span class="tag">{{ _("enabled") }}</span> {{ _("Signing in takes your password and a code from your authenticator app.") }}{% else %}<span class="tag">{{ _("disabled") }}</span> <span class="muted">{{ _("Your password alone signs you in. Add a code from an authenticator app on your phone or computer, so a password alone is not enough.") }}</span>{% endif %}</p>
+  <a class="btn" href="{{ base }}/settings/totp">{{ _("Turn off…") if me.totp_on else _("Set up…") }}</a>
+  {% endif %}
+  {% endif %}
+</section>
+
+<section class="panel panel-narrow" id="admin-interface">
+  <div class="panel-head"><h2>{{ _("Admin interface") }}</h2></div>
+  {{ feedback('admin-interface') }}
+  <p>{{ _('Listening on <span class="mono">%(address)s</span>', address=serving_address) }}
+     {% if serving_tls %}<span class="tag">TLS</span>{% else %}<span class="tag">HTTP</span>{% endif %}</p>
+  {% if pending_address %}<div class="banner warn">{{ _('config.json sets <span class="mono">%(address)s</span>: the admin UI moves there when ser2netweb starts again.', address=pending_address) }}</div>{% endif %}
+  {% if pending_tls %}<div class="banner warn">{{ _('The admin TLS settings saved are used from the next start.') }}</div>{% endif %}
+  {% if public_url %}<p>{{ _('Published as <a class="mono" href="%(url)s">%(url)s</a> (Settings → Reverse proxy)', url=public_url) }}</p>{% endif %}
+  {% if address_hint == 'env' %}
+  <p class="muted">{{ _('The address comes from <span class="mono">SER2NETWEB_BIND_IP</span> / <span class="mono">SER2NETWEB_PORT</span> (for a container: its environment), which win over config.json at every start: change them there and start ser2netweb (the container) again.') }}</p>
+  {% elif address_hint == 'service' %}
+  <p class="muted">{{ _('To change the address, run <span class="mono">%(command)s</span> from an elevated prompt: it stops the service, asks for the address and starts the service again.', command=address_command) }}</p>
+  {% else %}
+  <p class="muted">{{ _('To change the address, stop ser2netweb and start it as the account it runs as with <span class="mono">%(command)s</span>, which asks for the address; or change <span class="mono">admin_ui.bind_ip</span> / <span class="mono">port</span> in config.json and restart ser2netweb.', command=address_command) }}</p>
+  {% endif %}
+  {% if is_admin %}
+  {% with admin = submitted.node or admin %}
+  <form method="post" action="{{ base }}/settings/node-name" class="authform mt-sm">
+    <input type="hidden" name="_csrf" value="{{ request.state.csrf_token }}">
+    <label>{{ _("Name of this instance") }} <span class="muted">({{ _("for instances that share a host name: notifications, the browser tab, the top bar and the cluster’s fleet view show it · blank: the host name, %(host)s", host=hostname) }})</span>
+      {% if node_name_env %}<input type="text" value="{{ node_name }}" disabled>
+      {% else %}<input type="text" name="node_name" value="{{ admin.node_name }}" maxlength="{{ node_name_max }}" placeholder="{{ hostname }}" autocomplete="off" spellcheck="false" data-1p-ignore data-lpignore="true" data-bwignore>{% endif %}</label>
+    {% if node_name_env %}<p class="muted">{{ _('Set by <span class="mono">%(name)s</span> for this run; the field takes effect again once that is removed.', name=node_name_env) }}</p>{% endif %}
+    <button class="btn primary" type="submit">{{ _("Save name") }}</button>
+  </form>
+  {% endwith %}
+  {% endif %}
+  <p>{{ _('Server time: <span class="mono">%(utc)s UTC</span> · local <span class="mono">%(local)s</span> (%(zone)s)', utc=server_utc, local=server_local[:19], zone=server_zone()) }}</p>
+  {% if clock_behind %}<div class="banner warn">{% if clock_behind.what == 'backup' %}{{ _("The server’s clock reads %(now)s UTC, earlier than the newest configuration backup (%(when)s UTC): it is probably wrong, or it was ahead when that backup was made.", now=server_utc, when=clock_behind.when) }}{% elif clock_behind.what == 'config' %}{{ _("The server’s clock reads %(now)s UTC, earlier than the last change to config.json (%(when)s UTC): it is probably wrong.", now=server_utc, when=clock_behind.when) }}{% else %}{{ _("The server’s clock reads %(now)s UTC, before this version of ser2netweb was made (%(when)s): it is wrong.", now=server_utc, when=clock_behind.when[:10]) }}{% endif %} {{ _("Logs, the audit log and backups get wrong times, and sign-ins and certificate checks can fail. ser2netweb never sets the clock: set it on the server, or let its time sync (NTP) do it.") }}</div>{% endif %}
+  <div class="banner warn" data-clock-skew hidden></div>
+</section>
+
+{% if is_admin %}
+<section class="panel panel-narrow" id="access">
+  <div class="panel-head"><h2>{{ _("Web UI access") }}</h2></div>
+  {{ feedback('access') }}
+  <p class="muted mb-sm">{{ _('By default every visitor must sign in. On a trusted network you can let visitors use this UI <em>without a password</em>, with the role chosen below; signing in still gives a user their own role. Open access is honoured only when the UI is reached by IP address, <span class="mono">localhost</span> or this machine’s host name (protection against DNS rebinding — other names still ask for a login); behind a reverse proxy, have it pass the original name in <span class="mono">X-Forwarded-Host</span>, or keep login on. Other cluster nodes are only shown and managed after signing in, and the REST API always needs its token.') }}</p>
+  {% if not admin.require_login %}
+  <div class="banner warn">{{ _('Open access is <b>ON</b>: anyone who can reach this page gets the <span class="mono">%(role)s</span> role without a password.', role=admin.anonymous_role) }}{% if admin.bind_ip not in ['127.0.0.1', '::1'] %} {{ _('The UI listens on <span class="mono">%(ip)s</span>.', ip=admin.bind_ip or '*') }}{% endif %}</div>
+  {% endif %}
+  {% with admin = submitted.access or admin, session_minutes = submitted.session_minutes or session_minutes %}
+  <form method="post" action="{{ base }}/settings/access" class="authform">
+    <input type="hidden" name="_csrf" value="{{ request.state.csrf_token }}">
+    <label class="chk"><input type="checkbox" name="require_login" {% if admin.require_login %}checked{% endif %}> {{ _("Require login (password) for the web UI") }}</label>
+    <label>{{ _("Role for visitors without login") }} <span class="muted">({{ _("used only when login is not required") }})</span>
+      <select name="anonymous_role">
+        {% for r in roles %}<option value="{{ r }}" {% if r == admin.anonymous_role %}selected{% endif %}>{{ role_label(r) }}</option>{% endfor %}
+      </select>
+    </label>
+    <label>{{ _("Session lifetime (minutes)") }} <span class="muted">({{ _("how long a sign-in lasts · 5 min – 30 days · applies to new sign-ins") }})</span>
+      <input type="number" name="session_minutes" min="5" max="43200" value="{{ session_minutes }}" required>
+    </label>
+    <label>{{ _("Default language") }} <span class="muted">({{ _("for visitors who haven’t picked one with the language switch") }})</span>
+      <select name="default_language">
+        <option value="auto" {% if admin.language == 'auto' %}selected{% endif %}>{{ _("The browser’s language") }}</option>
+        {% for code, label in languages.items() %}<option value="{{ code }}" {% if admin.language == code %}selected{% endif %}>{{ label }}</option>{% endfor %}
+      </select>
+    </label>
+    <button class="btn primary" type="submit">{{ _("Save access") }}</button>
+  </form>
+  {% endwith %}
+  {% with admin = submitted.login_notice or admin %}
+  <form method="post" action="{{ base }}/settings/login-notice" class="authform mt-sm">
+    <input type="hidden" name="_csrf" value="{{ request.state.csrf_token }}">
+    <label>{{ _("Sign-in notice") }} <span class="muted">({{ _("shown on the sign-in page before anyone signs in, such as a privacy notice or a system-use warning · plain text, at most %(max)s characters · blank: none", max=login_notice_max) }})</span>
+      <textarea name="login_notice" rows="4" maxlength="{{ login_notice_max }}">{{ admin.login_notice }}</textarea></label>
+    <label>{{ _("Link to the full notice") }} <span class="muted">({{ _("optional · an http:// or https:// address") }})</span>
+      <input type="url" name="login_notice_url" value="{{ admin.login_notice_url }}" maxlength="{{ login_notice_url_max }}" placeholder="https://example.com/privacy" autocomplete="off" spellcheck="false"></label>
+    {% if not admin.require_login %}<p class="muted">{{ _("With open access, visitors who don’t sign in find it under “Notice” in the top bar.") }}</p>{% endif %}
+    <button class="btn" type="submit">{{ _("Save notice") }}</button>
+  </form>
+  {% endwith %}
+  <form method="post" action="{{ base }}/settings/sessions/revoke-all" class="authform mt-sm"
+        data-confirm="{{ _('Sign everyone out of this web UI, on every device? You stay signed in here.') }}">
+    <input type="hidden" name="_csrf" value="{{ request.state.csrf_token }}">
+    <p class="muted mb-sm">{{ _("Ends every web UI session at once by making a new session key — also sessions signed with the key in an old copy of config.json or of a backup. You stay signed in here.") }}</p>
+    <button class="btn" type="submit">{{ _("Sign out everyone") }}</button>
+  </form>
+</section>
+
+<section class="panel panel-narrow" id="audit-log">
+  <div class="panel-head"><h2>{{ _("Audit log") }}</h2><a class="btn sm" href="{{ base }}/settings/audit">{{ _("Open audit log →") }}</a></div>
+  {{ feedback('audit-log') }}
+  <p class="muted">{{ _("Sign-ins and every configuration change: who, from where, what — with search, filters and CSV export.") }}</p>
+  <form method="post" action="{{ base }}/settings/request-log" class="authform mt-sm">
+    <input type="hidden" name="_csrf" value="{{ request.state.csrf_token }}">
+    <label>{{ _("Web UI requests in all.log") }} <span class="muted">({{ _("one line each, with the client’s IP address; sign-ins and the audit log’s records are written either way") }})</span>
+      <select name="request_log">
+        {% set request_log_labels = {'all': _("Every page and change (the default)"), 'changes': _("Only changes, and refused or failed requests"), 'off': _("None")} %}
+        {% for m in request_log_modes %}<option value="{{ m }}" {% if m == admin.request_log %}selected{% endif %}>{{ request_log_labels[m] }}</option>{% endfor %}
+      </select>
+    </label>
+    <button class="btn" type="submit">{{ _("Save") }}</button>
+  </form>
+</section>
+
+<section class="panel panel-narrow" id="retention">
+  <div class="panel-head"><h2>{{ _("Retention") }}</h2></div>
+  {{ feedback('retention') }}
+  {% if disk and disk.free is not none %}
+  {% if disk.free < disk.floor %}<div class="banner warn">{{ _("The data disk is almost full: trace files are paused. Delete trace files that are no longer needed, or make room on the disk.") }}</div>{% endif %}
+  <p class="muted">{{ _("The data folder’s disk: %(free)s free of %(total)s (trace files pause below %(floor)s free). Traces take %(traces)s, logs %(logs)s.", free=size_text(disk.free), total=size_text(disk.total), floor=size_text(disk.floor), traces=size_text(disk.traces), logs=size_text(disk.logs)) }}</p>
+  {% endif %}
+  {% with trace_days = submitted.retention.trace_max_age_days if submitted.retention else trace_days, log_days = submitted.retention.log_max_age_days if submitted.retention else log_days %}
+  <form method="post" action="{{ base }}/settings/retention" class="authform">
+    <input type="hidden" name="_csrf" value="{{ request.state.csrf_token }}">
+    <label>{{ _("Delete trace files not written for (days)") }} <span class="muted">({{ _("0 = keep them, the default · up to %(max)s", max=trace_days_max) }})</span>
+      <input type="number" name="trace_max_age_days" min="0" max="{{ trace_days_max }}" value="{{ trace_days }}" required>
+    </label>
+    <p class="muted">{{ _("Off by default: a trace file stays until an operator deletes it in its mapping’s Trace panel. With a number of days, every trace file not written for that long is deleted at once and then every hour, also the one a mapping is writing (the next traffic begins it again), and the log says how many went.") }} {{ _("A file a mapping keeps writing into begins anew once it holds traffic from that many days ago, so its traffic goes too, that many days after its last write.") }}</p>
+    <label>{{ _("Delete log and audit records and configuration backups older than (days)") }} <span class="muted">({{ _("0 = only the size limits, the default · up to %(max)s", max=log_days_max) }})</span>
+      <input type="number" name="log_max_age_days" min="0" max="{{ log_days_max }}" value="{{ log_days }}" required>
+    </label>
+    <p class="muted">{{ _("Off by default: all.log (10 MB × 6 files), audit.log (5 MB × 2) and the newest 50 configuration backups are kept within their sizes however old they are, and a mapping’s log keeps 15 days (always its last 1000 lines). With a number of days, all.log and audit.log begin a new file once their first record is a fifth of that old and delete a file once its first record is older (so at least four fifths of the period stay, sizes allowing; audit.log then keeps up to 6 files), a mapping’s log keeps no more days than that, and older backups go, but never the newest %(min)s. Checked at once and then every hour; a clock set ahead while ser2netweb runs deletes nothing early. The copy of the log on the standard output (Docker, journald) has its own limits.", min=backups_min) }}</p>
+    <button class="btn" type="submit">{{ _("Save") }}</button>
+  </form>
+  {% endwith %}
+</section>
+
+<section class="panel panel-narrow" id="users">
+  <div class="panel-head"><h2>{{ _("Users") }}</h2></div>
+  {{ feedback('users') }}
+  <div class="table-scroll">
+  <table class="grid th-wrap">
+    <thead><tr><th>{{ _("Username") }}</th><th>{{ _("Role") }}</th><th></th></tr></thead>
+    <tbody>
+    {% for u in users %}
+      <tr>
+        <td class="mono"><span id="user-{{ loop.index }}-name">{{ u.username }}</span>{% if u.username == my_name %} <span class="tag">{{ _("you") }}</span>{% endif %}{% if u.source != 'local' %} <span class="tag">{{ u.source|upper }}</span>{% endif %}{% if u.totp_on %} <span class="tag" title="{{ _('two-factor sign-in') }}">2FA</span>{% endif %}<br><span class="muted">{{ _("last sign-in: %(time)s", time=last_sign_in[u.username]) }}</span></td>
+        <td>
+          {% if u.source != 'local' %}
+            <span class="mono">{{ u.role }}</span> <span class="muted">({{ _("from %(source)s", source=u.source|upper) }})</span>
+          {% else %}
+          <form method="post" action="{{ base }}/settings/users/role" class="inline">
+            <input type="hidden" name="_csrf" value="{{ request.state.csrf_token }}">
+            <input type="hidden" name="username" value="{{ u.username }}">
+            <select name="role" aria-label="{{ _('Role of %(user)s', user=u.username) }}">
+              {% for r in roles %}<option value="{{ r }}" {% if r == u.role %}selected{% endif %}>{{ role_label(r) }}</option>{% endfor %}
+            </select>
+            <button class="btn sm" type="submit" aria-describedby="user-{{ loop.index }}-name">{{ _("Set") }}</button>
+          </form>
+          {% endif %}
+        </td>
+        <td>
+          {% if u.username != my_name %}
+          <div class="row-actions">
+            <form method="post" action="{{ base }}/settings/users/signout" class="inline">
+              <input type="hidden" name="_csrf" value="{{ request.state.csrf_token }}">
+              <input type="hidden" name="username" value="{{ u.username }}">
+              <button class="btn sm" type="submit" aria-describedby="user-{{ loop.index }}-name">{{ _("Sign out") }}</button>
+            </form>
+            {% if u.totp_on %}
+            <form method="post" action="{{ base }}/settings/users/totp-reset" class="inline"
+                  data-confirm="{{ _('Turn off two-factor sign-in for %(user)s? They are signed out, and their password alone signs them in until they set it up again.', user=u.username) }}">
+              <input type="hidden" name="_csrf" value="{{ request.state.csrf_token }}">
+              <input type="hidden" name="username" value="{{ u.username }}">
+              <button class="btn sm" type="submit">{{ _("Turn off 2FA") }}</button>
+            </form>
+            {% endif %}
+            {#- asked for a local account: its password is gone with it (a directory account
+                comes back at its next sign-in while the directory allows it) #}
+            <form method="post" action="{{ base }}/settings/users/delete" class="inline"{% if u.source == 'local' %}
+                  data-confirm="{{ _('Delete the user “%(user)s”? The password goes with it: only restoring a configuration backup brings it back.', user=u.username) }}"{% endif %}>
+              <input type="hidden" name="_csrf" value="{{ request.state.csrf_token }}">
+              <input type="hidden" name="username" value="{{ u.username }}">
+              <button class="btn sm danger" type="submit" aria-describedby="user-{{ loop.index }}-name">{{ _("Delete") }}</button>
+            </form>
+          </div>
+          {% endif %}
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  <p class="muted mb-sm">{{ _('Roles: <span class="mono">admin</span> (everything), <span class="mono">operator</span> (manage mappings), <span class="mono">viewer</span> (read-only).') }}</p>
+  {% if ldap.enabled or oidc.enabled or users|rejectattr("source", "equalto", "local")|list %}
+  <p class="muted mb-sm">{{ _("LDAP / OIDC accounts are made at their first sign-in, and every sign-in takes their role from the directory or the identity provider again. Delete signs such an account out at once, but whether that person can sign in again is up to the directory: while a mapped group or the default role still applies, their next sign-in makes a new account.") }}</p>
+  <form method="post" action="{{ base }}/settings/users/expiry" class="authform mb-sm">
+    <input type="hidden" name="_csrf" value="{{ request.state.csrf_token }}">
+    <label>{{ _("Remove LDAP / OIDC accounts not signed in for (days)") }} <span class="muted">({{ _("0 = off, the default · %(min)s to %(max)s", min=expire_min, max=expire_max) }})</span>
+      <input type="number" name="expire_days" min="0" max="{{ expire_max }}" value="{{ submitted.expire_days or expire_days }}" required>
+    </label>
+    <p class="muted">{{ _("Off by default: an account that stops signing in stays until you delete it. With a number of days, LDAP / OIDC accounts not signed in for that long are removed at once and then every hour, each logged and audited — never admins or local accounts; they come back at their next sign-in while the directory still gives them a role.") }}</p>
+    <button class="btn" type="submit">{{ _("Save") }}</button>
+  </form>
+  {% endif %}
+  {% set nu = submitted.new_user or {} %}
+  <form method="post" action="{{ base }}/settings/users" class="authform">
+    <input type="hidden" name="_csrf" value="{{ request.state.csrf_token }}">
+    <div class="grid2">
+      <label>{{ _("Username") }} <input type="text" name="username" value="{{ nu.username }}" placeholder="{{ _('e.g. %(example)s', example='operator1') }}" autocomplete="off" autocapitalize="none" autocorrect="off" spellcheck="false" maxlength="32" pattern="[A-Za-z0-9._\-]{1,32}" title="{{ _("Username must be 1-32 characters: English letters (a-z, A-Z), digits, '.', '_' or '-'.") }}" required></label>
+      <label>{{ _("Role") }}
+        <select name="role">{% for r in roles %}<option value="{{ r }}" {% if r == (nu.role or 'viewer') %}selected{% endif %}>{{ role_label(r) }}</option>{% endfor %}</select>
+      </label>
+    </div>
+    <div class="grid2">
+      <label>{{ _("Password (min 8)") }} <input type="password" name="password" autocomplete="new-password" required></label>
+      <label>{{ _("Confirm") }} <input type="password" name="password2" autocomplete="new-password" required></label>
+    </div>
+    <button class="btn" type="submit">{{ _("Add user") }}</button>
+  </form>
+  {% set resettable = users|selectattr("source", "equalto", "local")|rejectattr("username", "equalto", my_name)|list %}
+  {% if resettable %}
+  <h3 class="mt-sm">{{ _("Set another user’s password") }}</h3>
+  <p class="muted mb-sm">{{ _("For someone who forgot theirs; it also signs that user out everywhere. “Sign out” in the table ends a user’s sessions without changing anything else.") }}</p>
+  <form method="post" action="{{ base }}/settings/users/password" class="authform">
+    <input type="hidden" name="_csrf" value="{{ request.state.csrf_token }}">
+    <label>{{ _("User") }}
+      <select name="username">{% for u in resettable %}<option value="{{ u.username }}"{% if u.username == submitted.reset_user %} selected{% endif %}>{{ u.username }}</option>{% endfor %}</select>
+    </label>
+    <div class="grid2">
+      <label>{{ _("New password (min 8 chars)") }} <input type="password" name="password" autocomplete="new-password" required></label>
+      <label>{{ _("Confirm") }} <input type="password" name="password2" autocomplete="new-password" required></label>
+    </div>
+    <button class="btn" type="submit">{{ _("Set password") }}</button>
+  </form>
+  {% endif %}
+</section>
+
+<section class="panel panel-narrow" id="ldap">
+  <div class="panel-head"><h2>LDAP / Active Directory</h2></div>
+  {{ feedback('ldap') }}
+  <p class="muted mb-sm">{{ _('Authenticate users against a directory; their group membership maps to a ser2netweb role. Local accounts above keep working. Needs <span class="mono">ldap3</span> (optional).') }} {{ _('Setup for Active Directory and OpenLDAP: <span class="mono">docs/SSO.md</span>.') }}</p>
+  {% if ldap_problem %}{{ package_problem(ldap_problem, _("LDAP sign-in")) }}{% endif %}
+  {% if ldap.enabled and ldap_tls_problem %}{{ tls_problem(ldap_tls_problem) }}{% endif %}
+  {% if ldap.enabled and ldap.uses_tls and not ldap.tls_verify %}<div class="banner warn">{{ _('The directory server’s certificate is not checked: anyone on the network between ser2netweb and the directory could read the passwords and sign in as anyone. Set the CA certificate file below and untick “Don’t check the server certificate” as soon as you can.') }}</div>
+  {% elif ldap.enabled and ldap.sends_plaintext %}<div class="banner warn">{{ _('Passwords go to the directory unencrypted (ldap:// without StartTLS): anyone on the network between ser2netweb and the directory can read them. Use ldaps:// or tick StartTLS.') }}</div>{% endif %}
+  {% for w in group_warnings.ldap %}{{ group_warning(w) }}{% endfor %}
+  {% with ldap = submitted.ldap or ldap %}
+  <form method="post" action="{{ base }}/settings/ldap" class="authform">
+    <input type="hidden" name="_csrf" value="{{ request.state.csrf_token }}">
+    <label class="chk"><input type="checkbox" name="ldap_enabled" {% if ldap.enabled %}checked{% endif %}> {{ _("Enable LDAP / AD login") }}</label>
+    <div class="grid2">
+      <label>{{ _("Server URI") }} <input type="text" name="ldap_server_uri" value="{{ ldap.server_uri }}" placeholder="ldaps://dc.corp.local:636"></label>
+      <label class="chk chk-pad"><input type="checkbox" name="ldap_start_tls" {% if ldap.start_tls %}checked{% endif %}> StartTLS</label>
+    </div>
+    <input type="hidden" name="ldap_tls_shown" value="1">
+    <label>{{ _("CA certificate file") }} <span class="muted">({{ _("LDAPS / StartTLS: the server’s certificate must come from this CA; PEM or DER; blank = the CAs this system trusts") }})</span>
+      <input type="text" name="ldap_ca_file" value="{{ ldap.ca_file }}" placeholder="{{ _('optional') }}">
+    </label>
+    <label class="chk"><input type="checkbox" name="ldap_tls_insecure" {% if not ldap.tls_verify %}checked{% endif %}> {{ _("Don’t check the server certificate (insecure: anyone on the network path could read the passwords)") }}</label>
+    <label>{{ _("User DN template") }} <span class="muted">({{ _("direct bind") }} — AD: <span class="mono">{username}@corp.local</span>; LDAP: <span class="mono">uid={username},ou=people,dc=ex,dc=com</span>)</span>
+      <input type="text" name="ldap_user_dn_template" value="{{ ldap.user_dn_template }}" placeholder="{{ _('optional') }}" autocapitalize="none" autocorrect="off" spellcheck="false">
+    </label>
+    <p class="muted">{{ _("…or search + bind with a service account:") }}</p>
+    <div class="grid2">
+      <label>Bind DN <input type="text" name="ldap_bind_dn" value="{{ ldap.bind_dn }}" placeholder="cn=svc,dc=ex,dc=com" autocomplete="off" autocapitalize="none" autocorrect="off" spellcheck="false"></label>
+      <label>{{ _("Bind password") }} <input type="password" name="ldap_bind_password" autocomplete="new-password" data-1p-ignore data-lpignore="true" data-bwignore placeholder="{% if ldap.bind_password %}{{ unchanged }}{% endif %}"></label>
+    </div>
+    <div class="grid2">
+      <label>{{ _("User search base") }} <input type="text" name="ldap_user_search_base" value="{{ ldap.user_search_base }}" placeholder="ou=people,dc=ex,dc=com"></label>
+      <label>{{ _("User search filter") }} <input type="text" name="ldap_user_search_filter" value="{{ ldap.user_search_filter }}" placeholder="(sAMAccountName={username})"></label>
+    </div>
+    <div class="grid2">
+      <label>{{ _("Group attribute") }} <input type="text" name="ldap_group_attr" value="{{ ldap.group_attr }}" placeholder="memberOf"></label>
+      <label>{{ _("Default role") }} <span class="muted">({{ _("if in no mapped group") }})</span>
+        <select name="ldap_default_role">
+          <option value="" {% if not ldap.default_role %}selected{% endif %}>{{ _("— deny login —") }}</option>
+          {% for r in roles %}<option value="{{ r }}" {% if r == ldap.default_role %}selected{% endif %}>{{ role_label(r) }}</option>{% endfor %}
+        </select>
+      </label>
+    </div>
+    <div class="grid3">
+      <label>{{ _("Admin group") }} <input type="text" name="ldap_admin_group" value="{{ ldap.admin_group }}" placeholder="ser2netweb-admins"></label>
+      <label>{{ _("Operator group") }} <input type="text" name="ldap_operator_group" value="{{ ldap.operator_group }}" placeholder="ser2netweb-operators"></label>
+      <label>{{ _("Viewer group") }} <input type="text" name="ldap_viewer_group" value="{{ ldap.viewer_group }}" placeholder="ser2netweb-viewers"></label>
+    </div>
+    <p class="muted">{{ _('A group setting is the whole name of one group, in any letter case (Turkish İ/ı too): its name (the CN, such as <span class="mono">ser2netweb-admins</span>) or its full DN. Part of a name, such as <span class="mono">admins</span> for ser2netweb-admins, doesn’t match.') }}</p>
+    <input type="hidden" name="ldap_nested_groups_shown" value="1">
+    <label class="chk"><input type="checkbox" name="ldap_nested_groups" {% if ldap.nested_groups %}checked{% endif %}> {{ _("Also count nested groups (Active Directory: groups the user is in through another group)") }}</label>
+    <button class="btn primary" type="submit">{{ _("Save LDAP") }}</button>
+  </form>
+  {% endwith %}
+</section>
+
+<section class="panel panel-narrow" id="oidc">
+  <div class="panel-head"><h2>{{ _("Single sign-on (OIDC)") }}</h2></div>
+  {{ feedback('oidc') }}
+  <p class="muted mb-sm">{{ _('OpenID Connect SSO (Keycloak, Entra ID, Google, Okta…). A claim maps to a ser2netweb role. Needs <span class="mono">authlib</span> (optional).') }} {{ _('Keycloak, Entra ID and Google settings: <span class="mono">docs/SSO.md</span>.') }}</p>
+  {% if oidc_problem %}{{ package_problem(oidc_problem, _("Single sign-on (OIDC)")) }}{% endif %}
+  <p class="mb-sm" id="oidc-redirect" data-uri="{{ oidc_redirect_uri }}"{% if oidc_redirect_auto %} data-auto{% endif %}>{{ _("Redirect URI to register at the identity provider:") }} <span class="mono">{{ oidc_redirect_uri }}</span>
+    <span class="muted">({% if oidc_redirect_public %}{{ _("Redirect URI below is blank, so it is made from the public URL (Settings → Reverse proxy)") }}{% elif oidc_redirect_auto %}{{ _("Redirect URI below is blank, so it is made from the address in this page’s request") }}{% else %}{{ _("as set below") }}{% endif %})</span></p>
+  {% if (oidc_redirect_auto or oidc_redirect_public) and oidc_redirect_http %}<div class="banner warn">{{ _("This redirect URI starts with http://: most identity providers accept http:// only for localhost. Use HTTPS (Admin TLS, or a reverse proxy with TLS) and register the https:// address.") }}</div>{% endif %}
+  <div class="banner warn" id="oidc-redirect-mismatch" hidden>{{ _('This browser has the page at another address, for which the redirect URI is <span class="mono" data-browser-uri></span>: a reverse proxy in between changed the address ser2netweb sees. If users sign in at this browser’s address, enter that value as Redirect URI below and register it at the identity provider.') }}</div>
+  {% for w in group_warnings.oidc %}{{ group_warning(w) }}{% endfor %}
+  {% with oidc = submitted.oidc or oidc %}
+  <form method="post" action="{{ base }}/settings/oidc" class="authform">
+    <input type="hidden" name="_csrf" value="{{ request.state.csrf_token }}">
+    <label class="chk"><input type="checkbox" name="oidc_enabled" {% if oidc.enabled %}checked{% endif %}> {{ _("Enable SSO login") }}</label>
+    <label>{{ _("Issuer URL") }} <input type="text" name="oidc_issuer" value="{{ oidc.issuer }}" placeholder="https://keycloak.example.com/realms/main"></label>
+    <div class="grid2">
+      <label>Client ID <input type="text" name="oidc_client_id" value="{{ oidc.client_id }}" autocomplete="off" autocapitalize="none" autocorrect="off" spellcheck="false"></label>
+      <label>Client secret <input type="password" name="oidc_client_secret" autocomplete="new-password" data-1p-ignore data-lpignore="true" data-bwignore placeholder="{% if oidc.client_secret %}{{ unchanged }}{% endif %}"></label>
+    </div>
+    <div class="grid2">
+      <label>Redirect URI <span class="muted">({{ _("blank = auto") }})</span><input type="text" name="oidc_redirect_uri" value="{{ oidc.redirect_uri }}" placeholder="{{ _('auto from request') }}"></label>
+      <label>Scopes <input type="text" name="oidc_scopes" value="{{ oidc.scopes }}" placeholder="openid email profile"></label>
+    </div>
+    <div class="grid2">
+      <label>{{ _("Username claim") }} <input type="text" name="oidc_username_claim" value="{{ oidc.username_claim }}" placeholder="preferred_username"></label>
+      <label>{{ _("Groups/roles claim") }} <input type="text" name="oidc_groups_claim" value="{{ oidc.groups_claim }}" placeholder="groups"></label>
+    </div>
+    <p class="muted mb-sm">{{ _('Both are read from the ID token only, as top-level claims: Keycloak needs a mapper with “Add to ID token” (its realm roles are nested and can’t be read), and Entra ID sends the groups’ Object IDs, which are what the group settings below then name.') }}</p>
+    <div class="grid3">
+      <label>{{ _("Admin group") }} <input type="text" name="oidc_admin_group" value="{{ oidc.admin_group }}" placeholder="ser2netweb-admins"></label>
+      <label>{{ _("Operator group") }} <input type="text" name="oidc_operator_group" value="{{ oidc.operator_group }}"></label>
+      <label>{{ _("Viewer group") }} <input type="text" name="oidc_viewer_group" value="{{ oidc.viewer_group }}"></label>
+    </div>
+    <p class="muted">{{ _('A group setting is the whole name of one group as the provider sends it, in any letter case (Turkish İ/ı too); of a path, the last part is enough: <span class="mono">ser2netweb-admins</span> matches <span class="mono">/team/ser2netweb-admins</span>. Part of a name, such as <span class="mono">admins</span> for ser2netweb-admins, doesn’t match.') }}</p>
+    <label>{{ _("Default role") }} <span class="muted">({{ _("if no group matched") }})</span>
+      <select name="oidc_default_role">
+        <option value="" {% if not oidc.default_role %}selected{% endif %}>{{ _("— deny login —") }}</option>
+        {% for r in roles %}<option value="{{ r }}" {% if r == oidc.default_role %}selected{% endif %}>{{ role_label(r) }}</option>{% endfor %}
+      </select>
+    </label>
+    <button class="btn primary" type="submit">{{ _("Save SSO") }}</button>
+  </form>
+  {% endwith %}
+</section>
+
+<section class="panel panel-narrow" id="cluster-settings">
+  <div class="panel-head"><h2>{{ _("LAN cluster") }}</h2></div>
+  {{ feedback('cluster-settings') }}
+  <p class="muted mb-sm">{{ _('Discover other ser2netweb nodes on the local network (signed UDP broadcast — no mDNS) and show every node’s mappings in one table on the dashboard, each row tagged with its host (name + IP). Set the <em>same shared key</em> on every node so they trust each other; with the key, operators can start/stop/restart a peer’s mappings from the unified view. This node’s ID: <span class="mono">%(id)s</span>.', id=instance_id[:8]) }}</p>
+  {% for c in cluster_copies %}
+  <div class="banner warn">{{ _("Another node uses this node’s identity: %(name)s at %(addr)s — probably a copy of this installation (its data folder, disk or VM image). Give one of the two a new identity (below).", name=c.name, addr=c.addr) }}</div>
+  {% endfor %}
+  {% if new_cluster_key %}
+  <div class="banner ok">{{ _("New cluster key (copy it now — it is not shown again). Set the same key on every node:") }}
+    <div class="mono token-box">{{ new_cluster_key }}</div>
+    <button type="button" class="btn sm mt-sm" data-copy>{{ _("Copy") }}</button>
+  </div>
+  {% endif %}
+  {% if cluster_key_hint == 'weak' %}
+  <div class="banner warn">{{ _("The cluster key is short or simple. Any host on this network can try to guess it offline from the beacons every node broadcasts, and the key lets a node start, stop and change the mappings of every other node: use at least 16 random characters, or generate one.") }}</div>
+  {% elif cluster_key_hint == 'ascii' and cluster.legacy_auth %}
+  <div class="banner warn">{{ _("The cluster key has letters outside ASCII: nodes running 2.8.0 or older can’t use it. Upgrade them or use an ASCII key.") }}</div>
+  {% endif %}
+  {% set sc = submitted.cluster %}
+  {% with cluster = sc or cluster, cluster_peers_text = sc.peers_text if sc else cluster_peers_text %}
+  <form method="post" action="{{ base }}/settings/cluster" class="authform">
+    <input type="hidden" name="_csrf" value="{{ request.state.csrf_token }}">
+    <input type="hidden" name="cluster_form" value="2">
+    <label class="chk"><input type="checkbox" name="enabled" {% if cluster.enabled %}checked{% endif %}> {{ _("Enable LAN cluster") }}</label>
+    <label>{{ _("Shared cluster key") }} <span class="muted">({{ _("the same on every node") }}{% if cluster_key_set %}; {{ _("blank = unchanged") }}{% endif %})</span>
+      <input type="password" name="key" autocomplete="new-password" data-1p-ignore data-lpignore="true" data-bwignore placeholder="{% if cluster_key_set %}{{ unchanged }}{% else %}{{ _('a long random string — or use “Generate a new key and save”') }}{% endif %}"></label>
+    {% if cluster_key_set %}
+    <label class="chk"><input type="checkbox" name="keep_old_key"{% if not sc or sc.keep_old_key %} checked{% endif %}> {{ _("When the key changes, keep accepting the current one for 7 days, until every node has the new one (untick it if the key leaked)") }}</label>
+    {% if cluster_previous %}
+    <p class="muted">{% if cluster_previous_until %}{{ _("The previous key is also accepted, until %(until)s UTC.", until=cluster_previous_until) }}{% else %}{{ _("The previous key is also accepted.") }}{% endif %}</p>
+    <label class="chk"><input type="checkbox" name="clear_previous_key"{% if sc and sc.clear_previous_key %} checked{% endif %}> {{ _("Stop accepting the previous key now") }}</label>
+    {% endif %}
+    <label class="chk"><input type="checkbox" name="clear_key"{% if sc and sc.clear_key %} checked{% endif %}> {{ _("Remove the stored key") }}</label>
+    {% endif %}
+    <label class="chk"><input type="checkbox" name="legacy_auth" {% if cluster.legacy_auth %}checked{% endif %}> {{ _("Legacy authentication: also accept and use the unsigned key with nodes running 2.8.0 or older") }}</label>
+    {% if cluster.legacy_auth %}
+    <p class="muted">{% if cluster_legacy %}{{ _("In use with: %(nodes)s.", nodes=cluster_legacy|join(", ")) }}{% else %}{{ _("No node has used it recently.") }}{% endif %} {{ _("Nodes running 2.8.0 or older send the key itself in every request, readable on the network; once every node is upgraded, turn this off.") }}</p>
+    {% endif %}
+    <label class="chk"><input type="checkbox" name="discovery" {% if cluster.discovery %}checked{% endif %}> {{ _("Find other nodes automatically (UDP broadcast); off = manual peers only") }}</label>
+    <div class="grid2">
+      <label>{{ _("Discovery UDP port") }} <input type="number" name="discovery_port" value="{{ cluster.discovery_port }}" min="1" max="65535"></label>
+      <label>{{ _("Advertise IP") }} <span class="muted">({{ _("blank = auto-detect") }})</span><input type="text" name="advertise_ip" value="{{ cluster.advertise_ip }}" placeholder="{{ _('this node’s LAN IP others reach') }}"></label>
+    </div>
+    <label>{{ _("Manual peers") }} <span class="muted">({{ _('one <span class="mono">host:port</span> per line — for routed/L3 networks broadcast can’t reach') }})</span>
+      <textarea name="peers" rows="3" placeholder="10.0.5.12:8080&#10;https://plc-gw.example:8443">{{ cluster_peers_text }}</textarea></label>
+    <div class="row-actions start">
+      <button class="btn primary" type="submit">{{ _("Save cluster") }}</button>
+      <button class="btn" type="submit" name="then" value="generate">{{ _("Generate a new key and save") }}</button>
+    </div>
+  </form>
+  {% endwith %}
+  <form method="post" action="{{ base }}/settings/cluster/identity" class="inline mt-sm"
+        data-confirm="{{ _('Give this node a new identity? Everyone signed in to it is signed out (you stay signed in), and other nodes see it as a new node.') }}">
+    <input type="hidden" name="_csrf" value="{{ request.state.csrf_token }}">
+    <button class="btn" type="submit">{{ _("Give this node a new identity") }}</button>
+  </form>
+  <p class="muted mt-sm">{{ _("For a node copied from another installation (its data folder, disk or VM image): a new cluster ID and a new session key, so the copies no longer hide each other in the cluster and a sign-in to one is not valid on the other.") }}</p>
+</section>
+
+<section class="panel panel-narrow" id="notifications">
+  <div class="panel-head"><h2>{{ _("Notifications") }}</h2></div>
+  {{ feedback('notifications') }}
+  <p class="muted mb-sm">{{ _("Get a message when something needs attention — to a chat (Slack, Microsoft Teams, Discord, Telegram, or any service that accepts a JSON webhook) and/or by e-mail. The same event for the same mapping is sent at most once per repeat interval.") }}</p>
+  <p class="muted mb-sm">{{ _("Messages go to the service you set here, which may be run in another country; the host name and the instance name are in every one.") }}</p>
+  {% with notify = submitted.notify or notify %}
+  <form method="post" action="{{ base }}/settings/notifications" class="authform">
+    <input type="hidden" name="_csrf" value="{{ request.state.csrf_token }}">
+    <label class="chk"><input type="checkbox" name="notify_enabled" {% if notify.enabled %}checked{% endif %}> {{ _("Send notifications") }}</label>
+    <fieldset>
+      <legend>{{ _("Events") }}</legend>
+      {% set event_labels = {
+        'device_lost': _("Serial device lost (unplugged, error, reconnecting)"),
+        'device_back': _("Serial device back"),
+        'start_failed': _("Mapping failed to start (e.g. port in use)"),
+        'link_lost': _("Connect-out mapping can't reach its remote server"),
+        'link_back': _("Connect-out mapping reaches its remote server again"),
+        'client_connected': _("Client connected"),
+        'client_disconnected': _("Client disconnected"),
+        'login_failed': _("Failed sign-in to this UI"),
+        'disk_low': _("Data disk almost full (traces pause)"),
+        'no_data': _("No data from a serial device (a mapping’s no-data alarm, set in its options)"),
+        'data_back': _("Data from that device again"),
+        'peer_offline': _("Cluster node offline (not heard from, or a configured peer that doesn’t answer)"),
+        'peer_back': _("Cluster node back"),
+        'service_started': _("ser2netweb started (which mappings run)"),
+        'unit_offline': _("Modbus unit stopped answering (a gateway's polling: no reply to any of its points in 3 polls in a row)"),
+        'unit_back': _("Modbus unit answering again"),
+      } %}
+      {% set event_hints = {
+        'client_connected': _("sends the client’s IP address"),
+        'client_disconnected': _("sends the client’s IP address"),
+        'login_failed': _("sends the account name, or “(unknown user)”, and the IP address"),
+      } %}
+      {% for e in notify_events %}
+      <label class="chk"><input type="checkbox" name="notify_event_{{ e }}" {% if e in notify.events %}checked{% endif %}> {{ event_labels[e] }}{% if e in event_hints %} <span class="muted">({{ event_hints[e] }})</span>{% endif %}</label>
+      {% endfor %}
+      <input type="hidden" name="notify_privacy_fields" value="1">
+      <label class="chk"><input type="checkbox" name="notify_mask_personal_data" {% if notify.mask_personal_data %}checked{% endif %}> {{ _("Leave out personal data: IP addresses only as their network (10.0.5.x; IPv6 /48), no account names") }}</label>
+      <label>{{ _("Repeat interval (minutes)") }} <span class="muted">({{ _("0 = every time") }})</span>
+        <input type="number" name="notify_repeat_min" min="0" max="1440" step="any" value="{{ '%g'|format(notify.repeat_s / 60) }}"></label>
+    </fieldset>
+    <fieldset>
+      <legend>Webhook</legend>
+      <div class="grid2">
+        <label>URL <span class="muted">({{ _("kept secret") }}{% if notify.webhook_url %}; {{ _("blank = unchanged") }}{% endif %})</span>
+          <input type="url" name="notify_webhook_url" autocomplete="off" spellcheck="false" data-1p-ignore data-lpignore="true" data-bwignore placeholder="{% if notify.webhook_url %}{{ unchanged }}{% else %}https://hooks.slack.com/services/…{% endif %}"></label>
+        <label>{{ _("Format") }}
+          <select name="notify_webhook_format">
+            {% set formats = {'json': _('JSON (generic)'), 'slack': 'Slack / Mattermost', 'teams': 'Microsoft Teams (Workflows)', 'discord': 'Discord', 'telegram': _('Telegram bot')} %}
+            {% for f in webhook_formats %}<option value="{{ f }}" {% if f == notify.webhook_format %}selected{% endif %}>{{ formats[f] }}</option>{% endfor %}
+          </select></label>
+      </div>
+      <div class="grid2">
+        <label>{{ _("Telegram chat ID") }} <span class="muted">({{ _("Telegram only; URL: https://api.telegram.org/bot&lt;token&gt;/sendMessage") }})</span>
+          <input type="text" name="notify_telegram_chat_id" value="{{ notify.telegram_chat_id }}"></label>
+        {% if notify.webhook_url %}<label class="chk chk-pad"><input type="checkbox" name="notify_webhook_clear"> {{ _("Remove the stored URL") }}</label>{% endif %}
+      </div>
+    </fieldset>
+    <fieldset>
+      <legend>{{ _("E-mail") }}</legend>
+      <div class="grid2">
+        <label>{{ _("To") }} <span class="muted">({{ _("comma-separated") }})</span><input type="text" name="notify_email_to" value="{{ notify.email_to }}" placeholder="ops@example.com"></label>
+        <label>{{ _("From") }} <span class="muted">({{ _("blank = ser2net@&lt;host&gt;") }})</span><input type="text" name="notify_email_from" value="{{ notify.email_from }}"></label>
+      </div>
+      <label class="chk"><input type="checkbox" name="notify_email_separately" {% if notify.email_separately %}checked{% endif %}> {{ _("Send each recipient a message of their own (they don’t see each other’s addresses)") }}</label>
+      <div class="grid3">
+        <label>{{ _("SMTP server") }} <input type="text" name="notify_smtp_host" value="{{ notify.smtp_host }}" placeholder="smtp.example.com"></label>
+        <label>{{ _("Port") }} <input type="number" name="notify_smtp_port" min="1" max="65535" value="{{ notify.smtp_port }}"></label>
+        <label>{{ _("Security") }}
+          <select name="notify_smtp_security">
+            {% set securities = {'starttls': 'STARTTLS (587)', 'ssl': 'TLS (465)', 'none': _('none (trusted network only)')} %}
+            {% for x in smtp_security %}<option value="{{ x }}" {% if x == notify.smtp_security %}selected{% endif %}>{{ securities[x] }}</option>{% endfor %}
+          </select></label>
+      </div>
+      <div class="grid2">
+        <label>{{ _("Username") }} <span class="muted">({{ _("optional") }})</span><input type="text" name="notify_smtp_username" value="{{ notify.smtp_username }}" autocomplete="off" autocapitalize="none" autocorrect="off" spellcheck="false"></label>
+        <label>{{ _("Password") }} <input type="password" name="notify_smtp_password" autocomplete="new-password" data-1p-ignore data-lpignore="true" data-bwignore placeholder="{% if notify.smtp_password %}{{ unchanged }}{% endif %}"></label>
+      </div>
+      {% if notify.smtp_security == 'none' and notify.smtp_username %}
+      <div class="banner warn">{{ _("With security “none”, the user name and password go to the mail server unencrypted. Choose STARTTLS or TLS unless the network to it is trusted.") }}</div>
+      {% endif %}
+    </fieldset>
+    <div class="row-actions start">
+      <button class="btn primary" type="submit">{{ _("Save notifications") }}</button>
+      <button class="btn" type="submit" name="then" value="test">{{ _("Save and send a test") }}</button>
+    </div>
+  </form>
+  {% endwith %}
+</section>
+
+<section class="panel panel-narrow" id="tls">
+  <div class="panel-head"><h2>{{ _("Admin TLS (HTTPS)") }}</h2></div>
+  {{ feedback('tls') }}
+  <p class="muted mb-sm">{{ _("Encrypts this management UI. A change applies to new connections at once (the files are read when you save, and again when ser2netweb reloads config.json); connections already open keep theirs.") }}</p>
+  {% set cert = tls_certificate %}
+  {% if cert and cert.problem == 'unreadable' %}<div class="banner warn">{{ _("The certificate file can’t be read (%(error)s): ser2netweb can’t start with TLS until it can.", error=cert.detail) }}</div>
+  {% elif cert and cert.problem == 'not_pem' %}<div class="banner warn">{{ _("The certificate file holds no PEM certificate: ser2netweb can’t start with TLS like this.") }}</div>
+  {% elif cert and cert.problem %}<p class="muted mb-sm">{{ _('Install the <span class="mono">cryptography</span> package to see the certificate’s details here.') }}</p>
+  {% elif cert %}
+  <p class="mb-sm">{{ _('Certificate: <span class="mono">%(subject)s</span>', subject=cert.subject|softbreak) }}{% if cert.self_signed %} <span class="tag">{{ _("self-signed") }}</span>{% endif %}
+    {% if cert.state == 'expired' %}<span class="tag tag-danger">{{ _("expired") }}</span>{% elif cert.state == 'not_yet_valid' %}<span class="tag tag-danger">{{ _("not valid yet") }}</span>{% elif cert.state == 'expiring' %}<span class="tag tag-warn">{{ ngettext("ends in %(num)s day", "ends in %(num)s days", cert.days) }}</span>{% else %}<span class="tag">{{ ngettext("%(num)s day left", "%(num)s days left", cert.days) }}</span>{% endif %}<br>
+    <span class="muted">{{ _("Valid from %(start)s to %(end)s UTC", start=cert.start, end=cert.end) }}{% if cert.names %} · {{ _("names: %(names)s", names=cert.names|softbreak) }}{% endif %}</span></p>
+  {% if cert.state == 'expired' %}<div class="banner warn">{{ _("By this server’s clock the certificate ended at %(end)s UTC: browsers and clients that check it refuse the connection. Renew it, or generate a new self-signed one.", end=cert.end) }}</div>
+  {% elif cert.state == 'not_yet_valid' %}<div class="banner warn">{{ _("The certificate starts at %(start)s UTC, later than this server’s clock reads: the clock is behind (see Admin interface), or the certificate was made while a clock was ahead. Clients whose clock reads earlier refuse it.", start=cert.start) }}</div>{% endif %}
+  {% endif %}
+  {% with admin = submitted.tls or admin %}
+  <form method="post" action="{{ base }}/settings/tls" class="authform">
+    <input type="hidden" name="_csrf" value="{{ request.state.csrf_token }}">
+    <label>{{ _("Certificate path") }} <input type="text" name="tls_cert" value="{{ admin.tls_cert }}" placeholder="/path/cert.pem"></label>
+    <label>{{ _("Key path") }} <input type="text" name="tls_key" value="{{ admin.tls_key }}" placeholder="/path/key.pem"></label>
+    <label>{{ _("Key password") }} <span class="muted">({{ _("only for an encrypted key") }})</span>
+      <input type="password" name="tls_key_password" autocomplete="new-password" data-1p-ignore data-lpignore="true" data-bwignore placeholder="{% if admin.tls_key_password %}{{ unchanged }}{% else %}{{ _('optional') }}{% endif %}"></label>
+    {% if admin.tls_key_password %}<label class="chk"><input type="checkbox" name="tls_key_password_clear"> {{ _("Remove the stored password") }}</label>{% endif %}
+    <label>{{ _("HSTS max-age (seconds)") }} <span class="muted">({{ _("31536000 = one year, the default · 0 = off · applies at once") }})</span>
+      <input type="number" name="hsts_max_age" min="0" max="{{ hsts_max }}" step="1" value="{{ admin.hsts_max_age }}" required></label>
+    <p class="muted">{{ _("With TLS, browsers that trust the certificate and reach this UI by host name use only https:// for that name, on every port, for this long after each visit: other plain-HTTP or self-signed web pages on the same name stop opening there. Before turning TLS off, set 0 and let the users open this UI once.") }}</p>
+    <button class="btn primary" type="submit">{{ _("Save TLS") }}</button>
+  </form>
+  {% endwith %}
+  <form method="post" action="{{ base }}/settings/tls/generate" class="inline mt-sm"{% if admin.tls_cert %}
+        data-confirm="{{ _('Replace the certificate %(cert)s with a new self-signed one, from the next restart? Browsers warn about a new certificate until they are told to trust it.', cert=admin.tls_cert) }}"{% endif %}>
+    <input type="hidden" name="_csrf" value="{{ request.state.csrf_token }}">
+    <button class="btn" type="submit">{{ _("Generate a self-signed certificate") }}</button>
+  </form>
+</section>
+
+<section class="panel panel-narrow" id="reverse-proxy">
+  <div class="panel-head"><h2>{{ _("Reverse proxy") }}</h2></div>
+  {{ feedback('reverse-proxy') }}
+  <p class="muted mb-sm">{{ _('Only for a reverse proxy (nginx, Apache, Caddy, Traefik, IIS) in front of this UI; <span class="mono">docs/REVERSE-PROXY.md</span> has examples. Changes apply at once.') }}</p>
+  {% with admin = submitted.proxy or admin %}
+  <form method="post" action="{{ base }}/settings/proxy" class="authform">
+    <input type="hidden" name="_csrf" value="{{ request.state.csrf_token }}">
+    <label>{{ _("Public URL") }} <span class="muted">({{ _("the address users open, such as https://ser2netweb.example.com, or https://gw.example.com/ser2netweb to serve the UI under that path too · blank: none") }})</span>
+      {% if public_url_env %}<input type="url" value="{{ public_url }}" disabled>
+      {% else %}<input type="url" name="public_url" value="{{ admin.public_url }}" placeholder="https://ser2netweb.example.com" autocomplete="off" spellcheck="false" data-1p-ignore data-lpignore="true" data-bwignore>{% endif %}</label>
+    {% if public_url_env %}<p class="muted">{{ _('Set by <span class="mono">%(name)s</span> for this run; the field takes effect again once that is removed.', name=public_url_env) }}</p>{% endif %}
+    <label>{{ _("Trusted proxies") }} <span class="muted">({{ _("IP addresses or networks of the proxies, such as 127.0.0.1 or 172.18.0.0/16 · blank: none") }})</span>
+      {% if trusted_env %}<input type="text" value="{{ trusted[0]|join(' ') }}" disabled>
+      {% else %}<input type="text" name="trusted_proxies" value="{{ admin.trusted_proxies|join(' ') }}" autocomplete="off" spellcheck="false" data-1p-ignore data-lpignore="true" data-bwignore>{% endif %}</label>
+    {% if trusted_env %}<p class="muted">{{ _('Set by <span class="mono">%(name)s</span> for this run; the field takes effect again once that is removed.', name=trusted_env) }}</p>
+    {% elif trusted[1] == 'FORWARDED_ALLOW_IPS' %}<p class="muted">{{ _('<span class="mono">FORWARDED_ALLOW_IPS</span> gives <span class="mono">%(list)s</span> while this is blank.', list=trusted[0]|join(' ')) }}</p>{% endif %}
+    <p class="muted">{{ _("Only a connection from one of them may say who the client is (X-Forwarded-For: for the sign-in limits, the audit log and all.log) and that the browser used HTTPS (X-Forwarded-Proto). Without them every client behind a proxy has the proxy’s address.") }}</p>
+    <label class="chk"><input type="checkbox" name="proxy_hsts" {% if admin.proxy_hsts %}checked{% endif %}> {{ _("Send HSTS on HTTPS through the proxy") }}</label>
+    <p class="muted">{{ _("With the max-age set under Admin TLS: browsers then use only https:// for that host name, on every port, a direct http:// address of the same name included. The proxy can send it instead.") }}</p>
+    <p class="muted">{{ _("Pages at the public URL count as this UI’s own (forms, console), a blank SSO redirect URI becomes the public URL followed by %(path)s, and notifications link to it. With a path, the UI is served under it too (the proxy passes the path on, or strips it and sends it as X-Forwarded-Prefix), and its cookies there are its own: users sign in once more.", path='/auth/oidc/callback') }}</p>
+    <button class="btn primary" type="submit">{{ _("Save reverse proxy settings") }}</button>
+  </form>
+  {% endwith %}
+</section>
+
+<section class="panel panel-narrow" id="api-token">
+  <div class="panel-head"><h2>{{ _("REST API token") }}</h2></div>
+  {{ feedback('api-token') }}
+  <p class="muted mb-sm">{{ _('A bearer token for the JSON API at <span class="mono">/api/v1</span> (automation, Ansible, fleet tools). Send it as <span class="mono">Authorization: Bearer &lt;token&gt;</span>. Spec: <a href="%(url)s">openapi.json</a>.', url=base ~ '/api/v1/openapi.json') }}</p>
+  {% if new_api_token %}
+  <div class="banner ok">{{ _("New token (copy now — shown only once):") }}
+    <div class="mono token-box">{{ new_api_token }}</div>
+    <button type="button" class="btn sm mt-sm" data-copy>{{ _("Copy") }}</button>
+  </div>
+  {% endif %}
+  <p>{{ _("Status:") }}
+    {% if api_token_set %}<span class="tag">{{ _("enabled") }}</span> <span class="muted">{{ _('role: <span class="mono">%(role)s</span>', role=api_token_role) }} · {{ _("last used: %(time)s", time=api_token_last_used) }}</span>{% else %}<span class="tag">{{ _("disabled") }}</span>{% endif %}
+  </p>
+  <form method="post" action="{{ base }}/settings/api-token" class="inline">
+    <input type="hidden" name="_csrf" value="{{ request.state.csrf_token }}">
+    <label>{{ _("Role") }} <span class="muted">({{ _("viewer = read-only") }})</span>
+      <select name="api_token_role">
+        {% set cur = api_token_role if api_token_set else 'admin' %}
+        {% for r in roles %}<option value="{{ r }}" {% if r == cur %}selected{% endif %}>{{ role_label(r) }}</option>{% endfor %}
+      </select>
+    </label>
+    {% if api_token_set %}
+    <button class="btn primary" type="submit"
+            data-confirm="{{ _('Replace the REST API token? Everything that uses the current one gets 401 until it is given the new one.') }}">{{ _("Regenerate token") }}</button>
+    {# the same token, another role: nothing that uses it has to change #}
+    <button class="btn" type="submit" formaction="{{ base }}/settings/api-token/role">{{ _("Change the role only") }}</button>
+    {% else %}
+    <button class="btn primary" type="submit">{{ _("Generate token") }}</button>
+    {% endif %}
+  </form>
+  {% if api_token_set %}
+  <form method="post" action="{{ base }}/settings/api-token/revoke" class="inline mt-sm"
+        data-confirm="{% if api_token_rows %}{{ _('Revoke the REST API token? Everything that uses it gets 401; the other tokens keep working.') }}{% else %}{{ _('Revoke the REST API token? The REST API is switched off, and everything that uses it gets 401.') }}{% endif %}">
+    <input type="hidden" name="_csrf" value="{{ request.state.csrf_token }}">
+    <button class="btn" type="submit">{{ _("Revoke") }}</button>
+  </form>
+  {% endif %}
+  <h3 class="mt-sm">{{ _("More tokens") }}</h3>
+  <p class="muted mb-sm">{{ _('Give each client its own token: a read-only one for monitoring, one that may change mappings for automation. Each has a name — the audit log shows it as <span class="mono">api-token:NAME</span> — a role and, if you like, an expiry; revoking one leaves the others working. The token above works as before. When a token was last used is known since ser2netweb started.') }}</p>
+  {% if api_token_rows %}
+  <div class="table-scroll">
+  <table class="grid th-wrap">
+    <thead><tr><th>{{ _("Name") }}</th><th>{{ _("Role") }}</th><th></th></tr></thead>
+    <tbody>
+    {% for t in api_token_rows %}
+      <tr>
+        <td class="mono">{{ t.name }}{% if t.expired %} <span class="tag">{{ _("expired") }}</span>{% endif %}<br><span class="muted">{{ _("created %(date)s", date=t.created) }} · {% if t.expires %}{{ _("expires %(date)s", date=t.expires) }}{% else %}{{ _("never expires") }}{% endif %} · {{ _("last used: %(time)s", time=t.last_used) }}</span></td>
+        <td class="mono">{{ t.role }}</td>
+        <td>
+          <form method="post" action="{{ base }}/settings/api-tokens/revoke" class="inline"
+                data-confirm="{{ _('Revoke the token “%(name)s”? Everything that uses it gets 401; the other tokens keep working.', name=t.name) }}">
+            <input type="hidden" name="_csrf" value="{{ request.state.csrf_token }}">
+            <input type="hidden" name="id" value="{{ t.id }}">
+            <button class="btn sm danger" type="submit">{{ _("Revoke") }}</button>
+          </form>
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  {% endif %}
+  {% if api_token_rows|length < api_token_max %}
+  {% set nt = submitted.new_token or {} %}
+  <form method="post" action="{{ base }}/settings/api-tokens" class="authform">
+    <input type="hidden" name="_csrf" value="{{ request.state.csrf_token }}">
+    <div class="grid2">
+      <label>{{ _("Name") }} <input type="text" name="name" value="{{ nt.name }}" placeholder="{{ _('e.g. %(example)s', example='prometheus') }}" autocapitalize="none" autocorrect="off" spellcheck="false" maxlength="64" pattern="[A-Za-z0-9._\-]{1,64}" title="{{ _("A token name is 1-64 characters: English letters, digits, '.', '_' or '-'.") }}" required></label>
+      <label>{{ _("Role") }} <span class="muted">({{ _("viewer = read-only") }})</span>
+        <select name="role"><option value="viewer"{% if nt.role != 'operator' %} selected{% endif %}>viewer</option><option value="operator"{% if nt.role == 'operator' %} selected{% endif %}>operator</option></select>
+      </label>
+    </div>
+    <label>{{ _("Expires after (days)") }} <span class="muted">({{ _("empty or 0 = never · at most %(max)s", max=api_token_days_max) }})</span>
+      <input type="number" name="expires_days" min="0" max="{{ api_token_days_max }}" value="{{ nt.expires_days }}">
+    </label>
+    <button class="btn" type="submit">{{ _("Add token") }}</button>
+  </form>
+  {% endif %}
+</section>
+{% endif %}
+
+{% if is_operator %}
+<section class="panel panel-narrow" id="import">
+  <div class="panel-head"><h2>{{ _("Mappings export / import") }}</h2></div>
+  {{ feedback('import') }}
+  <p><a class="btn" href="{{ base }}/settings/config/export">{{ _("⤓ Export mappings (JSON)") }}</a></p>
+  <p class="muted mb-sm">{{ _("The export holds each mapping’s MQTT broker password in plain text: keep the file as safe as a password.") }}</p>
+  {% if import_preview %}
+  {% set p = import_preview %}
+  <h3>{{ _("Import preview") }} <span class="muted">— {{ ngettext("%(num)s mapping from a %(source)s, mode: %(mode)s", "%(num)s mappings from a %(source)s, mode: %(mode)s", p.count, source=p.source, mode=_("merge") if p.mode == 'merge' else _("replace")) }}</span></h3>
+  {% for w in p.warnings %}<div class="banner warn">{{ w }}</div>{% endfor %}
+  {% if p.problem %}<div class="banner error" role="alert">{{ _("This import can’t be applied: %(problem)s", problem=p.problem) }}</div>{% endif %}
+  <div class="table-scroll">
+  <table class="grid import-preview stackable">
+    <thead><tr><th>{{ _("Mapping") }}</th><th>{{ _("Port / network") }}</th><th>{{ _("After import") }}</th><th>{{ _("Change") }}</th></tr></thead>
+    <tbody>
+    {% for r in p.rows %}
+      <tr{% if r.notes %} class="has-notes"{% endif %}>
+        <td class="col-name">{{ r.name|softbreak }}</td>
+        <td class="mono" data-label="{{ _('Port / network') }}">{{ r.kind|softbreak }}</td>
+        <td{% if r.after %} data-label="{{ _('After import') }}"{% endif %}>
+          {%- if r.after %}{% set a = r.after %}
+            {%- if a.enabled %}<span class="muted">{{ _("enabled") }}</span>{% else %}<span class="tag">{{ _("disabled") }}</span>{% endif %}
+            {%- if a.tls %} <span class="tag">TLS</span>{% endif %}
+            {%- if a.read_only %} <span class="tag" title="{{ _('read-only') }}">RO</span>{% endif %}
+            {%- if a.clients is not none %} <span class="tag{% if a.open %} tag-warn{% endif %}">{% if a.clients %}{{ ngettext("%(num)s allowed address", "%(num)s allowed addresses", a.clients) }}{% else %}{{ _("any client") }}{% endif %}</span>{% endif %}
+          {%- endif %}
+        </td>
+        <td data-label="{{ _('Change') }}">
+          {% if r.action == 'add' %}<span class="tag">{{ _("new") }}</span>
+          {% elif r.action == 'update' %}<span class="tag">{{ _("updates") }}</span>{% if r.target != r.name %} <span class="muted">“{{ r.target }}”</span>{% endif %}
+          {% elif r.action == 'same' %}<span class="muted">{{ _("unchanged") }}</span>
+          {% else %}<span class="tag tag-danger">{{ _("removed") }}</span>{% endif %}
+          {%- if r.changes %}<ul class="cell-list">{% for c in r.changes %}<li{% if c.security %} class="security"{% endif %}>{% if c.security %}⚠ {% endif %}{% if c.kept %}{{ _("%(what)s: %(value)s is kept (the file has %(file)s)", what=c.what, value=c.before, file=c.file) }}{% else %}{{ c.what }}: {{ c.before }} → {{ c.after }}{% endif %}</li>{% endfor %}</ul>{% endif %}
+        </td>
+      </tr>
+      {%- if r.notes %}
+      <tr class="notes-row"><td colspan="4"><ul class="cell-list">{% for n in r.notes %}<li{% if n.security %} class="security"{% endif %}>{% if n.security %}⚠ {% endif %}{{ n.text }}</li>{% endfor %}</ul></td></tr>
+      {%- endif %}
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  <form method="post" action="{{ base }}/settings/config/import/apply" class="inline mt-sm">
+    <input type="hidden" name="_csrf" value="{{ request.state.csrf_token }}">
+    <input type="hidden" name="token" value="{{ p.token }}">
+    <input type="hidden" name="mode" value="{{ p.mode }}">
+    <button class="btn primary" type="submit" {% if p.problem %}disabled{% endif %}>{{ _("Apply import") }}</button>
+  </form>
+  <a class="btn mt-sm" href="{{ base }}/settings#import">{{ _("Cancel") }}</a>
+  {% else %}
+  <form method="post" action="{{ base }}/settings/config/import" enctype="multipart/form-data" class="authform">
+    <input type="hidden" name="_csrf" value="{{ request.state.csrf_token }}">
+    <input type="hidden" name="step" value="preview">
+    <label>{{ _("Mappings file") }} <span class="muted">({{ _('a ser2netweb export or config.json — or a classic ser2net <span class="mono">ser2net.yaml</span> / <span class="mono">ser2net.conf</span> to migrate from') }})</span>
+      <input type="file" name="file" accept="application/json,.json,.yaml,.yml,.conf,text/plain" required>
+    </label>
+    <label class="chk"><input type="radio" name="mode" value="merge" checked> {{ _("Merge — update mappings with the same name, add the others, keep the rest") }}</label>
+    <label class="chk"><input type="radio" name="mode" value="replace"> {{ _("Replace — the file’s mappings replace all current ones") }}</label>
+    <button class="btn" type="submit">{{ _("Preview import") }}</button>
+  </form>
+  <p class="muted mt-sm">{{ _("Nothing changes until you apply the preview. The current configuration is kept as a backup either way.") }}</p>
+  <p class="muted">{{ _('Moving from the classic ser2net (stop its service first; ports below 1024; what works differently): <span class="mono">docs/MIGRATING-FROM-SER2NET.md</span>.') }}</p>
+  {% endif %}
+</section>
+{% endif %}
+
+{% if is_admin %}
+<section class="panel panel-narrow" id="backups">
+  <div class="panel-head"><h2>{{ _("Configuration backups") }}</h2></div>
+  {{ feedback('backups') }}
+  <p class="muted mb-sm">{{ _('Every change keeps the <span class="mono">config.json</span> it writes in the data folder’s <span class="mono">backups/</span>, and the one it replaces if that isn’t there yet (the newest 50; the one in use is marked), so the current configuration is kept there too, also when an older version takes over. Starting or stopping a mapping takes no backup of its own (the newest one is updated), so it doesn’t push out the backups of real changes. Restoring one brings back its mappings and settings after showing what changes for sign-in and access; the user accounts, the REST API token and the cluster key stay as they are unless you restore them too. A restore can be undone. Backups contain password hashes and secrets: only admins see them, and a download leaves out the session key.') }}</p>
+  {% if outside_edit %}<div class="banner warn">{{ _('config.json was changed outside ser2netweb (%(time)s) and is not in use: reload it to apply it. A change saved here before that replaces it; the edited file is then kept in the backups below.', time=outside_edit) }}</div>{% endif %}
+  {% if outside_gone %}<div class="banner warn">{{ _('config.json is gone from the data folder: ser2netweb goes on with the configuration in use and writes it again at the next change.') }}</div>{% endif %}
+  {% if replaced_edit and replaced_edit.backup %}<div class="banner warn">{{ _('A change saved at %(saved)s replaced a config.json edited outside ser2netweb (%(edited)s). The edited file is kept as <span class="mono">%(backup)s</span>: <a href="%(link)s">restore it</a> to use it.', saved=replaced_edit.saved, edited=replaced_edit.edited, backup=replaced_edit.backup, link=base ~ '/settings?restore=' ~ replaced_edit.backup ~ '#backups') }}</div>
+  {% elif replaced_edit %}<div class="banner warn">{{ _('A change saved at %(saved)s replaced a config.json edited outside ser2netweb (%(edited)s); its backup could not be written (all.log says why).', saved=replaced_edit.saved, edited=replaced_edit.edited) }}</div>{% endif %}
+  <form method="post" action="{{ base }}/settings/config/reload" class="authform mb-sm">
+    <input type="hidden" name="_csrf" value="{{ request.state.csrf_token }}">
+    <p class="muted mb-sm">{{ _('<span class="mono">config.json</span> changed by hand or by a tool (Ansible …) is used once ser2netweb reads it again: here, with <span class="mono">ser2netweb --reload</span>, or on Linux with SIGHUP (<span class="mono">systemctl reload ser2net</span>). Mappings whose settings didn’t change keep running with their clients; certificate files are read again. A file that doesn’t validate changes nothing (all.log says why); a new admin UI address waits for the next start.') }}</p>
+    <button class="btn" type="submit">{{ _("Reload config.json") }}</button>
+  </form>
+  {% if newer_writer %}<div class="banner warn">{{ _('At start-up, config.json had been written by ser2netweb %(newer)s, a newer version than this one (%(this)s). What only that version knows is not used here, and it is left out when this version saves config.json. The backups below keep the file as that version left it: restore it after upgrading again.', newer=newer_writer, this=app_version) }}</div>{% endif %}
+  {% if unknown_keys %}<div class="banner warn">{{ _('At start-up, config.json had settings this version doesn’t know: %(keys)s. They are not used here, and they are left out when config.json is saved; the backups below keep the file with them.', keys=(unknown_keys[:10] | join(', ')) ~ (' …' if unknown_keys | length > 10 else '')) }}</div>{% endif %}
+  {% if restore_preview %}
+  {% set rp = restore_preview %}
+  <h3 class="mt-sm">{{ _("Restore the configuration saved at %(time)s UTC", time=rp.time) }}</h3>
+  {% if rp.settings %}
+  <p class="mb-sm">{{ _("Sign-in and access settings it changes:") }}</p>
+  <ul>{% for line in rp.settings %}<li>{{ line }}</li>{% endfor %}</ul>
+  {% else %}
+  <p class="muted mb-sm">{{ _("It changes no sign-in or access setting.") }}</p>
+  {% endif %}
+  <form method="post" action="{{ base }}/settings/backups/restore" class="authform mb-sm">
+    <input type="hidden" name="_csrf" value="{{ request.state.csrf_token }}">
+    <input type="hidden" name="name" value="{{ rp.name }}">
+    <label class="chk"><input type="checkbox" name="accounts" {% if not rp.accounts_ok %}disabled{% endif %}> {{ _("Also restore its user accounts, REST API token and cluster key (everyone else is signed out)") }}</label>
+    {% if rp.accounts %}<ul class="muted">{% for line in rp.accounts %}<li>{{ line }}</li>{% endfor %}</ul>
+    {% elif rp.accounts_ok %}<p class="muted">{{ _("Its accounts and credentials are the same as now.") }}</p>{% endif %}
+    {% for note in rp.notes %}<div class="banner warn">{{ note }}</div>{% endfor %}
+    <div class="row-actions start">
+      <button class="btn primary" type="submit">{{ _("Restore") }}</button>
+      <button class="btn" type="submit" formaction="{{ base }}/settings/backups/restore-mappings">{{ _("Only its mappings…") }}</button>
+      <a class="btn" href="{{ base }}/settings#backups">{{ _("Cancel") }}</a>
+    </div>
+  </form>
+  {% endif %}
+  {% if backups %}
+  <div class="table-scroll">
+  <table class="grid th-wrap">
+    <thead><tr><th>{{ _("Saved (UTC)") }}</th><th>{{ _("Contents") }}</th><th class="col-actions"></th></tr></thead>
+    <tbody>
+    {% for bk in backups %}
+      <tr>
+        <td class="mono">{{ bk.time }}</td>
+        <td>{{ _("%(mappings)s mappings, %(users)s users", mappings=bk.mappings if bk.mappings is not none else '?', users=bk.users if bk.users is not none else '?') }}<br><span class="muted">{{ _("written by ser2netweb %(version)s", version=bk.written_by) if bk.written_by else _("written by 2.8.1 or older") }}</span>{% if bk.file_time %}<br><span class="muted">{{ _("saved at %(time)s UTC, when the clock was behind the newest backup", time=bk.file_time) }}</span>{% endif %}{% if bk.current %} <span class="tag">{{ _("in use") }}</span>{% endif %}
+          {% if bk.accounts %}<details class="muted"><summary>{{ _("Accounts") }}</summary><span class="mono">{% for a in bk.accounts %}{{ a.username }} ({{ a.role }}{% if a.source != 'local' %}, {{ a.source|upper }}{% endif %}){% if not loop.last %}, {% endif %}{% endfor %}</span></details>{% endif %}</td>
+        <td class="col-actions">
+          <div class="row-actions">
+            <a class="btn sm" href="{{ base }}/settings/backups/{{ bk.name }}">{{ _("Download") }}</a>
+            <a class="btn sm" href="{{ base }}/settings?restore={{ bk.name }}#backups">{{ _("Restore…") }}</a>
+            <form method="post" action="{{ base }}/settings/backups/delete" class="inline"
+                  data-confirm="{{ _('Delete the backup of %(time)s UTC? This can’t be undone.', time=bk.time) }}">
+              <input type="hidden" name="_csrf" value="{{ request.state.csrf_token }}">
+              <input type="hidden" name="name" value="{{ bk.name }}">
+              <button class="btn sm danger" type="submit">{{ _("Delete") }}</button>
+            </form>
+          </div>
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  {% if backup_gone_accounts %}
+  <form method="post" action="{{ base }}/settings/backups/remove-account" class="authform mt-sm"
+        data-confirm="{{ _('Remove this account from every backup that has it? A restore can then no longer bring it back, and this can’t be undone.') }}">
+    <input type="hidden" name="_csrf" value="{{ request.state.csrf_token }}">
+    <p class="muted mb-sm">{{ _("Deleting a user leaves the account, with its password hash, in the backups made before. These backups hold accounts that no longer exist; removing one from them leaves everything else in each backup as it was.") }}</p>
+    <label>{{ _("Account no longer in use") }}
+      <select name="username">{% for name in backup_gone_accounts %}<option value="{{ name }}">{{ name }}</option>{% endfor %}</select>
+    </label>
+    <button class="btn" type="submit">{{ _("Remove it from the backups") }}</button>
+  </form>
+  {% endif %}
+  <form method="post" action="{{ base }}/settings/backups/delete" class="authform mt-sm"
+        data-confirm="{{ _('Delete every configuration backup? This can’t be undone.') }}">
+    <input type="hidden" name="_csrf" value="{{ request.state.csrf_token }}">
+    <input type="hidden" name="all" value="on">
+    <button class="btn danger" type="submit">{{ _("Delete all backups") }}</button>
+  </form>
+  {% else %}
+  <p class="muted">{{ _("No backups yet — the first one is made at the next configuration change.") }}</p>
+  {% endif %}
+</section>
+{% endif %}
+{% endblock %}

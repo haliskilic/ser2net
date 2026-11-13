@@ -28,10 +28,10 @@ from unittest import mock
 
 from _server import ROOT  # noqa: F401  (sys.path setup)
 
-from app.config import AppConfig, MappingConfig, SerialSettings
-from app.engine import portdiag, portlist, serial_io
-from app.web.routes.forms import _preserve_unmanaged_fields, mapping_for_rerender
-from app.web.routes.ops import apply_usb_match
+from ser2netweb.config import AppConfig, MappingConfig, SerialSettings
+from ser2netweb.engine import portdiag, portlist, serial_io
+from ser2netweb.web.routes.forms import _preserve_unmanaged_fields, mapping_for_rerender
+from ser2netweb.web.routes.ops import apply_usb_match
 
 FTDI = {"device": "/dev/ttyUSB3", "by_id": "/dev/serial/by-id/usb-FTDI_FT232R_A12345-if00-port0",
         "vid": "0403", "pid": "6001", "serial_number": "A12345", "hardware": None}
@@ -319,7 +319,7 @@ def test_by_path_names():
     assert portlist.find(ports, usb1["by_path"]) is usb1
     assert portlist.names(usb0) == ["/dev/ttyUSB0", usb0["by_id"], usb0["by_path"]]
     # a mapping set to a by-path name: the supervisor wakes it when that name appears
-    from app.engine.supervisor import Supervisor
+    from ser2netweb.engine.supervisor import Supervisor
     sup = Supervisor(logger=lambda *a: None)
     woken = []
     sup._runners["m"] = SimpleNamespace(status=SimpleNamespace(state="device-missing"),

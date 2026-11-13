@@ -1,4 +1,4 @@
-"""Run the whole test suite under coverage.py — including the ser2net servers the
+"""Run the whole test suite under coverage.py — including the ser2netweb servers the
 tests start as subprocesses — and combine the data.
 
     pip install coverage
@@ -22,7 +22,7 @@ ROOT = os.path.dirname(HERE)
 def main(argv) -> int:
     env = dict(os.environ)
     env["COVERAGE_PROCESS_START"] = os.path.join(ROOT, ".coveragerc")
-    env["SER2NET_COV_DATA"] = os.path.join(ROOT, ".coverage")
+    env["SER2NETWEB_COV_DATA"] = os.path.join(ROOT, ".coverage")
     with tempfile.TemporaryDirectory() as hook:
         with open(os.path.join(hook, "sitecustomize.py"), "w", encoding="utf-8") as fh:
             fh.write("import coverage\ncoverage.process_startup()\n")

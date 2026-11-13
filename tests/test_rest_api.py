@@ -24,7 +24,7 @@ from _server import free_port, server_log, show_log_on_failure
 
 ROOT = os.path.join(os.path.dirname(__file__), "..")
 sys.path.insert(0, ROOT)
-from app import __version__
+from ser2netweb import __version__
 
 UI = free_port()
 BASE = f"http://127.0.0.1:{UI}"
@@ -71,7 +71,7 @@ def main():
     with open(cfg, "w") as fh:
         json.dump({"admin_ui": {"bind_ip": "127.0.0.1", "port": UI}}, fh)
     out = server_log(tmp)  # the server's output: a file, never an unread pipe
-    srv = subprocess.Popen([sys.executable, "ser2net.py", "--no-bootstrap", "--config", cfg],
+    srv = subprocess.Popen([sys.executable, "ser2netweb.py", "--no-bootstrap", "--config", cfg],
                            cwd=ROOT, stdin=subprocess.DEVNULL,
                            stdout=out, stderr=subprocess.STDOUT)
     out.close()  # (the server has its own copy)

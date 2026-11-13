@@ -1,8 +1,8 @@
-# Running ser2net behind a reverse proxy
+# Running ser2netweb behind a reverse proxy
 
 A reverse proxy (nginx, Apache, Caddy, Traefik, IIS) in front of the web UI is the usual way
 to give it HTTPS with a certificate your browsers already trust, or one name for several
-services. ser2net itself then speaks plain HTTP to the proxy only. This page is what the
+services. ser2netweb itself then speaks plain HTTP to the proxy only. This page is what the
 web UI needs from the proxy, the settings for it in **Settings → Reverse proxy**, examples
 and what to look for when something doesn't work. (The examples follow what
 `tests/test_reverse_proxy.py` checks with a stand-in proxy; the configurations themselves
@@ -24,7 +24,7 @@ each other's UI port directly too (next section).
    **Trusted proxies**. Only then do the sign-in limits, the audit log and all.log see each
    client's own address; otherwise every user has the proxy's, and 8 wrong passwords in
    5 minutes from anyone make the sign-in page answer HTTP 429 for everyone.
-4. **Set the public URL** (`https://ser2net.example.com`): the address users open.
+4. **Set the public URL** (`https://ser2netweb.example.com`): the address users open.
 5. **Keep the UI port off the network**: bind it to `127.0.0.1` (a native install, with
    the proxy on the same machine), publish it to the host only in Docker
    (`127.0.0.1:8080:8080`), or not at all when the proxy runs in the same Docker network.
@@ -42,8 +42,8 @@ each other's UI port directly too (next section).
 
 | Setting | `config.json` | For one run instead | Default |
 |---|---|---|---|
-| Public URL | `admin_ui.public_url` | `SER2NET_PUBLIC_URL` | none |
-| Trusted proxies | `admin_ui.trusted_proxies` | `SER2NET_TRUSTED_PROXIES` | none |
+| Public URL | `admin_ui.public_url` | `SER2NETWEB_PUBLIC_URL` | none |
+| Trusted proxies | `admin_ui.trusted_proxies` | `SER2NETWEB_TRUSTED_PROXIES` | none |
 | Send HSTS on HTTPS through the proxy | `admin_ui.proxy_hsts` | — | off |
 
 Changes apply at once. While an environment variable sets a value, the page shows it
@@ -70,11 +70,11 @@ pages (`/api`, `/settings`, `/static`, …). It is used:
 It does not make cookies Secure on its own: someone opening the UI directly by
 `http://address:port` (the fleet view's *Open* link does) keeps working.
 
-**A path in the public URL** (`https://gw.example.com/ser2net`) serves the UI under that
+**A path in the public URL** (`https://gw.example.com/ser2netweb`) serves the UI under that
 path too: every link, form, redirect and WebSocket address of a page requested under it
 starts with it, and so does the REST API's OpenAPI `servers` entry. A request without it
 is served at `/` exactly as before, so the LAN, cluster peers and the health check are
-unaffected. The proxy may pass the path on as it is (nginx `location /ser2net/ { proxy_pass
+unaffected. The proxy may pass the path on as it is (nginx `location /ser2netweb/ { proxy_pass
 http://127.0.0.1:8080; }`, Caddy `handle`), or strip it and send exactly that path as
 `X-Forwarded-Prefix` (Traefik's `StripPrefix`). Under a path, the UI's cookies have names of
 their own and `Path=<path>`, so another instance at `/` of the same site doesn't mix its
@@ -91,7 +91,7 @@ trust networks your clients are in (`0.0.0.0/0`, the LAN) while they can reach t
 port directly: anyone there could then choose the address the sign-in limits see.
 
 `FORWARDED_ALLOW_IPS`, uvicorn's variable that worked up to 2.8.1, is still read when
-neither the setting nor `SER2NET_TRUSTED_PROXIES` gives a list (the start-up log says so);
+neither the setting nor `SER2NETWEB_TRUSTED_PROXIES` gives a list (the start-up log says so);
 `*` there is warned about.
 
 The connection limits of the UI's listener (`admin_ui.max_connections_per_ip`) count the
@@ -112,14 +112,14 @@ only make cookies stricter. So nginx's `proxy_cookie_flags` isn't needed (nginx 
 1.19.3, as on Ubuntu 22.04, doesn't have it). Over HTTPS the cookies are named `__Host-…`
 (`__Secure-…` under a path; the SSO and two-factor cookies, which have a path of their own,
 always `__Secure-…`), and on a port other than 8080 their names carry a tag of the
-port, so the Secure cookies of `https://ser2net.example.com` never get in the way of
-`http://ser2net.example.com:8080`. The names follow the `Host` (port) the UI sees and the
+port, so the Secure cookies of `https://ser2netweb.example.com` never get in the way of
+`http://ser2netweb.example.com:8080`. The names follow the `Host` (port) the UI sees and the
 scheme, which is one more reason to pass the browser's address on unchanged.
 
 ## Examples
 
-Each one: TLS at the proxy for `ser2net.example.com`, ser2net on `127.0.0.1:8080` on the
-same machine (Trusted proxies: `127.0.0.1`), Public URL `https://ser2net.example.com`.
+Each one: TLS at the proxy for `ser2netweb.example.com`, ser2netweb on `127.0.0.1:8080` on the
+same machine (Trusted proxies: `127.0.0.1`), Public URL `https://ser2netweb.example.com`.
 
 **nginx** (`$http_host` is what the browser sent, port included; nginx's default,
 `Host $proxy_host`, is the upstream's address):
@@ -129,7 +129,7 @@ map $http_upgrade $connection_upgrade { default upgrade; '' close; }   # in http
 
 server {
     listen 443 ssl;
-    server_name ser2net.example.com;
+    server_name ser2netweb.example.com;
     # ssl_certificate / ssl_certificate_key …
     location / {
         proxy_pass http://127.0.0.1:8080;
@@ -139,22 +139,22 @@ server {
         proxy_set_header X-Forwarded-Proto $scheme;
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection $connection_upgrade;
-        # HSTS from the proxy instead of ser2net (optional):
+        # HSTS from the proxy instead of ser2netweb (optional):
         # add_header Strict-Transport-Security "max-age=31536000" always;
     }
 }
 ```
 
-Under a path (Public URL `https://gw.example.com/ser2net`): the same `proxy_set_header`
-lines in `location /ser2net/ { proxy_pass http://127.0.0.1:8080; … }` — without a path
-after the address, nginx passes `/ser2net/…` on as it is.
+Under a path (Public URL `https://gw.example.com/ser2netweb`): the same `proxy_set_header`
+lines in `location /ser2netweb/ { proxy_pass http://127.0.0.1:8080; … }` — without a path
+after the address, nginx passes `/ser2netweb/…` on as it is.
 
 **Apache** 2.4.47 or later (`mod_proxy_http` and `mod_headers`; older versions need
 `mod_proxy_wstunnel` for the WebSockets). `mod_proxy` sends `X-Forwarded-For` by itself:
 
 ```apache
 <VirtualHost *:443>
-    ServerName ser2net.example.com
+    ServerName ser2netweb.example.com
     # SSLEngine on, SSLCertificateFile / SSLCertificateKeyFile …
     ProxyPreserveHost On
     RequestHeader set X-Forwarded-Proto "https"
@@ -163,34 +163,34 @@ after the address, nginx passes `/ser2net/…` on as it is.
 </VirtualHost>
 ```
 
-Under a path: `ProxyPass /ser2net/ http://127.0.0.1:8080/ser2net/ upgrade=websocket` (and
+Under a path: `ProxyPass /ser2netweb/ http://127.0.0.1:8080/ser2netweb/ upgrade=websocket` (and
 the same `ProxyPassReverse`).
 
 **Caddy** keeps `Host`, passes WebSockets and sends `X-Forwarded-For` / `-Proto` by default:
 
 ```caddyfile
-ser2net.example.com {
+ser2netweb.example.com {
     reverse_proxy 127.0.0.1:8080
 }
 ```
 
-Under a path: `handle /ser2net* { reverse_proxy 127.0.0.1:8080 }` (`handle`, not
+Under a path: `handle /ser2netweb* { reverse_proxy 127.0.0.1:8080 }` (`handle`, not
 `handle_path`, which strips the path without saying so).
 
 **Traefik** (Docker labels; Traefik keeps `Host`, passes WebSockets and sends the
-`X-Forwarded-*` headers). Trust the address ser2net sees it at: the Docker network's
+`X-Forwarded-*` headers). Trust the address ser2netweb sees it at: the Docker network's
 subnet, or a fixed `ipv4_address` of the Traefik container:
 
 ```yaml
     labels:
       - traefik.enable=true
-      - traefik.http.routers.ser2net.rule=Host(`ser2net.example.com`)
-      - traefik.http.routers.ser2net.tls=true
-      - traefik.http.services.ser2net.loadbalancer.server.port=8080
+      - traefik.http.routers.ser2netweb.rule=Host(`ser2netweb.example.com`)
+      - traefik.http.routers.ser2netweb.tls=true
+      - traefik.http.services.ser2netweb.loadbalancer.server.port=8080
 ```
 
-Under a path: ``rule=Host(`gw.example.com`) && PathPrefix(`/ser2net`)`` and a `StripPrefix`
-middleware for `/ser2net` (it sends `X-Forwarded-Prefix`).
+Under a path: ``rule=Host(`gw.example.com`) && PathPrefix(`/ser2netweb`)`` and a `StripPrefix`
+middleware for `/ser2netweb` (it sends `X-Forwarded-Prefix`).
 
 **IIS** with Application Request Routing and URL Rewrite: install the *WebSocket Protocol*
 feature and keep the browser's host name (ARR's default replaces it):
@@ -211,14 +211,14 @@ services:
   ser2net:
     image: ghcr.io/haliskilic/ser2net:latest
     environment:
-      SER2NET_PUBLIC_URL: https://ser2net.example.com
-      SER2NET_TRUSTED_PROXIES: 172.30.0.0/24       # the network below
+      SER2NETWEB_PUBLIC_URL: https://ser2netweb.example.com
+      SER2NETWEB_TRUSTED_PROXIES: 172.30.0.0/24       # the network below
     ports: ["4001:4001"]                           # mappings only; no 8080
     networks: [web]
     # devices:, volumes: as in docker-compose.yml
   caddy:
     image: caddy:2
-    command: caddy reverse-proxy --from ser2net.example.com --to ser2net:8080
+    command: caddy reverse-proxy --from ser2netweb.example.com --to ser2net:8080
     ports: ["80:80", "443:443"]
     networks: [web]
 networks:

@@ -1,0 +1,37 @@
+{% set port_warnings = {
+  "console": (_("kernel console"), _("The kernel writes its messages to this port. Remove console= with this port from the kernel command line (Raspberry Pi: raspi-config, Interface Options, Serial Port).")),
+  "getty": (_("login prompt"), _("A login prompt (serial-getty) runs on this port: it reads from it, and hangs it up when it restarts. Turn it off with systemctl mask and its unit, e.g. serial-getty@ttyS0.service.")),
+  "modemmanager": (_("ModemManager"), _("ModemManager may probe this port with AT commands. A udev rule that sets ID_MM_DEVICE_IGNORE=1 for it keeps it away.")),
+} %}
+{% if ports %}
+<div class="table-scroll">
+<table class="grid ports stackable">
+  <thead><tr><th>{{ _("Device") }}</th><th>{{ _("Description") }}</th><th>VID:PID</th><th>{{ _("Serial no.") }}</th><th>{{ _("Manufacturer") }}</th><th>{{ _("In use") }}</th></tr></thead>
+  <tbody>
+  {% for p in ports %}
+    <tr>
+      <td class="mono col-name">{{ p.device|softbreak }}{% if p.hardware is false %} <span class="tag">{{ _("no hardware") }}</span>{% endif %}
+        {%- for w in p.warnings or [] if w in port_warnings %} <span class="tag tag-warn" title="{{ port_warnings[w][1] }}">{{ port_warnings[w][0] }}</span>{% endfor %}
+        {%- if p.access is false %} <span class="tag tag-warn" title="{{ _('ser2netweb may not open this port: the account it runs as is not in the group the device belongs to (see Requirements in the README).') }}">{{ _("no access") }}</span>{% endif %}
+        {%- if p.same_identity %} <span class="tag tag-warn" title="{{ _('%(ports)s have the same USB identity (VID:PID and serial number): “Find this device by its USB identity” can’t tell them apart. Bind such adapters by USB socket (/dev/serial/by-path).', ports=p.same_identity | join(', ')) }}">{{ _("same USB identity") }}</span>{% endif %}
+        {%- if p.ambiguous %} <span class="tag tag-warn" title="{{ _('This adapter has no by-id name of its own: an identical one (no serial number of its own, or the same one) shares it, and which of them gets it can change at a reboot or a re-plug. Use its by-path name (its USB socket).') }}">{{ _("by-id not unique") }}</span>{% endif %}
+        {% if p.by_id %}<div class="sub mono" title="{{ _('by serial number: survives re-plugging; not unique for identical adapters') }}">{{ p.by_id|softbreak }}</div>{% endif %}
+        {% if p.by_path %}<div class="sub mono" title="{{ _('by USB socket: right while the adapter stays in this socket') }}">{{ p.by_path|softbreak }}</div>{% endif %}</td>
+      <td data-label="{{ _('Description') }}">{{ p.description or '—' }}</td>
+      <td class="mono" data-label="VID:PID">{% if p.vid %}{{ p.vid }}:{{ p.pid }}{% else %}—{% endif %}</td>
+      <td class="mono" data-label="{{ _('Serial no.') }}">{{ p.serial_number or '—' }}</td>
+      <td data-label="{{ _('Manufacturer') }}">{{ p.manufacturer or '—' }}</td>
+      <td data-label="{{ _('In use') }}">{% if p.device in in_use %}<span class="dot on"></span>{{ _("yes") }}{% else %}<span class="dot off"></span>{{ _("no") }}{% endif %}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+{% else %}
+  <p class="muted">{{ _("No serial ports detected. Plug in a device and click Refresh.") }}</p>
+{% endif %}
+{% if show_all %}
+  <p class="muted mt-sm"><button type="button" class="link" id="ports-all" data-ports-all="0">{{ _("Hide the ports without hardware") }}</button></p>
+{% elif hidden %}
+  <p class="muted mt-sm">{{ ngettext('%(num)s port without hardware behind it is hidden (the kernel’s placeholder <span class="mono">ttyS</span> device).', '%(num)s ports without hardware behind them are hidden (the kernel’s placeholder <span class="mono">ttyS</span> devices).', hidden) }} <button type="button" class="link" id="ports-all" data-ports-all="1">{{ _("Show them") }}</button></p>
+{% endif %}

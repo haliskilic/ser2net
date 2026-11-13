@@ -58,7 +58,7 @@ def main():
         json.dump({"admin_ui": {"bind_ip": "127.0.0.1", "port": UI}}, fh)
     socat, dev_a, dev_b = start_socat()
     out = server_log(tmp)  # the server's output: a file, never an unread pipe
-    srv = subprocess.Popen([sys.executable, "ser2net.py", "--no-bootstrap", "--config", cfg],
+    srv = subprocess.Popen([sys.executable, "ser2netweb.py", "--no-bootstrap", "--config", cfg],
                            cwd=ROOT, stdin=subprocess.DEVNULL,
                            stdout=out, stderr=subprocess.STDOUT)
     out.close()  # (the server has its own copy)

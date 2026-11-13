@@ -3,7 +3,7 @@
 psutil is the one pinned package that isn't pure Python, and vendor/wheels has it for
 Linux x86_64 and Windows x64 only. It used to be required, so `pip install --no-index`
 failed as a whole on ARM Linux (32-bit Raspberry Pi OS included), macOS, musl and ARM or
-32-bit Windows Python, and ser2net never started there without the network. Checked here,
+32-bit Windows Python, and ser2netweb never started there without the network. Checked here,
 with the real pip and vendor/wheels in a scratch folder:
 - without a psutil wheel for this machine the set installs without it, in one pip run,
   with one line saying so; everything required imports and the next start does nothing;
@@ -11,7 +11,7 @@ with the real pip and vendor/wheels in a scratch folder:
   without psutil; a set that fails without psutil too still fails, with the old message;
 - whether a bundled wheel fits this Python follows pip's own tag rules;
 - a Python without pip gets the command that installs it (not "re-run with --online");
-- ser2net.py and bootstrap.py parse on old Pythons and stop with "needs Python 3.10"
+- ser2netweb.py, ser2net.py and bootstrap.py parse on old Pythons and stop with "needs Python 3.10"
   (RHEL 9's 3.9, RHEL 8's 3.6 failed with a TypeError / SyntaxError);
 - start.sh takes python3 when it is 3.10+, else the newest python3.1x, else says so;
 - --about lists psutil.
@@ -259,10 +259,10 @@ def _guard_runs_first(name: str) -> None:
                                          and isinstance(n.value, ast.Constant))]
     first = next(i for i, n in enumerate(body)
                  if isinstance(n, ast.If) and "version_info" in ast.unparse(n.test))
-    # before it: the stdlib imports and constants only (no app/, no definitions)
+    # before it: the stdlib imports and constants only (no ser2netweb/, no definitions)
     for n in body[:first]:
         assert (isinstance(n, ast.Import) or isinstance(n, ast.ImportFrom) and n.level == 0
-                and not (n.module or "").startswith("app")
+                and not (n.module or "").startswith("ser2netweb")
                 or isinstance(n, ast.Assign) and isinstance(n.value, (ast.Tuple, ast.Constant))), \
             f"{name}:{n.lineno}: runs before the version check"
     assert not any(isinstance(n, (ast.FunctionDef, ast.ClassDef, ast.AnnAssign))
@@ -273,15 +273,16 @@ def _guard_runs_first(name: str) -> None:
             f"{{'__name__': '__main__', '__file__': {os.path.join(ROOT, name)!r}}})")
     p = subprocess.run([sys.executable, "-c", code, "--version"], capture_output=True,
                        text=True, timeout=60, cwd=ROOT)
-    assert p.returncode == 1 and "ser2net needs Python 3.10 or newer" in p.stderr, \
+    assert p.returncode == 1 and "ser2netweb needs Python 3.10 or newer" in p.stderr, \
         (p.returncode, p.stdout, p.stderr)
     assert "sudo dnf install python3.11" in p.stderr and "Traceback" not in p.stderr, p.stderr
 
 
 def test_python_version_guard():
-    for name in ("ser2net.py", "bootstrap.py"):
+    for name in ("ser2netweb.py", "ser2net.py", "bootstrap.py"):
         _guard_runs_first(name)
-    print("ser2net.py / bootstrap.py: parse on old Pythons, stop with 'needs Python 3.10'  OK")
+    print("ser2netweb.py / ser2net.py / bootstrap.py: parse on old Pythons, stop with 'needs "
+          "Python 3.10'  OK")
 
 
 def _fake_python(folder: str, name: str, version_ok: bool) -> None:
@@ -313,11 +314,11 @@ def test_start_sh():
                                   env={"PATH": folder})
 
         p = start(("python3", True), ("python3.13", True))
-        assert p.returncode == 0 and p.stdout == "ran python3 ser2net.py --about\n", p
+        assert p.returncode == 0 and p.stdout == "ran python3 ser2netweb.py --about\n", p
         p = start(("python3", False), ("python3.11", True), ("python3.12", True))
-        assert p.stdout == "ran python3.12 ser2net.py --about\n", p
+        assert p.stdout == "ran python3.12 ser2netweb.py --about\n", p
         p = start(("python3", False), ("python", True))
-        assert p.stdout == "ran python ser2net.py --about\n", p
+        assert p.stdout == "ran python ser2netweb.py --about\n", p
         p = start(("python3", False))
         assert p.returncode == 1 and "Python 3.10+ not found" in p.stderr, p
         assert "sudo dnf install python3.11" in p.stderr, p.stderr
@@ -327,7 +328,7 @@ def test_start_sh():
 
 
 def test_about_lists_psutil():
-    p = subprocess.run([sys.executable, "ser2net.py", "--no-bootstrap", "--about"], cwd=ROOT,
+    p = subprocess.run([sys.executable, "ser2netweb.py", "--no-bootstrap", "--about"], cwd=ROOT,
                        capture_output=True, text=True, timeout=120)
     assert p.returncode == 0, p.stderr
     line = next((ln for ln in p.stdout.splitlines() if ln.strip().startswith("psutil ")), "")

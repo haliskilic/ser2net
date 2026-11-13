@@ -33,11 +33,11 @@ import urllib.request
 
 from _server import Browser, Server, free_port
 
-from app import i18n
-from app.config import (AppConfig, ConfigError, ConfigStore, MappingConfig, check_mqtt_clashes,
+from ser2netweb import i18n
+from ser2netweb.config import (AppConfig, ConfigError, ConfigStore, MappingConfig, check_mqtt_clashes,
                         mqtt_clashes, mqtt_warnings, sparkplug_identity)
-from app.web.auth import hash_password, hash_token
-from app.web.routes.ops import copy_of
+from ser2netweb.web.auth import hash_password, hash_token
+from ser2netweb.web.routes.ops import copy_of
 
 PUMP = {"name": "pump", "fn": 1, "dtype": "bool", "writable": True}
 TEMP = {"name": "temp", "fn": 3, "address": 1}
@@ -246,8 +246,8 @@ def test_stored_clashes():
     print("stored clashes: kept, one load note per pair in English, validate()/save pass, "
           "nothing raises on junk  OK")
 
-    from app.engine import supervisor as sup
-    from app.engine.bridge import RunnerStatus
+    from ser2netweb.engine import supervisor as sup
+    from ser2netweb.engine.bridge import RunnerStatus
 
     class Stub:
         def __init__(self, mapping, logger, *_args):

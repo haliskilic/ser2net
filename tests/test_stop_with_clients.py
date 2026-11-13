@@ -35,8 +35,8 @@ from unittest import mock
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "lib"))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from app.config import MappingConfig
-from app.engine.bridge import MappingRunner
+from ser2netweb.config import MappingConfig
+from ser2netweb.engine.bridge import MappingRunner
 
 
 def _free_port() -> int:
@@ -114,7 +114,7 @@ async def test_stop_while_the_device_takes_nothing():
     if os.name != "posix":
         print("SKIP stop() with a device that takes nothing: needs POSIX PTYs")
         return
-    from app.engine.serial_link import SERIAL_CLOSE_TIMEOUT_S
+    from ser2netweb.engine.serial_link import SERIAL_CLOSE_TIMEOUT_S
 
     assert SERIAL_CLOSE_TIMEOUT_S <= 2.5
     master, slave, path = _pty()
@@ -206,7 +206,7 @@ class HeldPort:
 
 async def _close_held(port, buffered: bytes = b""):
     """close_stream() on a stream over ``port``; (seconds it took, log lines)."""
-    from app.engine import serial_compat, serial_link
+    from ser2netweb.engine import serial_compat, serial_link
 
     loop = asyncio.get_running_loop()
     reader = asyncio.StreamReader(loop=loop)
@@ -224,7 +224,7 @@ async def _close_held(port, buffered: bytes = b""):
 
 
 async def test_close_never_waits_for_the_os_drain():
-    from app.engine import serial_link
+    from ser2netweb.engine import serial_link
 
     with mock.patch.object(serial_link, "SERIAL_CLOSE_TIMEOUT_S", 0.5):
         for buffered in (b"", b"z" * 100):
@@ -261,7 +261,7 @@ async def test_close_never_waits_for_the_os_drain():
 
 
 async def test_close_of_a_peer_that_reads_nothing():
-    from app.engine import bridge
+    from ser2netweb.engine import bridge
 
     got = asyncio.get_running_loop().create_future()
     server = await asyncio.start_server(lambda r, w: got.set_result(w), "127.0.0.1", 0)

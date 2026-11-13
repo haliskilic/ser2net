@@ -136,7 +136,8 @@ def test_no_unread_server_pipes():
                     call.func, "id", "")) in ("Popen", "create_subprocess_exec")):
                 continue
             runs_server = any(isinstance(n, ast.Constant) and isinstance(n.value, str)
-                              and n.value.endswith("ser2net.py") for n in ast.walk(call))
+                              and n.value.endswith(("ser2netweb.py", "ser2net.py"))
+                              for n in ast.walk(call))
             piped = [k.arg for k in call.keywords if k.arg in ("stdout", "stderr")
                      and _is_pipe(k.value)]
             if runs_server and piped:
@@ -149,10 +150,10 @@ def test_no_unread_server_pipes():
 # What makes a test function one that listens: it starts mappings, a server or a process
 # (which may listen) itself.
 _STARTS = re.compile(r"\b(apply_mapping|Server|Popen|create_subprocess_exec|start_server|"
-                     r"create_datagram_endpoint|start_all)\(|\.start\(|ser2net\.py")
+                     r"create_datagram_endpoint|start_all)\(|\.start\(|ser2netweb\.py")
 # where a port number is given: a mapping's network / the admin UI / the cluster's discovery,
 # a function parameter or keyword named like a port, a variable named PORT / UI / ..._PORT
-_PORT_KEYS = {"port", "network_port", "discovery_port", "SER2NET_PORT"}
+_PORT_KEYS = {"port", "network_port", "discovery_port", "SER2NETWEB_PORT", "SER2NET_PORT"}
 _NETWORK_KEYS = {"mode", "protocol", "bind_ip", "max_connections", "tls", "kick_old_user",
                  "udp_peer_host", "require_login"}
 _PORT_NAME = re.compile(r"(?i)(^|_)(port|ui)(_|$)|port$|^ui")

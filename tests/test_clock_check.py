@@ -33,12 +33,12 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from _clock import WallClock
 
-from app import clock, runtime
-from app.config import AppConfig, ConfigStore
-from app.state import AppState
-from app.web import auth
-from app.web.routes import settings as settings_routes
-from app.web.server import build_app
+from ser2netweb import clock, runtime
+from ser2netweb.config import AppConfig, ConfigStore
+from ser2netweb.state import AppState
+from ser2netweb.web import auth
+from ser2netweb.web.routes import settings as settings_routes
+from ser2netweb.web.server import build_app
 
 DAY = 86400.0
 PW = "clock-check-1"
@@ -99,7 +99,7 @@ def test_behind():
         assert clock.FLOOR <= time.time(), "the floor can't be in the future"
         line = clock.warning(store, utc(2009, 1, 1, 0, 0, 5))
         assert line.startswith("WARNING: the system clock reads 2009-01-01 00:00:05 UTC, "
-                               "before this version of ser2net was made (2026-11-01)"), line
+                               "before this version of ser2netweb was made (2026-11-01)"), line
         assert "never sets the clock" in line and clock.warning(store) == ""
     finally:
         shutil.rmtree(d, ignore_errors=True)
@@ -112,7 +112,8 @@ def test_start_up_warning():
     d = _data("config-20261111T120000Z.json", config_time=newest - 600)
     try:
         path = os.path.join(d, "config.json")
-        for k in ("SER2NET_BIND_IP", "SER2NET_PORT", "SER2NET_ADMIN_PASSWORD_FILE"):
+        for k in ("SER2NETWEB_BIND_IP", "SER2NETWEB_PORT", "SER2NETWEB_ADMIN_PASSWORD_FILE",
+                  "SER2NET_BIND_IP", "SER2NET_PORT", "SER2NET_ADMIN_PASSWORD_FILE"):
             os.environ.pop(k, None)
         with WallClock.patch(clock, shift=newest - 3 * DAY - time.time()):
             _store, cfg = runtime.prepare_config(path)
@@ -200,7 +201,7 @@ def test_settings():
             assert "The server’s clock reads " in text and \
                 "earlier than the newest configuration backup" in text, \
                 text[text.find("Admin interface"):][:1200]
-            assert "ser2net never sets the clock" in text
+            assert "ser2netweb never sets the clock" in text
             viewer = page("watcher")
             assert "Server time: " in viewer and "The server’s clock reads" not in viewer, \
                 "the warning names the newest backup's time: admins only"
@@ -210,7 +211,7 @@ def test_settings():
         _close_loggers()
         shutil.rmtree(d, ignore_errors=True)
 
-    js = open(os.path.join(os.path.dirname(__file__), "..", "app", "web", "static", "app.js"),
+    js = open(os.path.join(os.path.dirname(__file__), "..", "ser2netweb", "web", "static", "app.js"),
               encoding="utf-8").read()
     check = js[js.index(") Clock check: the server's clock"):]
     assert "data-server-time" in check and "[data-clock-skew]" in check and "<= 120" in check

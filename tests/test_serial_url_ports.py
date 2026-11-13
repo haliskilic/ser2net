@@ -20,10 +20,10 @@ import urllib.request
 
 from _server import Browser, Server, free_port
 
-from app.config import AppConfig, ConfigError, MappingConfig, url_port
-from app.engine import serial_io
-from app.importer import parse_mappings_file
-from app.web.auth import hash_password, hash_token
+from ser2netweb.config import AppConfig, ConfigError, MappingConfig, url_port
+from ser2netweb.engine import serial_io
+from ser2netweb.importer import parse_mappings_file
+from ser2netweb.web.auth import hash_password, hash_token
 
 PW = "serial-url-pass-1"
 TOKEN = "s2n_serial-url-token"
@@ -81,7 +81,7 @@ def test_load_keeps_but_notes():
     notes = [n for n in cfg.load_notes if "is a URL" in n]
     assert len(notes) == 1 and "does not start" in notes[0], cfg.load_notes
     d = tempfile.mkdtemp(prefix="s2n_url_")
-    from app.config import ConfigStore
+    from ser2netweb.config import ConfigStore
     store = ConfigStore(os.path.join(d, "config.json"))
     store.save(cfg)  # must not raise
     assert store.load().mappings[0].serial.port == "socket://10.0.0.1:502"

@@ -35,13 +35,13 @@ import time
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "lib"))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from app import clock
-from app.config import AppConfig, ConfigStore
-from app.engine.bridge import Tracer
-from app.signins import SignIns
-from app.state import AppState, _trim_log_file, write_audit_record
-from app.web import auth
-from app.web.server import build_app
+from ser2netweb import clock
+from ser2netweb.config import AppConfig, ConfigStore
+from ser2netweb.engine.bridge import Tracer
+from ser2netweb.signins import SignIns
+from ser2netweb.state import AppState, _trim_log_file, write_audit_record
+from ser2netweb.web import auth
+from ser2netweb.web.server import build_app
 
 STAMP = re.compile(r"\d{4}-\d\d-\d\d \d\d:\d\d:\d\d[+-]\d\d:\d\d")
 OLD = "%Y-%m-%d %H:%M:%S"
@@ -277,7 +277,7 @@ def test_viewers():
     finally:
         _close_loggers()
         shutil.rmtree(d, ignore_errors=True)
-    js = _read(os.path.join(os.path.dirname(__file__), "..", "app", "web", "static", "app.js"))
+    js = _read(os.path.join(os.path.dirname(__file__), "..", "ser2netweb", "web", "static", "app.js"))
     assert "resolvedOptions().timeZone" in js and 'tr("hex_zone"' in js
     print("hex view: its header says the times are in the browser's zone  OK")
 

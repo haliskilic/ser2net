@@ -39,11 +39,11 @@ from unittest import mock
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "lib"))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from app.config import AppConfig, MappingConfig, SerialSettings
-from app.engine import portlist, serial_io, serial_link
-from app.engine.bridge import MappingRunner
-from app.engine.serial_link import FAILING_SUMMARY_S, Backoff, FailureLog
-from app.engine.supervisor import Supervisor
+from ser2netweb.config import AppConfig, MappingConfig, SerialSettings
+from ser2netweb.engine import portlist, serial_io, serial_link
+from ser2netweb.engine.bridge import MappingRunner
+from ser2netweb.engine.serial_link import FAILING_SUMMARY_S, Backoff, FailureLog
+from ser2netweb.engine.supervisor import Supervisor
 
 
 class Pty:
@@ -221,7 +221,7 @@ def test_states_and_counters():
 
 
 async def _metrics():
-    from app.web.routes import system
+    from ser2netweb.web.routes import system
 
     class State:
         config = AppConfig.from_dict({"mappings": [{"id": "m1", "name": "plc", "serial":
@@ -367,7 +367,7 @@ def test_usb_identity_resolved_off_the_event_loop():
 
 
 async def _start_keeps_the_serial_state():
-    from app.engine.modbus_gateway import ModbusGatewayRunner
+    from ser2netweb.engine.modbus_gateway import ModbusGatewayRunner
 
     async def missing(settings):
         raise serial_io_error()

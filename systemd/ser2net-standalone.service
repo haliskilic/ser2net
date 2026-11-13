@@ -25,7 +25,7 @@ StateDirectoryMode=0700
 # admin UI to 127.0.0.1:8080 (loopback, never network-exposed without an explicit
 # choice). To expose it on the LAN, run "systemctl edit ser2net" and add
 #   [Service]
-#   Environment=SER2NET_BIND_IP=0.0.0.0 SER2NET_PORT=8080
+#   Environment=SER2NETWEB_BIND_IP=0.0.0.0 SER2NETWEB_PORT=8080
 # Commands run by hand on this data directory go as the service user, never as root
 # (root would own what they write, and the service could no longer read it):
 #   sudo -u ser2net /usr/local/bin/ser2net --data-dir /var/lib/ser2net --set-password admin

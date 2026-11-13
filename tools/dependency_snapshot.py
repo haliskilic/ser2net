@@ -9,7 +9,7 @@ an older Python installs (`python_version < "3.11"`: the Python 3.10 line of sta
 websockets, python-multipart and the exceptiongroup / taskgroup backports) are left out,
 so an advisory against one of them would raise no alert although every Python 3.10
 install ships it. .github/workflows/dependency-graph.yml therefore submits every pin of
-such a file, for all the Pythons and systems ser2net supports, through the dependency
+such a file, for all the Pythons and systems ser2netweb supports, through the dependency
 submission API (POST /repos/{owner}/{repo}/dependency-graph/snapshots). GitHub shows one
 source per manifest file and prefers a submission to its own parse, so the submitted
 requirements.txt (complete, both lines of a pin split by Python version) takes the place
@@ -36,11 +36,11 @@ import refresh_wheels as rw  # tools/ is not a package
 ROOT = rw.ROOT
 REQUIREMENT_FILES = ("requirements.txt", "requirements-optional.txt")
 # the interpreter GitHub's parser evaluates python_version markers for: its newest, which
-# is at least the newest Python ser2net supports
+# is at least the newest Python ser2netweb supports
 GRAPH_PYTHON = rw.PYTHONS[-1]
 CORRELATOR = "ser2net-requirements-markers"
-DETECTOR = {"name": "ser2net tools/dependency_snapshot.py", "version": "1",
-            "url": "https://github.com/haliskilic/ser2net/blob/main/tools/dependency_snapshot.py"}
+DETECTOR = {"name": "ser2netweb tools/dependency_snapshot.py", "version": "1",
+            "url": "https://github.com/haliskilic/ser2netweb/blob/main/tools/dependency_snapshot.py"}
 
 
 def canonical(name: str) -> str:

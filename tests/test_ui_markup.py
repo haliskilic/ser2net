@@ -34,9 +34,9 @@ sys.path.insert(0, ROOT)
 
 from markupsafe import Markup
 
-from app import __version__
-from app.config import MappingConfig
-from app.web.server import asset_version, make_templates, softbreak
+from ser2netweb import __version__
+from ser2netweb.config import MappingConfig
+from ser2netweb.web.server import asset_version, make_templates, softbreak
 
 VOID = {"area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta",
         "source", "track", "wbr"}
@@ -174,8 +174,8 @@ def test_durations_translated():
     older peer's payload) shows the duration it came with."""
     import time
 
-    from app import i18n
-    from app.web.routes.cluster import _fmt_uptime
+    from ser2netweb import i18n
+    from ser2netweb.web.routes.cluster import _fmt_uptime
     tpl = make_templates().env.get_template("_mappings_body.html")
     clients = [{"peer": "10.0.0.5:5000", "duration": "1h 02m", "connected_at": time.time() - 3725},
                {"peer": "10.0.0.6:5000", "duration": "7m 01s"}]
@@ -190,7 +190,7 @@ def test_durations_translated():
     assert '<span class="dur">7m 01s</span>' in out, "without connected_at: the text it came with"
     assert uptime == ("1 gün 1 sa", "1 sa 2 dk", "0 dk"), uptime
     assert _fmt_uptime(90000) == "1d 1h", "English outside a Turkish request"
-    js = open(os.path.join(ROOT, "app", "web", "static", "app.js"), encoding="utf-8").read()
+    js = open(os.path.join(ROOT, "ser2netweb", "web", "static", "app.js"), encoding="utf-8").read()
     assert 'tr("dur_hm", "{0}h {1}m"' in js and '"h "' not in js, "app.js counts on with the same units"
     print("durations: connection times and uptime in the page's units, older payloads as sent  OK")
 
@@ -234,7 +234,7 @@ def test_cluster_table():
 
     # what a peer can do decides its buttons: 2.5.x (no version) is only shown, 2.6.0
     # has no remote edit; another version is tagged, and a mixed cluster gets a banner
-    from app.web.routes.cluster import peer_caps
+    from ser2netweb.web.routes.cluster import peer_caps
     for payload, caps, labels in (
             ({"version": __version__, "caps": ["control", "edit"]}, {"control", "edit"},
              ["Stop", "Restart", "Edit", "Start", "Edit"]),
@@ -261,7 +261,7 @@ def test_counters_and_empty_state():
     """In / Out in B / KB / MB / GB in both tables (the exact counts stay in the REST API
     and /metrics); a dashboard without mappings tells viewers nothing about an "Add
     mapping" button they don't have."""
-    from app.web.routes.common import bytesize
+    from ser2netweb.web.routes.common import bytesize
     assert [bytesize(n) for n in (0, 1023, 1024, 1536, 10 * 1048576 + 1, 5 << 30, 3 << 40)] == \
         ["0 B", "1023 B", "1.0 KB", "1.5 KB", "10.0 MB", "5.0 GB", "3.0 TB"]
     assert bytesize("junk") == "junk" and bytesize(None) == "None", "a peer's odd value as is"
@@ -304,7 +304,7 @@ def test_ports_table_and_assets():
     head = "".join(tpl.blocks["head"](tpl.new_context({"request": Req})))
     for asset in ("xterm.js", "xterm.css", "xterm-addon-fit.js"):
         assert f"/static/{asset}?v={version}" in head, f"the dashboard lacks {asset}"
-    with open(os.path.join(ROOT, "app", "web", "templates", "base.html"), encoding="utf-8") as fh:
+    with open(os.path.join(ROOT, "ser2netweb", "web", "templates", "base.html"), encoding="utf-8") as fh:
         base = fh.read()
     assert base.index("{% block head %}") < base.index('/static/app.css'), \
         "app.css comes after a page's own CSS"
@@ -340,12 +340,12 @@ PM_OPT_OUT = ("data-1p-ignore", "data-lpignore", "data-bwignore")
 
 
 def test_secret_fields():
-    """A browser or password manager fills the saved ser2net sign-in into an empty password
+    """A browser or password manager fills the saved ser2netweb sign-in into an empty password
     field that looks like the half of a login form; saved there, the admin password would
     end up in config.json as the MQTT, LDAP, OIDC or SMTP password, the cluster key or a TLS
     key password (an unencrypted key never needs one, so nothing would refuse it)."""
     inputs = []
-    for f in sorted(glob.glob(os.path.join(ROOT, "app", "web", "templates", "*.html"))):
+    for f in sorted(glob.glob(os.path.join(ROOT, "ser2netweb", "web", "templates", "*.html"))):
         src = open(f, encoding="utf-8").read()
         inputs += [(os.path.basename(f), n) for n in parse(src).walk() if n.tag == "input"]
     for where, n in inputs:
@@ -359,7 +359,7 @@ def test_secret_fields():
         if name == "notify_webhook_url":   # never shown back; a URL, not a password
             assert n.attrs["type"] == "url" and n.attrs.get("autocomplete") == "off", n.attrs
             assert n.attrs.get("spellcheck") == "false", n.attrs
-            css = open(os.path.join(ROOT, "app", "web", "static", "app.css"), encoding="utf-8").read()
+            css = open(os.path.join(ROOT, "ser2netweb", "web", "static", "app.css"), encoding="utf-8").read()
             assert "input[type=url]" in css, "a URL field is styled like the text fields"
         else:
             assert n.attrs["type"] == "password", (name, n.attrs)
@@ -797,7 +797,7 @@ class Page:
         path = "/"
         query = ""
 
-    scope = {"type": "http", "path": "/", "root_path": "", "headers": []}   # (app/web/proxy.py)
+    scope = {"type": "http", "path": "/", "root_path": "", "headers": []}   # (ser2netweb/web/proxy.py)
 
 
 def dashboard(can_edit=True, cluster_on=False):
@@ -839,7 +839,7 @@ def test_select_all_shown():
     rows = make_templates().env.get_template("_mappings_body.html").render(
         mappings=mappings(), can_edit=True, statuses={"m1": {"state": "running", "client_count": 3}})
     assert 'data-mid="m1"' in rows and 'data-clients="3"' in rows and 'data-clients="0"' in rows
-    js = open(os.path.join(ROOT, "app", "web", "static", "app.js"), encoding="utf-8").read()
+    js = open(os.path.join(ROOT, "ser2netweb", "web", "static", "app.js"), encoding="utf-8").read()
     assert "ids: rows.map(" in js and "Array.from(selected)" not in js, "only the rows shown"
     assert "window.confirm(q)" in js, "a bulk action asks first"
     texts = json.loads(next(n for n in root.walk() if n.tag == "body").attrs["data-i18n"])
@@ -963,12 +963,12 @@ def test_keyboard_and_screen_readers():
     console) and an operator's console says how; the dashboard's counts are live regions;
     the audit log's filters have names; error banners are alerts."""
     env = make_templates().env
-    css = open(os.path.join(ROOT, "app", "web", "static", "app.css"), encoding="utf-8").read()
+    css = open(os.path.join(ROOT, "ser2netweb", "web", "static", "app.css"), encoding="utf-8").read()
     rule = re.search(r"input\[type=checkbox\]:focus-visible[^{]*\{([^}]*)\}", css)
     assert rule and "outline: 2px solid" in rule.group(1), "checkboxes need a focus outline"
     for kind in ("radio", "file"):
         assert f"input[type={kind}]:focus-visible" in css, kind
-    js = open(os.path.join(ROOT, "app", "web", "static", "app.js"), encoding="utf-8").read()
+    js = open(os.path.join(ROOT, "ser2netweb", "web", "static", "app.js"), encoding="utf-8").read()
     assert "attachCustomKeyEventHandler" in js and 'ev.key === "Tab"' in js and "ev.shiftKey" in js
     assert 'promptLabel = tr("terminal_input"' in js, "the console's input has a translated name"
     console = env.get_template("_console.html")
@@ -987,7 +987,7 @@ def test_keyboard_and_screen_readers():
         if n.tag in ("input", "select"):
             assert n.attrs.get("aria-label"), n.attrs
     for name in ("login.html", "setup.html"):
-        src = open(os.path.join(ROOT, "app", "web", "templates", name), encoding="utf-8").read()
+        src = open(os.path.join(ROOT, "ser2netweb", "web", "templates", name), encoding="utf-8").read()
         assert 'class="banner error">' not in src and 'class="banner error" role="alert"' in src, name
     print("focus outlines on checkboxes, a way out of the console, live counts, named audit "
           "filters, error banners as alerts  OK")
@@ -999,7 +999,7 @@ def test_console_says_why():
     console that ends says why — a refused handshake (the browser only sees 1006), each
     close code routes/console.py sends — and connects again after a restart; its notices
     (dropped bytes, mapping not running) and those texts are translated (base.html)."""
-    from app.web.routes import console as routes_console
+    from ser2netweb.web.routes import console as routes_console
 
     tpl = make_templates().env.get_template("_console.html")
     term = next(n for n in parse(tpl.render(mid="a", mapping_name="a", hex_first=True)).walk()
@@ -1008,13 +1008,13 @@ def test_console_says_why():
     term = next(n for n in parse(tpl.render(mid="a", mapping_name="a", interactive=True)).walk()
                 if n.attrs.get("id") == "term")
     assert term.attrs.get("data-mode") == "text", term.attrs
-    js = open(os.path.join(ROOT, "app", "web", "static", "app.js"), encoding="utf-8").read()
+    js = open(os.path.join(ROOT, "ser2netweb", "web", "static", "app.js"), encoding="utf-8").read()
     assert '"[data-text-only]"' in js and 'n.hidden = mode === "hex"' in js
     assert 'path + "?v=2"' in js, "the page asks for protocol 2"
     for name in ("CLOSE_BUSY", "CLOSE_STOPPED", "CLOSE_ACCESS", "CLOSE_SLOW", "CLOSE_GONE"):
         assert f"case {getattr(routes_console, name)}:" in js, f"app.js does not explain {name}"
     assert "ev.code === %d" % routes_console.CLOSE_STOPPED in js, "connects again after a restart"
-    base = open(os.path.join(ROOT, "app", "web", "templates", "base.html"), encoding="utf-8").read()
+    base = open(os.path.join(ROOT, "ser2netweb", "web", "templates", "base.html"), encoding="utf-8").read()
     for key in ("dropped", "ws_not_running", "ws_reconnected", "ws_reconnecting", "ws_refused",
                 "ws_busy", "ws_stopped", "ws_access", "ws_slow", "ws_gone"):
         # (a text with a count: a pair of forms, picked by trn)
@@ -1022,7 +1022,7 @@ def test_console_says_why():
                 or f"'{key}': [_(" in base and f'trn("{key}"' in js), key
     # the console text encoding: the form offers exactly config.CONSOLE_ENCODINGS, for every
     # kind and protocol (no data-show-when), and the panel carries the code page's table
-    from app.config import CONSOLE_ENCODINGS, console_charset
+    from ser2netweb.config import CONSOLE_ENCODINGS, console_charset
 
     class Req:
         class state:
@@ -1060,7 +1060,7 @@ def test_unsaved_form_is_guarded():
     assert "data-dirty" not in form(None).attrs
     texts = json.loads(next(n for n in parse(dashboard()).walk() if n.tag == "body").attrs["data-i18n"])
     assert texts.get("discard_changes") and texts.get("sign_in_tab")
-    js = open(os.path.join(ROOT, "app", "web", "static", "app.js"), encoding="utf-8").read()
+    js = open(os.path.join(ROOT, "ser2netweb", "web", "static", "app.js"), encoding="utf-8").read()
     assert '"beforeunload"' in js and 'tr("discard_changes"' in js
     print("mapping form: re-shown after a failed save it counts as unsaved; the guard's texts  OK")
 
@@ -1068,7 +1068,7 @@ def test_unsaved_form_is_guarded():
 def test_app_js_inserts_no_server_html():
     """app.js puts server texts into the page with textContent: the only innerHTML it
     writes is the empty string (closing a panel), and nothing else parses HTML."""
-    src = open(os.path.join(ROOT, "app", "web", "static", "app.js"), encoding="utf-8").read()
+    src = open(os.path.join(ROOT, "ser2netweb", "web", "static", "app.js"), encoding="utf-8").read()
     writes = re.findall(r"\.innerHTML\s*=(?!=)\s*([^;]*);", src)
     assert writes and all(w.strip() == '""' for w in writes), writes
     # (.outerHTML: the property; htmx.ajax's swap: "outerHTML" is htmx swapping a server

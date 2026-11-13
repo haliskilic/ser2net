@@ -26,10 +26,10 @@ import urllib.request
 
 from _server import Browser, Server, free_port
 
-from app.config import AppConfig, ConfigStore, MappingConfig, mapping_file, valid_mapping_id
-from app.importer import parse_mappings_file
-from app.state import AppState
-from app.web.auth import hash_password, hash_token
+from ser2netweb.config import AppConfig, ConfigStore, MappingConfig, mapping_file, valid_mapping_id
+from ser2netweb.importer import parse_mappings_file
+from ser2netweb.state import AppState
+from ser2netweb.web.auth import hash_password, hash_token
 
 PW = "mapping-ids-pass-1"
 TOKEN = "s2n_mapping-ids-token"
@@ -175,7 +175,7 @@ def test_server():
     with Server(boot_config(ports)) as srv:
         log = srv.output()
         assert log.count("is not a valid mapping id") == 4, log[-3000:]
-        saved = srv.saved_config()   # SER2NET_BIND_IP set: the boot re-saved the config
+        saved = srv.saved_config()   # SER2NETWEB_BIND_IP set: the boot re-saved the config
         ids = [m["id"] for m in saved["mappings"]]
         assert all(valid_mapping_id(i) for i in ids) and ids[-1] == "goodid12", ids
         data = srv.data

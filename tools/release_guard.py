@@ -5,7 +5,7 @@ with an unsupported or mismatched crypto stack:
 
   tag [vX.Y.Z]
       Run by release.yml before anything is built: the tag must be vX.Y.Z (vX.Y.Z-rc.N
-      for a pre-release), equal "v" + app.__version__, and CHANGELOG.md must have the
+      for a pre-release), equal "v" + ser2netweb.__version__, and CHANGELOG.md must have the
       version's dated "## [X.Y.Z] — YYYY-MM-DD" section. Without a tag (a dry run) it
       checks the tag the current version gets. Prints, and with $GITHUB_OUTPUT set also
       writes, the version, whether it is a pre-release and the image tags to publish:
@@ -39,8 +39,8 @@ _TAG = re.compile(rf"v(?P<version>(?P<major>{_N})\.(?P<minor>{_N})\.{_N}(?P<rc>-
 
 
 def app_version(root: str) -> str:
-    """app.__version__, read from app/__init__.py without importing the package."""
-    path = os.path.join(root, "app", "__init__.py")
+    """ser2netweb.__version__, read from ser2netweb/__init__.py without importing the package."""
+    path = os.path.join(root, "ser2netweb", "__init__.py")
     with open(path, encoding="utf-8") as fh:
         tree = ast.parse(fh.read(), path)
     for node in tree.body:
@@ -62,7 +62,7 @@ def check_tag(tag: str | None, root: str = ROOT, github_output: str | None = Non
     if not m:
         problems.append(f"the tag {tag!r} is not vX.Y.Z or vX.Y.Z-rc.N")
     elif m["version"] != version:
-        problems.append(f"the tag {tag} does not match app/__init__.py, which says {version}: "
+        problems.append(f"the tag {tag} does not match ser2netweb/__init__.py, which says {version}: "
                         f"bump __version__ (and CHANGELOG.md) or tag v{version}")
     heading = re.compile(rf"## \[{re.escape(version)}\] — \d{{4}}-\d{{2}}-\d{{2}}")
     with open(os.path.join(root, "CHANGELOG.md"), encoding="utf-8") as fh:
@@ -136,7 +136,7 @@ def check_sboms(paths: list[str], min_openssl: str) -> int:
 def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
-    t = sub.add_parser("tag", help="check a release tag against app/__init__.py and CHANGELOG.md")
+    t = sub.add_parser("tag", help="check a release tag against ser2netweb/__init__.py and CHANGELOG.md")
     t.add_argument("tag", nargs="?", help="vX.Y.Z or vX.Y.Z-rc.N (default: the current "
                    "version's tag, a dry run)")
     t.add_argument("--root", default=ROOT, help="the source tree (default: this checkout)")

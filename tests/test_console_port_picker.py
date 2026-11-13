@@ -28,9 +28,9 @@ import tempfile
 
 import _server  # noqa: F401  (puts the repo root and lib/ on sys.path)
 
-from app import console, runtime
-from app.config import AdminUI
-from app.engine import netinfo
+from ser2netweb import console, runtime
+from ser2netweb.config import AdminUI
+from ser2netweb.engine import netinfo
 
 
 def listener(host: str = "127.0.0.1") -> socket.socket:
@@ -154,10 +154,11 @@ def test_without_terminal() -> None:
         warning = console.in_use_warning("127.0.0.1", port)
         assert notes == [warning] and warning in out.getvalue(), (notes, out.getvalue())
         assert warning.startswith(f"WARNING: port {port} on 127.0.0.1 is in use") and \
-            "SER2NET_PORT" in warning
+            "SER2NETWEB_PORT" in warning
         # what a start without a terminal logs (--reconfigure here; a first run alike)
         tmp = tempfile.mkdtemp(prefix="s2n-picker-")
-        saved = {k: os.environ.pop(k) for k in ("SER2NET_BIND_IP", "SER2NET_PORT")
+        saved = {k: os.environ.pop(k) for k in ("SER2NETWEB_BIND_IP", "SER2NETWEB_PORT",
+                                                "SER2NET_BIND_IP", "SER2NET_PORT")
                  if k in os.environ}
         try:
             path = os.path.join(tmp, "config.json")

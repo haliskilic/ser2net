@@ -24,14 +24,14 @@ import types
 
 from _server import Browser, Server, free_port
 
-from app import notify
-from app.config import (
+from ser2netweb import notify
+from ser2netweb.config import (
     NOTIFY_DEFAULT_EVENTS, NOTIFY_EVENTS, AppConfig, MappingConfig, NotificationSettings,
 )
-from app.engine import bridge
-from app.engine.cluster import PEER_TTL
-from app.web.auth import hash_password
-from app.web.routes import forms
+from ser2netweb.engine import bridge
+from ser2netweb.engine.cluster import PEER_TTL
+from ser2netweb.web.auth import hash_password
+from ser2netweb.web.routes import forms
 
 
 class Clock:

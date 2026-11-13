@@ -5,7 +5,7 @@ M1: editing a mapping via the form must not silently drop fields the form does
 M3: a TCP listener and a UDP listener may share the same port number.
 M4: two enabled mappings must not target the same serial device.
 
-Pure stdlib + the app package (needs ./lib on path for app.web.routes).
+Pure stdlib + the app package (needs ./lib on path for ser2netweb.web.routes).
 Run: python3 tests/test_config_validation.py
 """
 import json
@@ -15,8 +15,8 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "lib"))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from app.config import MAX_TIMER_S, AppConfig, ConfigError, MappingConfig, modbus_response_timeout
-from app.web.routes import _build_mapping_dict, _preserve_unmanaged_fields
+from ser2netweb.config import MAX_TIMER_S, AppConfig, ConfigError, MappingConfig, modbus_response_timeout
+from ser2netweb.web.routes import _build_mapping_dict, _preserve_unmanaged_fields
 
 
 def _expect_error(cfg, needle):
@@ -666,7 +666,7 @@ def test_form_older_node():
 
 
 def test_form_text_input_unchanged():
-    """A close-on string with line breaks (imported from a ser2net configuration) can't be
+    """A close-on string with line breaks (imported from a ser2netweb configuration) can't be
     shown in a one-line input: posted back as the browser shows it, the stored value
     stays; a changed value is taken."""
     existing = MappingConfig.from_dict({"name": "m", "serial": {"port": "COM7"},
@@ -758,7 +758,7 @@ def test_modbus_point_options():
     points JSON shows them when set, and a form without the options marker (an older
     peer's, whose JSON can't carry them) keeps each point's stored ones, by name."""
     import json
-    from app.web.routes.forms import _modbus_points_json
+    from ser2netweb.web.routes.forms import _modbus_points_json
     old = {"name": "sp", "unit": 1, "fn": 3, "address": 10, "dtype": "int16", "writable": True}
     p = MappingConfig.from_dict({"modbus_poll": {"points": [old]}}).modbus_poll.points[0]
     assert (p.min, p.max, p.allowed, p.poll) == (None, None, None, True)
@@ -881,7 +881,7 @@ def test_form_modbus_response_timeout():
         m.validate()
         AppConfig.from_dict({"mappings": [m.to_dict()]}).validate()
         assert modbus_response_timeout(m.options) == reads, (stored, reads)
-    from app.engine.modbus_gateway import ModbusGatewayRunner
+    from ser2netweb.engine.modbus_gateway import ModbusGatewayRunner
     assert ModbusGatewayRunner(gateway("1.5"))._resp_timeout == 1.5
     print("form: Modbus response timeout parsed when shown, kept when absent; edits refuse "
           "values outside 0.01-60 s, stored ones read leniently  OK")
