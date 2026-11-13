@@ -47,7 +47,7 @@ def _caller(request) -> str:
     return token.audit_label if token is not None else "api-token"
 
 
-def _may_change(request, state) -> bool:
+def _operator_token(request, state) -> bool:
     """Is the calling token an operator's or an admin's? (GuardMiddleware refuses a viewer
     token's POST, PUT, PATCH and DELETE itself; a GET that only they may make asks here.)"""
     token = getattr(request.state, "api_token", None)
@@ -56,6 +56,9 @@ def _may_change(request, state) -> bool:
 
 
 _NOT_FOUND = {"error": "not_found"}
+# a viewer token's GET of trace files, which the web UI shows operators only too
+_TRACES_FORBIDDEN = {"error": "forbidden", "detail": "trace files hold what is sent to the "
+                     "device: an operator or admin token is needed"}
 
 
 def _mapping_view(mapping: MappingConfig, state: AppState,
@@ -346,6 +349,10 @@ def build_api_routes(state: AppState) -> list[Route]:
                            for f in files]}
 
     async def list_traces(request):
+        """A mapping's trace files. Operator and admin tokens only, as the web UI's Trace
+        panel: listing, downloading and deleting traces is for operators and up."""
+        if not _operator_token(request, state):
+            return JSONResponse(_TRACES_FORBIDDEN, status_code=403)
         m = state.config.get_mapping(request.path_params["mid"])
         if not m:
             return JSONResponse(_NOT_FOUND, status_code=404)
@@ -355,10 +362,8 @@ def build_api_routes(state: AppState) -> list[Route]:
         """Download one trace file, as it is now. Traces hold what is sent to the device
         too (what a viewer does not see in the web UI either): operator and admin tokens
         only. Audited."""
-        if not _may_change(request, state):
-            return JSONResponse({"error": "forbidden", "detail": "trace files hold what is "
-                                 "sent to the device: an operator or admin token is needed"},
-                                status_code=403)
+        if not _operator_token(request, state):
+            return JSONResponse(_TRACES_FORBIDDEN, status_code=403)
         mid, name = request.path_params["mid"], request.path_params["name"]
         m = state.config.get_mapping(mid)
         f = next((f for f in await asyncio.to_thread(state.trace_list, mid)
@@ -812,7 +817,8 @@ def openapi_spec(admin, base: str = "") -> dict:
                                      "body that is nothing importable (invalid_import)."),
         "Unauthorized": _json("Error", "No token, a wrong or expired one (unauthorized), or no API "
                                        "token configured (api_token_not_configured)."),
-        "Forbidden": _json("Error", "The token's role may only read (forbidden)."),
+        "Forbidden": _json("Error", "The token's role may only read (forbidden); trace files "
+                                    "are for operator and admin tokens only."),
         "Conflict": _json("Error", "Not possible as things are (conflict): a timed capture "
                                    "of a mapping that is traced already; a trace file that "
                                    "can't be deleted now."),
@@ -831,9 +837,10 @@ def openapi_spec(admin, base: str = "") -> dict:
         return {"$ref": f"#/components/responses/{name}"}
 
     def op(summary: str, ok: tuple, *errors: str, write: bool = False, body=None,
-           description: str = "", parameters=None) -> dict:
+           description: str = "", parameters=None, operator: bool = False) -> dict:
         """One operation: its 2xx answer, the errors it can give, and the token errors
-        every authenticated call can (403 for a call that changes something)."""
+        every authenticated call can (403 for a call that changes something, or
+        `operator`: one only operator and admin tokens may make)."""
         resp = {ok[0]: _json(ok[1], ok[2])}
         for name in errors:
             code = {"BadRequest": "400", "NotFound": "404", "Conflict": "409",
@@ -841,7 +848,7 @@ def openapi_spec(admin, base: str = "") -> dict:
                     "TooLarge": "413", "SaveFailed": "500"}[name]
             resp[code] = ref(name)
         resp["401"] = ref("Unauthorized")
-        if write:
+        if write or operator:
             resp["403"] = ref("Forbidden")
         resp["503"] = ref("SetupIncomplete")
         out = {"summary": summary, "security": bearer, "responses": resp}
@@ -969,8 +976,11 @@ def openapi_spec(admin, base: str = "") -> dict:
             },
             "/mappings/{mid}/traces": {
                 "parameters": [mid],
-                "get": op("List a mapping's trace files", ("200", "TraceList", "its trace "
-                          "files, newest first, and whether it is traced now"), "NotFound"),
+                "get": op("List a mapping's trace files (operator and admin tokens)",
+                          ("200", "TraceList", "its trace files, newest first, and whether "
+                                               "it is traced now"), "NotFound",
+                          operator=True, description="A viewer token gets 403, as a viewer "
+                                                     "gets no Trace panel in the web UI."),
                 "delete": op("Delete all trace files of a mapping",
                              ("200", "TracesDeleted", "what was deleted, and what could not "
                                                       "be"), "NotFound", write=True,

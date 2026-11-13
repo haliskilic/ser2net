@@ -1213,10 +1213,10 @@ gibi denetlenir; reddedilen bir patch hiçbir şeyi değiştirmez (HTTP 400). He
 önceki yapılandırma `backups/` içinde kalır.
 **Trace dosyaları:** `GET /mappings/{id}/traces` bir eşlemenin trace dosyalarını listeler
 (`name`, bayt olarak `size`, son yazılma zamanı Unix zamanı olarak `time`; ayrıca `tracing`,
-şu an yazılan `file` ve `capture_until`); her token okuyabilir. Bir dosyayı indirmek
-(`GET .../traces/{name}`) **operator ya da admin token'ı** ister — trace'ler cihaza
-gönderileni de içerir, viewer bunu web arayüzünde de görmez (viewer token'ına `403`) — ve
-denetim kaydına yazılır. `DELETE .../traces/{name}` tek dosyayı, `DELETE .../traces` hepsini
+şu an yazılan `file` ve `capture_until`). Listelemek ve bir dosyayı indirmek
+(`GET .../traces/{name}`, denetim kaydına yazılır) **operator ya da admin token'ı** ister —
+trace'ler cihaza gönderileni de içerir, viewer web arayüzünde de Trace panelini görmez
+(viewer token'ına `403`). `DELETE .../traces/{name}` tek dosyayı, `DELETE .../traces` hepsini
 siler (açık bir trace yeni bir dosyada sürer). `{"minutes": n}` (1 - 1440) gövdeli
 `POST /mappings/{id}/capture`, Trace panelindeki gibi süreli bir kayıt başlatır; kayıt
 sürerken yeniden gönderilirse yeni bitiş zamanı geçerli olur, `DELETE .../capture` kaydı

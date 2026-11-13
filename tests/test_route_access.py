@@ -140,9 +140,9 @@ ROUTES = {
     ("PUT", "/api/v1/mappings/{mid}"): (TOKEN_WRITE, NONE),
     ("PATCH", "/api/v1/mappings/{mid}"): (TOKEN_WRITE, NONE),
     ("DELETE", "/api/v1/mappings/{mid}"): (TOKEN_WRITE, NONE),
-    ("GET", "/api/v1/mappings/{mid}/traces"): (TOKEN_READ, NONE),
+    # traces hold what is sent to the device: not for a viewer token (nor in the web UI)
+    ("GET", "/api/v1/mappings/{mid}/traces"): (TOKEN_OPERATOR, NONE),
     ("DELETE", "/api/v1/mappings/{mid}/traces"): (TOKEN_WRITE, NONE),
-    # traces hold what is sent to the device: not for a viewer token
     ("GET", "/api/v1/mappings/{mid}/traces/{name}"): (TOKEN_OPERATOR, NONE),
     ("DELETE", "/api/v1/mappings/{mid}/traces/{name}"): (TOKEN_WRITE, NONE),
     ("POST", "/api/v1/mappings/{mid}/capture"): (TOKEN_WRITE, NONE),

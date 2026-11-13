@@ -1,10 +1,10 @@
 """Trace files in the REST API, and timed captures (ser2netweb/capture.py).
 
 Checks:
-  * GET /api/v1/mappings/{id}/traces lists a mapping's trace files (name, size, time) for
-    any token; GET .../traces/{name} downloads one for an operator or admin token only (a
-    viewer token: 403), only a name of the mapping's own list, audited as
-    api_trace_download; DELETE .../traces/{name} and DELETE .../traces delete one or all
+  * GET /api/v1/mappings/{id}/traces lists a mapping's trace files (name, size, time) and
+    GET .../traces/{name} downloads one for an operator or admin token only (a viewer
+    token: 403, as a viewer gets no Trace panel), only a name of the mapping's own list,
+    the download audited as api_trace_download; DELETE .../traces/{name} and DELETE .../traces delete one or all
     (viewer token 403), audited as api_trace_delete; the OpenAPI document has them all;
   * a timed capture, by the REST API and in the Trace panel: the mapping is traced to
     traces/<id>-capture.log without a restart of its runner, the end time is stored in
@@ -39,11 +39,12 @@ from ser2netweb.web.auth import hash_password, hash_token
 
 PW = "trace-api-pass-1"
 A, B, C = "bbbbbbbbbbb1", "bbbbbbbbbbb2", "bbbbbbbbbbb3"
-VIEW, OP = "s2n_trace-api-viewer", "s2n_trace-api-operator"
+VIEW, OP, ADMIN = "s2n_trace-api-viewer", "s2n_trace-api-operator", "s2n_trace-api-admin"
 USERS = [{"username": u, "password_hash": hash_password(PW), "role": r, "pwd_version": 1}
          for u, r in (("admin", "admin"), ("op", "operator"), ("view", "viewer"))]
 TOKENS = [{"id": "t1", "name": "ci", "sha256": hash_token(OP), "role": "operator"},
-          {"id": "t2", "name": "dash", "sha256": hash_token(VIEW), "role": "viewer"}]
+          {"id": "t2", "name": "dash", "sha256": hash_token(VIEW), "role": "viewer"},
+          {"id": "t3", "name": "root", "sha256": hash_token(ADMIN), "role": "admin"}]
 
 
 def mapping(mid, name, **options):
@@ -106,7 +107,10 @@ def test_rest_traces():
             fh.write(f"content of {name}\n")
     with srv:
         wait(lambda: os.path.isfile(os.path.join(traces, f"{A}-a.log")), "A's trace opened")
-        for token in (VIEW, OP):
+        st, _, body = api(srv, "GET", f"/mappings/{A}/traces", VIEW)
+        assert st == 403 and json.loads(body)["error"] == "forbidden", (st, body)
+        assert b"content of" not in body and f"{A}-old.log".encode() not in body
+        for token in (OP, ADMIN):
             st, _, body = api(srv, "GET", f"/mappings/{A}/traces", token)
             view = json.loads(body)
             assert st == 200 and view["id"] == A and view["tracing"] is True, (st, view)
@@ -120,7 +124,8 @@ def test_rest_traces():
         assert json.loads(body)["tracing"] is False and json.loads(body)["file"] is None
         assert api(srv, "GET", "/mappings/nosuch/traces")[0] == 404
         assert api(srv, "GET", f"/mappings/{A}/traces", token=None)[0] == 401
-        print("list: name, size and time of the mapping's own files, for any token  OK")
+        print("list: name, size and time of the mapping's own files, operator and admin "
+              "tokens only  OK")
 
         st, _, body = api(srv, "GET", f"/mappings/{A}/traces/{A}-old.log", VIEW)
         assert st == 403 and json.loads(body)["error"] == "forbidden", (st, body)
@@ -157,6 +162,7 @@ def test_rest_traces():
         assert set(paths["/mappings/{mid}/traces"]) >= {"get", "delete"}
         assert set(paths["/mappings/{mid}/traces/{name}"]) >= {"get", "delete"}
         assert "403" in paths["/mappings/{mid}/traces/{name}"]["get"]["responses"]
+        assert "403" in paths["/mappings/{mid}/traces"]["get"]["responses"]
         assert set(paths["/mappings/{mid}/capture"]) >= {"post", "delete"}
         assert "trace_until" in spec["components"]["schemas"]["MappingOptions"]["properties"]
         info = json.loads(api(srv, "GET", "/info")[2])

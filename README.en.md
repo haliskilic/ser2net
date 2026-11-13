@@ -1166,10 +1166,9 @@ The result is checked like any edit; a refused patch changes nothing (HTTP 400).
 previous configuration of every change stays in `backups/`.
 **Trace files:** `GET /mappings/{id}/traces` lists a mapping's trace files (`name`, `size`
 in bytes, `time` last written as Unix time; also `tracing`, the `file` written now and
-`capture_until`) for any token. Downloading one (`GET .../traces/{name}`) needs an
-**operator or admin token** — traces hold what is sent to the device too, which a viewer
-does not see in the web UI either (`403` for a viewer token) — and is recorded in the audit
-log. `DELETE .../traces/{name}` deletes one file, `DELETE .../traces` all of them (a trace
+`capture_until`). Listing them and downloading one (`GET .../traces/{name}`, recorded in
+the audit log) need an **operator or admin token** — traces hold what is sent to the device
+too, and a viewer gets no Trace panel in the web UI either (`403` for a viewer token). `DELETE .../traces/{name}` deletes one file, `DELETE .../traces` all of them (a trace
 that is on goes on in a new file). `POST /mappings/{id}/capture` with `{"minutes": n}`
 (1 to 1440) starts a timed recording as the Trace panel does, again while one runs sets a
 new end, `DELETE .../capture` ends it; a mapping that is traced by its `trace_both` answers
