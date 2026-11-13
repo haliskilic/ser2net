@@ -1,11 +1,11 @@
-"""Generate tools/ser2net.ico, the Windows executable icon (ser2netweb.spec).
+"""Generate tools/ser2netweb.ico, the Windows executable icon (ser2netweb.spec).
 
 Pure standard library, no image libraries, so the icon is reproducible from source. It
 writes a classic BMP-format .ico (32-bit BGRA + 1-bpp AND mask) with the sizes Windows
-asks for; PyInstaller embeds it into ser2net.exe. The mark is a rounded tile in the UI's
+asks for; PyInstaller embeds it into ser2netweb.exe. The mark is a rounded tile in the UI's
 accent blue with two rounded "data line" bars — a serial-to-network bridge.
 
-    python3 tools/make_icon.py [tools/ser2net.ico]
+    python3 tools/make_icon.py [tools/ser2netweb.ico]
 """
 from __future__ import annotations
 
@@ -106,5 +106,5 @@ def build(path):
 
 if __name__ == "__main__":
     dest = sys.argv[1] if len(sys.argv) > 1 else os.path.join(os.path.dirname(__file__),
-                                                              "ser2net.ico")
+                                                              "ser2netweb.ico")
     build(dest)

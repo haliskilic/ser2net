@@ -231,60 +231,63 @@ jobs:
       # the executables and their license texts / SBOMs (not CI's reports)
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8.0.2
         with:
-          pattern: ser2net-*
+          pattern: ser2netweb-*
           path: artifacts
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8.0.2
         with:
           pattern: meta-*
           path: artifacts
+      # (ser2net-* up to 2.9.x; a release has no file under the old names)
       - name: Name the release assets, SHA256SUMS
         run: |
           set -e
           mkdir out
           for arch in x64 arm64; do
-            cp "artifacts/ser2net-linux-$arch/ser2net" "out/ser2net-linux-$arch"
-            chmod +x "out/ser2net-linux-$arch"
-            cp "artifacts/meta-linux-$arch/THIRD-PARTY-LICENSES.txt" "out/ser2net-linux-$arch.THIRD-PARTY-LICENSES.txt"
-            cp "artifacts/meta-linux-$arch/ser2net.cdx.json" "out/ser2net-linux-$arch.cdx.json"
+            cp "artifacts/ser2netweb-linux-$arch/ser2netweb" "out/ser2netweb-linux-$arch"
+            chmod +x "out/ser2netweb-linux-$arch"
+            cp "artifacts/meta-linux-$arch/THIRD-PARTY-LICENSES.txt" "out/ser2netweb-linux-$arch.THIRD-PARTY-LICENSES.txt"
+            cp "artifacts/meta-linux-$arch/ser2netweb.cdx.json" "out/ser2netweb-linux-$arch.cdx.json"
           done
-          cp artifacts/ser2net-windows-x64/ser2net.exe out/ser2net-windows-x64.exe
-          cp artifacts/meta-windows-x64/THIRD-PARTY-LICENSES.txt out/ser2net-windows-x64.THIRD-PARTY-LICENSES.txt
-          cp artifacts/meta-windows-x64/ser2net.cdx.json out/ser2net-windows-x64.cdx.json
+          cp artifacts/ser2netweb-windows-x64/ser2netweb.exe out/ser2netweb-windows-x64.exe
+          cp artifacts/meta-windows-x64/THIRD-PARTY-LICENSES.txt out/ser2netweb-windows-x64.THIRD-PARTY-LICENSES.txt
+          cp artifacts/meta-windows-x64/ser2netweb.cdx.json out/ser2netweb-windows-x64.cdx.json
           # the systemd unit for the Linux binaries and the script that installs one with it
           # (README: Run as a service)
-          cp systemd/ser2net-standalone.service out/ser2net-standalone.service
-          cp systemd/ser2net-install.sh out/ser2net-install.sh
+          cp systemd/ser2net-standalone.service out/ser2netweb-standalone.service
+          cp systemd/ser2net-install.sh out/ser2netweb-install.sh
           cd out
           sha256sum * > SHA256SUMS
           cat SHA256SUMS
-      - name: Every platform ships the same supported CPython/OpenSSL
-        run: python3 tools/release_guard.py sboms out/*.cdx.json --min-openssl 3.5
+      - name: Exactly the release files, each in SHA256SUMS
+        run: python3 tools/release_guard.py assets out
+      - name: Every platform ships the same ser2netweb and supported CPython/OpenSSL
+        run: python3 tools/release_guard.py sboms out/ser2netweb-*.cdx.json --min-openssl 3.5
       - name: Build provenance attestation (gh attestation verify <file> -R ${{ github.repository }})
         if: github.event_name == 'push'
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8  # v4.2.2
         with:
           subject-path: |
-            out/ser2net-linux-x64
-            out/ser2net-linux-arm64
-            out/ser2net-windows-x64.exe
+            out/ser2netweb-linux-x64
+            out/ser2netweb-linux-arm64
+            out/ser2netweb-windows-x64.exe
       - name: SBOM attestation (Linux x64)
         if: github.event_name == 'push'
         uses: actions/attest-sbom@c604332985a26aa8cf1bdc465b92731239ec6b9e  # v4.1.0
         with:
-          subject-path: out/ser2net-linux-x64
-          sbom-path: out/ser2net-linux-x64.cdx.json
+          subject-path: out/ser2netweb-linux-x64
+          sbom-path: out/ser2netweb-linux-x64.cdx.json
       - name: SBOM attestation (Linux arm64)
         if: github.event_name == 'push'
         uses: actions/attest-sbom@c604332985a26aa8cf1bdc465b92731239ec6b9e  # v4.1.0
         with:
-          subject-path: out/ser2net-linux-arm64
-          sbom-path: out/ser2net-linux-arm64.cdx.json
+          subject-path: out/ser2netweb-linux-arm64
+          sbom-path: out/ser2netweb-linux-arm64.cdx.json
       - name: SBOM attestation (Windows x64)
         if: github.event_name == 'push'
         uses: actions/attest-sbom@c604332985a26aa8cf1bdc465b92731239ec6b9e  # v4.1.0
         with:
-          subject-path: out/ser2net-windows-x64.exe
-          sbom-path: out/ser2net-windows-x64.cdx.json
+          subject-path: out/ser2netweb-windows-x64.exe
+          sbom-path: out/ser2netweb-windows-x64.cdx.json
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
         with:
           name: release-files

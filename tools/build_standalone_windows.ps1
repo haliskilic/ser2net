@@ -1,4 +1,4 @@
-# Build the standalone Windows executable dist\ser2net.exe with the same pinned
+# Build the standalone Windows executable dist\ser2netweb.exe with the same pinned
 # python-build-standalone (PBS) interpreter as the Linux binaries, so Windows ships a
 # supported OpenSSL (3.5 LTS) instead of the end-of-life OpenSSL 3.0 that a frozen
 # actions/setup-python minor pins. The interpreter (CPython + OpenSSL/libffi/zlib...
@@ -60,7 +60,7 @@ if ($LASTEXITCODE -ne 0) { throw "release guard failed (OpenSSL below $MIN_OPENS
 & $PY -m PyInstaller --clean --noconfirm ser2netweb.spec
 if ($LASTEXITCODE -ne 0) { throw "PyInstaller failed" }
 # after the build: the spec lists the binaries the exe carries (pyexpat.pyd, _decimal.pyd ...)
-& $PY tools\third_party.py sbom build\ser2net.cdx.json --strict --binaries build\bundled-binaries.txt
+& $PY tools\third_party.py sbom build\ser2netweb.cdx.json --strict --binaries build\bundled-binaries.txt
 if ($LASTEXITCODE -ne 0) { throw "sbom failed" }
-& dist\ser2net.exe --version
+& dist\ser2netweb.exe --version
 if ($LASTEXITCODE -ne 0) { throw "the built exe did not run" }

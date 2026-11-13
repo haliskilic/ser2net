@@ -1,6 +1,6 @@
 # Code-signing the Windows executable
 
-An unsigned `ser2net-windows-x64.exe` makes Windows SmartScreen warn on the first run
+An unsigned `ser2netweb-windows-x64.exe` makes Windows SmartScreen warn on the first run
 ("Windows protected your PC") and some antivirus products flag it more readily. The
 release workflow signs the exe **when a signing service is configured**; without one,
 releases stay unsigned exactly as before — they can still be verified with `SHA256SUMS`
@@ -39,16 +39,17 @@ declares.
 1. Apply for the open-source program at <https://signpath.org> (the project must be
    open source and built by CI from its public repository) or use a SignPath
    subscription.
-2. In SignPath: a project (e.g. `ser2net`), an artifact configuration, and a signing
+2. In SignPath: a project (e.g. `ser2netweb`), an artifact configuration, and a signing
    policy (e.g. `release-signing`); connect the GitHub repository as a trusted build
    system and create an API token for CI.
    - The workflow uploads the exe with `actions/upload-artifact`, which **zips** it, so
-     the artifact configuration must have a `<zip-file>` root containing `ser2net.exe`
-     (not a bare `<pe-file>`), e.g.
+     the artifact configuration must have a `<zip-file>` root containing `ser2netweb.exe`
+     (not a bare `<pe-file>`; `ser2net.exe` up to 2.9.x: an existing configuration needs
+     the new name), e.g.
      ```xml
      <artifact-configuration xmlns="http://signpath.io/artifact-configuration/v1">
        <zip-file>
-         <pe-file path="ser2net.exe">
+         <pe-file path="ser2netweb.exe">
            <authenticode-sign/>
          </pe-file>
        </zip-file>
@@ -88,11 +89,11 @@ setting `WINDOWS_SIGNING` = `azure`, or keep the secret short-lived.
 
 ## Checking a release
 
-- Signature (Windows PowerShell): `Get-AuthenticodeSignature .\ser2net-windows-x64.exe`
+- Signature (Windows PowerShell): `Get-AuthenticodeSignature .\ser2netweb-windows-x64.exe`
 - Checksums: `sha256sum -c SHA256SUMS --ignore-missing` (Linux) or
-  `Get-FileHash .\ser2net-windows-x64.exe` (compare with `SHA256SUMS`)
+  `Get-FileHash .\ser2netweb-windows-x64.exe` (compare with `SHA256SUMS`)
 - Build provenance (the three executables, needs the GitHub CLI):
-  `gh attestation verify ser2net-windows-x64.exe -R haliskilic/ser2netweb`; add
+  `gh attestation verify ser2netweb-windows-x64.exe -R haliskilic/ser2netweb`; add
   `--signer-workflow haliskilic/ser2netweb/.github/workflows/release.yml` to also require
   that the release workflow made it (only its tag runs attest anything)
 - The Docker image: `gh attestation verify oci://ghcr.io/haliskilic/ser2net:X.Y.Z -R haliskilic/ser2netweb`.

@@ -69,7 +69,7 @@ class Release:
         self.root = os.path.join(self.tmp, "root")
         os.makedirs(self.dl)
         os.makedirs(self.root)
-        self.binary = fake_binary(os.path.join(self.dl, f"ser2net-linux-{ARCH or 'x64'}"))
+        self.binary = fake_binary(os.path.join(self.dl, f"ser2netweb-linux-{ARCH or 'x64'}"))
         shutil.copy(UNIT, self.dl)
         shutil.copy(SCRIPT, self.dl)
         self.sums()
@@ -132,10 +132,10 @@ def test_names_match_the_unit():
 
 def test_release_attaches_it():
     release = read(os.path.join(ROOT, ".github", "workflows", "release.yml"))
-    assert "cp systemd/ser2net-install.sh out/ser2net-install.sh" in release
+    assert "cp systemd/ser2net-install.sh out/ser2netweb-install.sh" in release
     files = release.index("cp systemd/ser2net-install.sh")
     assert files < release.index("sha256sum * > SHA256SUMS"), "listed in SHA256SUMS"
-    print("release.yml attaches ser2net-install.sh, covered by SHA256SUMS  OK")
+    print("release.yml attaches ser2netweb-install.sh, covered by SHA256SUMS  OK")
 
 
 def test_fresh_install(shell: str):

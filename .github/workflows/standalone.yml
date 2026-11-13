@@ -63,19 +63,19 @@ jobs:
         run: pip install -r requirements.txt cryptography pyelftools
       - name: Bundle contents, empty-PATH run, loaded libraries
         env:
-          SER2NETWEB_STANDALONE_BIN: dist/ser2net
+          SER2NETWEB_STANDALONE_BIN: dist/ser2netweb
         run: python tests/test_standalone.py
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
         with:
-          name: ser2net-linux-${{ matrix.arch }}
-          path: dist/ser2net
+          name: ser2netweb-linux-${{ matrix.arch }}
+          path: dist/ser2netweb
           if-no-files-found: error
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
         with:
           name: meta-linux-${{ matrix.arch }}
           path: |
             build/THIRD-PARTY-LICENSES.txt
-            build/ser2net.cdx.json
+            build/ser2netweb.cdx.json
           if-no-files-found: error
 
   # The binary under systemd/ser2net-standalone.service on a real systemd (the runner's
@@ -90,11 +90,11 @@ jobs:
           persist-credentials: false
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8.0.2
         with:
-          name: ser2net-linux-x64
+          name: ser2netweb-linux-x64
           path: dist
       - name: Install and run systemd/ser2net-standalone.service
         timeout-minutes: 10
-        run: tests/systemd_smoke.sh dist/ser2net
+        run: tests/systemd_smoke.sh dist/ser2netweb
 
   # The binary installed by systemd/ser2net-install.sh from files laid out as a release has
   # them: fresh, again (an upgrade), a changed file, --uninstall, a noexec /tmp
@@ -109,11 +109,11 @@ jobs:
           persist-credentials: false
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8.0.2
         with:
-          name: ser2net-linux-x64
+          name: ser2netweb-linux-x64
           path: dist
       - name: sudo sh ser2net-install.sh, as the README says
         timeout-minutes: 10
-        run: tests/install_smoke.sh dist/ser2net
+        run: tests/install_smoke.sh dist/ser2netweb
 
   linux-distros:
     name: linux ${{ matrix.arch }} on ${{ matrix.image }}
@@ -125,7 +125,7 @@ jobs:
         arch: [x64, arm64]
         # glibc 2.28 -> newest (Ubuntu 26.04 and current Fedora have glibc 2.42+, which refuses
         # how pyserial 3.5 sets a baud rate without a termios constant: test_standalone's
-        # 250000-baud PTY mapping checks ser2net's fix there)
+        # 250000-baud PTY mapping checks ser2netweb's fix there)
         image: ["almalinux:8", "debian:11", "ubuntu:20.04", "almalinux:9", "ubuntu:22.04",
                 "debian:12", "opensuse/leap:15.6", "ubuntu:24.04", "ubuntu:26.04", "fedora:latest"]
         # the distribution's CA bundle path, for base images that ship without ca-certificates
@@ -146,16 +146,16 @@ jobs:
           persist-credentials: false
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8.0.2
         with:
-          name: ser2net-linux-${{ matrix.arch }}
+          name: ser2netweb-linux-${{ matrix.arch }}
           path: dist
-      - run: chmod +x dist/ser2net
+      - run: chmod +x dist/ser2netweb
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7.1.0
         with:
           python-version: "3.12"
       - run: pip install -r requirements.txt cryptography
       - name: Runs in a clean ${{ matrix.image }} container (no Python, no openssl, empty PATH)
         env:
-          SER2NETWEB_STANDALONE_BIN: dist/ser2net
+          SER2NETWEB_STANDALONE_BIN: dist/ser2netweb
           SER2NETWEB_STANDALONE_IMAGE: ${{ matrix.image }}
           SER2NETWEB_STANDALONE_CA: ${{ matrix.ca }}
         run: python tests/test_standalone.py
@@ -185,11 +185,11 @@ jobs:
         if: github.event_name == 'workflow_dispatch' && inputs.sign_dry_run && vars.WINDOWS_SIGNING == ''
         shell: pwsh
         run: |
-          $cert = New-SelfSignedCertificate -Type CodeSigningCert -Subject "CN=ser2net signing dry run" `
+          $cert = New-SelfSignedCertificate -Type CodeSigningCert -Subject "CN=ser2netweb signing dry run" `
             -CertStoreLocation Cert:\CurrentUser\My -KeyUsage DigitalSignature -NotAfter (Get-Date).AddDays(1)
           $ts = (Get-Command signtool.exe -ErrorAction SilentlyContinue).Source
           if (-not $ts) { $ts = (Get-ChildItem "C:\Program Files (x86)\Windows Kits\10\bin\*\x64\signtool.exe" | Select-Object -Last 1).FullName }
-          & $ts sign /fd SHA256 /sha1 $cert.Thumbprint dist\ser2net.exe
+          & $ts sign /fd SHA256 /sha1 $cert.Thumbprint dist\ser2netweb.exe
           # trust it on this runner only, so the Verify step below reports Valid
           Export-Certificate -Cert $cert -FilePath dryrun.cer | Out-Null
           Import-Certificate -FilePath dryrun.cer -CertStoreLocation Cert:\LocalMachine\Root | Out-Null
@@ -204,7 +204,7 @@ jobs:
           endpoint: ${{ vars.AZURE_SIGNING_ENDPOINT }}
           signing-account-name: ${{ vars.AZURE_SIGNING_ACCOUNT }}
           certificate-profile-name: ${{ vars.AZURE_SIGNING_PROFILE }}
-          files: ${{ github.workspace }}\dist\ser2net.exe
+          files: ${{ github.workspace }}\dist\ser2netweb.exe
           file-digest: SHA256
           timestamp-rfc3161: http://timestamp.acs.microsoft.com
           timestamp-digest: SHA256
@@ -213,8 +213,8 @@ jobs:
         if: inputs.publish && vars.WINDOWS_SIGNING == 'signpath'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
         with:
-          name: ser2net-windows-x64-unsigned
-          path: dist/ser2net.exe
+          name: ser2netweb-windows-x64-unsigned
+          path: dist/ser2netweb.exe
           if-no-files-found: error
       - name: Sign with SignPath
         if: inputs.publish && vars.WINDOWS_SIGNING == 'signpath'
@@ -234,33 +234,33 @@ jobs:
       - name: Use the SignPath-signed exe
         if: inputs.publish && vars.WINDOWS_SIGNING == 'signpath'
         shell: pwsh
-        run: Copy-Item signed\ser2net.exe dist\ser2net.exe -Force
+        run: Copy-Item signed\ser2netweb.exe dist\ser2netweb.exe -Force
       - name: Verify the Authenticode signature
         if: (inputs.publish && vars.WINDOWS_SIGNING != '') || steps.dryrun.outputs.signed == 'true'
         shell: pwsh
         run: |
-          $sig = Get-AuthenticodeSignature dist\ser2net.exe
+          $sig = Get-AuthenticodeSignature dist\ser2netweb.exe
           "$($sig.Status): $($sig.SignerCertificate.Subject)"
-          if ($sig.Status -ne 'Valid') { throw "dist\ser2net.exe is not validly signed: $($sig.StatusMessage)" }
+          if ($sig.Status -ne 'Valid') { throw "dist\ser2netweb.exe is not validly signed: $($sig.StatusMessage)" }
 
       - name: Bundle contents, empty-PATH run, loaded libraries
         env:
-          SER2NETWEB_STANDALONE_BIN: dist/ser2net.exe
+          SER2NETWEB_STANDALONE_BIN: dist/ser2netweb.exe
         run: python tests/test_standalone.py
       - name: Windows service — install, crash restart, stop, uninstall (the exe)
         env:
-          SER2NETWEB_STANDALONE_BIN: dist/ser2net.exe
+          SER2NETWEB_STANDALONE_BIN: dist/ser2netweb.exe
           SER2NETWEB_SERVICE_TESTS: "1"
         run: python tests/test_windows_service.py
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
         with:
-          name: ser2net-windows-x64
-          path: dist/ser2net.exe
+          name: ser2netweb-windows-x64
+          path: dist/ser2netweb.exe
           if-no-files-found: error
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
         with:
           name: meta-windows-x64
           path: |
             build/THIRD-PARTY-LICENSES.txt
-            build/ser2net.cdx.json
+            build/ser2netweb.cdx.json
           if-no-files-found: error
