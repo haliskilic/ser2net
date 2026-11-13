@@ -6,6 +6,50 @@ versions follow [Semantic Versioning](https://semver.org/). Detailed notes for e
 
 ## [Unreleased]
 
+## [3.0.1] — 2026-11-13
+More ways to install ser2netweb, dependency ranges that distributions can meet, and fixes for
+3.0.0. **Upgrading from 3.0.0:** nothing has to change, except for Docker users of the old
+image name (below).
+
+### Fixed
+- **`SER2NETWEB_PORT` without `SER2NETWEB_BIND_IP` was ignored.** The port (also under its old
+  name `SER2NET_PORT`) now applies on its own and keeps the bind IP `config.json` has;
+  `--healthcheck` already read it that way and probed a port the server was not on. A port
+  outside 1-65535 now stops the start with one line in this case too (#122).
+- **Homebrew: data of 3.0.0 run by hand is found again.** 3.0.0 took the formula's install for
+  a pip install; while the user's data folder has a `config.json` and
+  `$(brew --prefix)/var/ser2netweb` has none, it stays the default (#122).
+- A pyserial-asyncio-fast that is installed but fails to import is reported at start instead of
+  being replaced silently by the built-in copy of its transport (#122).
+
+### Added
+- **Signed APT, DNF and zypper repositories** at <https://haliskilic.github.io/ser2netweb/>,
+  updated with every release (`docs/PACKAGES.md`; key fingerprint
+  `B587 60E7 C0B0 515E 81D2  50F9 8164 D694 711B B799`) (#109, #110).
+- **Package managers:** winget (`haliskilic.ser2netweb`), Scoop (bucket
+  `haliskilic/scoop-bucket`), Chocolatey, Homebrew (`brew install haliskilic/tap/ser2netweb`),
+  an AUR package `ser2netweb-bin`, a snap (USB serial adapters through
+  `sudo snap connect ser2netweb:raw-usb`), and a Docker Hub mirror
+  `docker.io/haliskilic/ser2netweb`. ser2netweb recognises these installs, keeps its data
+  where an upgrade doesn't remove it, and `--about` names the kind (#109, #111, #113).
+- **Recipes for distributions**, each built and started in CI: Debian / Ubuntu, Fedora,
+  openSUSE, Arch, Alpine, nixpkgs, Void, Gentoo, FreeBSD and MacPorts (`packaging/`,
+  `docs/PACKAGING.md`) (#109, #114, #116).
+- A built-in copy of pyserial-asyncio-fast's transport, used when that package is not
+  installed, and support for Starlette 0.46 to 1.5 (#112).
+
+### Changed
+- **Docker: the image name `ghcr.io/haliskilic/ser2net` no longer exists.** Since 2026-11-13
+  every pull of it fails and the 2.x images are no longer on GHCR; the image is
+  `ghcr.io/haliskilic/ser2netweb` (also on Docker Hub). Change `image:` in your compose file
+  or `docker run` command; the data volume is used as it is (#115, #122).
+- **Dependency ranges of the Python package are wider:** the lowest versions that work
+  (Debian 13, RHEL 10, Ubuntu 26.04), without upper limits. The executables, the Docker image
+  and `requirements.txt` keep the tested pins; CI also runs the suite on the lowest and, weekly,
+  on the newest versions (#112).
+- Release pipeline: a release starts the channel workflows itself, and one that can't be
+  started no longer keeps the others from starting (#110, #122).
+
 ## [3.0.0] — 2026-11-13
 **ser2net is now ser2netweb.** The project was renamed to tell it apart from Corey Minyard's
 ser2net, the C program that Debian, Ubuntu and Fedora package under that name: ser2netweb is an
@@ -990,7 +1034,8 @@ Hardening and operations.
 ## [1.0] — 2026-06-06
 First release: serial↔TCP (raw, telnet, RFC 2217), web UI, access control, logs.
 
-[Unreleased]: https://github.com/haliskilic/ser2netweb/compare/v3.0.0...HEAD
+[Unreleased]: https://github.com/haliskilic/ser2netweb/compare/v3.0.1...HEAD
+[3.0.1]: https://github.com/haliskilic/ser2netweb/releases/tag/v3.0.1
 [3.0.0]: https://github.com/haliskilic/ser2netweb/releases/tag/v3.0.0
 [2.9.0]: https://github.com/haliskilic/ser2netweb/releases/tag/v2.9.0
 [2.8.1]: https://github.com/haliskilic/ser2netweb/releases/tag/v2.8.1
