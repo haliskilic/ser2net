@@ -1,7 +1,7 @@
 name: Image refresh
 
 # A release builds the published image (ghcr.io/<owner>/ser2netweb; its name up to 2.9.x,
-# ghcr.io/<owner>/ser2net, stopped at 3.0.0 and is not refreshed) with the Debian, OpenSSL and
+# ghcr.io/<owner>/ser2net, no longer exists) with the Debian, OpenSSL and
 # CPython 3.12.x of that day. Every Monday, and when started by hand, this workflow
 #  * scans :latest with Grype (a pinned, sha256-checked release) and uploads the HIGH and
 #    CRITICAL findings that have a fix to code scanning (Security -> Code scanning); report
@@ -106,7 +106,7 @@ jobs:
           version=${tag#v}
           owner=${GITHUB_REPOSITORY_OWNER,,}
           # the image's one name, as in release.yml (ghcr.io/<owner>/ser2net, its name up to
-          # 2.9.x, is left as 3.0.0 left it)
+          # 2.9.x, no longer exists)
           image=ghcr.io/$owner/ser2netweb
           dockerfile=$(gh api "repos/$GITHUB_REPOSITORY/contents/Dockerfile?ref=$tag" -H "Accept: application/vnd.github.raw")
           base=$(sed -n 's/^ARG BASE_IMAGE=//p' <<<"$dockerfile")

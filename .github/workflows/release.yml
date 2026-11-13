@@ -17,7 +17,7 @@ name: Release
 # pre-release) the release channels are started: package-repo.yml, winget.yml,
 # chocolatey.yml, aur.yml, snap.yml. The
 # image is ghcr.io/<owner>/ser2netweb and nothing else: its name up to 2.9.x,
-# ghcr.io/<owner>/ser2net, got its last release with 3.0.0 and is left as it is. The write
+# ghcr.io/<owner>/ser2net, no longer exists (that package was deleted). The write
 # permissions belong to the publish jobs alone (and the untagged push).
 #
 # Actions -> Release -> Run workflow is a dry run on any branch: the same jobs check the
