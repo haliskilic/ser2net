@@ -877,7 +877,8 @@ hotplug özelliğinin sağladığı bir slot gerekir. Dahili UART'lara (`/dev/tt
 `/dev/ttyAMA0` / `serial0`'ı) normal bir Ubuntu'da snap'ten erişilemez: onlar için `.deb`'i,
 binary'yi ya da Docker'ı kullanın. Servis confinement içinde root olarak çalışır (snap
 servisleri böyle çalışır); verisi `/var/snap/ser2netweb/common/data`'dadır ve `sudo snap remove
---purge ser2netweb` onu siler; log'unu `sudo snap logs ser2netweb.daemon` gösterir. `snap unset
+--purge ser2netweb` onu siler; log'unu `sudo snap logs ser2netweb.daemon` gösterir. Tek başına
+`snap set ser2netweb port=8090`, `127.0.0.1` üzerinde o port demektir; `snap unset
 ser2netweb bind-ip port` `config.json`'daki adrese döner. Classic confinement'lı (sandbox'sız)
 bir snap için bakımcının isteyeceği bir Snap Store incelemesi gerekirdi; böyle bir snap yoktur.
 
@@ -912,7 +913,7 @@ Bir konteynerin, servis unit'inin ya da bir script'in bir çalıştırma için v
 
 | Değişken | Ne ayarlar |
 |---|---|
-| `SER2NETWEB_BIND_IP`, `SER2NETWEB_PORT` | yönetim arayüzünün adresi ve portu; her açılışta `config.json`'un önüne geçer (`*`: IPv4 ve IPv6 bütün arayüzler) |
+| `SER2NETWEB_BIND_IP`, `SER2NETWEB_PORT` | yönetim arayüzünün adresi ve portu; her açılışta `config.json`'un önüne geçer (`*`: IPv4 ve IPv6 bütün arayüzler); her biri tek başına da çalışır: yalnızca port verilirse bağlanılan IP `config.json`'daki kalır (3.0.0, bağlanılacak IP verilmeden ayarlanan portu yok sayıyordu) |
 | `SER2NETWEB_ADMIN_PASSWORD_FILE`, `SER2NETWEB_ADMIN_USER` | hiç hesap yokken ilk admin hesabı, bir dosyadan (Docker secret) |
 | `SER2NETWEB_NODE_NAME` | bu kopyanın adı |
 | `SER2NETWEB_PUBLIC_URL`, `SER2NETWEB_TRUSTED_PROXIES` | Ayarlar → Reverse proxy'nin ayarladıkları |

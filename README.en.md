@@ -849,8 +849,9 @@ provides. Built-in UARTs (`/dev/ttyS*`, a Raspberry Pi's `/dev/ttyAMA0` / `seria
 be reached from the snap on a regular Ubuntu: use the `.deb`, the binary or Docker for them.
 The service runs as root inside the confinement (as snap services do), with its data in
 `/var/snap/ser2netweb/common/data`, which `sudo snap remove --purge ser2netweb` deletes;
-`sudo snap logs ser2netweb.daemon` shows its log. `snap unset ser2netweb bind-ip port` goes
-back to `config.json`'s address. A snap with classic confinement (no sandbox) would need a
+`sudo snap logs ser2netweb.daemon` shows its log. `snap set ser2netweb port=8090` alone is
+that port on `127.0.0.1`; `snap unset ser2netweb bind-ip port` goes back to `config.json`'s
+address. A snap with classic confinement (no sandbox) would need a
 Snap Store review the maintainer asks for; there is none.
 
 ### Command-line options
@@ -883,7 +884,7 @@ feature):
 
 | Variable | What it sets |
 |---|---|
-| `SER2NETWEB_BIND_IP`, `SER2NETWEB_PORT` | the admin UI's address and port, which win over `config.json` at every start (`*`: every interface, IPv4 and IPv6) |
+| `SER2NETWEB_BIND_IP`, `SER2NETWEB_PORT` | the admin UI's address and port, which win over `config.json` at every start (`*`: every interface, IPv4 and IPv6); each works on its own: the port alone keeps `config.json`'s bind IP (3.0.0 ignored a port set without a bind IP) |
 | `SER2NETWEB_ADMIN_PASSWORD_FILE`, `SER2NETWEB_ADMIN_USER` | the first admin account, from a file (a Docker secret), while there is no account |
 | `SER2NETWEB_NODE_NAME` | this instance's name |
 | `SER2NETWEB_PUBLIC_URL`, `SER2NETWEB_TRUSTED_PROXIES` | what Settings → Reverse proxy sets |

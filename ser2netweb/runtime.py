@@ -54,6 +54,8 @@ def _env_bind_override(admin, notes: list[str] | None = None) -> bool:
     would default to loopback and leave the UI unreachable behind a published
     port). Returns True if a bind IP was provided. Env wins on every start, so a
     container's compose/run config stays the source of truth across restarts.
+    Each variable works on its own: a port without a bind IP moves the port and keeps
+    the bind IP config.json has (--healthcheck reads them the same way).
 
     SER2NETWEB_BIND_IP=* is every interface, IPv4 and IPv6 (admin_ui.bind_ip "", as the
     console's "All interfaces (IPv4 + IPv6)"); 0.0.0.0 is IPv4 only, :: IPv6 only.
@@ -62,11 +64,7 @@ def _env_bind_override(admin, notes: list[str] | None = None) -> bool:
     1-65535 (the UI could not start on either). A port that is not a number is ignored,
     as it always was, with a warning in `notes`. Messages name the variable as it is set."""
     ip = envvars.text("SER2NETWEB_BIND_IP")
-    if not ip:
-        return False
-    if ip == "*":
-        ip = ""
-    else:
+    if ip and ip != "*":
         try:
             ipaddress.ip_address(ip)
         except ValueError:
@@ -85,10 +83,11 @@ def _env_bind_override(admin, notes: list[str] | None = None) -> bool:
         else:
             if not 1 <= number <= 65535:
                 raise ConfigError(f"{port_var} must be a port number (1-65535), not {port!r}")
-    admin.bind_ip = ip
+    if ip:
+        admin.bind_ip = "" if ip == "*" else ip
     if number is not None:
         admin.port = number
-    return True
+    return bool(ip)
 
 
 def _os_error(e: OSError, data_dir: str | None = None) -> str:
@@ -207,10 +206,18 @@ def prepare_config(config_path: str, reconfigure: bool = False):
         env_set = _env_bind_override(config.admin_ui, notes)
     except ConfigError as e:
         raise SystemExit(f"ser2netweb: {e}") from None
+    # the port alone (no bind IP): applied above, and the console still asks for the bind IP
+    env_port = bool(envvars.text("SER2NETWEB_PORT")) and not env_set
     if (first_run or reconfigure) and not env_set:
         bind_ip, port = console.choose_admin_bind(config.admin_ui, notes)
         config.admin_ui.bind_ip = bind_ip
         config.admin_ui.port = port
+        if env_port:
+            _env_bind_override(config.admin_ui)
+        if config.admin_ui.port != port:
+            notes.append(f"WARNING: {envvars.source('SER2NETWEB_PORT')} sets the admin UI's "
+                         f"port ({config.admin_ui.port}) and wins over the port chosen "
+                         f"({port}) at every start")
     admin, note = accounts.provision_from_env(config, os.environ)
     if note:
         notes.append(note)
@@ -220,7 +227,7 @@ def prepare_config(config_path: str, reconfigure: bool = False):
     # also the first admin from the environment, or a config.json without secret_key /
     # instance_id (made by hand, or a downloaded backup put in its place): keep them, or
     # every restart would sign everyone out and give this node a new cluster id
-    if ((first_run or reconfigure or env_set) and not store.matches(config)
+    if ((first_run or reconfigure or env_set or env_port) and not store.matches(config)
             or config.ids_created or admin or moved):
         try:
             # not validated: what this config breaks was accepted just above, so a check

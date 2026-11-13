@@ -190,6 +190,8 @@ container with this command finds its data.)
   `SER2NETWEB_BIND_IP`, with `SER2NETWEB_PORT` for the port). The container network plus the
   published port are the real perimeter — don't publish `8080` to an untrusted network
   without TLS. These env vars win on every start, so compose stays the source of truth.
+  Each works on its own: `SER2NETWEB_PORT` without a bind IP moves the port and keeps the
+  bind IP (3.0.0 ignored a port set without one).
 - **Variable names.** Every `SER2NETWEB_…` variable is also read under its name up to
   2.9.x, `SER2NET_…` (`SER2NET_BIND_IP` and so on), so compose files and `docker run`
   commands that use the old names keep working; when both are set, the `SER2NETWEB_…` one
