@@ -1,0 +1,62 @@
+#!/bin/sh
+
+# PROVIDE: ser2netweb
+# REQUIRE: DAEMON NETWORKING
+# KEYWORD: shutdown
+#
+# Add these lines to /etc/rc.conf.local or /etc/rc.conf to enable ser2netweb:
+#
+# ser2netweb_enable (bool):	Set to NO by default.
+#				Set it to YES to enable ser2netweb.
+# ser2netweb_user (str):	The user it runs as (Default: ser2netweb, a member
+#				of the dialer group: the serial ports).
+# ser2netweb_dir (str):		The data directory: config.json, its backups,
+#				the logs (Default: /var/db/ser2netweb).
+# ser2netweb_args (str):	More command line arguments (ser2netweb --help).
+# ser2netweb_env (str):		Its environment, e.g.
+#				"SER2NETWEB_BIND_IP=0.0.0.0 SER2NETWEB_PORT=8080"
+#				for the web UI's address (127.0.0.1:8080 at first);
+#				they win over the web UI's own setting.
+
+. /etc/rc.subr
+
+name=ser2netweb
+rcvar=ser2netweb_enable
+desc="Serial-to-network bridge with a web UI"
+
+load_rc_config $name
+
+: ${ser2netweb_enable:="NO"}
+: ${ser2netweb_user:="ser2netweb"}
+: ${ser2netweb_dir:="/var/db/ser2netweb"}
+: ${ser2netweb_args:=""}
+
+pidfile="/var/run/${name}/${name}.pid"
+_child_pidfile="/var/run/${name}/${name}.child.pid"
+procname="daemon"
+command="/usr/sbin/daemon"
+# (rc.subr starts it as ${ser2netweb_user}: daemon(8) gets no -u)
+command_args="-f -c -r -S -T ${name} -P ${pidfile} -p ${_child_pidfile} \
+    %%PREFIX%%/bin/ser2netweb --data-dir ${ser2netweb_dir} ${ser2netweb_args}"
+
+extra_commands="reload"
+start_precmd="${name}_prestart"
+reload_cmd="${name}_reload"
+
+ser2netweb_prestart()
+{
+	install -d -o ${ser2netweb_user} -m 0755 /var/run/${name}
+	install -d -o ${ser2netweb_user} -m 0700 ${ser2netweb_dir}
+}
+
+# read config.json again without a restart (SIGHUP to ser2netweb, not to daemon(8))
+ser2netweb_reload()
+{
+	if [ ! -s ${_child_pidfile} ]; then
+		echo "${name} is not running."
+		return 1
+	fi
+	kill -HUP $(cat ${_child_pidfile})
+}
+
+run_rc_command "$1"

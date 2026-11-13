@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE pkgmetadata SYSTEM "https://www.gentoo.org/dtd/metadata.dtd">
+<pkgmetadata>
+	<maintainer type="person">
+		<email>mail@haliskilic.com.tr</email>
+		<name>Halis KILIÇ</name>
+	</maintainer>
+	<longdescription lang="en">
+		ser2netweb shares serial ports over the network: raw TCP, telnet, RFC 2217, UDP,
+		a Modbus RTU/TCP gateway and MQTT, configured in a web UI or over a REST API.
+		ser2netweb is an independent project, unrelated to Corey Minyard's ser2net
+		(net-misc/ser2net).
+	</longdescription>
+	<upstream>
+		<remote-id type="github">haliskilic/ser2netweb</remote-id>
+		<bugs-to>https://github.com/haliskilic/ser2netweb/issues</bugs-to>
+		<changelog>https://github.com/haliskilic/ser2netweb/blob/main/CHANGELOG.md</changelog>
+	</upstream>
+</pkgmetadata>
