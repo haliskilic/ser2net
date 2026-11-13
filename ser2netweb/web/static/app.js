@@ -381,6 +381,16 @@ window.addEventListener("beforeunload", function (e) {
 // 3b) TLS files uploaded from the mapping form (its "Upload and check"): the server
 //     answers where it keeps them (HX-Trigger: tlsUploaded {field name: path}); they go
 //     into the form's path fields, to be saved with it, and the file inputs are emptied.
+//     The button is no submit button (it sits in the mapping's form, whose save button
+//     must stay that form's first one): [data-submit-form] submits the form it names.
+document.addEventListener("click", function (e) {
+  var b = e.target.closest ? e.target.closest("[data-submit-form]") : null;
+  var f = b ? document.getElementById(b.getAttribute("data-submit-form")) : null;
+  if (!f) return;
+  e.preventDefault();
+  if (f.requestSubmit) f.requestSubmit();
+  else htmx.trigger(f, "submit");
+});
 document.addEventListener("tlsUploaded", function (e) {
   var f = document.querySelector("#form-panel form.mform"), paths = e.detail || {};
   if (!f) return;

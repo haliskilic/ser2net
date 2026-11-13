@@ -218,7 +218,7 @@
         <label data-show-when="network_mode=server">{{ _("Client CA certificate file") }} <input type="file" name="client_ca" form="tls-upload" accept=".pem,.crt,.cer,.cert,.der,.txt"></label>
         <label data-show-when="network_mode=client">{{ _("CA certificate file") }} <input type="file" name="ca" form="tls-upload" accept=".pem,.crt,.cer,.cert,.der,.txt"></label>
         {% endif %}
-        <button class="btn sm" type="submit" form="tls-upload" id="tls-upload-send">{{ _("Upload and check") }}</button>
+        <button class="btn sm" type="button" data-submit-form="tls-upload" id="tls-upload-send">{{ _("Upload and check") }}</button>
       </details>
       {% endif %}
       {% if 'tls_key_password' not in hide %}
