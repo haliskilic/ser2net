@@ -191,7 +191,7 @@ build_fedora() {
     useradd --create-home builder
     recipe fedora "$WORK/recipe"
     pkg_install() { dnf -y install "$@" | tail -25; }
-    pkg_builddep() { dnf -y builddep "$@" | tail -40; }
+    pkg_builddep() { dnf -y builddep "$@"; }
     rpm_build "$WORK/recipe"
     say "install"
     dnf -y -q install "$OUT"/ser2netweb-"$VERSION"-*.noarch.rpm
@@ -219,6 +219,9 @@ build_opensuse() {
                       printf "* %s %s %s %s %s\n", $1, $2, $3, $6, who; head = 0; next }
          NF { print }' "$WORK/recipe/ser2netweb.changes" >>"$WORK/recipe/ser2netweb.spec"
     sed -n '/^%changelog/,$p' "$WORK/recipe/ser2netweb.spec"
+    # and builds at the newest entry's time (file times and bytecode follow it)
+    SOURCE_DATE_EPOCH=$(date -u -d "$(sed -n '2s/ - .*//p' "$WORK/recipe/ser2netweb.changes")" +%s)
+    export SOURCE_DATE_EPOCH
     pkg_install() { zypper -n -q install --no-recommends "$@"; }
     pkg_builddep() { fail "no dynamic BuildRequires expected: $*"; }
     rpm_build "$WORK/recipe"
@@ -284,8 +287,10 @@ build_alpine() {
     [ "$code" -eq 0 ] || fail "apkbuild-lint: exit $code"
     say "abuild -r (as a user)"
     su -l builder -c "cd '$dir' && abuild -r"
-    repo=/home/builder/packages/testing
-    cp "$repo"/*/ser2netweb-*.apk "$OUT/"
+    find /home/builder/packages -name 'ser2netweb-*.apk' -exec cp {} "$OUT/" \;
+    ls -l "$OUT"
+    # (the repository abuild made: .../packages/<folder>/<arch>/APKINDEX.tar.gz)
+    repo=$(dirname "$(dirname "$(find /home/builder/packages -name APKINDEX.tar.gz | head -1)")")
     say "install"
     apk add -q --repository "$repo" ser2netweb ser2netweb-openrc
     apk info -a ser2netweb | sed -n '1,40p'
