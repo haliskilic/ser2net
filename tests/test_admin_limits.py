@@ -30,6 +30,7 @@ import contextlib
 import os
 import socket
 import ssl
+import sys
 import tempfile
 import threading
 import time
@@ -319,16 +320,27 @@ def test_send_deadline():
             while not (paused and transports) and loop.time() < end:
                 await asyncio.sleep(0.01)
             held = bool(paused and transports)
+            # the deadline starts at the pause and is set once more when the kernel took
+            # some of the response meanwhile: the abort comes within two of them (and
+            # before the client, which waits 6 s, reads anything)
+            limit = 2 * admin.request_timeout_s + 1.0
+            end = loop.time() + limit
             while held and loop.time() < end and not transports[-1].is_closing():
                 held = transports[-1].get_write_buffer_size() > 0
                 await asyncio.sleep(0.02)
+            aborted = held and transports[-1].is_closing()
             got = await stall
             if not paused or not held:
                 print("  (SKIP the stalled client: the kernel took the whole response here)")
             else:
-                assert got < len(payload), ("a client that takes nothing kept its response "
-                                            f"(connections aborted: {guard.timeouts})")
-                assert guard.timeouts >= 1
+                assert guard.timeouts >= 1, "a client that takes nothing was not timed out"
+                assert aborted, (f"the connection of a client that takes nothing was still "
+                                 f"open {limit:.0f} s after writing paused")
+                # what the kernel had taken before the abort is the kernel's: the Windows
+                # proactor loop's sockets still deliver it, so the client may get everything
+                if sys.platform != "win32":
+                    assert got < len(payload), ("a client that takes nothing kept its "
+                                                f"response (aborted: {guard.timeouts})")
             got, took = await asyncio.to_thread(slow_reader, port)
             assert got == len(payload), f"a slow reader was cut off after {got} bytes"
             assert took > 2.5, f"the slow reader took {took:.1f} s, not longer than the deadline"
