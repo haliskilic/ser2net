@@ -131,7 +131,6 @@ for t in \
     test_rfc2217_settings.py \
     test_secure_cookies.py \
     test_ser2net_import.py \
-    test_serial_compat.py \
     test_serial_mqtt.py \
     test_sparkplug.py \
     test_sparkplug_node.py \

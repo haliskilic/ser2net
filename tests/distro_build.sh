@@ -84,7 +84,7 @@ build_debian() {
     apt-get install -y -qq --no-install-recommends build-essential ca-certificates devscripts \
         equivs lintian autopkgtest python3 xz-utils >/dev/null
     (. /etc/os-release && echo "$PRETTY_NAME")
-    dpkg-query -W -f='${Package} ${Version}\n' debhelper dh-python lintian
+    dpkg-query -W -f='${Package} ${Version}\n' debhelper lintian
     useradd --create-home builder
     recipe debian "$WORK/recipe"
     cd "$WORK"
@@ -190,7 +190,7 @@ build_fedora() {
     (. /etc/os-release && echo "$PRETTY_NAME")
     useradd --create-home builder
     recipe fedora "$WORK/recipe"
-    pkg_install() { dnf -y -q install "$@"; }
+    pkg_install() { dnf -y install "$@" | tail -25; }
     pkg_builddep() { dnf -y -q builddep "$@"; }
     rpm_build "$WORK/recipe"
     say "install"
@@ -263,7 +263,10 @@ build_alpine() {
     chmod g+w /var/cache/distfiles
     cp "$TARBALL" "/var/cache/distfiles/ser2netweb-$VERSION.tar.gz"
     su -l builder -c 'abuild-keygen -a -n'
-    cp /home/builder/.abuild/*.rsa.pub /etc/apk/keys/
+    # (abuild keeps its keys in ~/.config/abuild, older ones in ~/.abuild)
+    find /home/builder/.config/abuild /home/builder/.abuild -name '*.rsa.pub' \
+        -exec cp {} /etc/apk/keys/ \; 2>/dev/null || true
+    ls /etc/apk/keys/builder-*.rsa.pub
     dir=/home/builder/aports/testing/ser2netweb
     recipe alpine/ser2netweb "$dir"
     chown -R builder /home/builder/aports
