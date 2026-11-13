@@ -200,7 +200,7 @@ def _icacls_private(path: str, grants: list[str]) -> None:
 
     # by full path: Windows searches an unqualified name in the program's own
     # folder and the current directory before System32, so an icacls.exe planted
-    # next to ser2net.exe (e.g. in Downloads) would otherwise run instead
+    # next to ser2netweb.exe (e.g. in Downloads) would otherwise run instead
     root = os.environ.get("SystemRoot") or os.environ.get("WINDIR") or r"C:\Windows"
     icacls = os.path.join(root, "System32", "icacls.exe")
     cmd = [icacls if os.path.isfile(icacls) else "icacls", path, "/inheritance:r"]

@@ -1606,17 +1606,22 @@ is no account at all; later starts ignore it.
   ```bat
   ser2netweb-windows-x64.exe --install-service
   ```
-  The exe copies itself to `C:\Program Files\ser2net\` (admin-only, so a standard user
+  The exe copies itself to `C:\Program Files\ser2netweb\` (admin-only, so a standard user
   can't replace the file the service runs as SYSTEM) and keeps its data in
-  `C:\ProgramData\ser2net\` (both writable by SYSTEM and Administrators only). The
-  service starts at boot, needs no signed-in user
+  `C:\ProgramData\ser2netweb\` (both writable by SYSTEM and Administrators only). The
+  service, `ser2netweb`, starts at boot, needs no signed-in user
   (LocalSystem) and restarts 5 s after it crashes or exits with an error; the console asks
   once for the UI address. Remove it with `--uninstall-service` (the data folder is kept,
-with the configuration, backups, logs, audit log and traces: delete it to remove those);
-  run several instances via `--service-name`. Stop/start: `sc stop ser2net` /
-  `sc start ser2net` or *Services* (services.msc). Re-running `--install-service` from a
-  newer exe upgrades it in place and keeps the data directory the service uses (a 2.8.0
-  service too). The service is *Running* once its UI listens (*Starting* until then), so
+  with the configuration, backups, logs, audit log and traces: delete it to remove those);
+  run several instances via `--service-name`. Stop/start: `sc stop ser2netweb` /
+  `sc start ser2netweb` or *Services* (services.msc). Re-running `--install-service` from a
+  newer exe upgrades it in place and keeps the data directory the service uses. Over 2.x's
+  service (called `ser2net`, in `C:\Program Files\ser2net\` and `C:\ProgramData\ser2net\`)
+  the same command moves it over: it stops it, installs `ser2netweb` (moving the data to
+  `C:\ProgramData\ser2netweb\` when it was in 2.x's default place), deletes the old service
+  once the new one runs and puts it all back if it doesn't; the old firewall rule then
+  needs replacing (docs/WINDOWS.md, *Upgrading from 2.x*). The service is *Running* once
+  its UI listens (*Starting* until then), so
   `--install-service` reports a service that stops while it starts (with its exit code and
   where to look) instead of success. **[`docs/WINDOWS.md`](docs/WINDOWS.md)** covers the
   firewall rule you need to reach it from other hosts, changing the address, upgrading and
@@ -1696,8 +1701,8 @@ The browser keeps each instance's sign-in apart when they are on different ports
 reach those under different host names (the IP address and the name) or in separate browser
 profiles.
 
-- **Windows:** `ser2netweb-windows-x64.exe --install-service --service-name ser2net-line2
-  --data-dir C:\ProgramData\ser2net-line2` (and a firewall rule per service:
+- **Windows:** `ser2netweb-windows-x64.exe --install-service --service-name line2`
+  (data in `C:\ProgramData\ser2netweb\line2`) (and a firewall rule per service:
   [docs/WINDOWS.md](docs/WINDOWS.md)).
 - **Linux (systemd):** the template `systemd/ser2netweb@.service` runs one instance per
   name, with its data in `/var/lib/ser2netweb/<name>` and its address in

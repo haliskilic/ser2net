@@ -1665,18 +1665,22 @@ içeren bir dosyaya (Docker secret) yönlendirin; ad için `SER2NETWEB_ADMIN_USE
   ```bat
   ser2netweb-windows-x64.exe --install-service
   ```
-  Exe kendini `C:\Program Files\ser2net\` altına kopyalar (yalnızca yöneticilerin
+  Exe kendini `C:\Program Files\ser2netweb\` altına kopyalar (yalnızca yöneticilerin
   değiştirebildiği bir yer; böylece sıradan bir kullanıcı, servisin SYSTEM olarak
-  çalıştırdığı dosyayı değiştiremez) ve verisini `C:\ProgramData\ser2net\` altında tutar
-  (ikisini de yalnızca SYSTEM ve Administrators değiştirebilir).
-  Servis açılışta başlar, kullanıcı oturumu gerektirmez (LocalSystem), çökerse ya da
-  hatayla çıkarsa 5 sn sonra yeniden başlar; arayüz adresi ilk kurulumda konsolda sorulur.
-  Kaldırmak: `--uninstall-service` (veri klasörü yapılandırma, yedekler, log'lar, denetim
-  kaydı ve trace'lerle birlikte kalır: bunları da kaldırmak için klasörü silin); birden fazla
-  örnek için
-  `--service-name`. Durdur/başlat: `sc stop ser2net` / `sc start ser2net` ya da *Hizmetler*
-  (services.msc). Yeni bir exe ile `--install-service`'i yeniden çalıştırmak servisi
-  yerinde yükseltir ve servisin kullandığı veri klasörünü korur (2.8.0 servisinde de).
+  çalıştırdığı dosyayı değiştiremez) ve verisini `C:\ProgramData\ser2netweb\` altında
+  tutar (ikisini de yalnızca SYSTEM ve Administrators değiştirebilir).
+  Servis (`ser2netweb`) açılışta başlar, kullanıcı oturumu gerektirmez (LocalSystem), çökerse
+  ya da hatayla çıkarsa 5 sn sonra yeniden başlar; arayüz adresi ilk kurulumda konsolda
+  sorulur. Kaldırmak: `--uninstall-service` (veri klasörü yapılandırma, yedekler, log'lar,
+  denetim kaydı ve trace'lerle birlikte kalır: bunları da kaldırmak için klasörü silin);
+  birden fazla örnek için `--service-name`. Durdur/başlat: `sc stop ser2netweb` /
+  `sc start ser2netweb` ya da *Hizmetler* (services.msc). Yeni bir exe ile
+  `--install-service`'i yeniden çalıştırmak servisi yerinde yükseltir ve servisin kullandığı
+  veri klasörünü korur. 2.x'in servisi (`ser2net` adlı; `C:\Program Files\ser2net\` ve
+  `C:\ProgramData\ser2net\`) varken aynı komut onu taşır: durdurur, `ser2netweb`'i kurar
+  (veri 2.x'in varsayılan yerindeyse onu `C:\ProgramData\ser2netweb\`'e taşır), yeni servis
+  çalışınca eskisini siler, çalışmazsa her şeyi geri alır; eski güvenlik duvarı kuralının
+  ardından yenilenmesi gerekir (docs/WINDOWS.md, *Upgrading from 2.x*).
   Servis arayüzü dinlemeye başlayınca *Çalışıyor* durumuna geçer (o zamana kadar
   *Başlatılıyor*); böylece `--install-service`, başlarken duran bir servisi başarılı
   saymaz, çıkış kodunu ve nereye bakılacağını yazar.
@@ -1759,8 +1763,8 @@ Tarayıcı, farklı portlardaki kurulumların (`http://host:8080`, `http://host:
 oturumlarını ayrı tutar; 2.8 ve öncesi bir host adı başına tek oturum paylaşıyordu, onlara
 farklı host adlarıyla (IP adresi ve ad) ya da ayrı tarayıcı profilleriyle girin.
 
-- **Windows:** `ser2netweb-windows-x64.exe --install-service --service-name ser2net-line2
-  --data-dir C:\ProgramData\ser2net-line2` (ve her servis için bir güvenlik duvarı
+- **Windows:** `ser2netweb-windows-x64.exe --install-service --service-name line2`
+  (verisi `C:\ProgramData\ser2netweb\line2` altında) (ve her servis için bir güvenlik duvarı
   kuralı: [docs/WINDOWS.md](docs/WINDOWS.md)).
 - **Linux (systemd):** `systemd/ser2netweb@.service` şablonu her ad için bir kurulum
   çalıştırır; verisi `/var/lib/ser2netweb/<ad>` altında, adresi `/etc/ser2netweb/<ad>.env`

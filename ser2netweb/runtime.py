@@ -347,9 +347,9 @@ def hold_data_dir(config_path: str) -> str | None:
     except datalock.Held as e:
         if e.brief:
             raise SystemExit(f"ser2netweb: {e} — start again once it is done") from None
-        raise SystemExit(f"ser2netweb: {e} — stop it first (a Windows service: sc stop ser2net; "
-                         "systemd: systemctl stop ser2net) or give this one its own "
-                         "--data-dir") from None
+        raise SystemExit(f"ser2netweb: {e} — stop it first (a Windows service: sc stop "
+                         "ser2netweb; systemd: systemctl stop ser2netweb; ser2net for 2.x's) or "
+                         "give this one its own --data-dir") from None
 
 
 def main(config_path: str, reconfigure: bool = False) -> int:
@@ -478,7 +478,7 @@ async def stop_engine(state: AppState) -> None:
                   "exiting anyway")
 
 
-def service_main(config_path: str, name: str = "ser2net") -> int:
+def service_main(config_path: str, name: str = "ser2netweb") -> int:
     """main() for the Windows service ``name``, which has no console: a start-up error
     that stops it (the one-line SystemExit) also goes to all.log next to config.json,
     where the admin looks for it; that and any other error that ends it is also written
