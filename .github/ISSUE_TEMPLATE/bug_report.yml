@@ -44,6 +44,9 @@ body:
         - Linux binary, systemd (ser2netweb-install.sh)
         - .deb / .rpm paketi / package (apt, dnf)
         - pip / pipx (PyPI)
+        - Homebrew (brew install haliskilic/tap/ser2netweb)
+        - AUR (ser2netweb-bin)
+        - Snap (snap install ser2netweb)
         - Kaynak / source (python ser2netweb.py)
         - Kaynak, systemd / source, systemd (ser2netweb.service, ser2netweb@.service)
         - Docker

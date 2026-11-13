@@ -22,7 +22,7 @@ from ser2netweb.optional import LIB_OVERRIDE_ENV
 
 # the source tree (the folder that holds ser2netweb/, bootstrap.py and ./lib), or a frozen
 # build's unpacked files (a pip install's site-packages folder: nothing of ours but the
-# package, layout.kind() == layout.PIP)
+# package, layout.kind() in layout.PIP_KINDS)
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 FROZEN = getattr(sys, "frozen", False)  # True inside a PyInstaller build
 
@@ -51,8 +51,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=None,  # see below: whether it was given matters to --install-service
         help="Directory for config.json, its backups, the logs and traces (default: data/ "
              "next to ser2netweb.py or the executable (Scoop's: in its persist folder); "
-             "/var/lib/ser2netweb for the .deb / .rpm package's; the user's application data "
-             "folder for a pip / pipx, winget or Chocolatey install; here: "
+             "/var/lib/ser2netweb for the .deb / .rpm / AUR package's; the user's application "
+             "data folder for a pip / pipx, winget or Chocolatey install; "
+             "$(brew --prefix)/var/ser2netweb for the Homebrew formula's; "
+             "/var/snap/ser2netweb/common/data for the snap's as root; here: "
              f"{default_data_dir().replace('%', '%%')}. For --install-service: the data "
              "directory the service already uses, or for a new service from the standalone "
              "exe %%ProgramData%%\\ser2netweb). Give ser2netweb a folder of its own: it makes "
@@ -168,7 +170,7 @@ def print_licenses() -> int:
     online = f"https://github.com/haliskilic/ser2netweb/blob/v{__version__}/THIRD-PARTY-NOTICES.md"
     if FROZEN:
         notices = online
-    elif layout.kind() == layout.PIP:
+    elif layout.kind() in layout.PIP_KINDS:
         folder = layout.licence_dir()
         notices = os.path.join(folder, "THIRD-PARTY-NOTICES.md") if folder else online
     else:
@@ -190,7 +192,7 @@ def _known_roots(env=None) -> list[tuple[str, str]]:
     """(label, folder) of the folders --about writes as a short label (_ROOT_LABELS)."""
     # (a pip install's ROOT is the site-packages folder every package is in: there, only
     # the package's own folder is ser2netweb's)
-    own = layout.PACKAGE_DIR if layout.kind() == layout.PIP else ROOT
+    own = layout.PACKAGE_DIR if layout.kind() in layout.PIP_KINDS else ROOT
     roots = [("<override>", envvars.text(LIB_OVERRIDE_ENV, env)),
              ("<bundle>", getattr(sys, "_MEIPASS", "") or ""),
              ("<ser2netweb>", own), ("<python>", sys.prefix),
@@ -324,7 +326,7 @@ def main(argv: list[str] | None = None, started_as: str = "") -> int:
     if args.install_service:
         if _service_call(lambda ws: ws.require_windows()):
             return 1
-        if layout.kind() == layout.PIP:
+        if layout.kind() in layout.PIP_KINDS:
             # the service would run a Python and a package any later pip command can
             # change (a pipx venv is the user's own), as LocalSystem
             print("ser2netweb: --install-service needs the standalone exe "
@@ -374,7 +376,7 @@ def load_dependencies(args: argparse.Namespace, refresh: bool) -> None:
     frozen build has everything inside). With ``refresh``, a ./lib installed for other
     pins (an upgrade) is brought up to date too. Its warnings go to the start-up log. A pip
     install's dependencies are pip's (and there is no bootstrap.py)."""
-    if FROZEN or layout.kind() == layout.PIP:
+    if FROZEN or layout.kind() in layout.PIP_KINDS:
         return
     sys.path.insert(0, ROOT)  # ensure local packages (ser2netweb/, bootstrap) import first
     if not args.no_bootstrap:

@@ -4,7 +4,8 @@ ser2netweb ships an official `Dockerfile`, an example `docker-compose.yml` and a
 image for amd64, arm64 and arm/v7 (32-bit ARM: 32-bit Raspberry Pi OS, armv7 gateways;
 since 2.9.0) with every release: `ghcr.io/haliskilic/ser2netweb` (`:latest` or a release
 tag). Up to 2.9.x it was `ghcr.io/haliskilic/ser2net`; the 3.x releases are published there
-too, as the same image (*Upgrading from 2.9.x* below).
+too, as the same image (*Upgrading from 2.9.x* below). The same image is also on Docker Hub,
+`docker.io/haliskilic/ser2netweb` (*Docker Hub* below).
 The published image is the very build the release smoke-tested on each architecture (same
 digest; arm/v7 under emulation, as no runner has that CPU); its tags `:X.Y.Z`, `:X.Y` and
 `:latest` are added only after that. On arm/v7 the image builds psutil and cffi from their
@@ -27,6 +28,26 @@ Each image records its base:
 Build provenance: `gh attestation verify oci://ghcr.io/haliskilic/ser2netweb:latest -R haliskilic/ser2netweb`
 (a release's image is attested by `release.yml`, a refreshed one by `image-refresh.yml`,
 under both names).
+
+## Docker Hub
+
+`docker pull haliskilic/ser2netweb:latest` (or `:X.Y`, `:X.Y.Z`) gets the image GHCR has:
+once a release has tagged its tested image on GHCR (and once a weekly refresh has moved `:X.Y`
+and `:latest` there), `.github/workflows/docker-hub.yml` copies that digest to Docker Hub
+under the same tags with `docker buildx imagetools create`. Nothing is rebuilt, so the digest
+is the same on both registries, and so is the build provenance:
+`gh attestation verify oci://docker.io/haliskilic/ser2netweb:latest -R haliskilic/ser2netweb`.
+Use whichever registry suits you (Docker Hub counts anonymous pulls against a rate limit);
+`docker-compose.yml` uses GHCR. There is no Docker Hub copy of the 2.9.x name
+`ghcr.io/haliskilic/ser2net`.
+
+For the maintainer: the copy needs the repository secrets `DOCKERHUB_USERNAME` (the Docker
+Hub account) and `DOCKERHUB_TOKEN` (hub.docker.com -> Account settings -> Personal access
+tokens -> Generate new token, access *Read & Write*; with a Docker Hub organisation, its
+name as the repository variable `DOCKERHUB_NAMESPACE`). Without them it is skipped with a
+notice. Actions -> *Docker Hub mirror* -> *Run workflow* with a release tag (e.g. `v3.0.0`)
+copies an existing release: its `X.Y.Z`, and `X.Y` / `latest` while GHCR's still point at
+that image.
 
 ## Upgrading from 2.9.x
 
