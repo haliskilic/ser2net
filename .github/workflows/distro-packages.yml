@@ -16,6 +16,9 @@ name: Distribution packages
 # new releases of the dependencies show up. Not a merge condition: ci.yml doesn't run it,
 # and EPEL 10 lacks what ser2netweb needs (it may fail, docs/PACKAGING.md says why).
 on:
+  # (temporary, for the lane's CI iteration before the pull request: removed again)
+  push:
+    branches: [ch/p2a-distros]
   pull_request:
     paths:
       - .github/workflows/distro-packages.yml
