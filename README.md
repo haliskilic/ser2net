@@ -56,6 +56,7 @@ düzenlemeye gerek yok.
 - İki seri portu birbirine köprüleme (serial↔serial)
 
 **Rehberler** (`docs/` altında, İngilizce): [Docker](docs/DOCKER.md) ·
+[Linux paket depoları](docs/PACKAGES.md) ·
 [Windows](docs/WINDOWS.md) · [Linux seri portları](docs/LINUX-SERIAL.md) ·
 [reverse proxy](docs/REVERSE-PROXY.md) ·
 [MQTT, Modbus noktaları ve Sparkplug B](docs/MODBUS-MQTT.md) ·
@@ -602,7 +603,12 @@ düzenlemeye gerek yok.
 | Yol | Nerede çalışır | Ne gerekir |
 |---|---|---|
 | [Standalone binary](#standalone-binary-başka-hiçbir-şey-kurmak-gerekmez) | Windows x64; glibc ≥ 2.28 olan Linux x86_64 ve arm64 (64-bit işletim sistemli Raspberry Pi 3/4/5) | hiçbir şey |
+| [winget](#windows-paket-yöneticileri-winget-scoop-chocolatey) (`winget install haliskilic.ser2netweb`) | Windows 10/11, Windows Server 2016 ya da daha yenisi (x64) | winget; veri `%LOCALAPPDATA%\ser2netweb`'de |
+| [Scoop](#windows-paket-yöneticileri-winget-scoop-chocolatey) (`haliskilic/scoop-bucket` bucket'ı) | Windows 10/11, Windows Server 2016 ya da daha yenisi (x64) | Scoop; veri `~\scoop\persist\ser2netweb\data`'da |
+| [Chocolatey](#windows-paket-yöneticileri-winget-scoop-chocolatey) (`choco install ser2netweb`) | Windows 10/11, Windows Server 2016 ya da daha yenisi (x64) | Chocolatey; veri `%LOCALAPPDATA%\ser2netweb`'de |
 | [`.deb` / `.rpm` paketi](#linux-paketleri-deb--rpm) (apt / dnf) | Debian 11+, Ubuntu 20.04+, 64-bit Raspberry Pi OS; Fedora, RHEL / AlmaLinux / Rocky 8+ (x86_64, arm64) | hiçbir şey; veri `/var/lib/ser2netweb`'te |
+| [APT deposu](#paket-depoları-apt-dnf-zypper) | Debian 11+, Ubuntu 20.04+, 64-bit Raspberry Pi OS (amd64, arm64) | hiçbir şey; güncellemeler `apt upgrade` ile gelir |
+| [DNF / YUM deposu](#paket-depoları-apt-dnf-zypper) (zypper da) | Fedora, RHEL / AlmaLinux / Rocky 8+, openSUSE Leap 15.6+ (x86_64, aarch64) | hiçbir şey; güncellemeler `dnf upgrade` / `zypper update` ile gelir |
 | [Docker](#docker) (GHCR, Docker Hub) | Linux host'lar: amd64, arm64, arm/v7 (32-bit Raspberry Pi OS) | Docker |
 | [pipx / pip](#pipx--pip) (PyPI) | her işletim sistemi ve işlemci | Python 3.10+, pipx; veri kullanıcının veri klasöründe |
 | [Homebrew](#homebrew-macos-linux) (`brew install haliskilic/tap/ser2netweb`) | macOS (Apple silicon, Intel), Linux | Homebrew; veri `$(brew --prefix)/var/ser2netweb`'te |
@@ -702,6 +708,32 @@ Bind IP'yi sonradan değiştirmek:
 python3 ser2netweb.py --reconfigure
 ```
 
+### Windows paket yöneticileri (winget, Scoop, Chocolatey)
+Her sürümün aynı `ser2netweb-windows-x64.exe`'si (SHA-256'sı doğrulanarak); paket yöneticisi
+onu `PATH`'e `ser2netweb` olarak koyar ve güncel tutar:
+```powershell
+winget install haliskilic.ser2netweb        # sonra: winget upgrade haliskilic.ser2netweb
+scoop bucket add haliskilic https://github.com/haliskilic/scoop-bucket
+scoop install haliskilic/ser2netweb         # sonra: scoop update ser2netweb
+choco install ser2netweb                    # (yönetici olarak) sonra: choco upgrade ser2netweb
+```
+Programın klasörü paket yöneticisinindir; bu yüzden ser2netweb verisini oraya koymaz
+(`ser2netweb --about` paket yöneticisinin adını, `ser2netweb --help` veri klasörünü gösterir;
+`--data-dir` başka bir klasör seçer):
+
+| | Veri (`config.json`, yedekler, log'lar) |
+|---|---|
+| winget | `%LOCALAPPDATA%\ser2netweb` (3.0.0: winget'in paket klasöründeki `data\`; yükseltmeler onu korur, sonraki sürümler de onu kullanmaya devam eder) |
+| Scoop | `~\scoop\persist\ser2netweb\data`, Scoop'un güncellemelerde koruduğu klasör (`scoop uninstall --purge ser2netweb` siler) |
+| Chocolatey | `%LOCALAPPDATA%\ser2netweb` (Chocolatey'nin klasörünü tanıyan ilk sürümden itibaren; 3.0.0 oraya gönderilmez) |
+
+Servis olarak: yönetici olarak açılmış bir komut isteminde `ser2netweb --install-service`,
+indirilen exe'de olduğu gibi exe'yi `C:\Program Files\ser2netweb\`'e kopyalar (veri
+`C:\ProgramData\ser2netweb\`'de); paket yöneticisinin yükseltmeleri bu yüzden servise
+ulaşmaz: her yükseltmeden sonra `ser2netweb --install-service`'i yeniden çalıştırın, paketi
+kaldırmadan önce de `ser2netweb --uninstall-service`'i
+([`docs/WINDOWS.md`](docs/WINDOWS.md#winget-scoop-and-chocolatey)).
+
 ### Linux paketleri (.deb / .rpm)
 Her sürümde Linux binary'si x86_64 ve arm64 için paket olarak da bulunur:
 `ser2netweb_X.Y.Z_amd64.deb` / `ser2netweb_X.Y.Z_arm64.deb` (Debian 11+, Ubuntu 20.04+, 64-bit
@@ -731,6 +763,34 @@ bunu `ser2netweb-install.sh` yapar (*Servis olarak çalıştırma* altında *2.9
 yükseltme*). `ser2netweb-install.sh` ile kurulmuş bir binary'nin unit'i
 `/etc/systemd/system`'dedir ve paketinkini gizler: önce
 `sudo sh ser2netweb-install.sh --uninstall` (veri kalır), sonra paket.
+
+### Paket depoları (apt, dnf, zypper)
+Aynı paketler GitHub Pages'teki imzalı depolardan da gelir,
+<https://haliskilic.github.io/ser2netweb/>; böylece paket yöneticisi onları güncel tutar (en
+yeni üç sürüm, x86_64 ve arm64; güncelleme, kaldırma ve nasıl denetlendikleri
+[docs/PACKAGES.md](docs/PACKAGES.md)'de):
+```bash
+# Debian, Ubuntu, Raspberry Pi OS (64-bit)
+sudo curl -fsSLo /usr/share/keyrings/ser2netweb-archive-keyring.gpg https://haliskilic.github.io/ser2netweb/ser2netweb-archive-keyring.gpg
+sudo curl -fsSLo /etc/apt/sources.list.d/ser2netweb.sources https://haliskilic.github.io/ser2netweb/ser2netweb.sources
+sudo apt update
+sudo apt install ser2netweb
+# Fedora, RHEL, AlmaLinux, Rocky
+sudo curl -fsSLo /etc/yum.repos.d/ser2netweb.repo https://haliskilic.github.io/ser2netweb/ser2netweb.repo
+sudo dnf install ser2netweb
+# openSUSE
+sudo rpm --import https://haliskilic.github.io/ser2netweb/ser2netweb-archive-keyring.asc
+sudo zypper addrepo https://haliskilic.github.io/ser2netweb/ser2netweb.repo
+sudo zypper refresh
+sudo zypper install ser2netweb
+sudo systemctl enable --now ser2netweb             # kurulum servisi kendisi başlatmaz
+```
+Depolar `B587 60E7 C0B0 515E 81D2  50F9 8164 D694 711B B799` anahtarıyla imzalıdır
+(RSA 4096, 2031-11-12'ye kadar; sitede `ser2netweb-archive-keyring.asc` / `.gpg`, depoda
+[`packaging/ser2netweb-archive-keyring.asc`](packaging/ser2netweb-archive-keyring.asc)):
+dnf ilk kurulumda onu gösterir, yalnızca bu parmak iziyle onaylayın. `.rpm` dosyalarının kendisi imzalı değildir;
+dnf ve zypper her paketin SHA-256'sını taşıyan imzalı depo meta verisini denetler
+(`repo_gpgcheck=1`, `gpgcheck=0`).
 
 ### pipx / pip
 PyPI paketi `ser2netweb`, Python 3.10 ya da daha yenisinin olduğu her işletim sistemi ve
@@ -828,7 +888,7 @@ unit'ler ve script'ler değişiklik gerektirmez:
 
 | Seçenek | Ne yapar |
 |---|---|
-| `--data-dir KLASÖR` | `config.json`, yedekleri, log'lar ve trace'lerin yeri (varsayılan: `ser2netweb.py`'nin ya da binary'nin yanındaki `data/`; `.deb` / `.rpm` / AUR paketininki için `/var/lib/ser2netweb`; pip / pipx kurulumu için kullanıcının veri klasörü, bkz. *pipx / pip*; Homebrew'unki için `$(brew --prefix)/var/ser2netweb`; snap'inki için, root olarak, `/var/snap/ser2netweb/common/data`); ser2netweb'e kendine ait bir klasör verin |
+| `--data-dir KLASÖR` | `config.json`, yedekleri, log'lar ve trace'lerin yeri (varsayılan: `ser2netweb.py`'nin ya da binary'nin yanındaki `data/`, Scoop'unki için onun persist klasöründe; `.deb` / `.rpm` / AUR paketininki için `/var/lib/ser2netweb`; pip / pipx, winget ya da Chocolatey kurulumu için kullanıcının veri klasörü, bkz. *pipx / pip* ve *Windows paket yöneticileri*; Homebrew'unki için `$(brew --prefix)/var/ser2netweb`; snap'inki için, root olarak, `/var/snap/ser2netweb/common/data`); ser2netweb'e kendine ait bir klasör verin |
 | `--config DOSYA` | başka bir yerdeki `config.json`; veri klasörü o zaman onun klasörüdür |
 | `--reconfigure` | yönetim arayüzünün adresini ve portunu konsolda yeniden sorar, sonra başlar |
 | `--online` | bağımlılık kurulumu `vendor/wheels/`'te olmayan bir wheel için PyPI'ye başvurabilir (kaynak kurulum) |

@@ -30,7 +30,8 @@ FROZEN = getattr(sys, "frozen", False)  # True inside a PyInstaller build
 def _app_dir() -> str:
     """Where config/logs live: next to the executable in a frozen build (so they
     survive and aren't written into the temp extraction dir), else the source tree
-    (layout.default_data_dir: not for the package's executable or a pip install)."""
+    (layout.default_data_dir: not for the package's executable, a pip install or the
+    winget / Chocolatey executable)."""
     return os.path.dirname(sys.executable) if FROZEN else ROOT
 
 
@@ -49,8 +50,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--data-dir",
         default=None,  # see below: whether it was given matters to --install-service
         help="Directory for config.json, its backups, the logs and traces (default: data/ "
-             "next to ser2netweb.py or the executable; /var/lib/ser2netweb for the .deb / .rpm "
-             "/ AUR package's; the user's application data folder for a pip / pipx install; "
+             "next to ser2netweb.py or the executable (Scoop's: in its persist folder); "
+             "/var/lib/ser2netweb for the .deb / .rpm / AUR package's; the user's application "
+             "data folder for a pip / pipx, winget or Chocolatey install; "
              "$(brew --prefix)/var/ser2netweb for the Homebrew formula's; "
              "/var/snap/ser2netweb/common/data for the snap's as root; here: "
              f"{default_data_dir().replace('%', '%%')}. For --install-service: the data "

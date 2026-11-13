@@ -17,6 +17,18 @@
   snap        the standalone executable in the snap: root (the snap's service, sudo)
               $SNAP_COMMON/data, /var/snap/ser2netweb/common/data; another user
               $SNAP_USER_COMMON/data (the snap's folder in the home directory)
+  winget, scoop, chocolatey
+              the Windows executable where one of these package managers puts it: winget's
+              portable package folder <root>\\haliskilic.ser2netweb_<source>, Scoop's
+              <root>\\apps\\<app>\\<version> (or current, with the manifest.json and
+              install.json Scoop writes there), Chocolatey's <root>\\lib\\<id>\\tools (next
+              to <id>.nupkg). The package manager owns that folder (Chocolatey replaces it on
+              an upgrade, a machine-wide one is for administrators only), so winget's and
+              Chocolatey's copy keep the data in the user's folder, as pip's, unless a data
+              folder with a config.json is already next to the executable (ser2netweb 3.0.0's,
+              which knew no package manager); Scoop's manifest persists data\\ next to the
+              executable (<root>\\persist\\ser2netweb\\data, kept by updates), so its copy
+              keeps the data there, as a standalone executable does
 
 --data-dir and --config choose another folder in every case. A pip install (and the Homebrew
 formula's) gets its dependencies from pip, so the offline bootstrap into ./lib (bootstrap.py)
@@ -36,15 +48,22 @@ from typing import Optional
 NAME = "ser2netweb"
 SOURCE, STANDALONE, PACKAGE, PIP = "source", "standalone", "package", "pip"
 HOMEBREW, SNAP = "homebrew", "snap"
+WINGET, SCOOP, CHOCOLATEY = "winget", "scoop", "chocolatey"
 # --about's "Build:" line
 LABELS = {SOURCE: "source", STANDALONE: "standalone executable",
           PACKAGE: "standalone executable, Linux package (.deb / .rpm / AUR)",
           PIP: "Python package (pip / pipx)", HOMEBREW: "Homebrew formula",
-          SNAP: "standalone executable, snap"}
+          SNAP: "standalone executable, snap",
+          WINGET: "standalone executable, winget package",
+          SCOOP: "standalone executable, Scoop package",
+          CHOCOLATEY: "standalone executable, Chocolatey package"}
 # the installations whose package pip put into a site-packages folder (pip, pipx, the
 # Homebrew formula's virtual environment): pip installed the dependencies, the licence
 # texts are in the .dist-info, and the command is ser2netweb
 PIP_KINDS = (PIP, HOMEBREW)
+# the package's PackageIdentifier in winget (packaging/winget), which names the folder winget
+# puts a portable package in: <root>\<PackageIdentifier>_<source>
+WINGET_ID = "haliskilic.ser2netweb"
 # where the .deb / .rpm package (and the AUR's) puts the executable, and its service's data
 # directory (packaging/nfpm.yaml, packaging/aur; ser2netweb-install.sh and the standalone
 # unit use /usr/local/bin)
@@ -87,8 +106,11 @@ def _in_snap(executable: str, env: Mapping[str, str]) -> bool:
 
 def detect(frozen: bool, executable: str, package_dir: str,
            platform: str = sys.platform, environ: Optional[Mapping[str, str]] = None) -> str:
-    """The kind of installation (SOURCE, STANDALONE, PACKAGE, PIP, HOMEBREW or SNAP) of a
-    copy whose package is `package_dir`, run by `executable`."""
+    """The kind of installation (SOURCE, STANDALONE, PACKAGE, PIP, HOMEBREW, SNAP, WINGET,
+    SCOOP or CHOCOLATEY) of a copy whose package is `package_dir`, run by `executable`. No
+    two can match: a frozen executable is PACKAGE or SNAP only on Linux and a package
+    manager's only on Windows; HOMEBREW and PIP are never frozen, and HOMEBREW is pip's
+    layout in a keg."""
     if frozen:
         # (a Linux path, compared as one whatever OS this runs on; a frozen executable's
         # sys.executable is absolute)
@@ -97,6 +119,8 @@ def detect(frozen: bool, executable: str, package_dir: str,
                 return PACKAGE
             if _in_snap(executable, os.environ if environ is None else environ):
                 return SNAP
+        if platform == "win32":
+            return windows_package_manager(executable) or STANDALONE
         return STANDALONE
     parent = os.path.dirname(os.path.abspath(package_dir))
     if os.path.basename(parent).lower() in _SITE_FOLDERS or _dist_infos(parent):
@@ -104,6 +128,27 @@ def detect(frozen: bool, executable: str, package_dir: str,
     # a source checkout (an editable install `pip install -e .` too: the package stays in
     # the checkout, so its data does as well)
     return SOURCE
+
+
+def windows_package_manager(executable: str) -> Optional[str]:
+    """WINGET, SCOOP or CHOCOLATEY when that package manager put the Windows executable
+    `executable` (the absolute path of a frozen build: PyInstaller resolves the symbolic link
+    winget puts on PATH, not Scoop's `current` junction) where it is, else None. The path is
+    a Windows one, its folder names compared without case; the files the package managers
+    write next to it are looked up with os.path (ntpath on Windows)."""
+    folder = ntpath.dirname(executable)
+    parent = ntpath.dirname(folder)
+    name, parent_name, grandparent_name = (ntpath.basename(p).lower()
+                                           for p in (folder, parent, ntpath.dirname(parent)))
+    if name.startswith(WINGET_ID + "_"):
+        return WINGET
+    if grandparent_name == "apps" and all(os.path.isfile(os.path.join(folder, f))
+                                          for f in ("manifest.json", "install.json")):
+        return SCOOP
+    if (name == "tools" and grandparent_name == "lib"
+            and os.path.isfile(os.path.join(parent, parent_name + ".nupkg"))):
+        return CHOCOLATEY
+    return None
 
 
 @functools.cache
@@ -149,9 +194,10 @@ def snap_data_dir(environ: Optional[Mapping[str, str]] = None,
 
 def default_data_dir(app_dir: str, kind_: Optional[str] = None) -> str:
     """The data directory without --data-dir / --config: data/ in `app_dir` (a source
-    checkout, or the folder of a standalone executable), the package's service's data
-    directory, a pip install's user data folder, the Homebrew formula's
-    <prefix>/var/ser2netweb or the snap's (snap_data_dir)."""
+    checkout, or the folder of a standalone executable, also Scoop's), the package's
+    service's data directory, the user data folder (a pip install; winget's and
+    Chocolatey's executable, unless `app_dir` has a data/ with a config.json already), the
+    Homebrew formula's <prefix>/var/ser2netweb or the snap's (snap_data_dir)."""
     k = kind() if kind_ is None else kind_
     if k == PIP:
         return user_data_dir()
@@ -162,7 +208,10 @@ def default_data_dir(app_dir: str, kind_: Optional[str] = None) -> str:
         return PACKAGE_DATA_DIR
     if k == SNAP:
         return snap_data_dir()
-    return os.path.join(app_dir, "data")
+    here = os.path.join(app_dir, "data")
+    if k in (WINGET, CHOCOLATEY) and not os.path.isfile(os.path.join(here, "config.json")):
+        return user_data_dir()
+    return here
 
 
 def licence_dir(package_dir: str = PACKAGE_DIR) -> Optional[str]:
