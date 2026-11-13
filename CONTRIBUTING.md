@@ -136,9 +136,13 @@ files) and `requirements-build.txt` (PyInstaller, and build + setuptools for the
 package, with their dependencies); Dependabot updates them with `requirements.txt`, and
 `python tools/refresh_locks.py` regenerates them after a hand-made change
 (`tests/test_build_lock.py` checks that they match). The PyPI package (`pyproject.toml`)
-lists the packages ser2netweb imports as ranges from each pin to below its next major (next
-minor for 0.x): a pin bumped out of its range fails `tests/test_pyproject.py` in the same
-job, so widen the range in the same pull request. The browser libraries
+lists the packages ser2netweb imports with a floor each, the oldest release it works with
+(what Linux and BSD distributions ship, [`docs/PACKAGING.md`](docs/PACKAGING.md)), and an
+upper bound only for a release known to break it; a pin bump needs no change there.
+`requirements-min.pins` has every floor exactly, and CI's job "minimum dependencies" runs
+the suite on it (not a merge condition): code that needs something newer than a floor
+raises that floor in `pyproject.toml`, `requirements-min.pins` and the page's table
+together (`tests/test_pyproject.py` checks the first two agree), or works without it. The browser libraries
 in `ser2netweb/web/static/` (htmx, xterm.js) are pinned in `vendor/npm/package.json`; change a
 version there and run `python tools/refresh_assets.py`, which copies the files out of the npm
 release and records their sha256 (Dependabot proposes minor updates, `refresh-pins.yml`
@@ -377,10 +381,14 @@ pin'ler, her sürümün dosyalarının sha256'larıyla) ve `requirements-build.t
 PyPI paketi için build + setuptools ve bağımlılıkları). Dependabot bunları `requirements.txt`
 ile birlikte günceller; elle yapılan bir değişiklikten sonra `python tools/refresh_locks.py`
 yeniden üretir (`tests/test_build_lock.py` eşleştiklerini denetler). PyPI paketi
-(`pyproject.toml`) ser2netweb'in import ettiği paketleri her pin'den bir sonraki major
-sürümün altına kadar (0.x için bir sonraki minor) aralıklar olarak listeler: aralığının
-dışına çıkan bir pin aynı işte `tests/test_pyproject.py`'yi düşürür, aralığı aynı PR'da
-genişletin. `ser2netweb/web/static/` içindeki tarayıcı
+(`pyproject.toml`) ser2netweb'in import ettiği paketleri birer alt sınırla listeler: birlikte
+çalıştığı en eski sürüm (Linux ve BSD dağıtımlarının getirdiği,
+[`docs/PACKAGING.md`](docs/PACKAGING.md)); üst sınır yalnızca ser2netweb'i bozduğu bilinen bir
+sürüm için konur, pin yükseltmek orada değişiklik gerektirmez. `requirements-min.pins` her
+alt sınırı tam olarak içerir ve CI'ın "minimum dependencies" işi test takımını onunla
+çalıştırır (birleştirme koşulu değildir): bir alt sınırdan yenisini gerektiren kod o sınırı
+`pyproject.toml`'da, `requirements-min.pins`'te ve sayfadaki tabloda birlikte yükseltir
+(`tests/test_pyproject.py` ilk ikisinin uyduğunu denetler) ya da onsuz da çalışır. `ser2netweb/web/static/` içindeki tarayıcı
 kütüphaneleri (htmx, xterm.js) `vendor/npm/package.json`'da sabitlenir; oradaki sürümü
 değiştirip `python tools/refresh_assets.py` çalıştırın: dosyaları npm sürümünden kopyalar ve
 sha256'larını kaydeder (Dependabot minor güncellemeleri önerir, `refresh-pins.yml` onları

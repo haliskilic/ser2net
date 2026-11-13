@@ -58,7 +58,8 @@ everything from a **password-protected web UI** — no CLI or hand-edited config
 [LDAP / AD and OIDC sign-in](docs/SSO.md) ·
 [moving from the classic ser2net](docs/MIGRATING-FROM-SER2NET.md) ·
 [virtual COM ports on the client](docs/VIRTUAL-COM.md) · [privacy](docs/PRIVACY.md) ·
-[code signing](docs/SIGNING.md).
+[code signing](docs/SIGNING.md) ·
+[packaging for a distribution](docs/PACKAGING.md).
 
 ---
 
