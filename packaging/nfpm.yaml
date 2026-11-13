@@ -1,0 +1,91 @@
+# The .deb and .rpm packages of the standalone Linux executable (amd64 and arm64), built by
+# nfpm (https://nfpm.goreleaser.com) through tools/build_packages.py, which sets the
+# variables below: the release's executable for the architecture (ser2netweb-linux-x64 /
+# -arm64, the same file) and its THIRD-PARTY-LICENSES.txt, the unit (made from
+# systemd/ser2netweb-standalone.service: /usr/bin/ser2netweb, data in /var/lib/ser2netweb)
+# and the version of ser2netweb/__init__.py (a pre-release 3.0.0-rc.1 is 3.0.0~rc.1 in
+# both formats, which sorts before 3.0.0).
+#
+# Installing the package creates the account ser2netweb and /var/lib/ser2netweb (0700),
+# but neither enables nor starts the service: sudo systemctl enable --now ser2netweb.
+# Nothing here names the classic C ser2net daemon's package (no Provides, Conflicts or
+# Replaces): the two are unrelated and install side by side.
+name: ser2netweb
+arch: ${SER2NETWEB_ARCH}
+platform: linux
+version: ${SER2NETWEB_VERSION}
+version_schema: semver
+section: net
+priority: optional
+maintainer: Halis KILIÇ <mail@haliskilic.com.tr>
+vendor: ser2netweb
+homepage: https://github.com/haliskilic/ser2netweb
+license: AGPL-3.0-only
+description: |-
+  Serial-to-network bridge with a web UI
+  ser2netweb shares local serial ports over the network (raw TCP, telnet,
+  RFC 2217, UDP), is a Modbus RTU/TCP gateway and publishes to MQTT and
+  Sparkplug B, all set up in a web UI. This is the standalone executable,
+  with Python and its components inside, and a hardened systemd unit.
+  It is an independent project (named ser2net up to 2.9.x), not related to
+  the classic ser2net daemon, whose configuration files it can import.
+overrides:
+  deb:
+    depends:
+      - libc6 (>= 2.28)
+  rpm:
+    depends:
+      - glibc >= 2.28
+contents:
+  - src: ${SER2NETWEB_BINARY}
+    expand: true  # (the variable)
+    dst: /usr/bin/ser2netweb
+    file_info:
+      mode: 0755
+  - src: ${SER2NETWEB_UNIT}
+    expand: true  # (the variable)
+    dst: /usr/lib/systemd/system/ser2netweb.service
+    file_info:
+      mode: 0644
+  - src: packaging/sysusers.conf
+    dst: /usr/lib/sysusers.d/ser2netweb.conf
+    file_info:
+      mode: 0644
+  - src: packaging/tmpfiles.conf
+    dst: /usr/lib/tmpfiles.d/ser2netweb.conf
+    file_info:
+      mode: 0644
+  # the licences: ser2netweb's, and those of everything the executable carries
+  - src: LICENSE
+    dst: /usr/share/doc/ser2netweb/LICENSE
+    file_info:
+      mode: 0644
+  - src: NOTICE
+    dst: /usr/share/doc/ser2netweb/NOTICE
+    file_info:
+      mode: 0644
+  - src: COMMERCIAL_LICENSE.md
+    dst: /usr/share/doc/ser2netweb/COMMERCIAL_LICENSE.md
+    file_info:
+      mode: 0644
+  - src: THIRD-PARTY-NOTICES.md
+    dst: /usr/share/doc/ser2netweb/THIRD-PARTY-NOTICES.md
+    file_info:
+      mode: 0644
+  - src: ${SER2NETWEB_LICENSES}
+    expand: true  # (the variable)
+    dst: /usr/share/doc/ser2netweb/THIRD-PARTY-LICENSES.txt
+    file_info:
+      mode: 0644
+  # (Debian's machine-readable summary of them)
+  - src: packaging/copyright
+    dst: /usr/share/doc/ser2netweb/copyright
+    packager: deb
+    file_info:
+      mode: 0644
+scripts:
+  postinstall: packaging/postinstall.sh
+  preremove: packaging/preremove.sh
+  postremove: packaging/postremove.sh
+rpm:
+  summary: Serial-to-network bridge with a web UI

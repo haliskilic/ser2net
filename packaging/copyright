@@ -1,0 +1,15 @@
+Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
+Upstream-Name: ser2netweb
+Upstream-Contact: Halis KILIÇ <mail@haliskilic.com.tr>
+Source: https://github.com/haliskilic/ser2netweb
+
+Files: *
+Copyright: 2026 Halis KILIÇ
+License: AGPL-3.0-only
+ ser2netweb is free software: you can redistribute it and/or modify it under the
+ terms of the GNU Affero General Public License, version 3 only. The full text is in
+ /usr/share/doc/ser2netweb/LICENSE. A commercial licence is offered as well
+ (COMMERCIAL_LICENSE.md); NOTICE says how the two relate.
+ .
+ The executable carries Python and the third-party components it runs with, under
+ their own licences: THIRD-PARTY-NOTICES.md and THIRD-PARTY-LICENSES.txt here.

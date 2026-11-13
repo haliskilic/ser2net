@@ -234,8 +234,6 @@
   authentication off by default and later drop it; optional TLS certificate pinning for
   peer requests (requests and replies are signed, but over plain HTTP a reply can still be
   read on the network); optional IPv6 (multicast) discovery
-- `.deb` / `.rpm` packages (the Linux executable has an install script,
-  `systemd/ser2net-install.sh`, since 2.9.0)
 - RTU inter-frame tuning for the Modbus gateway
 
 ### Icebox / conditional

@@ -1,7 +1,8 @@
 """The Docker image and the standalone builds install hash-locked sets that match the pins.
 
 requirements-lock.txt (the runtime + optional pins for Python 3.12) and
-requirements-build.txt (PyInstaller and its dependencies) list the sha256 of every file
+requirements-build.txt (PyInstaller, and build + setuptools for the PyPI package, with
+their dependencies) list the sha256 of every file
 of each release; the Dockerfile and both build scripts install them with
 pip --require-hashes --only-binary=:all:, so pip refuses any other file and any unlocked
 dependency. tools/refresh_locks.py writes them; this test checks they pin exactly what
@@ -40,6 +41,7 @@ def test_locks_match_the_pins():
     build = rl.read_lock(os.path.join(ROOT, rl.BUILD))
     assert lock["colorama"][1] == 'platform_system == "Windows"', lock["colorama"]
     assert "pyinstaller" in build and "pyinstaller-hooks-contrib" in build, sorted(build)
+    assert {"build", "pyproject-hooks", "setuptools"} <= set(build), sorted(build)
     assert build["pefile"][1] == 'platform_system == "Windows"', build["pefile"]
     for entries in (lock, build):
         for name, (_v, _m, hashes) in entries.items():

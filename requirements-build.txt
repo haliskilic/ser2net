@@ -1,11 +1,15 @@
-# Hash-locked: PyInstaller and its dependencies, for the standalone builds only
-# (tools/build_standalone_linux.sh, tools/build_standalone_windows.ps1), installed together
-# with requirements-lock.txt by pip --require-hashes. Change the PyInstaller version here,
-# then run `python tools/refresh_locks.py` to lock its dependencies (Dependabot updates
-# them like any pin).
+# Hash-locked: the build tools and their dependencies. PyInstaller for the standalone builds
+# (tools/build_standalone_linux.sh, tools/build_standalone_windows.ps1, installed together
+# with requirements-lock.txt by pip --require-hashes); build and setuptools (the backend
+# pyproject.toml names) for the PyPI package (CI's job "pypi package (build)": python -m
+# build --no-isolation). Change a tool's version here, then run `python
+# tools/refresh_locks.py` to lock its dependencies (Dependabot updates them like any pin).
 altgraph==0.17.5 \
     --hash=sha256:c87b395dd12fabde9c99573a9749d67da8d29ef9de0125c7f536699b4a9bc9e7 \
     --hash=sha256:f3a22400bce1b0c701683820ac4f3b159cd301acab067c51c653e06961600597
+build==1.6.1 \
+    --hash=sha256:51cc11666391ab6f092070437ac747002ff46f3e4113a3622177ee6b488bfc53 \
+    --hash=sha256:ecd351a4be9d35a9eaaba244a7687143c9c7d4aea6ac964e7e7ddab20cbcf4e7
 packaging==26.3 \
     --hash=sha256:94edc256424af38762eb31306eed28beb9f0efc50a8837492c9d6fd6004aed79 \
     --hash=sha256:d7193f7c8e4e93f444fde0262bf90af30e16fa0ad0ad44cb553c87339b23cd1c
@@ -28,6 +32,9 @@ pyinstaller==6.22.3 \
 pyinstaller-hooks-contrib==2026.10 \
     --hash=sha256:7e906c659522e592a1680f30f709ffb6333277141a695926aa7190592205c5e3 \
     --hash=sha256:dfc3cde20a7ce6c92e803016e66eed4b7050467e2c5f886a3745d89b258c6d6d
+pyproject-hooks==1.3.3 \
+    --hash=sha256:5fc53fdac9f7bd63fbcdc868fb5f90b4784d78a53a3d3388cd738b807441a20b \
+    --hash=sha256:defda19b854fa0d3bd4f76ea4ddcba8abd7dcfcdd585a6690ade050744fc5f43
 pywin32-ctypes==0.2.3 ; platform_system == "Windows" \
     --hash=sha256:8a1513379d709975552d202d942d9837758905c8d01eb82b8bcc30918929e7b8 \
     --hash=sha256:d162dc04946d704503b2edc4d55f3dba5c1d539ead017afa00142c38b9885755
