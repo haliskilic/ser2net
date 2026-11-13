@@ -1,6 +1,6 @@
 # ser2netweb — Roadmap
 
-> Current release: **v2.9.0**. CI is green across Linux + Windows × Python 3.10–3.14.
+> Current release: **v3.0.0**. CI is green across Linux + Windows × Python 3.10–3.14.
 
 ## Shipped
 
@@ -224,6 +224,16 @@
   script, offline installs on ARM and macOS, a `linux/arm/v7` image.
 - **Docs (#98):** the READMEs and guides checked against the code, guides for MQTT / Modbus /
   Sparkplug B, moving from the classic ser2net, SSO and Linux serial ports.
+
+### v3.0.0 — ser2netweb (issue [#104](https://github.com/haliskilic/ser2netweb/issues/104), PRs [#105](https://github.com/haliskilic/ser2netweb/pull/105)–[#107](https://github.com/haliskilic/ser2netweb/pull/107))
+- **The new name (#105):** ser2net is now ser2netweb, an independent project unrelated to
+  Corey Minyard's ser2net: the Python package, the command, the product name, `SER2NETWEB_*`
+  variables (the old names still work) and the repository.
+- **Distribution (#106):** release files, systemd units, the install script, the Windows
+  service and the Docker image under the new name, each moving a 2.x install over; the image
+  is published under the old path too.
+- **Packages (#107):** `.deb` / `.rpm` packages for amd64 and arm64, and `pipx install
+  ser2netweb` from PyPI.
 
 ---
 
