@@ -580,7 +580,9 @@ everything from a **password-protected web UI** — no CLI or hand-edited config
 | Way | Runs on | Needs |
 |---|---|---|
 | [Standalone binary](#standalone-binary-nothing-else-to-install) | Windows x64; Linux x86_64 and arm64 with glibc ≥ 2.28 (Raspberry Pi 3/4/5 with a 64-bit OS) | nothing |
+| [`.deb` / `.rpm` package](#linux-packages-deb--rpm) (apt / dnf) | Debian 11+, Ubuntu 20.04+, 64-bit Raspberry Pi OS; Fedora, RHEL / AlmaLinux / Rocky 8+ (x86_64, arm64) | nothing; data in `/var/lib/ser2netweb` |
 | [Docker](#docker) | Linux hosts: amd64, arm64, arm/v7 (32-bit Raspberry Pi OS) | Docker |
+| [pipx / pip](#pipx--pip) (PyPI) | any OS and CPU | Python 3.10+, pipx; data in the user's data folder |
 | From source (below) | any OS and CPU: also macOS, 32-bit ARM, Windows on ARM | Python 3.10+ with pip; offline from the bundled wheels |
 
 ```bash
@@ -613,9 +615,10 @@ or on 32-bit ARM the Docker image (arm/v7).
 Windows 11 on ARM also runs the x64 exe (emulated).
 
 Every release also publishes `SHA256SUMS`, a CycloneDX SBOM per binary (`*.cdx.json`), the
-license texts, `ser2netweb-standalone.service`, the systemd unit for the Linux binaries, and
+license texts, `ser2netweb-standalone.service`, the systemd unit for the Linux binaries,
 `ser2netweb-install.sh`, which installs a binary with it (see *Run as a service*), and the
-binaries carry GitHub build provenance:
+Linux binaries as `.deb` / `.rpm` packages (see *Linux packages*); the binaries and the
+packages carry GitHub build provenance:
 `sha256sum -c SHA256SUMS --ignore-missing`,
 `gh attestation verify ser2netweb-linux-x64 -R haliskilic/ser2netweb`. The Windows exe is **not
 code-signed yet** (it will be once a signing service is configured —
@@ -671,6 +674,60 @@ Change the bind IP later:
 python3 ser2netweb.py --reconfigure
 ```
 
+### Linux packages (.deb / .rpm)
+Every release also has the Linux binary as a package, for x86_64 and arm64:
+`ser2netweb_X.Y.Z_amd64.deb` / `ser2netweb_X.Y.Z_arm64.deb` (Debian 11+, Ubuntu 20.04+, 64-bit
+Raspberry Pi OS) and `ser2netweb-X.Y.Z-1.x86_64.rpm` / `ser2netweb-X.Y.Z-1.aarch64.rpm`
+(Fedora, RHEL / AlmaLinux / Rocky 8+), X.Y.Z being the release's version. Download it (and
+`SHA256SUMS` to check it), then:
+```bash
+sudo apt install ./ser2netweb_X.Y.Z_amd64.deb      # Debian, Ubuntu, Raspberry Pi OS
+sudo dnf install ./ser2netweb-X.Y.Z-1.x86_64.rpm   # Fedora, RHEL, AlmaLinux, Rocky
+sudo systemctl enable --now ser2netweb             # installing it doesn't start it
+```
+It installs the binary as `/usr/bin/ser2netweb`, its unit as
+`/usr/lib/systemd/system/ser2netweb.service` (`ser2netweb-standalone.service` with that path:
+the same sandbox), the account `ser2netweb` and its data directory `/var/lib/ser2netweb`
+(0700), and the licence texts in `/usr/share/doc/ser2netweb`. Installing it neither enables
+nor starts the service; `sudo systemctl enable --now ser2netweb` does, and the web UI then
+listens on `127.0.0.1:8080` (for the network: `sudo systemctl edit ser2netweb`, see *Run as
+a service*). Without `--data-dir` the packaged `ser2netweb` works on that data directory:
+`sudo -u ser2netweb ser2netweb --set-password admin` sets the first password. A newer
+package (`apt install` / `dnf install` of its file) restarts a running service; removing it
+(`sudo apt remove ser2netweb`, `sudo dnf remove ser2netweb`) stops and disables the service
+and keeps `/var/lib/ser2netweb` and the account (delete them by hand). It is unrelated to the
+classic ser2net daemon's `ser2net` package: both can be installed.
+`gh attestation verify ser2netweb_X.Y.Z_amd64.deb -R haliskilic/ser2netweb` checks where it
+was built. The package doesn't move a 2.9.x install (`ser2net.service`, `/var/lib/ser2net`): `ser2netweb-install.sh`
+does (*Upgrading from 2.9.x* under *Run as a service*). A binary installed by
+`ser2netweb-install.sh` has its unit in `/etc/systemd/system`, which hides the package's:
+switch with `sudo sh ser2netweb-install.sh --uninstall` (the data stays), then the package.
+
+### pipx / pip
+The PyPI package `ser2netweb`, for any OS and CPU with Python 3.10 or newer:
+```bash
+pipx install ser2netweb             # or "ser2netweb[all]": also MQTT, LDAP, OIDC, certificates
+ser2netweb                          # the first run asks for the web UI's address
+pipx upgrade ser2netweb
+```
+pip installs the dependencies from PyPI (ranges around the pins of `requirements.txt`), so it
+needs the network or an index mirror; the wheels in `vendor/wheels` are for the source
+checkout. The extras `mqtt` (paho-mqtt), `ldap` (ldap3), `oidc` (authlib), `tls`
+(cryptography: self-signed certificates in-process) and `all` add the optional packages
+(later: `pipx inject ser2netweb paho-mqtt`). A pip / pipx install keeps its data in the
+user's data folder, never next to the package:
+
+| OS | Data folder |
+|---|---|
+| Linux and other Unix | `$XDG_DATA_HOME/ser2netweb`, else `~/.local/share/ser2netweb` |
+| macOS | `~/Library/Application Support/ser2netweb` |
+| Windows | `%LOCALAPPDATA%\ser2netweb` |
+
+`--data-dir` (or `--config`) chooses another; `ser2netweb --help` names this one and
+`ser2netweb --about` says `Build: Python package (pip / pipx)`. `python -m ser2netweb` runs
+the same. For a service take the binary, the packages or Docker: a pip install isn't a
+Windows service (`--install-service` refuses), and it has no systemd unit of its own.
+
 ### Command-line options
 `python3 ser2netweb.py [options]`, `ser2netweb-linux-x64 [options]`, `ser2netweb-windows-x64.exe
 [options]` (`--help` lists them). `ser2net.py`, the start script's name up to 2.9.x, still
@@ -678,7 +735,7 @@ works and runs the same, so units and scripts that name it need no change:
 
 | Option | What it does |
 |---|---|
-| `--data-dir DIR` | where `config.json`, its backups, the logs and traces live (default: `data/` next to `ser2netweb.py` or the binary); give ser2netweb a folder of its own |
+| `--data-dir DIR` | where `config.json`, its backups, the logs and traces live (default: `data/` next to `ser2netweb.py` or the binary; `/var/lib/ser2netweb` for the `.deb` / `.rpm` package's; the user's data folder for a pip / pipx install, see *pipx / pip*); give ser2netweb a folder of its own |
 | `--config FILE` | a `config.json` elsewhere; its folder is the data directory then |
 | `--reconfigure` | ask again for the admin UI's address and port on the console, then start |
 | `--online` | let the dependency bootstrap fall back to PyPI for a wheel `vendor/wheels/` lacks (source installs) |
@@ -1514,6 +1571,10 @@ is no account at all; later starts ignore it.
     sudo cp ser2netweb-standalone.service /etc/systemd/system/ser2netweb.service
     sudo systemctl daemon-reload && sudo systemctl enable --now ser2netweb
     ```
+  - *The `.deb` / `.rpm` package* (*Linux packages*): the binary's unit as
+    `/usr/lib/systemd/system/ser2netweb.service` with `/usr/bin/ser2netweb`, the account and
+    `/var/lib/ser2netweb` are installed with it; `sudo systemctl enable --now ser2netweb`
+    starts it. What follows (`systemctl edit`, `sudo -u ser2netweb …`) applies to it as well.
   - The web UI listens on `127.0.0.1:8080` until you say otherwise. To reach it from the
     network, run `sudo systemctl edit ser2netweb`, add the lines below (use TLS on a network
     address, see Security) and `sudo systemctl restart ser2netweb`:

@@ -27,6 +27,11 @@ When you run `--install-service` from the standalone exe, it **copies itself int
 run the downloaded exe from anywhere. A new service keeps its data in
 `C:\ProgramData\ser2netweb\` unless you pass `--data-dir`.
 
+A pip / pipx install (`pipx install ser2netweb`, PyPI) can't be a service: its Python and
+packages are the user's to change (a pipx environment lives in the user profile), so
+`--install-service` refuses there. It runs in a console window as below, with its data in
+`%LOCALAPPDATA%\ser2netweb\`; for a service take the standalone exe.
+
 Both folders end up owned by *Administrators*, with only SYSTEM and Administrators able to
 change them (Users may read and run the program) — not even your own account outside an
 elevated prompt, since a program you run unelevated must not be able to change what the

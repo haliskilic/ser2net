@@ -108,6 +108,7 @@ jobs:
           python-version: "3.12"
       - run: python tests/test_vendor_wheels.py
       - run: python tests/test_build_lock.py
+      - run: python tests/test_pyproject.py   # the PyPI package's ranges hold the pins
       # the asset and SBOM checks import the app (and serve a page)
       - run: pip install -r requirements.txt
       - run: python tests/test_vendor_assets.py
@@ -449,6 +450,66 @@ jobs:
       AZURE_CLIENT_SECRET: ${{ inputs.publish && secrets.AZURE_CLIENT_SECRET || '' }}
       SIGNPATH_API_TOKEN: ${{ inputs.publish && secrets.SIGNPATH_API_TOKEN || '' }}
 
+  # The PyPI package (pyproject.toml): the sdist, then the wheel from it, built with the
+  # hash-locked build and setuptools (requirements-build.txt); what PyPI checks on upload
+  # (twine check) and their files (tests/pypi_smoke.py --contents-only: the package with its
+  # templates, static files and translations, the licences; nothing else of the tree).
+  # Called from release.yml, its artifact pypi-dist is what goes to PyPI.
+  pypi-build:
+    name: pypi package (build)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7.1.0
+        with:
+          python-version: "3.12"
+      - name: build and setuptools, hash-locked
+        run: |
+          pip install --require-hashes --only-binary=:all: -r requirements-build.txt
+      - name: python -m build (the sdist, then the wheel from it)
+        run: python -m build --no-isolation --outdir pypi-dist
+      - name: twine check, as PyPI's upload checks them
+        run: |
+          pip install twine==7.0.0
+          twine check --strict pypi-dist/*
+      - name: The files in the sdist and the wheel
+        run: python tests/pypi_smoke.py pypi-dist --contents-only
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
+        with:
+          name: pypi-dist
+          path: pypi-dist/
+          if-no-files-found: error
+
+  # The wheel as pip / pipx installs it, in a fresh virtual environment with its
+  # dependencies from PyPI (the oldest and the newest Python, Linux, Windows, macOS):
+  # --version, --about, the data in the user's data folder (not next to the package), a
+  # start with --data-dir on a free port answering /healthz (tests/pypi_smoke.py)
+  pypi-install:
+    name: pypi package on ${{ matrix.os }} py${{ matrix.python-version }}
+    needs: pypi-build
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        python-version: ["3.10", "3.14"]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7.1.0
+        with:
+          python-version: ${{ matrix.python-version }}
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8.0.2
+        with:
+          name: pypi-dist
+          path: pypi-dist
+      - name: pip install the wheel in a fresh venv, --version, --about, the data folder, /healthz
+        timeout-minutes: 15
+        run: python tests/pypi_smoke.py pypi-dist
+
   # The one check for branch protection to require (with license/cla): it passes only when
   # every job above passed, so jobs added to or renamed in this workflow need no settings
   # change. A needed job that failed, was cancelled or was skipped fails it (GitHub would
@@ -457,7 +518,7 @@ jobs:
   ci-ok:
     name: ci-ok
     if: always()
-    needs: [lint, typecheck, workflows, audit, vendor, ui, test, paho1, coverage, systemd, offline, offline-armv7, docker, standalone]
+    needs: [lint, typecheck, workflows, audit, vendor, ui, test, paho1, coverage, systemd, offline, offline-armv7, docker, standalone, pypi-build, pypi-install]
     runs-on: ubuntu-latest
     steps:
       - name: Every job passed

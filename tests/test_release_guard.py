@@ -144,20 +144,29 @@ def _assets(folder):
 
 def test_release_assets():
     want = release_guard.release_assets()
-    assert "SHA256SUMS" in want and len(want) == 12, want
+    assert "SHA256SUMS" in want and len(want) == 16, want
+    version = release_guard.app_version(release_guard.ROOT)
     for name in ("ser2netweb-linux-x64", "ser2netweb-linux-arm64.cdx.json",
                  "ser2netweb-windows-x64.exe", "ser2netweb-windows-x64.THIRD-PARTY-LICENSES.txt",
-                 "ser2netweb-install.sh", "ser2netweb-standalone.service"):
+                 "ser2netweb-install.sh", "ser2netweb-standalone.service",
+                 f"ser2netweb_{version}_amd64.deb", f"ser2netweb-{version}-1.aarch64.rpm"):
         assert name in want, name
+    # the packages carry the version: another one's are not this release's files
+    other = release_guard.release_assets("3.0.0-rc.1")
+    assert "ser2netweb_3.0.0-rc.1_arm64.deb" in other and \
+        "ser2netweb-3.0.0-rc.1-1.x86_64.rpm" in other, other
     files = [n for n in want if n != "SHA256SUMS"]
     with tempfile.TemporaryDirectory() as tmp:
         rc, text = _assets(_release_folder(tmp, files))
-        assert rc == 0 and "12 release files" in text, text
+        assert rc == 0 and "16 release files" in text, text
     for change, words in (
             (lambda f: f[1:], ("missing: ",)),
             (lambda f: f + ["ser2net-linux-x64"], ("not a release file: ser2net-linux-x64",)),
             (lambda f: [n.replace("ser2netweb-install", "ser2net-install") for n in f],
-             ("missing: ser2netweb-install.sh", "not a release file: ser2net-install.sh"))):
+             ("missing: ser2netweb-install.sh", "not a release file: ser2net-install.sh")),
+            (lambda f: [n.replace(f"_{version}_", "_0.0.1_") for n in f],
+             (f"missing: ser2netweb_{version}_amd64.deb",
+              "not a release file: ser2netweb_0.0.1_amd64.deb"))):
         with tempfile.TemporaryDirectory() as tmp:
             rc, text = _assets(_release_folder(tmp, change(list(files))))
             assert rc == 1 and all(w in text for w in words), (words, text)
@@ -167,8 +176,9 @@ def test_release_assets():
             fh.write("".join(f"{'0' * 64} *{n}\n" for n in files[1:]))
         rc, text = _assets(out)
         assert rc == 1 and "SHA256SUMS lists" in text, text
-    print("release_guard.py assets: exactly the ser2netweb-* files, each in SHA256SUMS; a "
-          "missing one, an old ser2net-* name or an incomplete SHA256SUMS fails  OK")
+    print("release_guard.py assets: exactly the ser2netweb-* files and this version's "
+          "packages, each in SHA256SUMS; a missing one, an old ser2net-* name, another "
+          "version's package or an incomplete SHA256SUMS fails  OK")
 
 
 def _sbom(tmp: str, name: str, product: str, version: str, cpython="3.12.16",

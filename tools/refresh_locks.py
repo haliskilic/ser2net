@@ -12,8 +12,10 @@ serves instead, is refused) and fails when a dependency isn't locked:
 
   requirements-lock.txt   the pins of requirements.txt (the ones Python 3.12 selects) and
                           requirements-optional.txt: what the image and the executables run.
-  requirements-build.txt  PyInstaller (its version is kept from this file) and its
-                          dependencies: the standalone builds only.
+  requirements-build.txt  the build tools (BUILD_TOOLS; their versions are kept from this
+                          file) and their dependencies: PyInstaller for the standalone
+                          builds, build and setuptools (pyproject.toml's backend) for the
+                          PyPI package (python -m build --no-isolation).
 
 requirements.txt stays hash-free (``pip install -r requirements.txt <extra>`` keeps working).
 Each lock line lists the sha256 of every file PyPI publishes for that release, as
@@ -43,6 +45,10 @@ import refresh_wheels as rw  # tools/ is not a package
 ROOT = rw.ROOT
 LOCK = "requirements-lock.txt"
 BUILD = "requirements-build.txt"
+# what requirements-build.txt locks with their dependencies: PyInstaller (the standalone
+# executables), the build frontend and pyproject.toml's build backend (the PyPI package;
+# PyInstaller needs setuptools too, and the arm/v7 image builds two packages with it)
+BUILD_TOOLS = ("pyinstaller", "build", "setuptools")
 PYTHON = "3.12"
 GLIBC = (2, 28)  # the Linux build container (AlmaLinux 8)
 # the environments the image and the executables are built for, as markers see them
@@ -141,11 +147,12 @@ LOCK_HEADER = """\
 # requirements.txt); tests/test_build_lock.py checks that it matches.
 """
 BUILD_HEADER = """\
-# Hash-locked: PyInstaller and its dependencies, for the standalone builds only
-# (tools/build_standalone_linux.sh, tools/build_standalone_windows.ps1), installed together
-# with requirements-lock.txt by pip --require-hashes. Change the PyInstaller version here,
-# then run `python tools/refresh_locks.py` to lock its dependencies (Dependabot updates
-# them like any pin).
+# Hash-locked: the build tools and their dependencies. PyInstaller for the standalone builds
+# (tools/build_standalone_linux.sh, tools/build_standalone_windows.ps1, installed together
+# with requirements-lock.txt by pip --require-hashes); build and setuptools (the backend
+# pyproject.toml names) for the PyPI package (CI's job "pypi package (build)": python -m
+# build --no-isolation). Change a tool's version here, then run `python
+# tools/refresh_locks.py` to lock its dependencies (Dependabot updates them like any pin).
 """
 
 
@@ -282,10 +289,14 @@ def _build_pins() -> dict[str, str]:
 def refresh(pyinstaller: str | None = None) -> int:
     runtime = runtime_pins()
     flat = {n: v for n, (v, _m) in runtime.items()}
-    kept = _build_pins()  # PyInstaller's dependencies keep their versions while they fit
+    kept = _build_pins()  # the tools' dependencies keep their versions while they fit
     pyi = pyinstaller or kept.get("pyinstaller")
     if not pyi:
         raise SystemExit(f"{BUILD} pins no pyinstaller version: pass --pyinstaller X.Y.Z")
+    _M, _R, SpecifierSet, _V = _packaging()
+    # a tool not locked yet: its newest release for every target
+    tool_roots = {t: kept.get(t) or newest(t, SpecifierSet(""), list(ENVS)) for t in BUILD_TOOLS}
+    tool_roots["pyinstaller"] = pyi
     # the runtime set must be complete: nothing chosen here, every dependency pinned
     runtime_on: dict[str, set[str]] = {}
     build_on: dict[str, set[str]] = {}
@@ -296,7 +307,7 @@ def refresh(pyinstaller: str | None = None) -> int:
         got = closure(roots, {}, target, choose=False)
         for n in got:
             runtime_on.setdefault(n, set()).add(target)
-        tools = closure({"pyinstaller": pyi}, {**flat, **build_versions}, target, choose=True,
+        tools = closure(tool_roots, {**flat, **build_versions}, target, choose=True,
                         prefer=kept)
         for n, v in tools.items():
             if n in {canonical(k) for k in flat}:
@@ -341,8 +352,7 @@ def check(root: str = ROOT) -> list[str]:
             problems.append(f"{LOCK}: {n} is locked as {lock[n][0]} {lock[n][1]!r}, "
                             f"pinned as {v} {m!r}")
     problems += [f"{LOCK}: {n} is locked but not pinned" for n in sorted(set(lock) - set(want))]
-    if "pyinstaller" not in build:
-        problems.append(f"{BUILD}: no pyinstaller")
+    problems += [f"{BUILD}: no {t}" for t in BUILD_TOOLS if t not in build]
     problems += [f"{BUILD}: {n} is also in {LOCK}" for n in sorted(set(build) & set(lock))]
     for fn, entries in ((LOCK, lock), (BUILD, build)):
         problems += [f"{fn}: {n} has no --hash" for n, (_v, _m, h) in entries.items() if not h]

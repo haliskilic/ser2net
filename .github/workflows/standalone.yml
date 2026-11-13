@@ -2,10 +2,12 @@ name: Standalone
 
 # Builds the standalone executables and proves they need nothing else installed
 # (tests/test_standalone.py), on Linux x86_64 + arm64 and Windows x64, and uploads them
-# (+ license texts and SBOMs) as artifacts. Called by ci.yml, for pull requests / main
-# and when release.yml runs ci.yml on a v* tag: release.yml's own publish job attaches
-# them to the release only after every check has passed. With publish (a release) the
-# Windows exe is code-signed when a signing service is configured (docs/SIGNING.md).
+# (+ license texts and SBOMs) as artifacts, with the .deb / .rpm packages of the Linux
+# ones (installed and checked on Debian, Ubuntu, Fedora and AlmaLinux). Called by ci.yml,
+# for pull requests / main and when release.yml runs ci.yml on a v* tag: release.yml's
+# own publish job attaches them to the release only after every check has passed. With
+# publish (a release) the Windows exe is code-signed when a signing service is configured
+# (docs/SIGNING.md).
 # This workflow only needs read access, so CI runs it with least privilege.
 on:
   workflow_call:
@@ -160,6 +162,91 @@ jobs:
           SER2NETWEB_STANDALONE_IMAGE: ${{ matrix.image }}
           SER2NETWEB_STANDALONE_CA: ${{ matrix.ca }}
         run: python tests/test_standalone.py
+
+  # The .deb and .rpm packages of both Linux binaries (tools/build_packages.py, with the
+  # nfpm release it pins, checked by its sha256; packaging/nfpm.yaml): /usr/bin/ser2netweb,
+  # the unit, the account ser2netweb and /var/lib/ser2netweb. Called from release.yml,
+  # these are the released packages, built from the released binaries.
+  packages:
+    name: build the .deb / .rpm packages
+    needs: linux
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8.0.2
+        with:
+          pattern: ser2netweb-linux-*
+          path: artifacts
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8.0.2
+        with:
+          pattern: meta-linux-*
+          path: artifacts
+      - name: nfpm (the pinned release, its sha256 checked)
+        run: python3 tools/build_packages.py fetch-nfpm "$RUNNER_TEMP/nfpm"
+      - name: The packages of the x64 and arm64 binaries
+        run: |
+          python3 tools/build_packages.py build --nfpm "$RUNNER_TEMP/nfpm/nfpm" --out packages \
+            --arch x64 --arch arm64 artifacts
+          ls -l packages
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
+        with:
+          name: packages-linux
+          path: packages/
+          if-no-files-found: error
+
+  # Each package installed as the README says (apt / dnf) in a clean container of its
+  # distributions, natively on x64 and arm64: --version, the files, the account and its
+  # folder (0700), not enabled, no other package named, removed and installed again
+  # (tests/package_smoke.sh). Two install systemd first, so the package's scripts use
+  # systemd-sysusers / systemd-tmpfiles; the other two get their useradd / mkdir way.
+  linux-packages:
+    name: package on ${{ matrix.image }} (${{ matrix.arch }})
+    needs: packages
+    runs-on: ${{ matrix.arch == 'x64' && 'ubuntu-latest' || 'ubuntu-24.04-arm' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [x64, arm64]
+        image: ["debian:12", "ubuntu:24.04", "fedora:latest", "almalinux:9"]
+        include:
+          - { image: "ubuntu:24.04", systemd: systemd }
+          - { image: "fedora:latest", systemd: systemd }
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8.0.2
+        with:
+          name: packages-linux
+          path: packages
+      - name: apt / dnf install in a clean ${{ matrix.image }}, the checks, removal
+        timeout-minutes: 15
+        env:
+          IMAGE: ${{ matrix.image }}
+          ARCH: ${{ matrix.arch }}
+          WITH: ${{ matrix.systemd }}
+        run: sh tests/package_smoke.sh "$IMAGE" "$ARCH" "$WITH"
+
+  # The .deb on the runner's real systemd: installed it neither enables nor starts the
+  # service; systemctl enable --now answers on /healthz as the account ser2netweb, an
+  # upgrade restarts it, a removal stops and disables it and keeps the data
+  linux-package-systemd:
+    name: package on systemd (.deb)
+    needs: packages
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8.0.2
+        with:
+          name: packages-linux
+          path: packages
+      - name: sudo apt install ./ser2netweb_….deb, systemctl enable --now, upgrade, removal
+        timeout-minutes: 10
+        run: sh tests/package_smoke.sh --host
 
   windows:
     name: build windows

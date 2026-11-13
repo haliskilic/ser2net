@@ -42,6 +42,8 @@ body:
         - Windows servisi / Windows service (--install-service)
         - Linux binary (elle / by hand)
         - Linux binary, systemd (ser2netweb-install.sh)
+        - .deb / .rpm paketi / package (apt, dnf)
+        - pip / pipx (PyPI)
         - Kaynak / source (python ser2netweb.py)
         - Kaynak, systemd / source, systemd (ser2netweb.service, ser2netweb@.service)
         - Docker
