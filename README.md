@@ -979,7 +979,8 @@ komutunu kullanın (hazır imaj, `--restart unless-stopped`, `--init`, eşleme p
 Hazır imaj (her sürümde; amd64, arm64 ve 32-bit Raspberry Pi OS gibi 32-bit ARM için
 arm/v7): `docker pull ghcr.io/haliskilic/ser2netweb:latest`
 (ya da `:3.0`, `:3.0.0`); `docker-compose.yml` bunu kullanır. 2.9.x'e kadar imaj
-`ghcr.io/haliskilic/ser2net` idi; 3.x sürümleri oraya da (aynı imaj olarak) yayımlanır.
+`ghcr.io/haliskilic/ser2net` idi: o ad 3.0.0'da kalır, sonraki sürümler oraya yayımlanmaz;
+güncelleme almayı sürdürmek için imajı `ghcr.io/haliskilic/ser2netweb` olarak değiştirin.
 2.9.x'ten kalan bir container'ı ya da compose dosyasını taşımak:
 [`docs/DOCKER.md`](docs/DOCKER.md#upgrading-from-29x). Aynı imaj, aynı digest ve etiketlerle,
 Docker Hub'da da `docker.io/haliskilic/ser2netweb` olarak vardır (`docker pull

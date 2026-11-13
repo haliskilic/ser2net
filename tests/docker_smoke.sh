@@ -1,9 +1,6 @@
 #!/usr/bin/env bash
 # Smoke test of the Docker image (CI job "docker"; needs Docker):
-#   tests/docker_smoke.sh <image> [<the same image under another name> ...]
-# 0. every other name given is the very same image (release.yml: the image of a release is
-#    published as ghcr.io/<owner>/ser2netweb and, for 3.x, also under its 2.9.x name
-#    ghcr.io/<owner>/ser2net, by the same digest);
+#   tests/docker_smoke.sh <image>
 # 1. a fresh volume: the container gets healthy, runs as uid 10001, keeps a
 #    --group-add group but not root's group, and the first-run setup works; a restart
 #    rewrites nothing;
@@ -40,8 +37,7 @@
 # (CI: linux/arm/v7), much slower: DOCKER_SMOKE_WAIT (seconds, default 60) is how long a
 # container may take to get healthy or to stop.
 set -euo pipefail
-IMAGE=${1:?usage: docker_smoke.sh <image> [<the same image under another name> ...]}
-shift
+IMAGE=${1:?usage: docker_smoke.sh <image>}
 WAIT=${DOCKER_SMOKE_WAIT:-60}
 HERE=$(cd "$(dirname "$0")" && pwd)
 PORT=18080
@@ -58,18 +54,6 @@ cleanup() {
 }
 trap cleanup EXIT
 cleanup
-
-if [ $# -gt 0 ]; then
-    echo "== 0. the image's other names"
-    want=$(docker image inspect -f '{{.Id}}' "$IMAGE")
-    for alias in "$@"; do
-        docker image inspect "$alias" >/dev/null 2>&1 || docker pull -q "$alias" >/dev/null \
-            || fail "could not pull $alias"
-        got=$(docker image inspect -f '{{.Id}}' "$alias")
-        [ "$got" = "$want" ] || fail "$alias is $got, not the tested $IMAGE ($want)"
-        echo "$alias is the same image ($want)  OK"
-    done
-fi
 
 wait_healthy() {
     for _ in $(seq 1 "$WAIT"); do
