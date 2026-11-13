@@ -33,7 +33,11 @@ whole process any more). Checked here, without a serial device:
     other than the checked ones are named in a start-up warning;
   - the upstream code each override replaces or relies on is pinned by a hash of its
     source: a pyserial / pyserial-asyncio-fast release that changes it fails here, so the
-    override is looked at again before the bump is merged.
+    override is looked at again before the bump is merged;
+  - without pyserial-asyncio-fast (a distribution that doesn't package it), Transport
+    builds on ser2netweb/engine/serial_transport.py: that copy is 0.16's transport, by a
+    hash of its text and against an installed 0.16, and everything above runs once more
+    on it in a child process where pyserial-asyncio-fast doesn't import.
 Runs on Windows too (the transport's timer-polled write path), the PTY parts on POSIX only.
 
 Run: python3 tests/test_serial_compat.py
@@ -52,11 +56,22 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "lib"))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, os.path.dirname(__file__))
 
+from ser2netweb import envvars
+
+# test_without_pyserial_asyncio_fast's child: as if pyserial-asyncio-fast weren't installed
+WITHOUT_SAF_ENV = "SER2NETWEB_TEST_WITHOUT_SAF"
+if envvars.get(WITHOUT_SAF_ENV) == "1":
+    sys.modules["serial_asyncio_fast"] = None  # (importing it fails)
+
 import serial
-import serial_asyncio_fast as saf
 
 from _fake_win32 import FakeWin32
-from ser2netweb.engine import serial_compat
+from ser2netweb.engine import serial_compat, serial_transport
+
+# pyserial-asyncio-fast, or where it isn't installed (as on CI's job "minimum
+# dependencies", or in the child of test_without_pyserial_asyncio_fast) the copy of its
+# transport built into ser2netweb: everything below holds for both
+saf = serial_compat._saf
 
 ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
 
@@ -172,7 +187,10 @@ def test_no_process_wide_patch():
 
 
 def test_fallback_and_version_note():
-    assert serial_compat.unverified_note() == "", serial_compat.unverified_note()
+    built_in = ("serial ports: pyserial-asyncio-fast is not installed — its transport (0.16), "
+                "built into ser2netweb, is used")
+    assert serial_compat.unverified_note() == (built_in if serial_compat.BUILT_IN else ""), \
+        serial_compat.unverified_note()
     with mock.patch.object(saf, "__version__", "0.17"):
         note = serial_compat.unverified_note()
     assert note.startswith("WARNING: serial ports: pyserial-asyncio-fast 0.17 (checked: "
@@ -601,17 +619,73 @@ PINS = {
 
 
 def test_upstream_pins():
-    changed = []
+    changed, checked = [], 0
     for module, pins in PINS.items():
-        found = upstream_functions(module)
+        # (without pyserial-asyncio-fast: its copy in ser2netweb, the same code, which leaves
+        # out connection_for_serial: what open_stream mirrors, not code that runs)
+        name_here = saf.__name__ if module == "serial_asyncio_fast" else module
+        found = upstream_functions(name_here)
         for name, want in pins.items():
+            if name_here != module and name not in found:
+                continue
             got = digest(found[name]) if name in found else "(gone)"
+            checked += 1
             if got != want:
                 changed.append(f"{module} {name}: {got} (pinned {want})")
     assert not changed, ("upstream code serial_compat builds on has changed; review the "
                          "matching override, then update PINS:\n  " + "\n  ".join(changed))
-    print(f"{sum(map(len, PINS.values()))} upstream functions serial_compat builds on are "
-          "the pinned ones  OK")
+    print(f"{checked} upstream functions serial_compat builds on are the pinned ones"
+          + (" (pyserial-asyncio-fast's: in the built-in copy)" if serial_compat.BUILT_IN else "")
+          + "  OK")
+
+
+# ser2netweb/engine/serial_transport.py, the copy of pyserial-asyncio-fast 0.16's transport for
+# an installation without it: everything from upstream's module logger to the end of its
+# SerialTransport class, by a hash of that text (a change to the copy fails here)
+COPY_FROM = "_LOGGER = logging.getLogger(__name__)"
+COPY_DIGEST = "c4c386f3996d7d35"
+
+
+def test_built_in_copy():
+    with open(serial_transport.__file__, encoding="utf-8") as fh:
+        text = fh.read()
+    copied = text[text.index(COPY_FROM):].rstrip()
+    assert digest(copied) == COPY_DIGEST, (f"ser2netweb/engine/serial_transport.py's copied part "
+                                           f"changed: {digest(copied)} (pinned {COPY_DIGEST})")
+    assert serial_transport.__version__ == "0.16" == dict(
+        (n, v) for n, _m, v in serial_compat.VERIFIED)["pyserial-asyncio-fast"]
+    spec = None if serial_compat.BUILT_IN else importlib.util.find_spec("serial_asyncio_fast")
+    if spec is None or saf.__version__ != serial_transport.__version__:
+        print(f"SKIP (part): the copy against an installed pyserial-asyncio-fast "
+              f"{serial_transport.__version__} (not installed here)")
+    else:
+        with open(spec.origin, encoding="utf-8") as fh:
+            theirs = fh.read()
+        end = theirs.index("\nasync def create_serial_connection(")
+        assert copied == theirs[theirs.index(COPY_FROM):end].rstrip(), \
+            "serial_transport.py's copy differs from the installed pyserial-asyncio-fast"
+        print(f"the built-in copy is pyserial-asyncio-fast {saf.__version__}'s transport, "
+              "character for character  OK")
+    print(f"the built-in copy of the transport is the pinned text ({COPY_DIGEST})  OK")
+
+
+def test_without_pyserial_asyncio_fast():
+    """This file once more, in a child process where pyserial-asyncio-fast doesn't import
+    (as on a distribution that doesn't package it): Transport builds on the built-in copy,
+    and every check above holds there too, the Windows branch's included."""
+    if serial_compat.BUILT_IN:
+        assert serial_compat.Transport.__mro__[1] is serial_transport.SerialTransport
+        assert "built into ser2netweb, is used" in serial_compat.unverified_note()
+        print("without pyserial-asyncio-fast: Transport builds on the built-in copy (this "
+              "run)  OK")
+        return
+    import subprocess
+    out = subprocess.run([sys.executable, os.path.abspath(__file__)], capture_output=True,
+                         text=True, timeout=300, env={**os.environ, WITHOUT_SAF_ENV: "1"})
+    assert out.returncode == 0, out.stdout[-3000:] + out.stderr[-3000:]
+    assert "Transport builds on the built-in copy (this run)  OK" in out.stdout, out.stdout
+    print("without pyserial-asyncio-fast (a child process): every check passes on the "
+          "built-in copy  OK")
 
 
 if __name__ == "__main__":
@@ -628,4 +702,6 @@ if __name__ == "__main__":
     test_windows_transport_branch()
     test_windows_serial_class()
     test_upstream_pins()
+    test_built_in_copy()
+    test_without_pyserial_asyncio_fast()
     print("\nPASS: serial_compat's transport and the upstream code it builds on")

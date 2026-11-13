@@ -61,7 +61,9 @@ the fix; tests/test_serial_compat.py pins the upstream code each one replaces (a
 that changes it fails there) and fails once upstream fixes _write_ready itself. At run
 time an override is used whenever the upstream members it builds on are there;
 unverified_note() says so at start when pyserial / pyserial-asyncio-fast are not the
-versions these were written for.
+versions these were written for. Where pyserial-asyncio-fast isn't installed (a Linux
+distribution that doesn't package it, docs/PACKAGING.md), Transport builds on
+serial_transport.py instead: its 0.16 SerialTransport, copied (``BUILT_IN``).
 
 ``open_stream`` opens a device with the class for this OS and builds the StreamReader /
 StreamWriter pair the way serial_asyncio_fast.open_serial_connection does, without its
@@ -82,9 +84,17 @@ import time
 from typing import TYPE_CHECKING, Any
 
 import serial
-import serial_asyncio_fast as _saf
 
 from .. import envvars
+
+try:
+    import serial_asyncio_fast as _saf
+except ImportError:  # not packaged by every distribution: its transport, copied (0.16)
+    from . import serial_transport as _saf  # type: ignore[no-redef]
+
+# pyserial-asyncio-fast isn't installed: Transport builds on ser2netweb's copy of its
+# SerialTransport (serial_transport.py), the same code as the pinned release's
+BUILT_IN = _saf.__name__ != "serial_asyncio_fast"
 
 _PIPES = ("pipe_abort_read_r", "pipe_abort_read_w", "pipe_abort_write_r", "pipe_abort_write_w")
 # what pyserial's own read() says when a port reads empty although it was ready
@@ -533,11 +543,13 @@ def transport_class() -> type:
 
 def unverified_note() -> str:
     """A start-up warning when pyserial / pyserial-asyncio-fast are not the versions the
-    overrides here were written for ("" when they are)."""
+    overrides here were written for ("" when they are), or a note that the built-in copy
+    of pyserial-asyncio-fast's transport is used."""
     other = [f"{name} {getattr(mod, '__version__', '?')} (checked: {want})"
              for name, mod, want in VERIFIED if getattr(mod, "__version__", None) != want]
     if not other:
-        return ""
+        return (f"serial ports: pyserial-asyncio-fast is not installed — its transport "
+                f"({_saf.__version__}), built into ser2netweb, is used" if BUILT_IN else "")
     note = (f"WARNING: serial ports: {', '.join(other)} — ser2netweb's fixes for these "
             "libraries were not checked against this version")
     if transport_class() is not Transport:
