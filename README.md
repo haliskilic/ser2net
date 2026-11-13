@@ -778,7 +778,7 @@ değilse ya da aynı klasörden çalışan başka bir ser2netweb hâlâ açıksa
 açılır ve nedenini log'una yazar (`WARNING: … ./lib …`); bu sürüm eski paketlerle hiç
 çalışamıyorsa (2.8.1 ve sonrası 2.7'ninkilerle) açılış bunu söyleyen tek bir satırla durur.
 `python3 bootstrap.py` seti elle kurar (önce ser2netweb'i durdurun ve komutu ser2netweb'in
-çalıştığı hesapla çalıştırın, ör. `sudo -u ser2net python3 /opt/ser2net/bootstrap.py`);
+çalıştığı hesapla çalıştırın, ör. `sudo -u ser2netweb python3 /opt/ser2netweb/bootstrap.py`);
 `--no-bootstrap` kullanılıyorsa her yükseltmeden sonra yol budur ve `lib/` güncel olmadıkça
 açılış log'u uyarır. Çalışan bir ser2netweb'in yanında da çalışabilen tek seferlik komutlar
 (`--set-password`, `--sign-out-all`, `--reload`, `--about`, `--install-service`) `lib/`'e dokunmaz,
@@ -1171,7 +1171,7 @@ da kullanıcı adı yoksa **CMD ⚠** etiketiyle gösterilir (ayrıca açılış
 `<topic>/tx`'i cihaza yazan bir seri eşleme için de aynısı geçerlidir (o da **CMD**).
 Örneğin `plant/line3` ana topic'i için bir Mosquitto `acl_file`:
 ```
-user ser2net
+user ser2netweb
 topic readwrite plant/line3/#
 user scada
 topic write plant/line3/+/set
@@ -1435,10 +1435,10 @@ sahibine geçer):
 
 | Kurulum | Komut |
 |---|---|
-| kaynak / Linux binary (systemd) | `sudo -u ser2net python3 /opt/ser2net/ser2netweb.py --data-dir /opt/ser2net/data --set-password admin` (`ser2net-standalone.service` ile binary: `sudo -u ser2net /usr/local/bin/ser2net --data-dir /var/lib/ser2net --set-password admin`; elle başlatılan: `./ser2netweb-linux-x64 --set-password admin`) |
-| Windows (yönetici komut istemi; servis çalışırken de) | `ser2netweb-windows-x64.exe --data-dir C:\ProgramData\ser2net --set-password admin` (servisin veri klasörü: `sc qc ser2net` gösterir) |
-| bir `ser2net@.service` örneği | `sudo -u ser2net python3 /opt/ser2net/ser2netweb.py --no-bootstrap --data-dir /var/lib/ser2net/<ad> --set-password admin` |
-| Docker | `docker exec -it ser2net python /app/ser2netweb.py --no-bootstrap --data-dir /data --set-password admin` |
+| kaynak / Linux binary (systemd) | `sudo -u ser2netweb python3 /opt/ser2netweb/ser2netweb.py --data-dir /opt/ser2netweb/data --set-password admin` (`ser2netweb-standalone.service` ile binary: `sudo -u ser2netweb /usr/local/bin/ser2netweb --data-dir /var/lib/ser2netweb --set-password admin`; elle başlatılan: `./ser2netweb-linux-x64 --set-password admin`; henüz taşınmamış bir 2.9.x kurulumu: aynısı `ser2net` ile) |
+| Windows (yönetici komut istemi; servis çalışırken de) | `ser2netweb-windows-x64.exe --data-dir C:\ProgramData\ser2netweb --set-password admin` (servisin veri klasörü: `sc qc ser2netweb` gösterir) |
+| bir `ser2netweb@.service` örneği | `sudo -u ser2netweb python3 /opt/ser2netweb/ser2netweb.py --no-bootstrap --data-dir /var/lib/ser2netweb/<ad> --set-password admin` |
+| Docker | `docker exec -it ser2netweb python /app/ser2netweb.py --no-bootstrap --data-dir /data --set-password admin` (container'ın adı; 2.9.x'in compose dosyası ona `ser2net` diyordu) |
 
 **Tarayıcısız ilk admin:** ilk açılıştan önce `ser2netweb --set-password admin` çalıştırın
 (systemd altındaki bir kaynak kurulumda servisin `data/`'yı oluşturan ilk açılışından sonra;
@@ -1833,7 +1833,7 @@ dosyasının klasörü). Veri dizini yalnızca sahibe açık kilitlenir (POSIX `
 `icacls` ile sahip/SYSTEM/Administrators), böylece içindeki dosyalar başka kullanıcılarca
 okunamaz; Linux/macOS'ta sunucunun oluşturduğu dosyalar da yalnızca sahibine açıktır. Bu,
 ser2netweb'in oluşturduğu ya da içinde yalnızca kendi dosyaları (aşağıdakiler) bulunan bir klasör
-için geçerlidir: içinde başka dosyalar olan bir klasörün (`--config /etc/ser2net.json`, bir ev
+için geçerlidir: içinde başka dosyalar olan bir klasörün (`--config /etc/ser2netweb.json`, bir ev
 dizini) izinlerine dokunulmaz, yalnızca config dosyası (ve `backups/`, `logs/`, `traces/`)
 gizli tutulur ve başka hesaplar klasörü kullanabiliyorsa açılış log'u uyarır — ser2netweb'e kendi
 klasörünü verin:
@@ -1991,10 +1991,10 @@ logu ya da içe aktarma önizlemesi bunu belirtir.
 **ser2netweb çalışırken `config.json`'u değiştirmek:** ser2netweb dosyayı açılışta okur, sonra
 bellekteki kopyasıyla çalışır. Elle ya da bir araçla (Ansible, kopyalanan bir dosya) yapılan
 bir düzenlemeden sonra dosyayı yeniden okutun — yeniden başlatma gerekmez:
-`systemctl reload ser2net` (bir örnek: `systemctl reload ser2net@<ad>`; üç unit'te de
-`ExecReload` var) ya da `kill -HUP <pid>` (SIGHUP, Linux/macOS; `docker kill -s HUP ser2net`),
-aynı `--data-dir` ile `ser2netweb --reload` (binary'nin unit'i için `/var/lib/ser2net`, bir örnek
-için `/var/lib/ser2net/<ad>`; her platformda, Windows servisi ve konteyner için de) ya da Ayarlar → *Yapılandırma yedekleri* →
+`systemctl reload ser2netweb` (bir örnek: `systemctl reload ser2netweb@<ad>`; üç unit'te de
+`ExecReload` var) ya da `kill -HUP <pid>` (SIGHUP, Linux/macOS; `docker kill -s HUP ser2netweb`),
+aynı `--data-dir` ile `ser2netweb --reload` (binary'nin unit'i için `/var/lib/ser2netweb`, bir örnek
+için `/var/lib/ser2netweb/<ad>`; her platformda, Windows servisi ve konteyner için de) ya da Ayarlar → *Yapılandırma yedekleri* →
 *config.json'u yeniden yükle*. Dosya bir düzenleme gibi denetlenir: okunamıyor ya da
 doğrulanmıyorsa (değişen bir eşlemede yanlış tipte bir değer, aynı portu kullanan iki eşleme,
 hiç kullanıcı hesabı olmaması, yüklenemeyen bir TLS çifti, kullanılamayan MQTT TLS dosyaları,
@@ -2007,7 +2007,7 @@ istemcileriyle çalışmayı sürdürür (çalışması gerekip çalışmayan ba
 başlar, kaldırılan durur, yeni olan başlar; küme yalnızca ayarları değiştiyse yeniden başlar.
 Yönetim arayüzünün ve değişmeyen TLS eşlemelerinin sertifika dosyaları yeni bağlantılar için
 yeniden okunur (yenilenen bir sertifika: örn. certbot'un
-`--deploy-hook "systemctl reload ser2net"` seçeneği). Yönetim arayüzünün adresi ancak bir
+`--deploy-hook "systemctl reload ser2netweb"` seçeneği). Yönetim arayüzünün adresi ancak bir
 sonraki açılışta geçerli olur (log, yanıt ve Ayarlar bunu söyler); `--data-dir` / `--config`
 ve ortam değişkenleri de öyle. Terminalde, terminal kapanınca gelen SIGHUP ser2netweb'i yine
 (düzgünce) kapatır. Log satırı ve denetim kaydı (`config_reload`) neyin değiştiğini söyler.
@@ -2026,7 +2026,7 @@ trace'leri bir sonraki açılışta silinir); ilk kurulumu sonra kim tamamlarsa 
 adlarını, adreslerini ve başarısız girişlerini — ve önceki hesapları ve gizli değerleri
 içeren o yedekleri Ayarlar'da görür. Bunu ser2netweb çalışırken yapmayın: bir sonraki kayıt,
 bellekteki yapılandırmayı hesaplarla birlikte `config.json`'a geri yazar. Veri dizini
-dışındaki kopyalar da kalır: journal (`journalctl -u ser2net`), Docker'ın container log'u
+dışındaki kopyalar da kalır: journal (`journalctl -u ser2netweb`), Docker'ın container log'u
 (`docker compose down -v` onu `/data` volume'uyla birlikte siler, bkz.
 [docs/DOCKER.md](docs/DOCKER.md)) ve bildirimlerin gönderdiği mesajlar. Parola unutulduysa
 bunun yerine `--set-password` kullanın (bkz. Güvenlik): başka hiçbir şey kaybolmaz.
@@ -2106,7 +2106,7 @@ yapılmışsa sürümle ve **Lisanslar** sayfasıyla da: bu kopyanın taşıdı�
 LICENSE, NOTICE, ticari lisans ve üçüncü taraf bildirimleri, bir binary'de ise onun
 `THIRD-PARTY-LICENSES.txt`'i). Başkalarının ağ üzerinden kullandığı değiştirilmiş bir sürüm
 onlara kendi kaynak kodunu sunmalıdır (AGPL-3.0 13. madde): bağlantıyı `SER2NETWEB_SOURCE_URL`
-ile ona yöneltin (`https://git.example.com/bizim-ser2net`; http(s) adresi olmayan bir değer
+ile ona yöneltin (`https://git.example.com/bizim-ser2netweb`; http(s) adresi olmayan bir değer
 kullanılmaz, açılışta uyarı verilir).
 
 Katkılar memnuniyetle karşılanır! İlk pull request'inde tek seferlik bir [Katkıcı Lisans Sözleşmesi (CLA)](https://gist.github.com/haliskilic/7a7fdcd355f54d1db6943959d7b76823) imzalaman istenir; katkının telif hakkı sende kalır.

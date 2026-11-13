@@ -12,8 +12,8 @@ the mapping's log) say what went wrong; `last_error` is pyserial's own text.
 
 | Shown | Cause | Fix |
 |---|---|---|
-| `[Errno 13] Permission denied`, with *… belongs to group dialout (gid 20), and user ser2net is not in it* | the account ser2netweb runs as is not in the device's group | [Groups](#groups) |
-| … *was added to group … after ser2netweb started* | the group was given while ser2netweb ran | restart ser2netweb (`sudo systemctl restart ser2net`) |
+| `[Errno 13] Permission denied`, with *… belongs to group dialout (gid 20), and user ser2netweb is not in it* | the account ser2netweb runs as is not in the device's group | [Groups](#groups) |
+| … *was added to group … after ser2netweb started* | the group was given while ser2netweb ran | restart ser2netweb (`sudo systemctl restart ser2netweb`) |
 | … *only root may open …* | the device belongs to root's group | a udev rule that gives it the serial group ([udev](#udev-rules)) |
 | `[Errno 16] Device or resource busy`, or *another program keeps other programs out of this port (TIOCEXCL)* | another program opened it exclusively: ModemManager, the classic ser2net, brltty | [Who has the port](#who-has-the-port) |
 | `Could not exclusively lock port …`, *another program has locked this port (flock)* | another ser2netweb mapping or instance, picocom, tio, miniterm | stop that program; *mapping '…' has this port open* names this ser2netweb's own |

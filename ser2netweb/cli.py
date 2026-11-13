@@ -112,7 +112,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                      help="Have the ser2netweb running with this data directory read config.json "
                           "again and apply it without a restart (mappings that didn't change "
                           "keep running with their clients), then exit. On Linux/macOS "
-                          "SIGHUP does the same (systemctl reload ser2net).")
+                          "SIGHUP does the same (systemctl reload ser2netweb).")
     args = p.parse_args(argv)
     if args.reload and (args.set_password is not None or args.sign_out_all):
         p.error("--reload can't be combined with --set-password or --sign-out-all")
