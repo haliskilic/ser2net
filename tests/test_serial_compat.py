@@ -206,8 +206,46 @@ def test_fallback_and_version_note():
         saf.SerialTransport._write_data = saved
     assert serial_compat.transport_class() is serial_compat.Transport
     assert "pyserial 3.6 (checked: 3.5)" in note and "its own transport is used" in note, note
-    print("an unchecked version is named at start; without the upstream members the "
-          "fixes build on, upstream's transport is used  OK")
+    assert "built into ser2netweb" not in note or serial_compat.BUILT_IN, note
+    # another pyserial than the checked one: the note about the built-in copy stays
+    with mock.patch.object(serial, "__version__", "3.6"), \
+            mock.patch.object(serial_compat, "BUILT_IN", True):
+        note = serial_compat.unverified_note()
+    assert note.startswith("WARNING: serial ports: pyserial 3.6 (checked: 3.5) — "), note
+    assert note.endswith(f"; pyserial-asyncio-fast is not installed — its transport "
+                         f"({saf.__version__}), built into ser2netweb, is used"), note
+    print("an unchecked version is named at start (with the note about the built-in copy); "
+          "without the upstream members the fixes build on, upstream's transport is used  OK")
+
+
+def test_broken_pyserial_asyncio_fast():
+    """The copy stands in only for a pyserial-asyncio-fast that isn't installed: one that
+    is there but fails to import (here: a module of its own is missing, and an error of its
+    own) stops the import with that error, as --about reports it."""
+    import subprocess
+    import tempfile
+    code = ("import sys\nsys.path.insert(0, sys.argv[1])\n"
+            "try:\n    from ser2netweb.engine import serial_compat\n"
+            "except ImportError as e:\n    print('ERROR', e)\n"
+            "else:\n    print('BUILT_IN', serial_compat.BUILT_IN)\n")
+    for body, error in (("import s2n_test_missing_dependency\n",
+                         "ModuleNotFoundError: No module named 's2n_test_missing_dependency'"),
+                        ("raise ImportError('cannot import name SerialTransport')\n",
+                         "ImportError: cannot import name SerialTransport")):
+        with tempfile.TemporaryDirectory() as tmp:
+            os.makedirs(os.path.join(tmp, "serial_asyncio_fast"))
+            with open(os.path.join(tmp, "serial_asyncio_fast", "__init__.py"), "w",
+                      encoding="utf-8") as fh:
+                fh.write(body)
+            env = {k: v for k, v in os.environ.items() if k != WITHOUT_SAF_ENV}
+            env["PYTHONPATH"] = os.pathsep.join(p for p in sys.path if p)
+            out = subprocess.run([sys.executable, "-c", code, tmp], capture_output=True,
+                                 text=True, timeout=120, env=env, cwd=ROOT)
+        assert out.returncode == 0, out.stderr[-2000:]
+        assert out.stdout.startswith("ERROR pyserial-asyncio-fast is installed but failed to "
+                                     f"import: {error} ("), out.stdout
+    print("a pyserial-asyncio-fast that is installed but fails to import: the error, not the "
+          "built-in copy  OK")
 
 
 def test_requirements_pin_the_checked_versions():
@@ -694,6 +732,7 @@ if __name__ == "__main__":
     test_read_size()
     test_no_process_wide_patch()
     test_fallback_and_version_note()
+    test_broken_pyserial_asyncio_fast()
     test_requirements_pin_the_checked_versions()
     test_eagain_keeps_the_data_posix()
     test_custom_baud_rates_on_new_glibc()
