@@ -225,9 +225,11 @@ def _icacls_private(path: str, grants: list[str]) -> None:
 # adds to any folder.
 OWN_NAMES = frozenset({"backups", "logs", "traces", "tls", "admin-requests", "ser2net.lock",
                        "setup-code.txt", "sparkplug-bdseq.json", "hang.log", "service.log",
+                       "cert-notices.json",  # (ser2netweb/certwatch.py)
                        "lost+found", ".DS_Store", "Thumbs.db", "desktop.ini"})
 _OWN_NAME = re.compile(r"(?:all|audit)\.log(?:\.\d+|\.tmp)?|(?:hang|service)\.log\.1|"
-                       r"\.cfg\..+\.tmp|setup-code\.txt\.tmp|sparkplug-bdseq\.json\.tmp")
+                       r"\.cfg\..+\.tmp|setup-code\.txt\.tmp|sparkplug-bdseq\.json\.tmp|"
+                       r"cert-notices\.json\.tmp")
 
 
 def foreign_entries(directory: str, config_name: str = "config.json") -> Optional[list[str]]:
@@ -3043,7 +3045,7 @@ class ClusterSettings:
 NOTIFY_EVENTS = ("device_lost", "device_back", "start_failed", "link_lost", "link_back",
                  "client_connected", "client_disconnected", "login_failed", "disk_low",
                  "no_data", "data_back", "peer_offline", "peer_back", "service_started",
-                 "unit_offline", "unit_back")
+                 "unit_offline", "unit_back", "cert_expiring")
 # (a saved events list is kept as it is: these are what a config without one gets)
 NOTIFY_DEFAULT_EVENTS = ("device_lost", "device_back", "start_failed", "link_lost", "link_back")
 WEBHOOK_FORMATS = ("json", "slack", "teams", "discord", "telegram")

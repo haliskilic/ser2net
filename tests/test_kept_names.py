@@ -78,7 +78,8 @@ def test_cluster_protocol():
     print("cluster: signing labels, headers, auth scheme, beacon envelope, UDP 41750  OK")
 
 
-# every series /metrics answers, as 2.9 named them: OLD + "_" + one of these
+# every series /metrics answers, as 2.9 named them (the last line: added in 3.1):
+# OLD + "_" + one of these
 METRICS = [f"{OLD}_{name}" for name in """
 up build_info start_time_seconds event_loop_lag_seconds event_loop_stalls_total
 mappings_total open_fds fd_limit data_free_bytes data_size_bytes traces_bytes logs_bytes
@@ -89,6 +90,7 @@ mapping_bytes_dropped_total mapping_reconnects_total mapping_open_failures_total
 mapping_device_lost_total mapping_dropped_clients_total mapping_link_up
 mapping_connect_failures_total modbus_unit_up modbus_unit_poll_errors_total mqtt_connected
 mqtt_messages_dropped_total
+tls_certificate_expiry_seconds
 """.split()]
 
 

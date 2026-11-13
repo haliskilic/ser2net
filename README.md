@@ -407,8 +407,11 @@ düzenlemeye gerek yok.
   **ser2netweb'in başlaması** (bir açılıştan 15 sn sonra: hangi eşlemelerin çalıştığı ve önceki
   çalışmayı event loop watchdog'unun sonlandırıp sonlandırmadığı) ve bir gateway'in periyodik
   okuduğu bir **Modbus unit'inin yanıt vermeyi kesmesi** (3 okuma üst üste hiçbir noktasına
-  yanıt vermemesi) ve yeniden yanıt vermesi. Tekrarlar bastırılır, test mesajı
-  gönderilebilir. Bu olaylar gönderilsin ya da gönderilmesin all.log'a yazılır.
+  yanıt vermemesi) ve yeniden yanıt vermesi, ve **süresi dolmak üzere olan bir TLS
+  sertifikası** (yönetim arayüzününki ve etkin her TLS eşlemesininki, günde bir kez okunur:
+  30, 7 ve 1 günden az kaldığında birer mesaj, süresi dolduğunda bir mesaj daha — sertifika
+  ve eşik başına bir kez, yeniden başlatmalardan sonra da; yenilenen sertifika baştan
+  başlar). Tekrarlar bastırılır, test mesajı gönderilebilir. Bu olaylar gönderilsin ya da gönderilmesin all.log'a yazılır.
   Genel URL ayarlıysa (Ayarlar → Reverse proxy) her mesaj onunla biter, JSON biçiminde de
   bir `url` alanı olur. İstemci olayları istemcinin IP adresini, hatalı giriş hesap adını
   (ya da `(unknown user)`) ve IP adresini gönderir; *Kişisel verileri gönderme* seçeneği
@@ -1106,7 +1109,10 @@ Adımlar, farklar ve seçenek tablosu (İngilizce):
   sıra bekleyen TLS el sıkışmaları, kabulden hemen sonra reddedilen bağlantılar
   (`ser2net_connections_refused_total`, nedene göre), veri klasörünün diski
   (`ser2net_data_free_bytes`, `ser2net_data_size_bytes`) ve orada trace'lerle log'ların
-  kapladığı yer (`ser2net_traces_bytes`, `ser2net_logs_bytes`); bir Modbus gateway'in
+  kapladığı yer (`ser2net_traces_bytes`, `ser2net_logs_bytes`); kullanılan TLS
+  sertifikalarının bitiş zamanı (`ser2net_tls_certificate_expiry_seconds`, Unix zamanı:
+  yönetim arayüzününki ve etkin her TLS eşlemesininki; kalan gün sayısıyla birlikte
+  `/api/v1/status` içinde `certificates`); bir Modbus gateway'in
   periyodik okuduğu her unit için yanıt verip vermediği (`ser2net_modbus_unit_up`) ve
   başarısız okumaları (`ser2net_modbus_unit_poll_errors_total`); MQTT'ye yayın yapan bir
   eşlemenin broker'ına bağlı olup olmadığı (`ser2net_mqtt_connected`) ve broker'a teslim
@@ -2159,6 +2165,9 @@ klasörünü verin:
   yolla kaydedilir); taşımadan önceki yedekler ve içe aktarmalar da aynı şekilde ele alınır.
 - `setup-code.txt` — ilk kurulumun bir host adıyla yapılması için tek kullanımlık kod; yalnızca
   ilk admin hesabı oluşana kadar durur.
+- `cert-notices.json` — hangi *TLS sertifikasının süresi dolmak üzere* bildirimlerinin
+  gönderildiği (sertifika dosyası başına: bitiş tarihi ve eşik); böylece yeniden başlatma
+  bunları tekrar göndermez. Silinirse bir kez daha gönderilirler.
 - `sparkplug-bdseq.json` — her Sparkplug B edge node'unun (grup/düğüm) son oturumunun
   `bdSeq`'i; yeniden başlatmadan sonra numara buradan devam eder. Silinirse sonraki
   açılış 0'dan başlar.

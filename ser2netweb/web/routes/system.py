@@ -116,6 +116,14 @@ async def metrics_text(state) -> str:
     guard = getattr(state, "admin_guard", None)
     if guard is not None:
         lines.append(f"ser2net_admin_connections {len(guard.connections)}")
+    # when the TLS certificates in use end (the admin UI's, each enabled TLS mapping's)
+    watch = getattr(state, "certwatch", None)
+    for c in (await watch.current() if watch is not None else ()):
+        if c.info is not None:
+            who = (f'use="mapping",mapping="{_metric_label(c.mapping)}",'
+                   f'id="{_metric_label(c.key)}"' if c.mapping else 'use="admin"')
+            lines.append(f"ser2net_tls_certificate_expiry_seconds{{{who}}} "
+                         f"{int(c.info.not_after)}")
     budget = netguard.BUDGET
     lines.append(f"ser2net_tls_handshakes_in_progress {len(budget.handshakes)}")
     lines.append(f"ser2net_tls_handshakes_waiting {len(budget.waiting)}")  # for a slot
@@ -195,6 +203,9 @@ METRIC_INFO = {
     "ser2net_traces_bytes": ("gauge", "What the trace files take in the data folder"),
     "ser2net_logs_bytes": ("gauge", "What the logs take in the data folder"),
     "ser2net_admin_connections": ("gauge", "Connections to the admin UI"),
+    "ser2net_tls_certificate_expiry_seconds": ("gauge", "When a TLS certificate in use ends "
+                                                        "(Unix time): the admin UI's, an "
+                                                        "enabled TLS mapping's"),
     "ser2net_tls_handshakes_in_progress": ("gauge", "TLS handshakes under way"),
     "ser2net_tls_handshakes_waiting": ("gauge", "Connections waiting for a TLS handshake slot"),
     "ser2net_connections_refused_total": ("counter", "Connections refused right after accept, "

@@ -502,7 +502,9 @@ def build_api_routes(state: AppState) -> list[Route]:
         return PlainTextResponse(await metrics_text(state), media_type=METRICS_TYPE)
 
     async def status(request):
-        return JSONResponse({"mappings": state.supervisor.all_status()})
+        certificates = [c.view() for c in await state.certwatch.current()]
+        return JSONResponse({"mappings": state.supervisor.all_status(),
+                             "certificates": certificates})
 
     async def ports(request):
         return JSONResponse({"ports": await state.ports.current()})
@@ -710,7 +712,24 @@ def openapi_spec(admin, base: str = "") -> dict:
             "mappings": {"type": "array", "items": {"$ref": "#/components/schemas/Mapping"}}}},
         "StatusMap": {"type": "object", "properties": {"mappings": {
             "type": "object", "description": "mapping id -> its live state",
-            "additionalProperties": {"$ref": "#/components/schemas/MappingStatus"}}}},
+            "additionalProperties": {"$ref": "#/components/schemas/MappingStatus"}},
+            "certificates": {
+                "type": "array", "description": "the TLS certificates in use: the admin UI's "
+                                                "and each enabled TLS mapping's (read at "
+                                                "most every 5 minutes)",
+                "items": {"type": "object", "properties": {
+                    "use": {"type": "string", "enum": ["admin", "mapping"]},
+                    "id": {"type": "string", "description": "the mapping (use mapping)"},
+                    "mapping": {"type": "string", "description": "its name"},
+                    "path": {"type": "string"},
+                    "subject": {"type": "string"},
+                    "not_after": {"type": "number", "description": "its end (Unix time)"},
+                    "days_left": {"type": "integer",
+                                  "description": "whole days left (negative: ended)"},
+                    "state": {"type": "string", "enum": [
+                        "valid", "expiring", "expired", "not_yet_valid", "unreadable"]},
+                    "detail": {"type": "string",
+                               "description": "why it is unreadable"}}}}}},
         "PortList": {"type": "object", "properties": {"ports": {
             "type": "array", "items": {"type": "object", "additionalProperties": True}}}},
         "Health": {"type": "object", "properties": {"status": {"type": "string"},

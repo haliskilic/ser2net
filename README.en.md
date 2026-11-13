@@ -393,8 +393,11 @@ everything from a **password-protected web UI** — no CLI or hand-edited config
   peer that misses two answers a minute apart) and back, and **ser2netweb started** (15 s
   after a start: which mappings run, and whether the previous run was ended by the event
   loop watchdog), and a **Modbus unit** that a gateway polls **stops answering** (no reply
-  to any of its points in 3 polls in a row) or answers again. Repeats are suppressed, and a
-  test message can be sent. The same events are logged in all.log whether or not they are
+  to any of its points in 3 polls in a row) or answers again, and a **TLS certificate about
+  to expire** (the admin UI's and each enabled TLS mapping's, read once a day: one message
+  when fewer than 30, 7 and 1 days are left and one once it has ended — once per
+  certificate and threshold, also across restarts; a renewed certificate starts afresh).
+  Repeats are suppressed, and a test message can be sent. The same events are logged in all.log whether or not they are
   sent.
   With a public URL (Settings → Reverse proxy) each message ends with it, and the JSON
   format has a `url` field. The client events send the client's IP address, a failed
@@ -1069,7 +1072,10 @@ what differs and an option table: [`docs/MIGRATING-FROM-SER2NET.md`](docs/MIGRAT
   connections, TLS handshakes in progress and waiting for one to end, the connections
   refused right after accept (`ser2net_connections_refused_total`, by reason), the data
   folder's disk (`ser2net_data_free_bytes`, `ser2net_data_size_bytes`) and what traces and
-  logs take there (`ser2net_traces_bytes`, `ser2net_logs_bytes`); for a Modbus gateway's
+  logs take there (`ser2net_traces_bytes`, `ser2net_logs_bytes`); when the TLS
+  certificates in use end (`ser2net_tls_certificate_expiry_seconds`, Unix time: the admin
+  UI's and each enabled TLS mapping's; also `certificates` in `/api/v1/status`, with the
+  days left); for a Modbus gateway's
   polled units whether each answers (`ser2net_modbus_unit_up`) and its failed reads
   (`ser2net_modbus_unit_poll_errors_total`); for a mapping that publishes to MQTT whether
   it is connected to its broker (`ser2net_mqtt_connected`) and the messages it could not
@@ -2079,6 +2085,9 @@ when other accounts can use the folder — give ser2netweb a folder of its own:
   path); backups and imports from before the move are handled the same way.
 - `setup-code.txt` — the one-time code for first-run setup through a host name; it exists
   only until the first admin account does.
+- `cert-notices.json` — which *TLS certificate about to expire* notifications were sent
+  (per certificate file: its end date and the threshold), so a restart does not send them
+  again. Deleted, they are sent once more.
 - `sparkplug-bdseq.json` — the `bdSeq` of each Sparkplug B edge node's (group/node) last
   session; after a restart the numbering goes on from there. Deleted, the next start begins
   at 0.

@@ -34,6 +34,7 @@ from typing import Any
 
 from . import accounts, clock, envvars, logsetup, storage, tlsreload
 from .capture import Captures
+from .certwatch import CertWatch
 from .config import (
     AppConfig, ConfigStore, ConfigWriteError, User, fold, lock_down_dir, mapping_file,
     valid_mapping_id,
@@ -736,6 +737,7 @@ class AppState:
         self.pending_imports: dict[str, dict] = {}
         self.notifier = Notifier(self)
         self.captures = Captures(self)  # timed captures (ser2netweb/capture.py)
+        self.certwatch = CertWatch(self)  # TLS certificates about to end (certwatch.py)
         self.config_lock = asyncio.Lock()
         self.started_at = time.time()        # when this process started (wall clock)
         self.started_mono = time.monotonic()  # the same for how long it runs (uptime)

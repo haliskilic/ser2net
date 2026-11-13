@@ -95,6 +95,7 @@ PORTABLE = [
     "test_trace.py",
     "test_trace_files.py",
     "test_trace_api.py",      # trace files in the REST API, timed captures
+    "test_cert_expiry.py",    # the cert_expiring notification
     "test_session_timeout.py",
     "test_session_revocation.py",
     "test_account_recovery.py",

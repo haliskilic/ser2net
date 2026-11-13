@@ -1580,5 +1580,7 @@
   "Choose how long to record: 15 minutes, 1 hour or 24 hours.": "Ne kadar süre kaydedileceğini seç: 15 dakika, 1 saat ya da 24 saat.",
   "This mapping is traced already (its trace file name is set): there is nothing to time.": "Bu eşlemenin trace'i zaten açık (trace dosya adı ayarlı): süreli kayda gerek yok.",
   "Recording until {0}; it then stops by itself.": "{0} zamanına kadar kaydediliyor; sonra kendiliğinden durur.",
-  "Recording stopped.": "Kayıt durduruldu."
+  "Recording stopped.": "Kayıt durduruldu.",
+  "TLS certificate about to expire": "TLS sertifikasının süresi dolmak üzere",
+  "TLS certificate about to expire (the admin UI’s and each TLS mapping’s: 30, 7 and 1 days before, and once it has ended; checked daily)": "TLS sertifikasının süresi dolmak üzere (yönetim arayüzününki ve her TLS eşlemesininki: 30, 7 ve 1 gün kala ve süresi dolduğunda; günde bir kez kontrol edilir)"
 }
