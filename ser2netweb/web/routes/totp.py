@@ -16,13 +16,13 @@ only admin, and with ser2netweb stopped.
 """
 from __future__ import annotations
 
-from starlette.routing import Route
 
 from ... import notify
 from ...config import ConfigError
 from ...i18n import _
 from .. import auth, proxy, totp
 from ..auth import LoginRateLimiter
+from ..starlette_compat import Route
 from .common import Ctx, csrf_failed, local_path
 from .settings import _Flash
 

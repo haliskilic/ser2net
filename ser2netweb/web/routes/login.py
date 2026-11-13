@@ -7,7 +7,6 @@ import secrets
 import time
 
 from starlette.responses import RedirectResponse
-from starlette.routing import Route
 
 from ... import notify
 from ...config import (
@@ -17,6 +16,7 @@ from ...config import (
 from ...engine import netguard, netinfo
 from ...i18n import _
 from .. import auth, ldap_auth, oidc_auth, proxy
+from ..starlette_compat import Route
 from . import totp
 from .common import Ctx, csrf_failed, local_path
 from .forms import _password_problem, _username_problem

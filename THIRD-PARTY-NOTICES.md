@@ -34,6 +34,11 @@ browser libraries below.
 | exceptiongroup, taskgroup (Python 3.10 only) | MIT |
 | colorama (Windows only) | BSD-3-Clause |
 
+Two modules of ser2netweb hold code copied from these, with their BSD-3-Clause notice:
+`ser2netweb/engine/serial_transport.py` (pyserial-asyncio-fast 0.16's `SerialTransport`,
+used where pyserial-asyncio-fast isn't installed) and `ser2netweb/web/starlette_compat.py`
+(Starlette 1.10's request body limit, used with a Starlette older than 1.6).
+
 ## Optional feature packages (`requirements-optional.txt`)
 
 Not installed by the offline bootstrap; bundled into the standalone executables and the

@@ -20,7 +20,6 @@ from typing import Any
 from markupsafe import escape
 from starlette.datastructures import FormData
 from starlette.responses import HTMLResponse, JSONResponse, PlainTextResponse, Response
-from starlette.routing import Route
 
 from ... import __version__
 from ...config import (
@@ -31,6 +30,7 @@ from ...engine.cluster import (ACTOR_FIELD, ACTOR_MAX, ACTOR_NODE_FIELD, AUTH_HE
                                peer_addr, peer_port, peer_url)
 from ...i18n import _
 from .. import auth
+from ..starlette_compat import Route
 from . import ops
 from .common import (
     Ctx, LiveTable, bytesize, csrf_failed, domid, notice, read_form, reason, start_failed,
