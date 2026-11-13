@@ -336,6 +336,25 @@
         <input type="text" name="mqtt_client_id" value="{{ mapping.mqtt.client_id }}" placeholder="{{ _('e.g. %(example)s', example='s2n-plc1') }}" autocapitalize="none" autocorrect="off" spellcheck="false">
       </label>
     </div>
+    {% if 'mqtt5' not in hide %}
+    <div class="grid3">
+      <label>{{ _("MQTT version") }}
+        <select name="mqtt_protocol">
+          <option value="3.1.1" {% if mapping.mqtt.protocol != '5' %}selected{% endif %}>3.1.1</option>
+          <option value="5" {% if mapping.mqtt.protocol == '5' %}selected{% endif %}>5</option>
+        </select></label>
+    </div>
+    <div data-show-when="mqtt_protocol=5">
+      <input type="hidden" name="mqtt_v5_shown" value="1">
+      <label class="chk"><input type="checkbox" name="mqtt_clean_start" {% if mapping.mqtt.clean_start is not sameas false %}checked{% endif %}> {{ _("Clean start") }} <span class="muted">({{ _("a new session at every connect. Off, with a client ID and a session expiry: the broker keeps the subscriptions, and delivers the QoS 1 commands that came while the connection was away; Sparkplug B always starts clean") }})</span></label>
+      <div class="grid2">
+        <label>{{ _("Session expiry (s)") }} <span class="muted">({{ _("how long the broker keeps the session after the connection ends · 0 = not at all") }})</span>
+          <input type="number" required name="mqtt_session_expiry_s" min="0" max="4294967295" step="1" value="{{ mapping.mqtt.session_expiry_s }}"></label>
+        <label>{{ _("Message expiry of retained data (s)") }} <span class="muted">({{ _("the broker stops handing out a retained line or value this long after it was published · 0 = never") }})</span>
+          <input type="number" required name="mqtt_message_expiry_s" min="0" max="4294967295" step="1" value="{{ mapping.mqtt.message_expiry_s }}"></label>
+      </div>
+    </div>
+    {% endif %}
     {% if 'mqtt_retain' not in hide %}
     <div data-show-when="mqtt_payload_format=plain">
       <input type="hidden" name="mqtt_retain_shown" value="1">

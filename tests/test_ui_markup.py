@@ -415,6 +415,16 @@ def test_mapping_form_modbus_fields():
     # the points' options marker is posted exactly when the points JSON is
     assert conditions("modbus_point_options_shown") == conditions("modbus_points") == [
         "network_protocol=modbus"], conditions("modbus_point_options_shown")
+    # the MQTT version is offered for every mapping with a network side; MQTT 5's settings
+    # (and their marker) only while version 5 is selected
+    assert conditions("mqtt_protocol") == ["kind=net"], conditions("mqtt_protocol")
+    for name in ("mqtt_v5_shown", "mqtt_clean_start", "mqtt_session_expiry_s",
+                 "mqtt_message_expiry_s"):
+        assert conditions(name) == ["mqtt_protocol=5", "kind=net"], (name, conditions(name))
+    older = tpl.render(request=Req, mapping=m, is_new=False, modbus_points_json="", ports=[],
+                       ips=[], error=None, hide={"mqtt5"})
+    for gone in ("mqtt_protocol", "mqtt_v5_shown", "mqtt_clean_start"):
+        assert gone not in older, f"{gone} is in a form shown for a node before 3.1"
     field = next(n for n in root.walk() if n.attrs.get("name") == "opt_modbus_response_timeout_s")
     assert field.attrs.get("value") == "0.8" and field.attrs.get("type") == "number", field.attrs
     print("mapping form: banner/close-on/client buffer not offered for modbus; the retained "

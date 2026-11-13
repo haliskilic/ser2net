@@ -513,6 +513,15 @@ düzenlemeye gerek yok.
   okumalar art arda gönderilmez). Bir eşlemeyi durdurmak ya da yeniden başlatmak,
   broker'ın son mesajı (`offline` ya da Sparkplug NDEATH) almasını en çok 3 s bekler
   (ötesinde aynısını Last-Will söyler); bu sırada diğer eşlemeler ve arayüz beklemez.
+  **MQTT sürümü** (`mqtt.protocol`) varsayılan olarak 3.1.1'dir; **5** seçilince bağlantı
+  MQTT 5 konuşur (paho-mqtt 1.6 ve 2.x): **Temiz başlangıç** (varsayılan açık; kapalıyken,
+  bir istemci kimliği ve **oturum süresi** ile broker abonelikleri saklar ve bağlantı
+  yokken gelen QoS 1 komutlarını sonradan teslim eder — tam olarak bunu istemiyorsanız
+  açık bırakın), **retained verinin ileti süresi** (varsayılan kapalı: broker retained bir
+  satırı ya da değeri yayınlandıktan o kadar süre sonra artık vermez) ve broker'ın reason
+  code'ları log'da ve durumda (`reason_code`: bağlantıyı neden reddettiği ya da bitirdiği;
+  `rejected`: reddettiği yayınlar, paho-mqtt 2.x ile). MQTT 5 üzerinde Sparkplug B,
+  spesifikasyonunun istediği gibi her zaman temiz başlangıçla ve oturumsuz bağlanır.
   **Verileri retained yayınla** (düz biçim) seri satırları ve periyodik okunan Modbus
   değerlerini retained yayınlar; böylece sonradan bağlanan bir abone (Home Assistant,
   Node-RED, Telegraf) bir sonraki okumayı ya da satırı beklemeden son değeri hemen alır

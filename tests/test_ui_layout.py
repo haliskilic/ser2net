@@ -226,7 +226,8 @@ def modbus_mapping(port):
             "serial": {"port": "/dev/ttyUSB7", "baudrate": 9600},
             "network": {"mode": "server", "protocol": "modbus", "bind_ip": "127.0.0.1",
                         "port": port},
-            "mqtt": {"enabled": True, "host": LONG_HOST, "base_topic": "fabrika/hat3/enerji"},
+            "mqtt": {"enabled": True, "host": LONG_HOST, "base_topic": "fabrika/hat3/enerji",
+                     "protocol": "5", "message_expiry_s": 600},
             "modbus_poll": {"block_reads": True, "block_gap": 4, "points": [
                 {"name": "Gerilim_L1_" + LONG_NAME, "unit": 1, "fn": 3, "address": 0,
                  "dtype": "float32", "word_order": "CDAB", "scale": 0.1},

@@ -1565,5 +1565,19 @@
   "Source code": "Kaynak kodu",
   "Licences": "Lisanslar",
   "ser2netweb %(version)s is licensed under the GNU AGPL-3.0 or a separate commercial licence. The components it ships keep their own licences, listed below.": "ser2netweb %(version)s, GNU AGPL-3.0 ya da ayrı bir ticari lisansla lisanslanır. İçinde gelen bileşenler kendi lisanslarını korur; aşağıda listelenir.",
-  "Source code:": "Kaynak kodu:"
+  "Source code:": "Kaynak kodu:",
+  "Clean start": "Temiz başlangıç (clean start)",
+  "Clean start, session expiry and message expiry are MQTT 5 settings: with MQTT 3.1.1 they are not used.": "Temiz başlangıç, oturum süresi ve ileti süresi MQTT 5 ayarlarıdır: MQTT 3.1.1 ile kullanılmazlar.",
+  "MQTT clean start off needs a client ID: the broker keeps a session for the client ID it knows.": "MQTT temiz başlangıcı kapatmak için bir istemci kimliği gerekir: broker oturumu tanıdığı istemci kimliği için saklar.",
+  "MQTT message expiry": "MQTT ileti süresi",
+  "MQTT session expiry": "MQTT oturum süresi",
+  "MQTT version": "MQTT sürümü",
+  "Message expiry of retained data (s)": "Retained verinin ileti süresi (sn)",
+  "Session expiry (s)": "Oturum süresi (sn)",
+  "Sparkplug B always starts a clean MQTT session and keeps none: clean start off and the session expiry are not used.": "Sparkplug B her zaman temiz bir MQTT oturumu başlatır ve oturum saklamaz: kapalı temiz başlangıç ve oturum süresi kullanılmaz.",
+  "The MQTT protocol version must be one of {0}.": "MQTT protokol sürümü şunlardan biri olmalı: {0}.",
+  "a new session at every connect. Off, with a client ID and a session expiry: the broker keeps the subscriptions, and delivers the QoS 1 commands that came while the connection was away; Sparkplug B always starts clean": "her bağlantıda yeni oturum. Kapalıyken, bir istemci kimliği ve oturum süresiyle: broker abonelikleri saklar ve bağlantı yokken gelen QoS 1 komutlarını sonradan teslim eder; Sparkplug B her zaman temiz başlar",
+  "how long the broker keeps the session after the connection ends · 0 = not at all": "bağlantı bittikten sonra broker'ın oturumu ne kadar sakladığı · 0 = hiç",
+  "the broker stops handing out a retained line or value this long after it was published · 0 = never": "broker, retained bir satırı ya da değeri yayınlandıktan bu kadar süre sonra artık vermez · 0 = hiçbir zaman",
+  "{0} must be a whole number of seconds from 0 to {1}.": "{0}, 0 ile {1} arasında tam sayı bir saniye değeri olmalı."
 }

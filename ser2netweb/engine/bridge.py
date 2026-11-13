@@ -610,7 +610,8 @@ class RunnerStatus:
     points: list[dict] = field(default_factory=list)
     # the MQTT publisher's connection to its broker while the mapping runs (empty: MQTT
     # off): MqttPublisher.state — "state" (connecting | connected | down | off), "broker",
-    # "since", "error", "dropped"
+    # "since", "error", "dropped", "protocol" ("3.1.1" | "5"); MQTT 5 also "reason_code"
+    # and "rejected"
     mqtt: dict = field(default_factory=dict)
 
     def set_clients(self, clients) -> None:

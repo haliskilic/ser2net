@@ -430,6 +430,7 @@ _ENUMS = {
     ("MqttSettings", "payload_format"): config.MQTT_FORMATS,
     ("MqttSettings", "line_end"): config.MQTT_LINE_ENDS,
     ("MqttSettings", "value_format"): config.MQTT_VALUE_FORMATS,
+    ("MqttSettings", "protocol"): config.MQTT_PROTOCOLS,
     ("ModbusPoint", "fn"): (1, 2, 3, 4),
     ("ModbusPoint", "dtype"): config.MODBUS_DTYPES,
     ("ModbusPoint", "word_order"): config.MODBUS_WORD_ORDERS,
@@ -454,6 +455,13 @@ _NOTES = {
     ("MqttSettings", "client_key_password"): "The password of an encrypted client_key. "
                                              "Masked as ******** for a viewer token; sent back "
                                              "so in a PUT or PATCH, the stored one stays.",
+    ("MqttSettings", "protocol"): "The MQTT version of the broker connection.",
+    ("MqttSettings", "clean_start"): "MQTT 5: begin a new session at every connect. false "
+                                     "needs a client_id; Sparkplug B always starts clean.",
+    ("MqttSettings", "session_expiry_s"): "MQTT 5: seconds the broker keeps the session "
+                                          "after the connection ends (0: not at all).",
+    ("MqttSettings", "message_expiry_s"): "MQTT 5: seconds after which the broker stops "
+                                          "handing out retained data (0: never).",
     ("NetworkSettings", "tls_key_password"): "The password of an encrypted tls_key. Masked as "
                                              "******** for a viewer token; sent back so in a "
                                              "PUT or PATCH, the stored one stays.",
@@ -564,7 +572,13 @@ def openapi_spec(admin, base: str = "") -> dict:
             "rx_idle_s": {"type": "number", "nullable": True,
                           "description": "how long the device has sent nothing"},
             "reply_wait_s": {"type": "number", "nullable": True,
-                             "description": "how long what was sent to it has had no answer"}}},
+                             "description": "how long what was sent to it has had no answer"},
+            "mqtt": {"type": "object", "additionalProperties": True, "description": (
+                "The MQTT connection while the mapping runs ({}: MQTT off): state "
+                "(connecting, connected, down, off), broker, since, error, dropped, "
+                "protocol (3.1.1 or 5); with MQTT 5 also reason_code (the broker's reason "
+                "code for refusing or ending the connection, else null) and rejected "
+                "(publications the broker refused).")}}},
         "MappingList": {"type": "object", "properties": {
             "mappings": {"type": "array", "items": {"$ref": "#/components/schemas/Mapping"}}}},
         "StatusMap": {"type": "object", "properties": {"mappings": {

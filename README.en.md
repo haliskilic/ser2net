@@ -498,7 +498,16 @@ everything from a **password-protected web UI** — no CLI or hand-edited config
   latest value of each point instead (no burst of stale readings after an outage).
   Stopping or restarting a mapping waits at most 3 s for the broker to take its last
   message (`offline`, or a Sparkplug NDEATH; beyond that the Last-Will says the same),
-  without holding up the other mappings or the UI. **Retain the data** (plain format)
+  without holding up the other mappings or the UI. **MQTT version** (`mqtt.protocol`) is
+  3.1.1 by default; with **5** the connection speaks MQTT 5 (paho-mqtt 1.6 and 2.x):
+  **Clean start** (on by default; off, with a client ID and a **session expiry**, the
+  broker keeps the subscriptions and delivers the QoS 1 commands that came while the
+  connection was away — so leave it on unless you want exactly that), a **message expiry
+  of retained data** (off by default: the broker stops handing out a retained line or
+  value that long after it was published), and the broker's reason codes in the log and
+  the status (`reason_code`: why it refused or ended the connection; `rejected`:
+  publications it refused, with paho-mqtt 2.x). Sparkplug B on MQTT 5 always connects with
+  clean start and no session, as its specification asks. **Retain the data** (plain format)
   publishes the serial lines and the polled Modbus values retained, so a subscriber that
   connects later (Home Assistant, Node-RED, Telegraf) gets the last one at once instead of
   waiting for the next poll or line (Sparkplug B never retains data, command results are

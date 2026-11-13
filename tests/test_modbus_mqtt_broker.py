@@ -21,6 +21,8 @@ the Will, retained messages and reconnects all run as they do in service. Checks
     link dropped: the broker publishes the NDEATH Will, the next session's Will and NBIRTH
     carry bdSeq 1; an NCMD rebirth gives a new NBIRTH; stop: NDEATH with the session's
     bdSeq.
+The plain and the Sparkplug B checks run once more with the mapping on MQTT 5
+(mqtt.protocol "5"): the same topics, payloads, commands, Wills and reconnects.
 Needs paho-mqtt (skips without it; SER2NETWEB_OPTIONAL_TESTS=1 makes that a failure). Runs
 with paho-mqtt 2.x and 1.6.
 
@@ -40,6 +42,7 @@ from ser2netweb.config import MappingConfig
 from ser2netweb.engine import modbus, serial_io, sparkplug
 from ser2netweb.engine.modbus_gateway import ModbusGatewayRunner
 
+MQTT: dict = {}  # MQTT settings every gateway here gets on top of its own (the version)
 POINTS = [
     {"name": "temp", "unit": 1, "fn": 4, "address": 0, "dtype": "float32"},
     {"name": "setpoint", "unit": 1, "fn": 3, "address": 10, "dtype": "int16", "writable": True},
@@ -122,7 +125,7 @@ async def gateway(broker, slave, fmt="plain", logs=None, mqtt=None, points=POINT
                     "port": free_port()},
         "options": {"modbus_response_timeout_s": timeout},
         "mqtt": dict({"enabled": True, "host": "127.0.0.1", "port": broker.port,
-                      "base_topic": "plant/a", "payload_format": fmt}, **(mqtt or {})),
+                      "base_topic": "plant/a", "payload_format": fmt}, **MQTT, **(mqtt or {})),
         "modbus_poll": {"interval_s": 0.2, "points": points}})
     m.validate()
     m.validate_input()
@@ -335,6 +338,17 @@ async def main():
         await flood_checks(broker)
     with MqttBroker() as broker:
         await sparkplug_checks(broker)
+    MQTT["protocol"] = "5"
+    try:
+        with MqttBroker() as broker:
+            await plain_checks(broker)
+            assert {c["protocol"] for c in broker.connects} == {5}, broker.connects
+        with MqttBroker() as broker:
+            await sparkplug_checks(broker)
+            assert {(c["protocol"], c["clean"]) for c in broker.connects} == {(5, True)}
+    finally:
+        MQTT.clear()
+    print("the plain and the Sparkplug B checks again over MQTT 5  OK")
 
 
 if __name__ == "__main__":

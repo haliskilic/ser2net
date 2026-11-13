@@ -19,6 +19,36 @@ A mapping has one MQTT connection to one broker (**MQTT publishing** in the mapp
 bridge has no MQTT, and nor does a Modbus gateway without poll points (both are logged as
 settings that do nothing).
 
+## MQTT version
+
+The connection speaks MQTT 3.1.1 unless the mapping's **MQTT version** (`mqtt.protocol`) is
+`"5"`. Topics, payloads and commands are the same with both; MQTT 5 adds:
+
+| Setting | `config.json` | What it does | Default |
+|---|---|---|---|
+| **Clean start** | `mqtt.clean_start` | on: the broker begins a new session at every connect. Off (needs a **Client ID** and a session expiry to be of use): the broker keeps the session — the subscriptions and the QoS 1 messages for them — while the connection is away | on |
+| **Session expiry (s)** | `mqtt.session_expiry_s` | how long the broker keeps the session after the connection ends; 0: not at all | 0 |
+| **Message expiry of retained data (s)** | `mqtt.message_expiry_s` | retained lines and values (**Retain the data**) carry this message expiry: the broker stops handing one out that long after it was published, so a subscriber that connects later does not take a stale value for a current one. Not on `<topic>/status`, the units' states or command answers. 0: never | 0 |
+
+- With clean start off, a `/set` (or a `<topic>/tx`) that another client published at QoS 1
+  while the gateway was away is delivered, and written, when it connects again — up to
+  the session expiry later. Leave clean start on unless that is what you want; a publisher
+  can bound it with a message expiry of its own.
+- The broker's reason codes are named in the mapping's log and kept in its status
+  (`status.mqtt`): `reason_code` is the code of the CONNACK that refused the connection or
+  of the DISCONNECT the broker ended it with (`Not authorized (reason code 0x87)`,
+  `Session taken over (reason code 0x8E)`), a refused subscription is logged with its
+  reason, and `rejected` counts the QoS 1/2 publications the broker answered with a
+  failure (not authorized, quota exceeded; each reason is logged once per connection).
+- Sparkplug B on MQTT 5 always connects with clean start and session expiry 0, as the
+  Sparkplug 3.0 specification asks; the two settings are then not used, and nothing is
+  retained, so nor is the message expiry.
+- paho-mqtt 1.6 speaks MQTT 5 too, but does not report why the broker refused a
+  publication or sent a DISCONNECT (the log then says the connection was lost); paho-mqtt
+  2.x does. MQTT 5's request / response properties (response topic, correlation data),
+  topic aliases and shared subscriptions are not used.
+- The three settings do nothing with MQTT 3.1.1 (the form and the log say so).
+
 ## Plain topics
 
 | Topic | Payload | Retained | QoS |
@@ -165,6 +195,8 @@ curl -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/jso
 
 For Sparkplug B add `"payload_format": "sparkplug_b"` (and optionally
 `"sparkplug_group_id"`, `"sparkplug_node_id"`, `"sparkplug_primary_host_id"`) to `mqtt`.
+For MQTT 5 add `"protocol": "5"` (and optionally `"clean_start"`, `"session_expiry_s"`,
+`"message_expiry_s"`).
 `GET /api/v1/openapi.json` lists every field with its default; `GET /api/v1/status` gives
 each point's last value, when it was read and why its last read failed, each unit's state
 and the MQTT connection's state.
@@ -189,3 +221,6 @@ and the MQTT connection's state.
 - A 2.8 node (a fleet edit from one) or going back to 2.8 drops `word_order`, `bit`,
   `length`, `min`, `max`, `allowed`, `poll`, the block reads, the unit map, the JSON
   values, the unit states and the MQTT TLS files, and 2.8 can't poll the new types.
+- A 3.0 node (a fleet edit from one keeps them; its own mappings can't have them) or
+  going back to 3.0 drops `mqtt.protocol`, `clean_start`, `session_expiry_s` and
+  `message_expiry_s`: the mapping then speaks MQTT 3.1.1.

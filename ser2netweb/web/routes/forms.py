@@ -120,6 +120,8 @@ def _field_label(name: str) -> str:
         "opt_max_connection_time_s": _("Max connection time (s)"),
         "opt_trace_max_mb": _("Trace file size (MB)"), "opt_trace_keep": _("Rotated trace files kept"),
         "mqtt_port": _("MQTT broker port"), "mqtt_qos": "QoS",
+        "mqtt_session_expiry_s": _("MQTT session expiry"),
+        "mqtt_message_expiry_s": _("MQTT message expiry"),
     }.get(key, key)
     return _("{0} (serial port B)").format(label) if side_b else label
 
@@ -233,6 +235,10 @@ _OPTIONAL_FORM_FIELDS = {
     # Modbus value format (shown for plain-format points; the select is its own marker)
     "mqtt_retain_shown": ("mqtt", ("retain",)),
     "mqtt_value_format": ("mqtt", ("value_format",)),
+    # the MQTT version (3.1: the select is its own marker) and MQTT 5's settings, shown
+    # (and posted) for version 5 only: a clean start checkbox is absent when unticked
+    "mqtt_protocol": ("mqtt", ("protocol",)),
+    "mqtt_v5_shown": ("mqtt", ("clean_start", "session_expiry_s", "message_expiry_s")),
     # MQTT over TLS: CA file, client certificate (mutual TLS), host name check (2.9)
     "mqtt_ca_file": ("mqtt", ("ca_file", "client_cert", "client_key", "client_key_password",
                               "tls_check_hostname")),
@@ -466,6 +472,12 @@ def _build_mapping_dict(form, strict: bool) -> dict:
                if "mqtt_retain_shown" in form else {}),
             **({"value_format": form.get("mqtt_value_format", "text")}
                if "mqtt_value_format" in form else {}),
+            **({"protocol": form.get("mqtt_protocol", "3.1.1")}
+               if "mqtt_protocol" in form else {}),
+            **({"clean_start": _checkbox(form, "mqtt_clean_start"),
+                "session_expiry_s": _num(form, "mqtt_session_expiry_s", 0, strict=strict),
+                "message_expiry_s": _num(form, "mqtt_message_expiry_s", 0, strict=strict)}
+               if "mqtt_v5_shown" in form else {}),
             **({"ca_file": form.get("mqtt_ca_file", "").strip(),
                 "client_cert": form.get("mqtt_client_cert", "").strip(),
                 "client_key": form.get("mqtt_client_key", "").strip(),
@@ -701,6 +713,7 @@ FORM_BLOCKS_SINCE = {
     "point_options": (2, 9, 0),     # point keys of 2.9 (min, max, word_order ...), editor
     "value_format": (2, 9, 0),      # MQTT values as JSON
     "unit_status": (2, 9, 0),       # <topic>/unit<N>/status
+    "mqtt5": (3, 1, 0),             # MQTT version, clean start, session and message expiry
 }
 
 

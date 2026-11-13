@@ -1325,6 +1325,8 @@ def modbus_unit_map(opts: MappingOptions) -> dict[int, int]:
 # Per-mapping MQTT publishing (optional northbound to an IIoT broker)
 # ---------------------------------------------------------------------------
 MQTT_VALUE_FORMATS = ("text", "json")  # plain-format Modbus values (mqtt.value_format)
+MQTT_PROTOCOLS = ("3.1.1", "5")        # mqtt.protocol (engine/mqtt_pub.PROTOCOLS)
+MQTT_EXPIRY_MAX_S = 0xFFFFFFFF         # an MQTT 5 expiry interval: 32 bits of seconds
 MQTT_FORMATS = ("plain", "sparkplug_b")
 # what ends a serial line published to MQTT (MqttSettings.line_end)
 MQTT_LINE_ENDS = ("lf", "cr", "any")
@@ -1394,6 +1396,22 @@ class MqttSettings:
     # read fails or whose unit stops answering. Edits refuse other values; a stored one
     # (a later version's) is published as text.
     value_format: str = "text"
+    # The MQTT version the connection speaks: "3.1.1" (as before) or "5". Edits refuse
+    # other values; a stored one (a later version's) connects with 3.1.1, and says so in
+    # the log. The three below are MQTT 5's and do nothing with 3.1.1:
+    protocol: str = "3.1.1"
+    # clean start: the broker begins a new session at every connect (as 3.1.1 always
+    # does here). Off, with a client ID and a session expiry: it keeps the session (the
+    # subscriptions, and the QoS 1/2 messages for them that came while the connection
+    # was away) for that long. Sparkplug B always starts clean and keeps no session (the
+    # specification asks so).
+    clean_start: bool = True
+    session_expiry_s: int = 0   # 0: the session ends with the connection
+    # retained data (serial lines, polled values with retain on) expires at the broker
+    # this many seconds after it was published: a subscriber that connects later does not
+    # get a value that old. 0: never (as before). Not for <base_topic>/status and the
+    # units' states.
+    message_expiry_s: int = 0
 
     @staticmethod
     def from_dict(d: dict[str, Any], notes: Optional[list[FieldNote]] = None,
@@ -1845,6 +1863,15 @@ class MappingConfig:
         if self.kind == "net" and self.network.mode == "udp" and self.options.closeon:
             out.append(_("A close-on string is set, but a UDP mapping has no connections to "
                          "close: it is not used."))
+        mq = self.mqtt
+        if mq.enabled and self.kind == "net":
+            session = mq.clean_start is False or mq.session_expiry_s != 0
+            if mq.protocol != "5" and (session or mq.message_expiry_s != 0):
+                out.append(_("Clean start, session expiry and message expiry are MQTT 5 "
+                             "settings: with MQTT 3.1.1 they are not used."))
+            elif mq.protocol == "5" and session and not _plain_mqtt(self):
+                out.append(_("Sparkplug B always starts a clean MQTT session and keeps none: "
+                             "clean start off and the session expiry are not used."))
         if self.kind == "net":  # a list an edit would refuse: only in a hand-edited file
             nets, bad = client_networks(self.network.allowed_client_ips)
             if bad:
@@ -1942,6 +1969,8 @@ class MappingConfig:
                 if not isinstance(host, str) or any(c in host for c in "/+#"):
                     raise ConfigError(_("Sparkplug {0} must not contain '/', '+' or '#'.").format(
                         _("primary host ID")))
+        if self.kind == "net":
+            self._validate_mqtt_version()
         if self.kind == "net" and self.mqtt.enabled and _plain_mqtt(self):
             # (serial lines and their /tx writes too: a subscription to such a topic would
             # take every matching one)
@@ -1966,6 +1995,23 @@ class MappingConfig:
             mapping_context(net)
         except TlsFileError as e:
             raise ConfigError(tls_file_message(e)) from None
+
+    def _validate_mqtt_version(self) -> None:
+        """The MQTT version and MQTT 5's settings (an edit's rules: a stored protocol they
+        refuse connects with 3.1.1, a stored expiry they refuse reads as 0)."""
+        mq = self.mqtt
+        if mq.protocol not in MQTT_PROTOCOLS:
+            raise ConfigError(_("The MQTT protocol version must be one of {0}.").format(
+                _choices(MQTT_PROTOCOLS)))
+        for label, value in ((_("MQTT session expiry"), mq.session_expiry_s),
+                             (_("MQTT message expiry"), mq.message_expiry_s)):
+            if not (_is_int(value) and 0 <= value <= MQTT_EXPIRY_MAX_S):
+                raise ConfigError(_("{0} must be a whole number of seconds from 0 to "
+                                    "{1}.").format(label, MQTT_EXPIRY_MAX_S))
+        if (mq.enabled and mq.protocol == "5" and mq.clean_start is False
+                and _plain_mqtt(self) and not str(mq.client_id).strip()):
+            raise ConfigError(_("MQTT clean start off needs a client ID: the broker keeps a "
+                                "session for the client ID it knows."))
 
     def _validate_lines_and_poll(self) -> None:
         """A serial-to-network mapping's MQTT line end and its poll string (an edit's

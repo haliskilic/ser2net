@@ -346,8 +346,8 @@ jobs:
       - run: pip install -r requirements.txt cryptography paho-mqtt==1.6.1
       - name: The MQTT tests (publisher, connection log, TLS, Modbus edge mode with a broker)
         run: |
-          for t in test_mqtt_pub test_mqtt_link test_mqtt_tls test_modbus_mqtt_write \
-                   test_modbus_mqtt_broker; do
+          for t in test_mqtt_pub test_mqtt_link test_mqtt5 test_mqtt_tls \
+                   test_modbus_mqtt_write test_modbus_mqtt_broker; do
             python "tests/$t.py" || exit 1
           done
 

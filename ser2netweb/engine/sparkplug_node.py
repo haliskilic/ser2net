@@ -39,7 +39,9 @@ metrics are that unit's poll points:
     the retained STATE on subscribe), and when the host goes offline the node sends
     NDEATH, disconnects and connects again, to wait once more. A STATE older than the
     newest one taken is ignored. One broker only: no list to walk, and nothing is kept
-    for a host that is away (no store and forward).
+    for a host that is away (no store and forward);
+  * with mqtt.protocol "5" the node speaks MQTT 5, always with clean start and no session
+    kept (session expiry 0), as Sparkplug 3.0 asks of an MQTT 5 edge node.
 After a lost connection the next session gets bdSeq + 1 (the Will is renewed in
 MqttPublisher's disconnect hook), as the specification asks. With a data folder
 (``state_dir``), the bdSeq of every session is stored there per edge node (BDSEQ_FILE), and
@@ -253,7 +255,8 @@ class SparkplugNode:
             subscriptions.update(dict.fromkeys(state_topics, self.on_host_state))
         self._pub = MqttPublisher(self.mapping.mqtt, logger=self._log, will=self._will,
                                   birth=False, on_connect=self.birth, accept_retained=False,
-                                  subscriptions=subscriptions, state_topics=state_topics)
+                                  subscriptions=subscriptions, state_topics=state_topics,
+                                  clean=True)
         host = f"; births wait for primary host {self.primary_host!r}" if self.primary_host else ""
         self._log(f"Sparkplug B edge node {self.group}/{self.node}: "
                   f"{len(self.devices)} device(s), {len(self.points)} metrics{host}")
