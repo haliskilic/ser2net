@@ -16,10 +16,16 @@ with an unsupported or mismatched crypto stack:
       must be at least the given series (OpenSSL 3.0 reached end of life in 2026-09).
 
   sboms OUT/*.cdx.json --min-openssl 3.5
-      Run at publish time over the per-platform SBOMs: every one must report the same
-      CPython and OpenSSL version, and OpenSSL must be at least the given series — so a
-      platform can't silently fall back to an older interpreter (as a frozen setup-python
-      minor once did on Windows).
+      Run at publish time over the per-platform SBOMs: every one must describe the same
+      ser2netweb version and report the same CPython and OpenSSL version, and OpenSSL must
+      be at least the given series — so a platform can't silently fall back to an older
+      interpreter (as a frozen setup-python minor once did on Windows).
+
+  assets OUT
+      Run once release.yml has named the release files: OUT holds exactly the files a
+      release has (RELEASE_ASSETS: the executables with their SBOMs and license texts, the
+      install script, the unit, SHA256SUMS), none under another name (the ser2net-* names
+      of 2.9.x and older included), and SHA256SUMS lists every other one of them.
 
 Standard library only.
 """
@@ -104,6 +110,44 @@ def check_interpreter(min_openssl: str) -> int:
     return 0
 
 
+# The files of a release (release.yml's attest job names them, publish uploads exactly
+# those). Up to 2.9.x they were called ser2net-*; a release has no file under the old names.
+RELEASE_EXECUTABLES = ("ser2netweb-linux-x64", "ser2netweb-linux-arm64",
+                       "ser2netweb-windows-x64.exe")
+RELEASE_FILES = ("ser2netweb-install.sh", "ser2netweb-standalone.service")
+CHECKSUMS = "SHA256SUMS"
+
+
+def release_assets() -> list[str]:
+    """Every file a release has: each executable with its SBOM and license texts, the
+    other files and SHA256SUMS."""
+    names = [CHECKSUMS, *RELEASE_FILES]
+    for exe in RELEASE_EXECUTABLES:
+        stem = exe[:-len(".exe")] if exe.endswith(".exe") else exe
+        names += [exe, f"{stem}.cdx.json", f"{stem}.THIRD-PARTY-LICENSES.txt"]
+    return sorted(names)
+
+
+def check_assets(folder: str) -> int:
+    want = release_assets()
+    have = sorted(os.listdir(folder))
+    problems = [f"missing: {n}" for n in want if n not in have]
+    problems += [f"not a release file: {n}" for n in have if n not in want]
+    if CHECKSUMS in have:
+        with open(os.path.join(folder, CHECKSUMS), encoding="utf-8") as fh:
+            listed = sorted(line.split(None, 1)[1].lstrip("*").strip()
+                            for line in fh if line.strip())
+        if listed != [n for n in want if n != CHECKSUMS]:
+            problems.append(f"{CHECKSUMS} lists {', '.join(listed) or 'nothing'}, not every "
+                            "other release file")
+    if problems:
+        print(f"release guard: {folder} is not the set of release files:\n  "
+              + "\n  ".join(problems), file=sys.stderr)
+        return 1
+    print(f"release guard OK: {len(want)} release files, each listed in {CHECKSUMS}")
+    return 0
+
+
 def _component(bom: dict, name: str) -> str | None:
     for comp in bom.get("components", []):
         if comp.get("name") == name:
@@ -114,10 +158,19 @@ def _component(bom: dict, name: str) -> str | None:
 def check_sboms(paths: list[str], min_openssl: str) -> int:
     want = _series(min_openssl)
     seen: dict[str, tuple[str | None, str | None]] = {}
+    products: dict[str, str] = {}
     for path in paths:
         with open(path, encoding="utf-8") as fh:
             bom = json.load(fh)
         seen[path] = (_component(bom, "cpython"), _component(bom, "openssl"))
+        product = bom.get("metadata", {}).get("component", {})
+        products[path] = f"{product.get('name')} {product.get('version')}"
+    if len(set(products.values())) != 1 or not next(iter(products.values())).startswith(
+            "ser2netweb "):
+        lines = "\n".join(f"  {p}: {what}" for p, what in products.items())
+        print("release guard: the SBOMs do not all describe the same ser2netweb version:\n"
+              + lines, file=sys.stderr)
+        return 1
     pairs = set(seen.values())
     if len(pairs) != 1 or None in next(iter(pairs)):
         lines = "\n".join(f"  {p}: CPython {c}, OpenSSL {o}" for p, (c, o) in seen.items())
@@ -129,7 +182,8 @@ def check_sboms(paths: list[str], min_openssl: str) -> int:
         print(f"release guard: OpenSSL {openssl} is older than the minimum supported "
               f"{min_openssl} series", file=sys.stderr)
         return 1
-    print(f"release guard OK: every SBOM reports CPython {cpython}, OpenSSL {openssl}")
+    print(f"release guard OK: every SBOM describes {next(iter(products.values()))} with "
+          f"CPython {cpython}, OpenSSL {openssl}")
     return 0
 
 
@@ -145,11 +199,15 @@ def main(argv: list[str]) -> int:
     s = sub.add_parser("sboms", help="check the per-platform SBOMs agree and are supported")
     s.add_argument("sbom", nargs="+")
     s.add_argument("--min-openssl", default="3.5")
+    a = sub.add_parser("assets", help="check a folder holds exactly the release files")
+    a.add_argument("folder")
     args = ap.parse_args(argv)
     if args.cmd == "tag":
         return check_tag(args.tag, args.root, os.environ.get("GITHUB_OUTPUT"))
     if args.cmd == "interpreter":
         return check_interpreter(args.min_openssl)
+    if args.cmd == "assets":
+        return check_assets(args.folder)
     return check_sboms(args.sbom, args.min_openssl)
 
 

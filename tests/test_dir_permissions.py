@@ -117,7 +117,7 @@ def test_windows_owner_only_acl():
 
     # icacls must be run by its full System32 path: an unqualified name is searched
     # in the program's own folder and the current directory BEFORE System32, so an
-    # icacls.exe planted next to ser2net.exe (e.g. in Downloads) would run instead
+    # icacls.exe planted next to ser2netweb.exe (e.g. in Downloads) would run instead
     calls, real_run = [], subprocess.run
     subprocess.run = lambda cmd, *a, **kw: calls.append(cmd) or real_run(cmd, *a, **kw)
     try:

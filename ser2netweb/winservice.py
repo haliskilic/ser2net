@@ -1,19 +1,27 @@
 """Run ser2netweb as a Windows service, with the Windows API itself (ctypes) — neither
 pywin32 nor a wrapper program (NSSM, Shawl) is needed.
 
-    ser2net.exe --install-service [--data-dir DIR] [--service-name NAME] [--reconfigure]
-    ser2net.exe --uninstall-service [--service-name NAME]
+    ser2netweb.exe --install-service [--data-dir DIR] [--service-name NAME] [--reconfigure]
+    ser2netweb.exe --uninstall-service [--service-name NAME]
 
 ``--install-service`` registers ser2netweb to start at boot as LocalSystem, restart 5 s
 after it dies or exits with an error, and starts it. A standalone exe copies itself to
-%ProgramFiles%\\ser2net first and runs from there; a new service keeps its data in
-%ProgramData%\\ser2net. Both folders are left to SYSTEM and Administrators alone: nobody
+%ProgramFiles%\\ser2netweb first and runs from there; a new service keeps its data in
+%ProgramData%\\ser2netweb. Both folders are left to SYSTEM and Administrators alone: nobody
 else may change what the service runs. A source checkout (python + ser2netweb.py) can't
 move, so it is refused where another account could change it. Run again on an existing
 service, it upgrades it in place: stops it, keeps its data directory, puts the current
 build in place, starts it — and on a failure puts the previous version back.
 
-The Service Control Manager then runs ``ser2net.exe --service --data-dir ...``: ``run()``
+Up to 2.9.x the product was ser2net: the default service had that name, the exe lived in
+%ProgramFiles%\\ser2net and the data in %ProgramData%\\ser2net (a named service's in a
+folder of its name there). Installing the default service moves such a 2.x service over:
+the ser2net service, recognised as ours by its registered command line, is stopped and,
+once the new ser2netweb service runs, deleted. A data directory in 2.x's default place moves
+to 3.x's when that one doesn't exist yet; any other stays where it is. A named service
+keeps its name and is upgraded in place the same way.
+
+The Service Control Manager then runs ``ser2netweb.exe --service --data-dir ...``: ``run()``
 hands the process to the SCM dispatcher, runs the normal server in the service thread and
 stops it cleanly on a stop request or at shutdown. Windows only; everything is imported
 lazily so the module loads (and its pure decision helpers are testable) on any OS.
@@ -23,6 +31,7 @@ from __future__ import annotations
 import contextlib
 import ctypes
 import functools
+import ntpath
 import os
 import re
 import sys
@@ -36,11 +45,16 @@ from . import clock
 # ctypes with its Windows-only parts (WinDLL, WINFUNCTYPE, get_last_error, FormatError)
 _win: Any = ctypes
 
-DEFAULT_NAME = "ser2net"
+DEFAULT_NAME = "ser2netweb"
 _NAME = re.compile(r"^[A-Za-z0-9_.-]{1,64}$")
 # where a frozen build installs itself so only administrators can replace the exe a
-# LocalSystem service runs (see install()); the folder name under %ProgramFiles%
-INSTALL_SUBDIR = "ser2net"
+# LocalSystem service runs (see install()); the folder name under %ProgramFiles% (and
+# %ProgramData%, for the data of a new service)
+INSTALL_SUBDIR = "ser2netweb"
+# the same up to 2.9.x, when the product was called ser2net: what --install-service of
+# the default service moves over, and --uninstall-service finds
+OLD_DEFAULT_NAME = "ser2net"
+OLD_INSTALL_SUBDIR = "ser2net"
 
 # winsvc.h
 SC_MANAGER_CONNECT = 0x0001
@@ -131,7 +145,12 @@ def service_command(name: str, data_dir: str, config: Optional[str] = None,
 
 
 def display_name(name: str) -> str:
-    return "ser2net" if name == DEFAULT_NAME else f"ser2net ({name})"
+    return "ser2netweb" if name == DEFAULT_NAME else f"ser2netweb ({name})"
+
+
+def old_display_name(name: str) -> str:
+    """What 2.x called the service in the Services list (and its firewall rule)."""
+    return "ser2net" if name == OLD_DEFAULT_NAME else f"ser2net ({name})"
 
 
 # --------------------------------------------------------------------------
@@ -151,10 +170,10 @@ def install_dir() -> str:
 
 
 def installed_exe_path(name: str) -> str:
-    """Where the service's exe lives after install: ser2net.exe for the default service,
+    """Where the service's exe lives after install: ser2netweb.exe for the default service,
     <name>.exe for a named one, so several services share one admin-only folder but each
     upgrades to its own path."""
-    return os.path.join(install_dir(), "ser2net.exe" if name == DEFAULT_NAME else f"{name}.exe")
+    return os.path.join(install_dir(), "ser2netweb.exe" if name == DEFAULT_NAME else f"{name}.exe")
 
 
 def default_service_data_dir(name: str) -> str:
@@ -162,6 +181,81 @@ def default_service_data_dir(name: str) -> str:
     which would otherwise sit under %ProgramFiles% read-only to the service)."""
     base = os.path.join(program_data(), INSTALL_SUBDIR)
     return base if name == DEFAULT_NAME else os.path.join(base, name)
+
+
+def old_install_dir() -> str:
+    """Where 2.x's --install-service put the exe (%ProgramFiles%\\ser2net)."""
+    return os.path.join(program_files(), OLD_INSTALL_SUBDIR)
+
+
+def old_installed_exe_path(name: str) -> str:
+    return os.path.join(old_install_dir(),
+                        "ser2net.exe" if name == OLD_DEFAULT_NAME else f"{name}.exe")
+
+
+def old_default_data_dir(name: str) -> str:
+    """The data directory 2.x gave a new service of this name (%ProgramData%\\ser2net, or a
+    folder of the name in it)."""
+    base = os.path.join(program_data(), OLD_INSTALL_SUBDIR)
+    return base if name == OLD_DEFAULT_NAME else os.path.join(base, name)
+
+
+def is_ours(registered: Optional[dict], name: str) -> bool:
+    """A registered command line (parse_service_command) that --install-service wrote for
+    the service `name`, 2.x's included: --service with that --service-name and a
+    --data-dir, run by ser2net(web).exe (or a copy named after the service, or the release
+    download's ser2net(web)-windows-x64.exe) or by python with ser2net(web).py. What
+    --install-service of the default service moves over and deletes must pass this; a
+    service of another program called ser2net never does."""
+    if not registered or registered.get("service_name") != name or not registered.get("data_dir"):
+        return False
+    script = registered.get("script")
+    if script:
+        return ntpath.basename(script).lower() in ("ser2net.py", "ser2netweb.py")
+    exe = ntpath.basename(registered.get("executable") or "").lower()
+    return exe.endswith(".exe") and ("ser2net" in exe or exe == f"{name.lower()}.exe")
+
+
+# What a data directory holds of its own (config.OWN_NAMES' folders): any other folder in a
+# 2.x default data directory may be another service's (named services kept theirs inside
+# %ProgramData%\\ser2net), so such a directory isn't moved.
+_OWN_FOLDERS = frozenset({"backups", "logs", "traces", "tls", "admin-requests", "lost+found"})
+
+
+def plan_data_move(registered: Optional[dict], old_name: str, name: str, data_dir: str,
+                   config: Optional[str], frozen: bool,
+                   exists: Callable[[str], bool] = os.path.lexists,
+                   folders: Optional[Callable[[str], list[str]]] = None):
+    """Pure decision (any OS): whether a service's data directory moves from 2.x's default
+    place to 3.x's, as (old, new, config at the new place, note), or (None, None, None,
+    note) to keep it (note "" when it never was a candidate). It moves when the standalone
+    exe installs, the service keeps the data directory it has (no --data-dir), that is
+    old_default_data_dir(old_name) with its config.json inside it (a --config elsewhere
+    stays as it is), the new default doesn't exist yet, and no other folder is in it."""
+    old = old_default_data_dir(old_name)
+    new = default_service_data_dir(name)
+    keep = (None, None, None)
+    if (not frozen or not registered or not registered.get("data_dir")
+            or os.path.normcase(os.path.abspath(registered["data_dir"])) != os.path.normcase(old)
+            or os.path.normcase(os.path.abspath(data_dir)) != os.path.normcase(old)
+            or os.path.normcase(old) == os.path.normcase(new)):
+        return (*keep, "")
+    if config and not _inside(config, old):
+        return (*keep, f"keeping the data directory {old}: its configuration is {config}")
+    if exists(new):
+        return (*keep, f"keeping the data directory {old}: {new} exists already")
+    if folders is None:
+        def folders(path: str) -> list[str]:
+            return [n for n in os.listdir(path) if os.path.isdir(os.path.join(path, n))]
+    try:
+        others = sorted(n for n in folders(old) if n.lower() not in _OWN_FOLDERS)
+    except OSError:
+        others = []
+    if others:
+        return (*keep, f"keeping the data directory {old}: it also holds {', '.join(others)} "
+                       f"(other services' data?); move it to {new} by hand once they moved")
+    new_config = os.path.join(new, os.path.relpath(config, old)) if config else None
+    return old, new, new_config, f"moving the data directory {old} to {new}"
 
 
 def firewall_command(name: str, exe: Optional[str] = None) -> str:
@@ -388,9 +482,9 @@ _api = None
 def require_windows() -> None:
     if os.name != "nt":
         raise ServiceError("Windows services exist only on Windows (on Linux, use systemd: "
-                           "systemd/ser2net.service for a source checkout, "
-                           "ser2net-standalone.service for the binary, which "
-                           "ser2net-install.sh installs, both attached to every release; "
+                           "systemd/ser2netweb.service for a source checkout, "
+                           "ser2netweb-standalone.service for the binary, which "
+                           "ser2netweb-install.sh installs, both attached to every release; "
                            "README: Run as a service).")
 
 
@@ -906,7 +1000,7 @@ def location_warning() -> Optional[str]:
 
 
 def _check_adoptable(data_dir: str, config_path: str) -> None:
-    """A new service doesn't take over a data directory (or the shared %ProgramData%\\ser2net
+    """A new service doesn't take over a data directory (or the shared %ProgramData%\\ser2netweb
     above a named one, or a --config file elsewhere) that holds anything owned by another
     account: a standard user can create folders in %ProgramData% and leave a config.json
     of their own there."""
@@ -1013,8 +1107,9 @@ def install(name: str, data_dir: Optional[str] = None, config: Optional[str] = N
     """Install the service — or, when it exists, upgrade it in place: stop it, keep its
     data directory (unless --data-dir names another), put the current build in place and
     start it again; on a failure after the stop the previous version is put back and
-    started. `prepare(config_path)` loads (on a first run: creates) the configuration
-    while no instance runs on it, and its result is returned."""
+    started. The default service takes over 2.x's (named ser2net) the same way, and deletes
+    it once it runs. `prepare(config_path)` loads (on a first run: creates) the
+    configuration while no instance runs on it, and its result is returned."""
     api = _advapi()
     name = check_name(name)
     frozen = getattr(sys, "frozen", False) if frozen is None else frozen
@@ -1022,7 +1117,7 @@ def install(name: str, data_dir: Optional[str] = None, config: Optional[str] = N
     scm = api.dll.OpenSCManagerW(None, None, SC_MANAGER_CONNECT | SC_MANAGER_CREATE_SERVICE)
     if not scm:
         raise _fail("Opening the Service Control Manager")
-    svc = None
+    svc = old = None
     try:
         # (a NULL handle comes back as None or 0: one value for every check below)
         svc = api.dll.OpenServiceW(scm, name, SERVICE_QUERY_CONFIG | SERVICE_QUERY_STATUS
@@ -1037,32 +1132,120 @@ def install(name: str, data_dir: Optional[str] = None, config: Optional[str] = N
                                    f"({previous.binary_path}). Pick another --service-name.")
         elif _win.get_last_error() != ERROR_SERVICE_DOES_NOT_EXIST:
             raise _fail("Opening the service")
+        elif name == DEFAULT_NAME:  # the default service of 2.x, to move over
+            old = _old_service(api, scm, log)
+            if old is not None:
+                previous, registered = old.registration, old.registered
         new_default = default_service_data_dir(name) if frozen else default_data_dir
+        given = data_dir
         data_dir, config, notes = choose_install_paths(data_dir, config, registered, new_default)
+        move = None
+        if given is None:
+            src, dest, moved_config, note = plan_data_move(
+                registered, old.name if old else name, name, data_dir, config, frozen)
+            if dest and not _parent_trusted(dest):
+                src, note = None, (f"keeping the data directory {data_dir}: another account "
+                                   f"owns {os.path.dirname(dest)}")
+            if note:
+                notes.append(note)
+            if src and dest:
+                move = (src, dest)
+                data_dir, config = dest, moved_config
         for note in notes:
             log(note)
         _guard_location(frozen, allow_unsafe_location, log)  # before anything is stopped
-        if svc is None:
+        if svc is None and old is None:
             _check_adoptable(data_dir, config or os.path.join(data_dir, "config.json"))
             _wait_lock_free(state_dir(data_dir, config), 0)
         return _install_steps(api, scm, svc, previous, registered, name, data_dir, config,
-                              prepare, frozen, start, log)
+                              prepare, frozen, start, log, old=old, move=move)
     finally:
         if svc:
             api.dll.CloseServiceHandle(svc)
+        if old is not None:
+            api.dll.CloseServiceHandle(old.handle)
         api.dll.CloseServiceHandle(scm)
 
 
+def _old_service(api, scm, log: Callable[[str], None]):
+    """2.x's default service (named ser2net), when it is one --install-service of ours
+    registered (is_ours): its handle, name, registration and parsed command line. A
+    service of that name that runs something else is left alone (None)."""
+    h = api.dll.OpenServiceW(scm, OLD_DEFAULT_NAME, SERVICE_QUERY_CONFIG | SERVICE_QUERY_STATUS
+                             | SERVICE_START | SERVICE_STOP | SERVICE_CHANGE_CONFIG | DELETE) or None
+    if h is None:
+        return None
+    try:
+        registration = _query_registration(api, h)
+    except ServiceError:
+        api.dll.CloseServiceHandle(h)
+        raise
+    registered = parse_service_command(registration.binary_path)
+    if not is_ours(registered, OLD_DEFAULT_NAME):
+        api.dll.CloseServiceHandle(h)
+        log(f"note: the service '{OLD_DEFAULT_NAME}' ({registration.binary_path}) is not one "
+            "ser2net(web) --install-service registered: left as it is")
+        return None
+    log(f"moving the 2.x service '{OLD_DEFAULT_NAME}' over to '{DEFAULT_NAME}' (it is deleted "
+        "once the new one runs)")
+    return SimpleNamespace(handle=h, name=OLD_DEFAULT_NAME, registration=registration,
+                           registered=registered)
+
+
+def _parent_trusted(path: str) -> bool:
+    """The folder a data directory moves into is missing (made admin-only) or not another
+    account's (Windows; True elsewhere)."""
+    parent = os.path.dirname(os.path.abspath(path))
+    if sys.platform != "win32" or not os.path.lexists(parent):
+        return True
+    sec = read_security(parent)
+    return sec is None or not foreign_owner(sec[0], _current_user_sid())
+
+
+def _move_data(src: str, dest: str, log: Callable[[str], None]) -> None:
+    """Move a stopped service's data directory (one rename on the same volume, so its
+    permissions go along); the folder it moves into is made admin-only when missing."""
+    parent = os.path.dirname(os.path.abspath(dest))
+    if not os.path.isdir(parent):
+        _mkdir_admin_only(parent)
+    _retry(lambda: os.rename(src, dest), f"Moving the data directory {src} to {dest}")
+    log(f"moved the data directory {src} to {dest}")
+
+
+def _drop_old_copy(exe: Optional[str], keep: Optional[str], log: Callable[[str], None]) -> None:
+    """After an upgrade or a move to the new names: the exe the service ran before goes
+    when it is a copy 2.x's --install-service made in %ProgramFiles%\\ser2net (with what an
+    interrupted upgrade left next to it); one elsewhere is only named. Best effort."""
+    if not exe or (keep and os.path.normcase(os.path.abspath(exe)) == os.path.normcase(keep)):
+        return
+    if not _inside(exe, old_install_dir()) or not exe.lower().endswith(".exe"):
+        log(f"note: the service no longer runs {exe}; you can delete it")
+        return
+    for path in (exe, exe + ".old", exe + ".new"):
+        if os.path.lexists(path):
+            try:
+                _retry(functools.partial(os.remove, path), f"Removing {path}", timeout=10)
+                log(f"removed {path}")
+            except ServiceError as e:
+                log(f"note: {e}")
+    with contextlib.suppress(OSError):
+        os.rmdir(old_install_dir())  # only when no other service's copy is left in it
+
+
 def _install_steps(api, scm, svc, previous, registered, name, data_dir, config, prepare,
-                   frozen, start, log):
+                   frozen, start, log, old=None, move=None):
     done = SimpleNamespace(stopped=False, placed=None, backup=None, reconfigured=False,
-                           created=None)
+                           created=None, moved=None)
     config_path = config or os.path.join(data_dir, "config.json")
     state = state_dir(data_dir, config)  # (the same as data_dir without --config)
+    exe = None
     try:
-        if svc:
-            done.stopped = _stop_and_wait(api, svc, name, log)
-            _wait_lock_free(state, 30)
+        if svc or old:
+            done.stopped = _stop_and_wait(api, svc or old.handle, old.name if old else name, log)
+            _wait_lock_free(move[0] if move else state, 30)
+        if move:
+            _move_data(move[0], move[1], log)
+            done.moved = move
         _mkdir_admin_only(data_dir)
         loaded = prepare(config_path)
         # after prepare: loading the config may have added a grant for the installing
@@ -1072,7 +1255,6 @@ def _install_steps(api, scm, svc, previous, registered, name, data_dir, config, 
         if not _inside(config_path, data_dir):
             _harden_file(config_path)
             _require_protected([config_path], "The configuration file")
-        exe = None
         if frozen:
             exe = installed_exe_path(name)
             if os.path.normcase(os.path.abspath(sys.executable)) != os.path.normcase(exe):
@@ -1105,12 +1287,13 @@ def _install_steps(api, scm, svc, previous, registered, name, data_dir, config, 
         if start:
             _start_and_wait(api, target, name, state, log)
     except BaseException as e:
-        if svc is None and done.created is not None:
+        if svc is None and old is None and done.created is not None:
             # a new service that doesn't start stays registered, as before (see all.log)
             if isinstance(e, (ServiceError, SystemExit, KeyboardInterrupt)):
                 raise
             raise ServiceError(f"{type(e).__name__}: {e}") from e
-        note = _roll_back(api, svc, previous, done, name)
+        note = (_roll_back_move(api, old, done, name) if old is not None
+                else _roll_back(api, svc, previous, done, name))
         if isinstance(e, (SystemExit, KeyboardInterrupt)):
             if note:
                 log(note)
@@ -1123,8 +1306,24 @@ def _install_steps(api, scm, svc, previous, registered, name, data_dir, config, 
     if done.backup:
         with contextlib.suppress(OSError):
             os.remove(done.backup)
-    if registered and exe and os.path.normcase(registered["executable"]) != os.path.normcase(exe):
-        log(f"note: the service no longer runs {registered['executable']}; you can delete it")
+    if old is not None:  # the new service runs: the 2.x one goes
+        if not api.dll.DeleteService(old.handle) and \
+                _win.get_last_error() != ERROR_SERVICE_MARKED_FOR_DELETE:
+            log(f"note: the 2.x service '{old.name}' could not be deleted ({_fail('Removing it')}); "
+                f"remove it with: sc delete {old.name}")
+        else:
+            log(f"removed the 2.x service '{old.name}'")
+    if registered and exe:
+        _drop_old_copy(registered["executable"], exe, log)
+        if os.path.normcase(registered["executable"]) != os.path.normcase(exe):
+            rule = old_display_name(old.name if old else name)
+            log(f"note: a Windows Firewall rule for the old program (e.g. \"{rule}\") no longer "
+                f"lets other hosts in: add one for {exe} (the command is printed below when the "
+                f'service listens beyond this machine) and delete the old one: netsh advfirewall '
+                f'firewall delete rule name="{rule}"')
+    if done.moved:
+        with contextlib.suppress(OSError):  # 2.x's %ProgramData%\ser2net, once it is empty
+            os.rmdir(old_default_data_dir(OLD_DEFAULT_NAME))
     exposed = _exposed_ancestors(data_dir)
     if not _inside(config_path, data_dir):
         exposed += [a for a in _exposed_ancestors(config_path) if a not in exposed]
@@ -1134,6 +1333,34 @@ def _install_steps(api, scm, svc, previous, registered, name, data_dir, config, 
             f"data to {default_service_data_dir(name)} (stop the service, copy the folder, then "
             "--install-service --data-dir <new folder>; keep the old one until it works).")
     return loaded
+
+
+def _roll_back_move(api, old, done, name: str) -> str:
+    """Undo a failed move of a 2.x service to the new name: the new service goes, the data
+    directory and the program copy too, and the 2.x service is started again."""
+    try:
+        if done.created is not None:
+            _stop_and_wait(api, done.created, name, lambda *_: None)
+            api.dll.DeleteService(done.created)
+        if done.placed:
+            if done.backup:
+                _retry(lambda: os.replace(done.backup, done.placed),
+                       f"Putting the previous {done.placed} back")
+            else:
+                with contextlib.suppress(OSError):
+                    os.remove(done.placed)
+        if done.moved:
+            _retry(lambda: os.rename(done.moved[1], done.moved[0]),
+                   f"Moving the data directory back to {done.moved[0]}")
+        if not done.stopped:
+            return f"the 2.x service '{old.name}' was left as it was"
+        if api.dll.StartServiceW(old.handle, 0, None) and \
+                _wait_state(api, old.handle, SERVICE_RUNNING) == SERVICE_RUNNING:
+            return f"the 2.x service '{old.name}' is running again"
+        return f"the 2.x service '{old.name}' was put back but did not start; see its all.log"
+    except Exception as e:  # report it; the first failure stays the error
+        return (f"putting the 2.x service back failed too: {e}; check it with sc qc {old.name} "
+                f"and sc qc {name}")
 
 
 def _roll_back(api, svc, previous, done, name: str) -> str:
@@ -1148,14 +1375,18 @@ def _roll_back(api, svc, previous, done, name: str) -> str:
             api.dll.ChangeServiceConfigW(svc, previous.service_type, previous.start_type,
                                          previous.error_control, previous.binary_path, None,
                                          None, None, None, None, previous.display_name)
-        if done.placed:
+        if done.placed or done.moved:
             _stop_and_wait(api, svc, name, lambda *_: None)  # the new build may have started
+        if done.placed:
             if done.backup:
                 _retry(lambda: os.replace(done.backup, done.placed),
                        f"Putting the previous {done.placed} back")
             else:
                 with contextlib.suppress(OSError):
                     os.remove(done.placed)
+        if done.moved:
+            _retry(lambda: os.rename(done.moved[1], done.moved[0]),
+                   f"Moving the data directory back to {done.moved[0]}")
         if not done.stopped:
             return "the previous version was left as it was" if done.placed or done.reconfigured else ""
         if api.dll.StartServiceW(svc, 0, None) and \
@@ -1247,23 +1478,46 @@ class StartProgress:
 
 
 def uninstall(name: str, log: Callable[[str], None] = print) -> None:
+    """Stop and remove the service `name`; for the default name, 2.x's default service
+    (ser2net) when there is no ser2netweb service and that one is ours. Its exe copy in
+    %ProgramFiles%\\ser2netweb (or 2.x's %ProgramFiles%\\ser2net) goes too, its data stays."""
     api = _advapi()
     name = check_name(name)
     scm = api.dll.OpenSCManagerW(None, None, SC_MANAGER_CONNECT)
     if not scm:
         raise _fail("Opening the Service Control Manager")
+    access = SERVICE_QUERY_CONFIG | SERVICE_QUERY_STATUS | SERVICE_STOP | DELETE
+    registered = None
     try:
-        svc = api.dll.OpenServiceW(scm, name, SERVICE_QUERY_CONFIG | SERVICE_QUERY_STATUS
-                                   | SERVICE_STOP | DELETE)
+        svc = api.dll.OpenServiceW(scm, name, access)
         if not svc:
-            if _win.get_last_error() == ERROR_SERVICE_DOES_NOT_EXIST:
+            if _win.get_last_error() != ERROR_SERVICE_DOES_NOT_EXIST:
+                raise _fail("Opening the service")
+            svc = api.dll.OpenServiceW(scm, OLD_DEFAULT_NAME, access) if name == DEFAULT_NAME else None
+            if svc:
+                try:
+                    registered = parse_service_command(_query_registration(api, svc).binary_path)
+                except ServiceError:
+                    registered = None
+                if not is_ours(registered, OLD_DEFAULT_NAME):
+                    api.dll.CloseServiceHandle(svc)
+                    svc = None
+            if not svc:
                 raise ServiceError(f"There is no service named '{name}'.")
-            raise _fail("Opening the service")
+            log(f"there is no service '{name}': removing 2.x's '{OLD_DEFAULT_NAME}'")
+            name = OLD_DEFAULT_NAME
+        elif name == DEFAULT_NAME:
+            other = api.dll.OpenServiceW(scm, OLD_DEFAULT_NAME, SERVICE_QUERY_CONFIG)
+            if other:
+                api.dll.CloseServiceHandle(other)
+                log(f"note: a service '{OLD_DEFAULT_NAME}' (2.x's name) is installed too: "
+                    f"remove it with --uninstall-service --service-name {OLD_DEFAULT_NAME}")
         try:
-            try:  # where its data is, for the last message (best effort)
-                registered = parse_service_command(_query_registration(api, svc).binary_path)
-            except ServiceError:
-                registered = None
+            if registered is None:
+                try:  # where its data is, for the last message (best effort)
+                    registered = parse_service_command(_query_registration(api, svc).binary_path)
+                except ServiceError:
+                    registered = None
             data_dir = registered.get("data_dir") if registered else None
             _stop_and_wait(api, svc, name, log)  # its process gone: the exe is free below
             if not api.dll.DeleteService(svc):
@@ -1274,18 +1528,28 @@ def uninstall(name: str, log: Callable[[str], None] = print) -> None:
             api.dll.CloseServiceHandle(svc)
     finally:
         api.dll.CloseServiceHandle(scm)
-    # drop the copy this service's install put into %ProgramFiles%\ser2net (and what an
-    # interrupted upgrade left next to it); best effort
-    dest = installed_exe_path(name)
-    for path in (dest, dest + ".old", dest + ".new"):
-        if os.path.lexists(path):
-            try:
-                _retry(functools.partial(os.remove, path), f"Removing {path}", timeout=10)
-                log(f"removed {path}")
-            except ServiceError as e:
-                log(f"note: {e}")
-    with contextlib.suppress(OSError):
-        os.rmdir(install_dir())  # only when no other service's copy is left in it
+    # drop the copy this service's install put into %ProgramFiles%\ser2netweb (or 2.x's
+    # %ProgramFiles%\ser2net), and what an interrupted upgrade left next to it; best effort
+    copies = [installed_exe_path(name), old_installed_exe_path(name)]
+    exe = registered.get("executable") if registered else None
+    if exe and exe.lower().endswith(".exe") and (_inside(exe, install_dir())
+                                                 or _inside(exe, old_install_dir())):
+        copies.append(exe)
+    seen = set()
+    for dest in copies:
+        if os.path.normcase(dest) in seen:
+            continue
+        seen.add(os.path.normcase(dest))
+        for path in (dest, dest + ".old", dest + ".new"):
+            if os.path.lexists(path):
+                try:
+                    _retry(functools.partial(os.remove, path), f"Removing {path}", timeout=10)
+                    log(f"removed {path}")
+                except ServiceError as e:
+                    log(f"note: {e}")
+    for folder in (install_dir(), old_install_dir()):
+        with contextlib.suppress(OSError):
+            os.rmdir(folder)  # only when no other service's copy is left in it
 
 
 STOP_WAIT_HINT_MS = 30000  # what a STOP_PENDING report tells the SCM to allow for

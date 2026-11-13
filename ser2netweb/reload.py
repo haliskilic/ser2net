@@ -1,4 +1,4 @@
-"""Reading config.json again while ser2netweb runs: SIGHUP (POSIX: `systemctl reload ser2net`,
+"""Reading config.json again while ser2netweb runs: SIGHUP (POSIX: `systemctl reload ser2netweb`,
 `kill -HUP`, `docker kill -s HUP`), `ser2netweb --reload` (any platform, the Windows service
 too) and Settings -> Configuration backups -> Reload.
 

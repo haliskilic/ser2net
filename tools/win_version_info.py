@@ -1,4 +1,4 @@
-"""Write the Windows VS_VERSIONINFO resource text for ser2net.exe (ser2netweb.spec).
+"""Write the Windows VS_VERSIONINFO resource text for ser2netweb.exe (ser2netweb.spec).
 
 PyInstaller stamps the executable with the version resource this prints, built from the
 single source of truth ser2netweb.__version__ (so the exe's Details tab, and anything that reads
@@ -18,7 +18,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 COMPANY = "Halis KILIÇ"
 DESCRIPTION = "ser2netweb — serial-to-network bridge with a web UI"
 PRODUCT = "ser2netweb"
-ORIGINAL_FILENAME = "ser2net.exe"
+ORIGINAL_FILENAME = "ser2netweb.exe"
 
 
 def version_tuple(version: str) -> tuple[int, int, int, int]:

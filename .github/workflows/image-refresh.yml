@@ -1,6 +1,7 @@
 name: Image refresh
 
-# A release builds the published image (ghcr.io/<owner>/ser2net) with the Debian, OpenSSL and
+# A release builds the published image (ghcr.io/<owner>/ser2netweb; for the 3.x line the same
+# digest also as ghcr.io/<owner>/ser2net, its name up to 2.9.x) with the Debian, OpenSSL and
 # CPython 3.12.x of that day. Every Monday, and when started by hand, this workflow
 #  * scans :latest with Grype (a pinned, sha256-checked release) and uploads the HIGH and
 #    CRITICAL findings that have a fix to code scanning (Security -> Code scanning); report
@@ -11,7 +12,8 @@ name: Image refresh
 #    rebuilds the latest release from its tag (same Dockerfile, same hash-locked pins, the
 #    platforms :latest has), pushes it by digest, smoke-tests that digest on each of them
 #    with the tag's tests/docker_smoke.sh (arm/v7 under QEMU), attests it and moves the X.Y
-#    and latest tags to it. X.Y.Z stays the image its release tested and published.
+#    and latest tags to it, under both names as the release did. X.Y.Z stays the image its
+#    release tested and published.
 # Auto-updaters (Watchtower and the like) restart the container after such a refresh.
 # GitHub turns scheduled workflows off after 60 days without repository activity:
 # Actions -> Image refresh -> "Enable workflow".
@@ -36,6 +38,7 @@ concurrency:
 jobs:
   scan:
     name: scan the published image (Grype, fixed HIGH/CRITICAL)
+    needs: check             # (which image the latest release has)
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -60,8 +63,9 @@ jobs:
           GRYPE_REGISTRY_AUTH_AUTHORITY: ghcr.io
           GRYPE_REGISTRY_AUTH_USERNAME: ${{ github.actor }}
           GRYPE_REGISTRY_AUTH_PASSWORD: ${{ github.token }}
+          IMAGE: ${{ needs.check.outputs.image }}
         run: |
-          image="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/ser2net:latest"
+          image="$IMAGE:latest"
           ./grype "registry:$image" --platform linux/amd64 --only-fixed -o sarif=all.sarif -o table
           # Grype gives HIGH and CRITICAL the SARIF level "error"
           jq '.runs[].results |= map(select(.level == "error"))' all.sarif > grype.sarif
@@ -82,6 +86,9 @@ jobs:
       rebuild: ${{ steps.base.outputs.rebuild }}
       tag: ${{ steps.base.outputs.tag }}
       image: ${{ steps.base.outputs.image }}
+      old-image: ${{ steps.base.outputs.old-image }}
+      names: ${{ steps.base.outputs.names }}
+      title: ${{ steps.base.outputs.title }}
       base: ${{ steps.base.outputs.base }}
       base-name: ${{ steps.base.outputs.base-name }}
       base-digest: ${{ steps.base.outputs.base-digest }}
@@ -99,7 +106,13 @@ jobs:
         run: |
           tag=$(gh release view -R "$GITHUB_REPOSITORY" --json tagName --jq .tagName)  # never a pre-release
           version=${tag#v}
-          image="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/ser2net"
+          owner=${GITHUB_REPOSITORY_OWNER,,}
+          # the image is ser2netweb from 3.0.0 on (ser2net up to 2.9.x), and the 3.x line is
+          # also published under the old name, as release.yml does: both are refreshed
+          case $version in
+            [0-2].*) image=ghcr.io/$owner/ser2net; old_image="" ;;
+            *) image=ghcr.io/$owner/ser2netweb; old_image=ghcr.io/$owner/ser2net ;;
+          esac
           dockerfile=$(gh api "repos/$GITHUB_REPOSITORY/contents/Dockerfile?ref=$tag" -H "Accept: application/vnd.github.raw")
           base=$(sed -n 's/^ARG BASE_IMAGE=//p' <<<"$dockerfile")
           [ -n "$base" ] || base=$(sed -n 's/^FROM //p' <<<"$dockerfile" | head -n 1)  # before 2.9.0
@@ -121,6 +134,8 @@ jobs:
           echo "rebuild: $rebuild" >> "$GITHUB_STEP_SUMMARY"
           {
             echo "rebuild=$rebuild"; echo "tag=$tag"; echo "image=$image"; echo "base=$base"
+            echo "old-image=$old_image"; echo "names=$image${old_image:+,$old_image}"
+            echo "title=${image##*/}"
             echo "base-name=$name"; echo "base-digest=$now"; echo "platforms=$platforms"
             echo "image-tags=${version%.*} latest"     # X.Y and latest, never X.Y.Z
           } >> "$GITHUB_OUTPUT"
@@ -155,9 +170,10 @@ jobs:
           images: ${{ needs.check.outputs.image }}
           tags: type=semver,pattern={{version}},value=${{ needs.check.outputs.tag }}
           labels: |
-            org.opencontainers.image.title=ser2net
+            org.opencontainers.image.title=${{ needs.check.outputs.title }}
             org.opencontainers.image.description=Serial-to-network bridge with a web UI
             org.opencontainers.image.licenses=AGPL-3.0-only
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
             org.opencontainers.image.base.name=${{ needs.check.outputs.base-name }}
             org.opencontainers.image.base.digest=${{ needs.check.outputs.base-digest }}
       - id: push
@@ -166,18 +182,21 @@ jobs:
           context: .
           platforms: ${{ needs.check.outputs.platforms }}
           build-args: BASE_IMAGE=${{ needs.check.outputs.base }}@${{ needs.check.outputs.base-digest }}
-          outputs: type=image,name=${{ needs.check.outputs.image }},push-by-digest=true,name-canonical=true,push=true
+          # every name the release has, by digest only (the same index under each)
+          outputs: type=image,"name=${{ needs.check.outputs.names }}",push-by-digest=true,name-canonical=true,push=true
           labels: ${{ steps.meta.outputs.labels }}
           provenance: mode=max
           sbom: true
-      - name: Tagging keeps this digest (imagetools create --dry-run)
+      - name: Tagging keeps this digest under every name (imagetools create --dry-run)
         env:
-          IMAGE: ${{ needs.check.outputs.image }}
+          NAMES: ${{ needs.check.outputs.names }}
           DIGEST: ${{ steps.push.outputs.digest }}
         run: |
-          docker buildx imagetools create --dry-run "$IMAGE@$DIGEST" > index.json
-          got="sha256:$(head -c -1 index.json | sha256sum | cut -d' ' -f1)"   # minus its newline
-          [ "$got" = "$DIGEST" ] || { echo "::error::tagging would push $got, not $DIGEST"; exit 1; }
+          for image in ${NAMES//,/ }; do
+            docker buildx imagetools create --dry-run "$image@$DIGEST" > index.json
+            got="sha256:$(head -c -1 index.json | sha256sum | cut -d' ' -f1)"   # minus its newline
+            [ "$got" = "$DIGEST" ] || { echo "::error::tagging $image would push $got, not $DIGEST"; exit 1; }
+          done
 
   # Each platform the rebuild has (a leg for one it doesn't have, linux/arm/v7 before 2.9.0,
   # skips its steps)
@@ -198,6 +217,7 @@ jobs:
           - { arch: arm/v7, runner: ubuntu-latest, platform: linux/arm/v7, qemu: true }
     env:
       REF: ${{ needs.check.outputs.image }}@${{ needs.build.outputs.digest }}
+      OLD_REF: ${{ needs.check.outputs.old-image && format('{0}@{1}', needs.check.outputs.old-image, needs.build.outputs.digest) || '' }}
       DOCKER_DEFAULT_PLATFORM: ${{ matrix.qemu && matrix.platform || '' }}
       DOCKER_SMOKE_WAIT: ${{ matrix.qemu && '300' || '60' }}
       BUILT: ${{ contains(format(',{0},', needs.check.outputs.platforms), format(',{0},', matrix.platform)) }}
@@ -238,7 +258,7 @@ jobs:
           echo "pulled image: $got"
           test "$got" = "$want" || { echo "::error::the pulled image is $got, not $want"; exit 1; }
       - if: env.BUILT == 'true'
-        run: tests/docker_smoke.sh "$REF"
+        run: tests/docker_smoke.sh "$REF" ${OLD_REF:+"$OLD_REF"}
 
   tag:
     name: move X.Y and latest to the tested image
@@ -250,7 +270,7 @@ jobs:
       id-token: write        # build provenance attestation
       attestations: write    # (both)
     env:
-      IMAGE: ${{ needs.check.outputs.image }}
+      NAMES: ${{ needs.check.outputs.names }}
       DIGEST: ${{ needs.build.outputs.digest }}
     steps:
       - name: Sign in to GHCR
@@ -262,16 +282,24 @@ jobs:
           subject-name: ${{ needs.check.outputs.image }}
           subject-digest: ${{ needs.build.outputs.digest }}
           push-to-registry: true
-      - name: Tag it ${{ needs.check.outputs.image-tags }}
+      - if: needs.check.outputs.old-image != ''
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8  # v4.2.2
+        with:
+          subject-name: ${{ needs.check.outputs.old-image }}
+          subject-digest: ${{ needs.build.outputs.digest }}
+          push-to-registry: true
+      - name: Tag it ${{ needs.check.outputs.image-tags }} (under every name)
         env:
           TAGS: ${{ needs.check.outputs.image-tags }}
         run: |
-          refs=()
-          for tag in $TAGS; do refs+=(--tag "$IMAGE:$tag"); done
-          docker buildx imagetools create "${refs[@]}" "$IMAGE@$DIGEST"
-          for tag in $TAGS; do
-            got=$(docker buildx imagetools inspect "$IMAGE:$tag" | awk '$1 == "Digest:" {print $2; exit}')
-            echo "$IMAGE:$tag -> $got"
-            [ "$got" = "$DIGEST" ] || { echo "::error::$IMAGE:$tag is $got, not the tested $DIGEST"; exit 1; }
+          for image in ${NAMES//,/ }; do
+            refs=()
+            for tag in $TAGS; do refs+=(--tag "$image:$tag"); done
+            docker buildx imagetools create "${refs[@]}" "$image@$DIGEST"
+            for tag in $TAGS; do
+              got=$(docker buildx imagetools inspect "$image:$tag" | awk '$1 == "Digest:" {print $2; exit}')
+              echo "$image:$tag -> $got"
+              [ "$got" = "$DIGEST" ] || { echo "::error::$image:$tag is $got, not the tested $DIGEST"; exit 1; }
+            done
+            echo "refreshed: $image $TAGS -> $DIGEST" >> "$GITHUB_STEP_SUMMARY"
           done
-          echo "refreshed: $TAGS -> $DIGEST" >> "$GITHUB_STEP_SUMMARY"

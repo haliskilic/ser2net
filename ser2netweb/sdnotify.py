@@ -1,6 +1,6 @@
 """systemd's notification protocol (sd_notify), standard library only.
 
-Under a unit with Type=notify (the optional drop-in systemd/ser2net.service.d/notify.conf)
+Under a unit with Type=notify (the optional drop-in systemd/ser2netweb.service.d/notify.conf)
 systemd waits for READY=1 before it counts ser2netweb as started, and with WatchdogSec= it
 restarts ser2netweb when the WATCHDOG=1 pings stop (they come from the event loop, so a
 loop that is stuck stops them). Everything here does nothing without $NOTIFY_SOCKET, so

@@ -106,8 +106,8 @@ PORTABLE = [
     "test_upgrade_from_2_7.py",
     "test_upgrade_from_2_8.py",  # a 2.8.0 config.json (tests/make_config_fixture.py) and data/
     "test_windows_service.py",  # real service part: Windows + SER2NETWEB_SERVICE_TESTS=1 (CI)
-    "test_systemd_units.py",    # systemd/*.service (also ser2net@.service): paths, sandbox, verify
-    "test_install_script.py",   # systemd/ser2net-install.sh, staged under a scratch root
+    "test_systemd_units.py",    # systemd/*.service (also ser2netweb@.service): paths, sandbox, verify
+    "test_install_script.py",   # systemd/ser2netweb-install.sh, staged under a scratch root
     "test_single_instance.py",
     "test_notifications.py",
     "test_ports_usb_identity.py",
@@ -197,7 +197,7 @@ PORTABLE = [
     "test_ci_gate.py",          # ci.yml: ci-ok needs every job; required names kept
     "test_harness.py",          # run_all itself: every test listed, timeouts kill what tests start
     "test_release_pipeline.py",  # release.yml gates, SHA-pinned actions
-    "test_release_guard.py",    # release tag = version, CHANGELOG section, image tags
+    "test_release_guard.py",    # release tag = version, CHANGELOG section, image tags; release files
     "test_dependency_snapshot.py",  # the Python 3.10 pins go to the dependency graph
     "test_pin_workflows.py",    # a pin bump fails one job; Dependabot branches get wheels
     "test_image_refresh.py",    # weekly image scan; rebuild on a moved base image

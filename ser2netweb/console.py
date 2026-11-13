@@ -90,7 +90,9 @@ def reconfigure_hint(data_dir: str, service_name: str = "", environ=None) -> tup
                               "ser2netweb.py")
         prog = f"{_quoted(sys.executable)} {_quoted(script)}"
     if service_name:
-        name = "" if service_name == "ser2net" else f" --service-name {_quoted(service_name)}"
+        # (ser2net: 2.x's default service, which --install-service of the default moves over)
+        name = ("" if service_name in ("ser2netweb", "ser2net")
+                else f" --service-name {_quoted(service_name)}")
         return "service", f"{prog} --install-service --reconfigure{name}"
     return "console", f"{prog} --reconfigure --data-dir {_quoted(data_dir)}"
 
