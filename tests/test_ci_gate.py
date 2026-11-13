@@ -4,7 +4,9 @@ The ci-ok job in .github/workflows/ci.yml is the one check branch protection nee
 passes only when every job it needs passed. A job added to ci.yml but not to ci-ok's
 needs would not gate a merge, so this test fails until it is listed there (test-next,
 the newest Python, and min-deps, the oldest dependencies pyproject.toml allows, are left
-out on purpose; they must be continue-on-error).
+out on purpose; they must be continue-on-error). latest-deps.yml, the newest release of
+every dependency once a week, gates nothing either: a workflow of its own, scheduled or
+started by hand only, which no other workflow runs.
 Until branch protection requires ci-ok instead, it also asks for the 14 check names it
 requires today: a renamed or removed one would block every pull request. And every push
 to main gets a run of its own (no shared concurrency group that drops waiting runs).
@@ -14,6 +16,7 @@ Run: python3 tests/test_ci_gate.py   (stdlib only)
 import re
 
 from _workflows import jobs as _jobs
+from _workflows import names as _names
 from _workflows import read as _read
 
 # may fail (the newest Python; the floors of pyproject.toml): not merge conditions
@@ -71,8 +74,29 @@ def test_every_main_push_gets_a_run():
     print("pull requests share a concurrency group; every other run has its own  OK")
 
 
+def test_latest_deps_never_gates():
+    text = _read("latest-deps.yml")
+    on = text.split("\non:\n", 1)[1].split("\n\n", 1)[0]
+    triggers = re.findall(r"(?m)^  ([a-z_]+):", on)
+    assert triggers == ["schedule", "workflow_dispatch"], triggers  # no push / pull_request
+    jobs = _jobs(text)
+    assert list(jobs) == ["latest-deps"], list(jobs)
+    job = jobs["latest-deps"]
+    assert re.search(r"(?m)^    continue-on-error: true$", job), "latest-deps may fail"
+    assert "latest-deps" not in _jobs(_read("ci.yml")), "a job of its own workflow only"
+    for name in _names():
+        assert "workflows/latest-deps.yml" not in _read(name), f"{name} runs latest-deps.yml"
+    # the newest releases, by name (no requirements file, no version), then the whole suite
+    assert "pip install --upgrade --upgrade-strategy eager" in job and "requirements" \
+        not in job.replace("latest-requirements.txt", ""), job
+    assert "python -m pip check" in job and "python tests/run_all.py --socat" in job, job
+    print("latest-deps.yml: scheduled and manual only, continue-on-error, run by no other "
+          "workflow; the newest releases, pip check, the whole suite  OK")
+
+
 if __name__ == "__main__":
     test_ci_ok_needs_every_job()
     test_required_check_names_kept()
     test_every_main_push_gets_a_run()
+    test_latest_deps_never_gates()
     print("\nPASS: CI merge gate")

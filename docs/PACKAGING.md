@@ -59,6 +59,14 @@ How the floors are kept true:
 - `tests/test_pyproject.py` checks that every pin of `requirements.txt` is at or above its
   floor and inside any upper bound, and that `requirements-min.pins` has exactly the floors
   of `pyproject.toml`.
+- Without upper bounds, a newer release counts too. `.github/workflows/latest-deps.yml`
+  runs the suite every week with the newest release of every dependency and extra (on the
+  newest Python), so an upstream release that breaks ser2netweb shows within a week.
+  `tests/test_dependency_internals.py` checks the undocumented parts of the dependencies
+  ser2netweb builds on (uvicorn's h11 protocol, which `ser2netweb/web/httpguard.py`
+  subclasses; pyserial's and pyserial-asyncio-fast's classes; Starlette's StaticFiles and
+  Route hooks) against whichever release is installed, and names what moved. A
+  distribution's own test run (`python3 tests/run_all.py`) runs it too.
 - The floors are about what works, not about security. Some floor releases have published
   vulnerabilities fixed later (h11 before 0.16.0, for example: CVE-2025-43859); a
   distribution's own build carries its security fixes (Debian 13's
