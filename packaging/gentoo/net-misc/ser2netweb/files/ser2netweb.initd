@@ -16,6 +16,8 @@ pidfile="/run/${RC_SVCNAME}.pid"
 output_logger="logger -t ${RC_SVCNAME} -p daemon.info"
 error_logger="logger -t ${RC_SVCNAME} -p daemon.err"
 umask=0077
+# open connections are closed first
+retry="TERM/30/KILL/5"
 
 depend() {
 	need net
