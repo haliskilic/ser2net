@@ -3,7 +3,9 @@
   - a TCP server mapping starts with the port closed (status: running, waiting); the
     first client opens it and is taken once it is open, so what it sends first reaches
     the device; the port closes port_linger_s after the last client left, and a client
-    that comes back within that time finds it still open (one open, not two);
+    that comes back within that time finds it still open (one open, not two); one that
+    connects while the port is being closed waits for it to open again and is not taken
+    on the port that closes;
   - while the mapping waits, the no-data alarm does not count the silence;
   - a device that can't be opened: the client is turned away after the short wait
     (options.rfc2217_net_timeout_s), the status says why while it is tried, and goes back
@@ -24,7 +26,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "lib"))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, os.path.dirname(__file__))
 
-from _device import FakeDevice, eof_within, port_of, running, until
+from _device import FakeDevice, eof_within, port_of, read_for, running, until
 
 from ser2netweb.config import ConfigError, MappingConfig, port_linger
 from ser2netweb.engine.bridge import MappingRunner
@@ -88,6 +90,43 @@ async def _lifecycle():
             r, w = await asyncio.open_connection("127.0.0.1", port_of(runner))
             w.write(b"x")
             await until(lambda: device.opens == 2 and device.heard.endswith(b"x"))
+            w.close()
+    finally:
+        await device.close()
+
+
+async def _client_while_closing():
+    """A client that connects while the port is being closed after the linger (here a close
+    that takes a while) is not taken on that port: it waits for the next open, and what it
+    sends first arrives. With disconnect_without_device a client taken on a port that then
+    closes would be disconnected."""
+    device, logs = await FakeDevice().start(), []
+    m = mapping(linger=0.2, disconnect_without_device=True)
+    m.options.rfc2217_net_timeout_s = 3.0
+    try:
+        async with running(m, device, logs, wait_open=False) as runner:
+            closing = asyncio.Event()
+            session = runner._serial_session
+
+            async def slow_close(reader, writer):
+                try:
+                    await session(reader, writer)
+                except asyncio.CancelledError:
+                    closing.set()
+                    await asyncio.sleep(0.3)
+                    raise
+
+            runner._serial_session = slow_close
+            _r, w = await asyncio.open_connection("127.0.0.1", port_of(runner))
+            await until(lambda: runner.status.client_count == 1 and device.is_open)
+            w.close()
+            await asyncio.wait_for(closing.wait(), 5)  # the linger is over: closing
+            r, w = await asyncio.open_connection("127.0.0.1", port_of(runner))
+            w.write(b"after")
+            await until(lambda: device.opens == 2 and bytes(device.heard).endswith(b"after"))
+            assert runner.status.client_count == 1
+            assert await read_for(r, 0.5) == [], "still connected"
+            assert not any("disconnecting" in ln for ln in logs), logs
             w.close()
     finally:
         await device.close()
@@ -157,6 +196,8 @@ def test_runner():
     asyncio.run(_lifecycle())
     print("opened for the first client (its first bytes arrive), kept through the linger, "
           "closed after the last one, status waiting in between  OK")
+    asyncio.run(_client_while_closing())
+    print("a client that connects while the port closes waits for the next open  OK")
     asyncio.run(_missing_device())
     print("a device that can't be opened: the client is turned away, waiting again without "
           "an error, served once it is back  OK")

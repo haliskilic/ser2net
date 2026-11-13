@@ -1640,12 +1640,17 @@ class MappingRunner:
             try:
                 while True:  # until nobody has wanted the port for the linger time
                     await demand.idle.wait()
-                    try:
+                    with contextlib.suppress(asyncio.TimeoutError):
                         await asyncio.wait_for(demand.wanted.wait(), timeout=linger)
-                    except asyncio.TimeoutError:
+                    # (a client taken just as the linger ran out wants the port, too)
+                    if not demand.wanted.is_set():
                         break
             finally:
                 was_open = self._link.is_open
+                # No await since the last check: a client that connects from here on finds
+                # the port not open, waits for it (_on_client) and so has it opened again
+                # once it is closed, instead of being taken on a port about to close.
+                self._link.ready.clear()
                 run.cancel()
                 with contextlib.suppress(asyncio.CancelledError, Exception):
                     await run
