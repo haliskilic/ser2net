@@ -602,7 +602,9 @@ düzenlemeye gerek yok.
 | Yol | Nerede çalışır | Ne gerekir |
 |---|---|---|
 | [Standalone binary](#standalone-binary-başka-hiçbir-şey-kurmak-gerekmez) | Windows x64; glibc ≥ 2.28 olan Linux x86_64 ve arm64 (64-bit işletim sistemli Raspberry Pi 3/4/5) | hiçbir şey |
+| [`.deb` / `.rpm` paketi](#linux-paketleri-deb--rpm) (apt / dnf) | Debian 11+, Ubuntu 20.04+, 64-bit Raspberry Pi OS; Fedora, RHEL / AlmaLinux / Rocky 8+ (x86_64, arm64) | hiçbir şey; veri `/var/lib/ser2netweb`'te |
 | [Docker](#docker) | Linux host'lar: amd64, arm64, arm/v7 (32-bit Raspberry Pi OS) | Docker |
+| [pipx / pip](#pipx--pip) (PyPI) | her işletim sistemi ve işlemci | Python 3.10+, pipx; veri kullanıcının veri klasöründe |
 | Kaynaktan (aşağıda) | her işletim sistemi ve işlemci: macOS, 32-bit ARM, ARM üzerinde Windows da | pip'li Python 3.10+; paketlenmiş wheel'lerle offline |
 
 ```bash
@@ -634,9 +636,10 @@ Diğer platformlar — 32-bit ARM (32-bit Raspberry Pi OS, armv7 gateway'ler), m
 *Offline kurulum*). 32-bit ARM'da Docker imajı (arm/v7) da kullanılabilir. ARM üzerindeki Windows 11 x64 exe'yi de (emülasyonla) çalıştırır.
 
 Her sürümde ayrıca `SHA256SUMS`, her binary için CycloneDX SBOM (`*.cdx.json`), lisans
-metinleri, Linux binary'leri için systemd unit'i `ser2netweb-standalone.service` ve bir binary'yi
-onunla kuran `ser2netweb-install.sh` (bkz. *Servis olarak çalıştırma*) yayımlanır; binary'ler GitHub'ın derleme kaynağı imzasıyla (build provenance)
-doğrulanabilir: `sha256sum -c SHA256SUMS --ignore-missing`,
+metinleri, Linux binary'leri için systemd unit'i `ser2netweb-standalone.service`, bir binary'yi
+onunla kuran `ser2netweb-install.sh` (bkz. *Servis olarak çalıştırma*) ve Linux binary'lerinin
+`.deb` / `.rpm` paketleri (bkz. *Linux paketleri*) yayımlanır; binary'ler ve paketler GitHub'ın
+derleme kaynağı imzasıyla (build provenance) doğrulanabilir: `sha256sum -c SHA256SUMS --ignore-missing`,
 `gh attestation verify ser2netweb-linux-x64 -R haliskilic/ser2netweb`. Windows exe'si **henüz
 imzalanmıyor** (bir imzalama servisi tanımlanınca imzalanacak —
 [`docs/SIGNING.md`](docs/SIGNING.md)); bu yüzden ilk çalıştırmada SmartScreen uyarabilir.
@@ -696,6 +699,63 @@ Bind IP'yi sonradan değiştirmek:
 python3 ser2netweb.py --reconfigure
 ```
 
+### Linux paketleri (.deb / .rpm)
+Her sürümde Linux binary'si x86_64 ve arm64 için paket olarak da bulunur:
+`ser2netweb_X.Y.Z_amd64.deb` / `ser2netweb_X.Y.Z_arm64.deb` (Debian 11+, Ubuntu 20.04+, 64-bit
+Raspberry Pi OS) ve `ser2netweb-X.Y.Z-1.x86_64.rpm` / `ser2netweb-X.Y.Z-1.aarch64.rpm` (Fedora,
+RHEL / AlmaLinux / Rocky 8+); X.Y.Z sürümün numarasıdır. İndirin (denetlemek için
+`SHA256SUMS`'u da), sonra:
+```bash
+sudo apt install ./ser2netweb_X.Y.Z_amd64.deb      # Debian, Ubuntu, Raspberry Pi OS
+sudo dnf install ./ser2netweb-X.Y.Z-1.x86_64.rpm   # Fedora, RHEL, AlmaLinux, Rocky
+sudo systemctl enable --now ser2netweb             # kurulum servisi kendisi başlatmaz
+```
+Binary'yi `/usr/bin/ser2netweb`, unit'ini `/usr/lib/systemd/system/ser2netweb.service`
+(`ser2netweb-standalone.service`'in bu yolla hali: aynı sandbox), `ser2netweb` hesabını ve veri
+dizini `/var/lib/ser2netweb`'i (0700), lisans metinlerini de `/usr/share/doc/ser2netweb`
+altına kurar. Kurulum servisi ne etkinleştirir ne başlatır; bunu
+`sudo systemctl enable --now ser2netweb` yapar, web arayüzü de o zaman `127.0.0.1:8080`'de
+dinler (ağ için: `sudo systemctl edit ser2netweb`, bkz. *Servis olarak çalıştırma*).
+`--data-dir` verilmezse paketteki `ser2netweb` bu veri dizinini kullanır:
+`sudo -u ser2netweb ser2netweb --set-password admin` ilk parolayı belirler. Daha yeni bir
+paket (dosyasıyla `apt install` / `dnf install`) çalışan servisi yeniden başlatır; paketi
+kaldırmak (`sudo apt remove ser2netweb`, `sudo dnf remove ser2netweb`) servisi durdurup
+devre dışı bırakır, `/var/lib/ser2netweb`'i ve hesabı bırakır (onları elle silin). Klasik
+ser2net daemon'unun `ser2net` paketiyle ilgisi yoktur: ikisi birlikte kurulabilir.
+`gh attestation verify ser2netweb_X.Y.Z_amd64.deb -R haliskilic/ser2netweb` nerede
+derlendiğini denetler. Paket 2.9.x kurulumunu (`ser2net.service`, `/var/lib/ser2net`) taşımaz;
+bunu `ser2netweb-install.sh` yapar (*Servis olarak çalıştırma* altında *2.9.x'ten
+yükseltme*). `ser2netweb-install.sh` ile kurulmuş bir binary'nin unit'i
+`/etc/systemd/system`'dedir ve paketinkini gizler: önce
+`sudo sh ser2netweb-install.sh --uninstall` (veri kalır), sonra paket.
+
+### pipx / pip
+PyPI paketi `ser2netweb`, Python 3.10 ya da daha yenisinin olduğu her işletim sistemi ve
+işlemci için:
+```bash
+pipx install ser2netweb             # ya da "ser2netweb[all]": MQTT, LDAP, OIDC, sertifikalar da
+ser2netweb                          # ilk çalıştırma web arayüzünün adresini sorar
+pipx upgrade ser2netweb
+```
+pip bağımlılıkları PyPI'den kurar (`requirements.txt`'teki sürümlerin çevresinde aralıklar),
+bu yüzden ağ ya da bir paket deposu aynası gerekir; `vendor/wheels` altındaki wheel'ler kaynak
+kurulum içindir. `mqtt` (paho-mqtt), `ldap` (ldap3), `oidc` (authlib), `tls` (cryptography:
+süreç içinde kendinden imzalı sertifika) ve `all` ekleri isteğe bağlı paketleri ekler (sonradan:
+`pipx inject ser2netweb paho-mqtt`). pip / pipx kurulumu verisini paketin yanında değil,
+kullanıcının veri klasöründe tutar:
+
+| İşletim sistemi | Veri klasörü |
+|---|---|
+| Linux ve diğer Unix'ler | `$XDG_DATA_HOME/ser2netweb`, yoksa `~/.local/share/ser2netweb` |
+| macOS | `~/Library/Application Support/ser2netweb` |
+| Windows | `%LOCALAPPDATA%\ser2netweb` |
+
+`--data-dir` (ya da `--config`) başka bir klasör seçer; `ser2netweb --help` bu klasörü
+gösterir, `ser2netweb --about` da `Build: Python package (pip / pipx)` der.
+`python -m ser2netweb` de aynısını çalıştırır. Servis için binary'yi, paketleri ya da Docker'ı kullanın:
+pip kurulumu Windows servisi olamaz (`--install-service` reddeder) ve kendine ait bir systemd
+unit'i yoktur.
+
 ### Komut satırı seçenekleri
 `python3 ser2netweb.py [seçenekler]`, `ser2netweb-linux-x64 [seçenekler]`,
 `ser2netweb-windows-x64.exe [seçenekler]` (`--help` hepsini listeler). Başlatma script'inin
@@ -704,7 +764,7 @@ unit'ler ve script'ler değişiklik gerektirmez:
 
 | Seçenek | Ne yapar |
 |---|---|
-| `--data-dir KLASÖR` | `config.json`, yedekleri, log'lar ve trace'lerin yeri (varsayılan: `ser2netweb.py`'nin ya da binary'nin yanındaki `data/`); ser2netweb'e kendine ait bir klasör verin |
+| `--data-dir KLASÖR` | `config.json`, yedekleri, log'lar ve trace'lerin yeri (varsayılan: `ser2netweb.py`'nin ya da binary'nin yanındaki `data/`; `.deb` / `.rpm` paketininki için `/var/lib/ser2netweb`; pip / pipx kurulumu için kullanıcının veri klasörü, bkz. *pipx / pip*); ser2netweb'e kendine ait bir klasör verin |
 | `--config DOSYA` | başka bir yerdeki `config.json`; veri klasörü o zaman onun klasörüdür |
 | `--reconfigure` | yönetim arayüzünün adresini ve portunu konsolda yeniden sorar, sonra başlar |
 | `--online` | bağımlılık kurulumu `vendor/wheels/`'te olmayan bir wheel için PyPI'ye başvurabilir (kaynak kurulum) |
@@ -1574,6 +1634,10 @@ içeren bir dosyaya (Docker secret) yönlendirin; ad için `SER2NETWEB_ADMIN_USE
     sudo cp ser2netweb-standalone.service /etc/systemd/system/ser2netweb.service
     sudo systemctl daemon-reload && sudo systemctl enable --now ser2netweb
     ```
+  - *`.deb` / `.rpm` paketi* (*Linux paketleri*): binary'nin unit'i
+    `/usr/lib/systemd/system/ser2netweb.service` olarak `/usr/bin/ser2netweb` ile, hesap ve
+    `/var/lib/ser2netweb` onunla birlikte kurulur; `sudo systemctl enable --now ser2netweb`
+    başlatır. Aşağıdakiler (`systemctl edit`, `sudo -u ser2netweb …`) onun için de geçerlidir.
   - Web arayüzü, aksi söylenmedikçe `127.0.0.1:8080`'de dinler. Ağdan erişmek için
     `sudo systemctl edit ser2netweb` çalıştırıp aşağıdaki satırları ekleyin (ağ adresinde TLS
     kullanın, bkz. Güvenlik) ve `sudo systemctl restart ser2netweb` yapın:
