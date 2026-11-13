@@ -9,7 +9,8 @@
   * the service runs ser2netweb on $SNAP_COMMON/data (layout.py's default for root in the
     snap), with `snap set ser2netweb bind-ip=... port=...` as SER2NETWEB_BIND_IP / _PORT;
     the configure hook refuses a bad address or port and restarts a running service;
-  * snap.yml: on a release (not a pre-release; to stable), by hand with a tag and a channel,
+  * snap.yml: on a release (not a pre-release; to stable; release.yml's channels job starts
+    it with the tag), by hand with a tag and a channel,
     on pull requests that change the snap; snapcore/action-build, the snap tested on the
     runner (tests/snap_smoke.sh) before the upload, which needs SNAPCRAFT_STORE_CREDENTIALS
     (skipped with a notice without it) and has no GitHub permission.
@@ -106,6 +107,15 @@ def test_service_and_hook():
           "refuses bad ones and restarts a running service only  OK")
 
 
+def _started_by_release(workflow: str) -> None:
+    """release.yml's channels job starts `workflow` on main with the tag (a release made with
+    the GITHUB_TOKEN starts no workflow by itself)."""
+    channels = jobs(read("release.yml"))["channels"]
+    loop = next(line for line in channels.splitlines() if "for workflow in" in line)
+    assert workflow in re.findall(r"[\w.-]+\.yml", loop), loop
+    assert 'gh workflow run "$workflow" --ref main -f tag="$GITHUB_REF_NAME"' in channels
+
+
 def test_workflow():
     text = read("snap.yml")
     on = text.split("\npermissions:", 1)[0]
@@ -140,8 +150,10 @@ def test_workflow():
                  "sudo snap set ser2netweb bind-ip=127.0.0.1 port=8091", "healthy 8091",
                  "sudo snap remove --purge ser2netweb"):
         assert part in smoke, part
-    print("snap.yml: releases (stable), by hand (a channel), pull requests; built and tested "
-          "on both architectures before the upload, which needs its secret  OK")
+    _started_by_release("snap.yml")
+    print("snap.yml: releases (stable; release.yml starts it), by hand (a channel), pull "
+          "requests; built and tested on both architectures before the upload, which needs "
+          "its secret  OK")
 
 
 if __name__ == "__main__":
