@@ -1,0 +1,11 @@
+#!/bin/sh
+# The snap's service (ser2netweb.daemon): ser2netweb on /var/snap/ser2netweb/common/data,
+# as root inside the snap's confinement. `snap set ser2netweb bind-ip=... port=...` sets the
+# web UI's address (SER2NETWEB_BIND_IP / SER2NETWEB_PORT, which win over config.json; the
+# configure hook restarts the service); unset, config.json's (127.0.0.1:8080 at first).
+bind_ip=$(snapctl get bind-ip)
+port=$(snapctl get port)
+if [ -n "$bind_ip" ]; then export SER2NETWEB_BIND_IP="$bind_ip"; fi
+if [ -n "$port" ]; then export SER2NETWEB_PORT="$port"; fi
+mkdir -p "$SNAP_COMMON/data"
+exec "$SNAP/bin/ser2netweb" --data-dir "$SNAP_COMMON/data"
