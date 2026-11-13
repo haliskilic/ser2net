@@ -18,7 +18,7 @@ after its package manager installed the package:
   * as the account, in the group of the serial ports: --set-password admin into its data
     directory, a start on a free port of 127.0.0.1 that answers /healthz and
     --healthcheck, a clean stop on SIGTERM;
-  * --service (OpenRC): rc-service ser2netweb start answers /healthz on 127.0.0.1:8080,
+  * --service (OpenRC): rc-service ser2netweb start answers /healthz on the admin UI's port,
     rc-service ser2netweb stop ends it.
 It starts a server: run it in a throwaway container, not on a machine of your own.
 Standard library only (the distribution's python3).
@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import argparse
 import grp
+import json
 import os
 import pwd
 import re
@@ -229,15 +230,18 @@ def check_start(group: str) -> None:
 def check_openrc_service() -> None:
     os.makedirs("/run/openrc", exist_ok=True)
     open("/run/openrc/softlevel", "a").close()  # (a container booted no runlevel)
+    # the port the start above left in config.json (8080 on a fresh install)
+    with open(os.path.join(DATA, "config.json"), encoding="utf-8") as fh:
+        port = int((json.load(fh).get("admin_ui") or {}).get("port") or 8080)
     try:
-        run(["rc-service", "ser2netweb", "start"])
-        healthz(8080, timeout=60)
+        print(run(["rc-service", "ser2netweb", "start"]).strip())
+        healthz(port, timeout=60)
         p = subprocess.run(["rc-service", "ser2netweb", "status"], capture_output=True,
                            text=True, timeout=60)
         print(p.stdout.strip())
     finally:
         subprocess.run(["rc-service", "ser2netweb", "stop"], timeout=120)
-    print("rc-service ser2netweb start: /healthz on 127.0.0.1:8080; stopped  OK")
+    print(f"rc-service ser2netweb start: /healthz on 127.0.0.1:{port}; stopped  OK")
 
 
 def main(argv: list[str]) -> int:
