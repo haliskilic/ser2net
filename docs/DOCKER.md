@@ -3,8 +3,9 @@
 ser2netweb ships an official `Dockerfile`, an example `docker-compose.yml` and a published
 image for amd64, arm64 and arm/v7 (32-bit ARM: 32-bit Raspberry Pi OS, armv7 gateways;
 since 2.9.0) with every release: `ghcr.io/haliskilic/ser2netweb` (`:latest` or a release
-tag). Up to 2.9.x it was `ghcr.io/haliskilic/ser2net`: that name stops at 3.0.0, so change the
-image to `ghcr.io/haliskilic/ser2netweb` (*Upgrading from 2.9.x* below). The same image is also on Docker Hub,
+tag). Up to 2.9.x it was `ghcr.io/haliskilic/ser2net`: that image no longer exists (since
+2026-11-13 a pull of it fails), so change the image to `ghcr.io/haliskilic/ser2netweb`
+(*Upgrading from 2.9.x* below). The same image is also on Docker Hub,
 `docker.io/haliskilic/ser2netweb` (*Docker Hub* below).
 The published image is the very build the release smoke-tested on each architecture (same
 digest; arm/v7 under emulation, as no runner has that CPU); its tags `:X.Y.Z`, `:X.Y` and
@@ -37,8 +38,8 @@ under the same tags with `docker buildx imagetools create`. Nothing is rebuilt, 
 is the same on both registries, and so is the build provenance:
 `gh attestation verify oci://docker.io/haliskilic/ser2netweb:latest -R haliskilic/ser2netweb`.
 Use whichever registry suits you (Docker Hub counts anonymous pulls against a rate limit);
-`docker-compose.yml` uses GHCR. There is no Docker Hub copy of the 2.9.x name
-`ghcr.io/haliskilic/ser2net`.
+`docker-compose.yml` uses GHCR. Docker Hub has 3.0.0 and later only (the 2.x images were
+never copied there).
 
 For the maintainer: the copy needs the repository secrets `DOCKERHUB_USERNAME` (the Docker
 Hub account) and `DOCKERHUB_TOKEN` (hub.docker.com -> Account settings -> Personal access
@@ -53,12 +54,13 @@ that image.
 The project was called ser2net up to 2.9.x. For Docker that changes names, not the data:
 
 - **The image** is `ghcr.io/haliskilic/ser2netweb`, and you have to change it: the old
-  path `ghcr.io/haliskilic/ser2net` stops at 3.0.0. The images already there (2.x and
-  3.0.0) stay pullable, but no later release and no weekly refresh is published under that
-  name, so its `:latest` stays 3.0.0 for good and a compose file or an auto-updater
-  (Watchtower and the like) left on it gets no more updates or base-image fixes. Put
-  `image: ghcr.io/haliskilic/ser2netweb:latest` (or the tag you pin) in your compose file
-  or `docker run` command; the data is used as it is (next point).
+  image `ghcr.io/haliskilic/ser2net` no longer exists. Since 2026-11-13 every pull of it
+  fails, whatever the tag: a container that runs keeps running on the image the host
+  already has, but `docker compose pull`, an auto-updater (Watchtower and the like) or a
+  new host gets nothing. Put `image: ghcr.io/haliskilic/ser2netweb:latest` (or the tag you
+  pin) in your compose file or `docker run` command; the data is used as it is (next
+  point). The 2.x images went with the old name: the registry has 3.0.0 and later only,
+  and a 2.x image can only be built from its tag (`git checkout v2.9.0 && docker build .`).
 - **The data** stays as it is: `/data`, the same account uid/gid 10001 (now called
   `ser2netweb` instead of `ser2net`), the same files. Nothing to move.
 - **Environment variables** are `SER2NETWEB_*`; the `SER2NET_*` names still work (a
@@ -190,6 +192,8 @@ container with this command finds its data.)
   `SER2NETWEB_BIND_IP`, with `SER2NETWEB_PORT` for the port). The container network plus the
   published port are the real perimeter — don't publish `8080` to an untrusted network
   without TLS. These env vars win on every start, so compose stays the source of truth.
+  Each works on its own: `SER2NETWEB_PORT` without a bind IP moves the port and keeps the
+  bind IP (3.0.0 ignored a port set without one).
 - **Variable names.** Every `SER2NETWEB_…` variable is also read under its name up to
   2.9.x, `SER2NET_…` (`SER2NET_BIND_IP` and so on), so compose files and `docker run`
   commands that use the old names keep working; when both are set, the `SER2NETWEB_…` one

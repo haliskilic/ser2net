@@ -246,6 +246,30 @@ class _Kind:
         layout.kind = self.saved
 
 
+def _homebrew_upgrade():
+    """3.0.0 took the keg for a pip install: a copy run by hand kept its data in the user
+    data folder, which stays the default while <prefix>/var/ser2netweb has no config.json.
+    (Called with layout.kind() answering HOMEBREW.)"""
+    saved = layout.homebrew_prefix, layout.user_data_dir
+    with tempfile.TemporaryDirectory() as tmp:
+        prefix, user = os.path.join(tmp, "brew"), os.path.join(tmp, "user", "ser2netweb")
+        var = os.path.join(prefix, "var", "ser2netweb")
+        layout.homebrew_prefix, layout.user_data_dir = (lambda *_a: prefix), (lambda *_a: user)
+        try:
+            assert layout.default_data_dir("/x") == var, "neither folder exists"
+            _touch(user, "all.log")
+            assert layout.default_data_dir("/x") == var, "a user folder without a config.json"
+            _touch(user, "config.json")
+            assert layout.default_data_dir("/x") == user, "3.0.0's data, run by hand"
+            assert cli.parse_args([]).data_dir == user
+            os.makedirs(var)  # (the formula makes it)
+            assert layout.default_data_dir("/x") == user
+            _touch(var, "config.json")  # the service ran, or --data-dir was given
+            assert layout.default_data_dir("/x") == var, "the formula's folder wins"
+        finally:
+            layout.homebrew_prefix, layout.user_data_dir = saved
+
+
 def test_command_line():
     args = cli.parse_args([])
     assert args.data_dir == os.path.join(ROOT, "data") and not args.data_dir_given, args.data_dir
@@ -265,6 +289,8 @@ def test_command_line():
             "ser2netweb --reconfigure --data-dir /d"
     with _Kind(layout.PACKAGE):
         assert cli.parse_args([]).data_dir == "/var/lib/ser2netweb"
+    with _Kind(layout.HOMEBREW):
+        _homebrew_upgrade()
     saved = layout.homebrew_prefix
     layout.homebrew_prefix = lambda *_a: "/opt/homebrew"
     try:
@@ -399,6 +425,15 @@ def test_homebrew_end_to_end():
         assert p.returncode == 0 and "Build: Homebrew formula" in p.stdout.splitlines(), p
         p = _run(site, dict(env, COLUMNS="500"), "--help")
         assert want in " ".join(p.stdout.split()), p.stdout
+        # data 3.0.0 left in the user data folder (it took the keg for a pip install) stays
+        # the default until <prefix>/var/ser2netweb has a config.json
+        user = layout.user_data_dir(sys.platform, env, home)
+        old = _touch(user, "config.json")
+        p = _run(site, dict(env, COLUMNS="500"), "--help")
+        assert user in " ".join(p.stdout.split()), p.stdout
+        shutil.rmtree(os.path.join(tmp, "xdg"), ignore_errors=True)
+        if os.path.exists(old):  # (macOS, Windows: the folder is under the home directory)
+            os.remove(old)
         p = _run(site, env, "--set-password", "admin", stdin=PW + "\n")
         assert p.returncode == 0, p
         assert os.path.isfile(os.path.join(want, "config.json")), os.listdir(prefix)
@@ -408,7 +443,8 @@ def test_homebrew_end_to_end():
         assert os.path.join(f"ser2netweb-{__version__}.dist-info", "licenses",
                             "THIRD-PARTY-NOTICES.md") in p.stdout, p
     print("a copy laid out as the Homebrew formula installs it: --about, --set-password into "
-          "<prefix>/var/ser2netweb, its licence texts  OK")
+          "<prefix>/var/ser2netweb (3.0.0's data in the user data folder kept in use), its "
+          "licence texts  OK")
 
 
 if __name__ == "__main__":

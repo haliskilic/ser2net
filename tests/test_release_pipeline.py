@@ -9,7 +9,7 @@
   and nothing that writes (assets, attestations, the image) starts before all of it
   passed; its standalone job builds the released files. One release runs at a time.
 * the image is pushed by digest only, as ghcr.io/<owner>/ser2netweb and under no other
-  name (ghcr.io/<owner>/ser2net, its name up to 2.9.x, stopped at 3.0.0), that digest is
+  name (ghcr.io/<owner>/ser2net, its name up to 2.9.x, no longer exists), that digest is
   smoke-tested on amd64 and arm64 natively and on arm/v7 under QEMU, and only then (after
   the release files) does it get its tags, unchanged, and its attestation. The tags come
   from the tag check: a pre-release never moves X.Y or latest.
@@ -160,8 +160,8 @@ def test_image_published_as_tested():
 
 def test_image_names():
     """The image is ghcr.io/<owner>/ser2netweb and image-refresh.yml refreshes that one. Its
-    name up to 2.9.x, ghcr.io/<owner>/ser2net, stopped at 3.0.0: no workflow names it, so
-    nothing is pushed, tagged or attested there any more."""
+    name up to 2.9.x, ghcr.io/<owner>/ser2net, no longer exists: no workflow names it, so
+    nothing is pushed, tagged or attested there (which would make that package again)."""
     verify = jobs(read("release.yml"))["verify"]
     assert 'owner=${GITHUB_REPOSITORY_OWNER,,}' in verify, verify
     assert 'echo "image=ghcr.io/$owner/ser2netweb" >> "$GITHUB_OUTPUT"' in verify, verify
@@ -174,7 +174,7 @@ def test_image_names():
     for name in names():
         text = read(name)
         assert "${GITHUB_REPOSITORY_OWNER,,}/ser2net" not in text, name
-        # the old name only in comments (that it stopped), never in a step
+        # the old name only in comments (that it is gone), never in a step
         for line in text.splitlines():
             code = line.split("#", 1)[0]
             assert not re.search(r"/ser2net(?!web)\b", code), (name, line)

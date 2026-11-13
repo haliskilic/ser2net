@@ -87,6 +87,16 @@ def main():
         print("stopped instance: exit 1  OK")
     code, out = run_check(d, {"SER2NETWEB_PORT": str(free_port())})
     assert code == 1, (code, out)
+
+    # the port alone, no bind IP: the server listens where the check looks
+    srv = Server({"users": [], "admin_ui": {"bind_ip": "127.0.0.1", "port": free_port()}})
+    del srv.env["SER2NETWEB_BIND_IP"]
+    with srv:
+        code, out = run_check(srv.data, {"SER2NETWEB_PORT": str(srv.port)})
+        assert code == 0 and out == f"ok: http://127.0.0.1:{srv.port}/healthz", (code, out)
+        saved = srv.saved_config()["admin_ui"]
+        assert (saved["bind_ip"], saved["port"]) == ("127.0.0.1", srv.port), saved
+    print("SER2NETWEB_PORT without SER2NETWEB_BIND_IP: the server and the check use it  OK")
     print("\nPASS: --healthcheck")
 
 

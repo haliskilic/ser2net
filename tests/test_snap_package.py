@@ -93,6 +93,35 @@ def test_service_and_hook():
             with open(log, encoding="utf-8") as fh:
                 return p.returncode, fh.read()
 
+        # the service's wrapper, with a stand-in for the executable that prints what it got
+        snap = os.path.join(tmp, "snap")
+        os.makedirs(os.path.join(snap, "bin"))
+        exe = os.path.join(snap, "bin", "ser2netweb")
+        with open(exe, "w", encoding="utf-8") as fh:
+            fh.write('#!/bin/sh\necho "ip=${SER2NETWEB_BIND_IP-unset} '
+                     'port=${SER2NETWEB_PORT-unset} $*"\n')
+        os.chmod(exe, 0o755)
+        common = os.path.join(tmp, "common")
+
+        def service(bind_ip, port):
+            env = {k: v for k, v in os.environ.items()
+                   if k not in ("SER2NETWEB_BIND_IP", "SER2NETWEB_PORT")}
+            env.update(PATH=tmp + os.pathsep + os.environ["PATH"], LOG=log, BIND_IP=bind_ip,
+                       PORT=port, STATE="active", SNAP=snap, SNAP_COMMON=common)
+            p = subprocess.run([sh, os.path.join(ROOT, "snap", "local", "daemon")], env=env,
+                               capture_output=True, text=True, timeout=30)
+            assert p.returncode == 0, p.stderr
+            return p.stdout.strip()
+
+        data = os.path.join(common, "data")
+        for (bind_ip, port), expect in ((("", ""), "ip=unset port=unset"),
+                                        (("0.0.0.0", "8081"), "ip=0.0.0.0 port=8081"),
+                                        (("192.168.1.10", ""), "ip=192.168.1.10 port=unset"),
+                                        (("", "8092"), "ip=127.0.0.1 port=8092")):
+            got = service(bind_ip, port)
+            assert got == f"{expect} --data-dir {data}", (bind_ip, port, got)
+        assert os.path.isdir(data)
+
         for ok in (("0.0.0.0", "8080"), ("*", "1"), ("::", "65535"), ("", ""),
                    ("192.168.1.10", "")):
             rc, calls = hook(*ok)
@@ -103,7 +132,8 @@ def test_service_and_hook():
                     ("", "80a"), ("", "-1")):
             rc, calls = hook(*bad)
             assert rc == 1 and "restart" not in calls, (bad, rc, calls)
-    print("the service: $SNAP_COMMON/data, snap set's bind-ip / port; the configure hook "
+    print("the service: $SNAP_COMMON/data, snap set's bind-ip / port (port alone: on "
+          "127.0.0.1); the configure hook "
           "refuses bad ones and restarts a running service only  OK")
 
 
@@ -148,6 +178,8 @@ def test_workflow():
     for part in ("sudo snap install --dangerous", "disabled +inactive", "ser2netweb:$plug",
                  "sudo snap start --enable ser2netweb.daemon", "healthy 8080",
                  "sudo snap set ser2netweb bind-ip=127.0.0.1 port=8091", "healthy 8091",
+                 "sudo snap unset ser2netweb bind-ip\nsudo snap set ser2netweb port=8092\n"
+                 "healthy 8092",
                  "sudo snap remove --purge ser2netweb"):
         assert part in smoke, part
     _started_by_release("snap.yml")

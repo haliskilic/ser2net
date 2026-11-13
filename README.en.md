@@ -806,7 +806,9 @@ data, `all.log` too, in `$(brew --prefix)/var/ser2netweb`; `brew services info s
 shows it. After `brew upgrade ser2netweb`: `brew services restart ser2netweb`;
 `brew uninstall ser2netweb` keeps the data folder. `--data-dir` as above works with every
 version; after 3.0.0 that folder is also the default of a Homebrew install, and
-`ser2netweb --about` says `Build: Homebrew formula`. Serial ports: `/dev/cu.usbserial-*` /
+`ser2netweb --about` says `Build: Homebrew formula`. 3.0.0 without `--data-dir` kept its data
+in the user's data folder (as a pip install does): while that folder has a `config.json` and
+`$(brew --prefix)/var/ser2netweb` has none, later versions go on using it. Serial ports: `/dev/cu.usbserial-*` /
 `/dev/cu.usbmodem*` on macOS; on Linux your account needs the ports' group (`dialout`, `uucp`
 on Arch). The tap proposes each new release's formula within a day (its workflow "bump");
 `packaging/homebrew/make_formula.py` makes it.
@@ -849,8 +851,9 @@ provides. Built-in UARTs (`/dev/ttyS*`, a Raspberry Pi's `/dev/ttyAMA0` / `seria
 be reached from the snap on a regular Ubuntu: use the `.deb`, the binary or Docker for them.
 The service runs as root inside the confinement (as snap services do), with its data in
 `/var/snap/ser2netweb/common/data`, which `sudo snap remove --purge ser2netweb` deletes;
-`sudo snap logs ser2netweb.daemon` shows its log. `snap unset ser2netweb bind-ip port` goes
-back to `config.json`'s address. A snap with classic confinement (no sandbox) would need a
+`sudo snap logs ser2netweb.daemon` shows its log. `snap set ser2netweb port=8090` alone is
+that port on `127.0.0.1`; `snap unset ser2netweb bind-ip port` goes back to `config.json`'s
+address. A snap with classic confinement (no sandbox) would need a
 Snap Store review the maintainer asks for; there is none.
 
 ### Command-line options
@@ -860,7 +863,7 @@ works and runs the same, so units and scripts that name it need no change:
 
 | Option | What it does |
 |---|---|
-| `--data-dir DIR` | where `config.json`, its backups, the logs and traces live (default: `data/` next to `ser2netweb.py` or the binary, for Scoop's in its persist folder; `/var/lib/ser2netweb` for the `.deb` / `.rpm` / AUR package's; the user's data folder for a pip / pipx, winget or Chocolatey install, see *pipx / pip* and *Windows package managers*; `$(brew --prefix)/var/ser2netweb` for Homebrew's; `/var/snap/ser2netweb/common/data` for the snap's, as root); give ser2netweb a folder of its own |
+| `--data-dir DIR` | where `config.json`, its backups, the logs and traces live (default: `data/` next to `ser2netweb.py` or the binary, for Scoop's in its persist folder; `/var/lib/ser2netweb` for the `.deb` / `.rpm` / AUR package's; the user's data folder for a pip / pipx, winget or Chocolatey install, see *pipx / pip* and *Windows package managers*; `$(brew --prefix)/var/ser2netweb` for Homebrew's, or the user's data folder that 3.0.0 used there, see *Homebrew*; `/var/snap/ser2netweb/common/data` for the snap's, as root); give ser2netweb a folder of its own |
 | `--config FILE` | a `config.json` elsewhere; its folder is the data directory then |
 | `--reconfigure` | ask again for the admin UI's address and port on the console, then start |
 | `--online` | let the dependency bootstrap fall back to PyPI for a wheel `vendor/wheels/` lacks (source installs) |
@@ -883,7 +886,7 @@ feature):
 
 | Variable | What it sets |
 |---|---|
-| `SER2NETWEB_BIND_IP`, `SER2NETWEB_PORT` | the admin UI's address and port, which win over `config.json` at every start (`*`: every interface, IPv4 and IPv6) |
+| `SER2NETWEB_BIND_IP`, `SER2NETWEB_PORT` | the admin UI's address and port, which win over `config.json` at every start (`*`: every interface, IPv4 and IPv6); each works on its own: the port alone keeps `config.json`'s bind IP (3.0.0 ignored a port set without a bind IP) |
 | `SER2NETWEB_ADMIN_PASSWORD_FILE`, `SER2NETWEB_ADMIN_USER` | the first admin account, from a file (a Docker secret), while there is no account |
 | `SER2NETWEB_NODE_NAME` | this instance's name |
 | `SER2NETWEB_PUBLIC_URL`, `SER2NETWEB_TRUSTED_PROXIES` | what Settings → Reverse proxy sets |
@@ -950,8 +953,9 @@ limits).
 Published image (every release; amd64, arm64, and arm/v7 for 32-bit ARM such as 32-bit
 Raspberry Pi OS): `docker pull ghcr.io/haliskilic/ser2netweb:latest`
 (or `:3.0`, `:3.0.0`); `docker-compose.yml` uses it. Up to 2.9.x the image was
-`ghcr.io/haliskilic/ser2net`: that name stops at 3.0.0 and gets no later release, so
-change the image to `ghcr.io/haliskilic/ser2netweb` to keep getting updates;
+`ghcr.io/haliskilic/ser2net`: that image no longer exists (since 2026-11-13 a pull of it
+fails, and the 2.x images are no longer on GHCR), so change the image to
+`ghcr.io/haliskilic/ser2netweb`;
 moving a 2.9.x container or compose file over: [`docs/DOCKER.md`](docs/DOCKER.md#upgrading-from-29x).
 The same image, by digest and with the same tags, is on Docker Hub as
 `docker.io/haliskilic/ser2netweb` (`docker pull haliskilic/ser2netweb:latest`). Between releases `:latest` and `:X.Y`

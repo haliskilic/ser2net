@@ -85,11 +85,17 @@ from typing import TYPE_CHECKING, Any
 
 import serial
 
-from .. import envvars
+from .. import envvars, optional
 
 try:
     import serial_asyncio_fast as _saf
-except ImportError:  # not packaged by every distribution: its transport, copied (0.16)
+except ImportError as _e:
+    _problem = optional.problem(_e, "pyserial-asyncio-fast", "serial_asyncio_fast")
+    if not _problem.missing:
+        # installed, but broken: said as it is (as --about does), not passed over with the
+        # copy as if it weren't installed
+        raise ImportError(str(_problem)) from _e
+    # not packaged by every distribution: its transport, copied (0.16)
     from . import serial_transport as _saf  # type: ignore[no-redef]
 
 # pyserial-asyncio-fast isn't installed: Transport builds on ser2netweb's copy of its
@@ -547,14 +553,17 @@ def unverified_note() -> str:
     of pyserial-asyncio-fast's transport is used."""
     other = [f"{name} {getattr(mod, '__version__', '?')} (checked: {want})"
              for name, mod, want in VERIFIED if getattr(mod, "__version__", None) != want]
-    if not other:
-        return (f"serial ports: pyserial-asyncio-fast is not installed — its transport "
+    built_in = (f"pyserial-asyncio-fast is not installed — its transport "
                 f"({_saf.__version__}), built into ser2netweb, is used" if BUILT_IN else "")
+    if not other:
+        return f"serial ports: {built_in}" if built_in else ""
     note = (f"WARNING: serial ports: {', '.join(other)} — ser2netweb's fixes for these "
             "libraries were not checked against this version")
     if transport_class() is not Transport:
         note += ("; pyserial-asyncio-fast lacks what they build on, so its own transport is "
                  "used (without them)")
+    if built_in:
+        note += f"; {built_in}"
     return note
 
 

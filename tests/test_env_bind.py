@@ -56,6 +56,38 @@ def test_bad_port_keeps_default():
     print("env: invalid port ignored (with a warning), default kept  OK")
 
 
+def test_port_without_bind_ip():
+    """Each variable works on its own: the port moves, the configured bind IP stays (and
+    the function still answers False: no bind IP came from the environment)."""
+    for name in ("SER2NETWEB_PORT", "SER2NET_PORT"):
+        _clear()
+        os.environ[name] = "9000"
+        try:
+            a = AdminUI(bind_ip="192.0.2.7", port=8080)
+            assert _env_bind_override(a) is False
+            assert (a.bind_ip, a.port) == ("192.0.2.7", 9000), (name, a.bind_ip, a.port)
+            os.environ[name] = "70000"
+            try:
+                _env_bind_override(a)
+            except ConfigError as e:
+                assert f"{name} must be a port number" in str(e), str(e)
+            else:
+                raise AssertionError("port 70000 was accepted")
+            os.environ[name], notes = "80a", []
+            assert _env_bind_override(a, notes) is False and a.port == 9000
+            assert notes == [f"WARNING: {name} '80a' is not a number and is ignored — the "
+                             "admin UI uses port 9000"], notes
+        finally:
+            _clear()
+    os.environ["SER2NETWEB_BIND_IP"] = "0.0.0.0"
+    try:
+        a = AdminUI(port=8123)
+        assert _env_bind_override(a) is True and (a.bind_ip, a.port) == ("0.0.0.0", 8123)
+    finally:
+        _clear()
+    print("env: a port without a bind IP is applied, the bind IP kept (and the reverse)  OK")
+
+
 def test_unusable_values_rejected():
     """The UI could not start on these: a clear error (start-up turns it into one line)."""
     for ip, port, expect in (("eth0", "", "SER2NETWEB_BIND_IP must be an IP address"),
@@ -89,6 +121,7 @@ def main():
     test_no_env_is_noop()
     test_env_applies_ip_and_port()
     test_bad_port_keeps_default()
+    test_port_without_bind_ip()
     test_unusable_values_rejected()
     print("\nPASS: env bind override (Docker/headless)")
 

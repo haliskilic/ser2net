@@ -8,7 +8,8 @@
 # standalone executable; enabled, the service answers on 127.0.0.1:8080 with its data in
 # /var/snap/ser2netweb/common/data, --set-password works on that data while it runs;
 # `snap set ser2netweb bind-ip=... port=...` moves the web UI (the configure hook restarts the
-# service) and a bad port is refused; disabled and removed in the end.
+# service), port alone moves it on 127.0.0.1, and a bad port is refused; disabled and
+# removed in the end.
 set -eu
 
 snap=${1:?usage: $0 SNAP VERSION}
@@ -51,8 +52,11 @@ printf '%s\n' snap-smoke-pass-1 |
     sudo /snap/bin/ser2netweb --data-dir "$data" --set-password admin
 sudo snap set ser2netweb bind-ip=127.0.0.1 port=8091
 healthy 8091
+sudo snap unset ser2netweb bind-ip
+sudo snap set ser2netweb port=8092
+healthy 8092
 if sudo snap set ser2netweb port=99999 2>/dev/null; then fail "port=99999 was taken"; fi
 if sudo snap set ser2netweb bind-ip='0.0.0.0;x' 2>/dev/null; then fail "a bad bind-ip was taken"; fi
 sudo snap stop --disable ser2netweb.daemon
 sudo snap remove --purge ser2netweb
-echo "PASS: $(basename "$snap"): installed, connected, the service on 8080 and 8091, removed"
+echo "PASS: $(basename "$snap"): installed, connected, the service on 8080, 8091 and 8092 (port alone), removed"

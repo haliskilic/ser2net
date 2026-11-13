@@ -23,6 +23,10 @@ ser2net is installed:
   (`docker exec -it ser2netweb python /app/ser2netweb.py --no-bootstrap --data-dir /data --set-password admin`).
   The image's account is `ser2netweb` with the same uid 10001, so volumes are used as they are
   (`docs/DOCKER.md` → *Upgrading from 2.9.x*) (#104, #106).
+
+  *Note, 2026-11-13:* since that day the old image name `ghcr.io/haliskilic/ser2net` no
+  longer exists and a pull of it fails; use `ghcr.io/haliskilic/ser2netweb` (3.0.0 and
+  later; the 2.x images are no longer on GHCR).
 - **Standalone binary installed with 2.9.x's `ser2net-install.sh`:** put `ser2netweb-linux-x64`
   (or `-arm64`), `ser2netweb-standalone.service`, `ser2netweb-install.sh` and `SHA256SUMS` of
   this release in one folder and run `sudo sh ser2netweb-install.sh`. It recognises the

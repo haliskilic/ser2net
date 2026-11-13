@@ -145,6 +145,17 @@ def test_left_alone_unless_changed():
         assert len(backups(data)) == 2, backups(data)
         print("a new SER2NETWEB_PORT: saved, and kept in backups/ next to the previous file  OK")
 
+        with env(SER2NETWEB_BIND_IP=None, SER2NET_BIND_IP=None, SER2NETWEB_PORT="9191"):
+            _store, cfg = runtime.prepare_config(path)
+            assert (cfg.admin_ui.bind_ip, cfg.admin_ui.port) == ("0.0.0.0", 9191), cfg.admin_ui
+            with open(path, encoding="utf-8") as fh:
+                saved = json.load(fh)["admin_ui"]
+            assert (saved["bind_ip"], saved["port"]) == ("0.0.0.0", 9191), saved
+            before = file_state(path)
+            runtime.prepare_config(path)
+            assert file_state(path) == before, "an unchanged config.json was rewritten"
+        print("SER2NETWEB_PORT without a bind IP: the port moves, config.json's bind IP stays  OK")
+
         shutil.copy(FIXTURE, path)  # an upgrade: 2.8 adds keys and moves the trace paths
         with env(**CONTAINER):
             runtime.prepare_config(path)

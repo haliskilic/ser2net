@@ -835,7 +835,10 @@ unit'i); verisi, `all.log` da, `$(brew --prefix)/var/ser2netweb`'tedir; `brew se
 ser2netweb` durumunu gösterir. `brew upgrade ser2netweb`'ten sonra: `brew services restart
 ser2netweb`; `brew uninstall ser2netweb` veri klasörünü bırakır. Yukarıdaki gibi `--data-dir`
 her sürümde çalışır; 3.0.0'dan sonraki sürümlerde Homebrew kurulumunun varsayılanı da bu
-klasördür ve `ser2netweb --about` `Build: Homebrew formula` der. Seri portlar: macOS'ta
+klasördür ve `ser2netweb --about` `Build: Homebrew formula` der. 3.0.0, `--data-dir`
+verilmeden çalıştırıldığında verisini (pip kurulumu gibi) kullanıcının veri klasöründe
+tutuyordu: o klasörde bir `config.json` varken `$(brew --prefix)/var/ser2netweb`'te yoksa
+sonraki sürümler orayı kullanmayı sürdürür. Seri portlar: macOS'ta
 `/dev/cu.usbserial-*` / `/dev/cu.usbmodem*`; Linux'ta hesabınızın portların grubunda olması
 gerekir (`dialout`, Arch'ta `uucp`). Tap her yeni sürümün formülünü bir gün içinde önerir
 (oradaki "bump" iş akışı); formülü `packaging/homebrew/make_formula.py` üretir.
@@ -877,7 +880,8 @@ hotplug özelliğinin sağladığı bir slot gerekir. Dahili UART'lara (`/dev/tt
 `/dev/ttyAMA0` / `serial0`'ı) normal bir Ubuntu'da snap'ten erişilemez: onlar için `.deb`'i,
 binary'yi ya da Docker'ı kullanın. Servis confinement içinde root olarak çalışır (snap
 servisleri böyle çalışır); verisi `/var/snap/ser2netweb/common/data`'dadır ve `sudo snap remove
---purge ser2netweb` onu siler; log'unu `sudo snap logs ser2netweb.daemon` gösterir. `snap unset
+--purge ser2netweb` onu siler; log'unu `sudo snap logs ser2netweb.daemon` gösterir. Tek başına
+`snap set ser2netweb port=8090`, `127.0.0.1` üzerinde o port demektir; `snap unset
 ser2netweb bind-ip port` `config.json`'daki adrese döner. Classic confinement'lı (sandbox'sız)
 bir snap için bakımcının isteyeceği bir Snap Store incelemesi gerekirdi; böyle bir snap yoktur.
 
@@ -889,7 +893,7 @@ unit'ler ve script'ler değişiklik gerektirmez:
 
 | Seçenek | Ne yapar |
 |---|---|
-| `--data-dir KLASÖR` | `config.json`, yedekleri, log'lar ve trace'lerin yeri (varsayılan: `ser2netweb.py`'nin ya da binary'nin yanındaki `data/`, Scoop'unki için onun persist klasöründe; `.deb` / `.rpm` / AUR paketininki için `/var/lib/ser2netweb`; pip / pipx, winget ya da Chocolatey kurulumu için kullanıcının veri klasörü, bkz. *pipx / pip* ve *Windows paket yöneticileri*; Homebrew'unki için `$(brew --prefix)/var/ser2netweb`; snap'inki için, root olarak, `/var/snap/ser2netweb/common/data`); ser2netweb'e kendine ait bir klasör verin |
+| `--data-dir KLASÖR` | `config.json`, yedekleri, log'lar ve trace'lerin yeri (varsayılan: `ser2netweb.py`'nin ya da binary'nin yanındaki `data/`, Scoop'unki için onun persist klasöründe; `.deb` / `.rpm` / AUR paketininki için `/var/lib/ser2netweb`; pip / pipx, winget ya da Chocolatey kurulumu için kullanıcının veri klasörü, bkz. *pipx / pip* ve *Windows paket yöneticileri*; Homebrew'unki için `$(brew --prefix)/var/ser2netweb` ya da 3.0.0'ın orada kullandığı kullanıcı veri klasörü, bkz. *Homebrew*; snap'inki için, root olarak, `/var/snap/ser2netweb/common/data`); ser2netweb'e kendine ait bir klasör verin |
 | `--config DOSYA` | başka bir yerdeki `config.json`; veri klasörü o zaman onun klasörüdür |
 | `--reconfigure` | yönetim arayüzünün adresini ve portunu konsolda yeniden sorar, sonra başlar |
 | `--online` | bağımlılık kurulumu `vendor/wheels/`'te olmayan bir wheel için PyPI'ye başvurabilir (kaynak kurulum) |
@@ -912,7 +916,7 @@ Bir konteynerin, servis unit'inin ya da bir script'in bir çalıştırma için v
 
 | Değişken | Ne ayarlar |
 |---|---|
-| `SER2NETWEB_BIND_IP`, `SER2NETWEB_PORT` | yönetim arayüzünün adresi ve portu; her açılışta `config.json`'un önüne geçer (`*`: IPv4 ve IPv6 bütün arayüzler) |
+| `SER2NETWEB_BIND_IP`, `SER2NETWEB_PORT` | yönetim arayüzünün adresi ve portu; her açılışta `config.json`'un önüne geçer (`*`: IPv4 ve IPv6 bütün arayüzler); her biri tek başına da çalışır: yalnızca port verilirse bağlanılan IP `config.json`'daki kalır (3.0.0, bağlanılacak IP verilmeden ayarlanan portu yok sayıyordu) |
 | `SER2NETWEB_ADMIN_PASSWORD_FILE`, `SER2NETWEB_ADMIN_USER` | hiç hesap yokken ilk admin hesabı, bir dosyadan (Docker secret) |
 | `SER2NETWEB_NODE_NAME` | bu kopyanın adı |
 | `SER2NETWEB_PUBLIC_URL`, `SER2NETWEB_TRUSTED_PROXIES` | Ayarlar → Reverse proxy'nin ayarladıkları |
@@ -979,8 +983,9 @@ komutunu kullanın (hazır imaj, `--restart unless-stopped`, `--init`, eşleme p
 Hazır imaj (her sürümde; amd64, arm64 ve 32-bit Raspberry Pi OS gibi 32-bit ARM için
 arm/v7): `docker pull ghcr.io/haliskilic/ser2netweb:latest`
 (ya da `:3.0`, `:3.0.0`); `docker-compose.yml` bunu kullanır. 2.9.x'e kadar imaj
-`ghcr.io/haliskilic/ser2net` idi: o ad 3.0.0'da kalır, sonraki sürümler oraya yayımlanmaz;
-güncelleme almayı sürdürmek için imajı `ghcr.io/haliskilic/ser2netweb` olarak değiştirin.
+`ghcr.io/haliskilic/ser2net` idi: o imaj artık yok (2026-11-13'ten beri `docker pull`
+başarısız olur, 2.x imajları da GHCR'da değildir); imajı `ghcr.io/haliskilic/ser2netweb`
+olarak değiştirin.
 2.9.x'ten kalan bir container'ı ya da compose dosyasını taşımak:
 [`docs/DOCKER.md`](docs/DOCKER.md#upgrading-from-29x). Aynı imaj, aynı digest ve etiketlerle,
 Docker Hub'da da `docker.io/haliskilic/ser2netweb` olarak vardır (`docker pull
