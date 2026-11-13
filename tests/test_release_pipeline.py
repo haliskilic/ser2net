@@ -21,6 +21,11 @@
   "pypi package (build)" made and checked (artifact pypi-dist), by trusted publishing
   (id-token only, the environment pypi, PyPI's own action pinned by SHA, no checkout); a
   failure there (no trusted publisher yet) leaves the release and the image as they are;
+* once the GHCR tags are there, the same digest gets the same tags on Docker Hub
+  (docker-hub.yml, also image-refresh.yml's and a manual run's): imagetools create from
+  GHCR by digest, no rebuild, each tag checked to be that digest, only the two Docker Hub
+  secrets handed over, read-only otherwise, skipped with a notice without them; nothing
+  waits for it;
 * a manual run (workflow_dispatch) is a dry run: it checks, builds and tests the same way
   but attests, releases, tags and uploads nothing, and neither waits for nor blocks a
   release.
@@ -211,7 +216,7 @@ def test_dry_run_publishes_nothing():
     assert "\n  workflow_dispatch:\n" in text.split("\npermissions:", 1)[0]
     release = jobs(text)
     push_only = "github.event_name == 'push'"
-    for job in ("publish", "image", "pypi"):
+    for job in ("publish", "image", "pypi", "docker-hub"):
         assert key(release[job], "if") == push_only, f"{job} must not run in a dry run"
     attestations = [s for s in steps(release["attest"]) if "uses: actions/attest-" in s]
     assert len(attestations) == 4, attestations
@@ -284,6 +289,45 @@ def test_pypi_published_last():
           "publishing (id-token only, environment pypi), nothing waits for it  OK")
 
 
+def test_docker_hub_copy():
+    release = jobs(read("release.yml"))
+    hub = release["docker-hub"]
+    assert key(hub, "uses") == "./.github/workflows/docker-hub.yml", hub
+    assert "image" in needs(hub), "after the GHCR tags"
+    assert permissions(hub) == {"contents": "read", "packages": "read"}, permissions(hub)
+    assert "docker-hub" not in {n for job in release for n in needs(release[job])}, \
+        "nothing waits for Docker Hub"
+    assert "      digest: ${{ needs.image-build.outputs.digest }}\n" in hub, "the tested digest"
+    assert "      tags: ${{ needs.verify.outputs.image-tags }}\n" in hub, "the release's tags"
+    passed = re.findall(r"(?m)^      (\w+): \$\{\{ secrets\.(\w+) \}\}$", hub)
+    assert passed == [("DOCKERHUB_USERNAME", "DOCKERHUB_USERNAME"),
+                      ("DOCKERHUB_TOKEN", "DOCKERHUB_TOKEN")], passed
+    assert "secrets: inherit" not in hub
+    refresh = jobs(read("image-refresh.yml"))["docker-hub"]
+    assert key(refresh, "uses") == "./.github/workflows/docker-hub.yml"
+    assert "tag" in needs(refresh) and "      digest: ${{ needs.build.outputs.digest }}\n" in refresh
+    assert "      tags: ${{ needs.check.outputs.image-tags }}\n" in refresh, "X.Y and latest"
+    assert key(refresh, "if") == "needs.check.outputs.title == 'ser2netweb'", "3.x only"
+
+    text = read("docker-hub.yml")
+    on = text.split("\npermissions:", 1)[0]
+    assert "\n  workflow_call:\n" in on and "\n  workflow_dispatch:\n" in on, on
+    assert re.search(r"(?m)^      tag:\n        description: .*\n        required: true", on)
+    mirror = jobs(text)["mirror"]
+    assert permissions(mirror) == {"contents": "read", "packages": "read"}, permissions(mirror)
+    assert not uses(text), "only the runner's docker CLI"
+    st = steps(mirror)
+    assert '[ -z "$HUB_USER" ] || [ -z "$HUB_TOKEN" ]' in st[0] and "::notice::" in st[0]
+    assert all("        if: steps.hub.outputs.copy == 'true'\n" in x for x in st[1:]), st
+    assert "source=ghcr.io/$owner/ser2netweb" in mirror
+    assert "namespace=${HUB_NAMESPACE:-$owner}" in mirror
+    assert 'docker buildx imagetools create "${refs[@]}" "$SOURCE@$DIGEST"' in mirror
+    assert '[ "$got" = "$DIGEST" ]' in mirror, "each tag checked to be the digest"
+    assert "--password-stdin" in mirror and "build-push-action" not in text
+    print("Docker Hub: after the GHCR tags, the same digest and tags (imagetools, checked), "
+          "two secrets only, skipped without them; image-refresh.yml and by hand too  OK")
+
+
 if __name__ == "__main__":
     test_actions_pinned_by_sha()
     test_tag_checked_first()
@@ -295,4 +339,5 @@ if __name__ == "__main__":
     test_release_files_named()
     test_image_names()
     test_pypi_published_last()
+    test_docker_hub_copy()
     print("\nPASS: release pipeline")

@@ -588,8 +588,11 @@ everything from a **password-protected web UI** — no CLI or hand-edited config
 | [`.deb` / `.rpm` package](#linux-packages-deb--rpm) (apt / dnf) | Debian 11+, Ubuntu 20.04+, 64-bit Raspberry Pi OS; Fedora, RHEL / AlmaLinux / Rocky 8+ (x86_64, arm64) | nothing; data in `/var/lib/ser2netweb` |
 | [APT repository](#package-repositories-apt-dnf-zypper) | Debian 11+, Ubuntu 20.04+, 64-bit Raspberry Pi OS (amd64, arm64) | nothing; updates come with `apt upgrade` |
 | [DNF / YUM repository](#package-repositories-apt-dnf-zypper) (zypper too) | Fedora, RHEL / AlmaLinux / Rocky 8+, openSUSE Leap 15.6+ (x86_64, aarch64) | nothing; updates come with `dnf upgrade` / `zypper update` |
-| [Docker](#docker) | Linux hosts: amd64, arm64, arm/v7 (32-bit Raspberry Pi OS) | Docker |
+| [Docker](#docker) (GHCR, Docker Hub) | Linux hosts: amd64, arm64, arm/v7 (32-bit Raspberry Pi OS) | Docker |
 | [pipx / pip](#pipx--pip) (PyPI) | any OS and CPU | Python 3.10+, pipx; data in the user's data folder |
+| [Homebrew](#homebrew-macos-linux) (`brew install haliskilic/tap/ser2netweb`) | macOS (Apple silicon, Intel), Linux | Homebrew; data in `$(brew --prefix)/var/ser2netweb` |
+| [AUR](#arch-linux-aur) (`ser2netweb-bin`) | Arch Linux, Manjaro, EndeavourOS (x86_64, aarch64) | an AUR helper or `makepkg`; data in `/var/lib/ser2netweb` |
+| [Snap](#snap) (`snap install ser2netweb`) | Linux with snapd (amd64, arm64): USB serial adapters only | snapd; data in `/var/snap/ser2netweb/common/data` |
 | From source (below) | any OS and CPU: also macOS, 32-bit ARM, Windows on ARM | Python 3.10+ with pip; offline from the bundled wheels |
 
 ```bash
@@ -788,6 +791,68 @@ user's data folder, never next to the package:
 the same. For a service take the binary, the packages or Docker: a pip install isn't a
 Windows service (`--install-service` refuses), and it has no systemd unit of its own.
 
+### Homebrew (macOS, Linux)
+The tap `haliskilic/tap` has a formula that builds ser2netweb from the release's source into
+a virtual environment of Homebrew's Python 3.14, with every component the binaries carry
+(MQTT, LDAP, OIDC; `cryptography` from Homebrew's own formula):
+```bash
+brew trust haliskilic/tap                 # once: Homebrew loads another tap's formulae once trusted
+brew install haliskilic/tap/ser2netweb
+brew services start ser2netweb            # the web UI on 127.0.0.1:8080, also after a restart
+ser2netweb --data-dir "$(brew --prefix)/var/ser2netweb" --set-password admin
+```
+The service runs as you (a launchd agent on macOS, a systemd user unit on Linux) with its
+data, `all.log` too, in `$(brew --prefix)/var/ser2netweb`; `brew services info ser2netweb`
+shows it. After `brew upgrade ser2netweb`: `brew services restart ser2netweb`;
+`brew uninstall ser2netweb` keeps the data folder. `--data-dir` as above works with every
+version; after 3.0.0 that folder is also the default of a Homebrew install, and
+`ser2netweb --about` says `Build: Homebrew formula`. Serial ports: `/dev/cu.usbserial-*` /
+`/dev/cu.usbmodem*` on macOS; on Linux your account needs the ports' group (`dialout`, `uucp`
+on Arch). The tap proposes each new release's formula within a day (its workflow "bump");
+`packaging/homebrew/make_formula.py` makes it.
+
+### Arch Linux (AUR)
+The AUR package `ser2netweb-bin` is the release's binary for x86_64 and aarch64, installed
+as the `.deb` installs it:
+```bash
+yay -S ser2netweb-bin                     # or paru, or by hand:
+# git clone https://aur.archlinux.org/ser2netweb-bin.git && cd ser2netweb-bin && makepkg -si
+sudo systemctl enable --now ser2netweb    # installing it doesn't start it
+sudo -u ser2netweb ser2netweb --set-password admin
+```
+It installs `/usr/bin/ser2netweb`, the unit `/usr/lib/systemd/system/ser2netweb.service`
+(`ser2netweb-standalone.service` with that path and `SupplementaryGroups=uucp`, Arch's serial
+group), the account `ser2netweb` and `/var/lib/ser2netweb` (sysusers.d / tmpfiles.d, as the
+`.deb`) and the licence texts in `/usr/share/licenses/ser2netweb-bin`. An upgrade doesn't
+restart a running service (`sudo systemctl try-restart ser2netweb`); removing the package
+keeps the data and the account. It is unrelated to the classic daemon's `ser2net` package:
+both can be installed. Every release updates it (`.github/workflows/aur.yml`, which builds and
+installs it in an Arch container first); `packaging/aur/make_pkgbuild.py` makes the
+`PKGBUILD`.
+
+### Snap
+The snap `ser2netweb` (strict confinement; amd64, arm64) is the release's binary with a
+service that is off until you enable it:
+```bash
+sudo snap install ser2netweb
+sudo snap connect ser2netweb:raw-usb            # USB serial adapters (not connected by itself)
+sudo snap connect ser2netweb:hardware-observe   # the port list's details (optional)
+sudo snap start --enable ser2netweb.daemon      # the web UI on 127.0.0.1:8080
+sudo ser2netweb --data-dir /var/snap/ser2netweb/common/data --set-password admin
+sudo snap set ser2netweb bind-ip=0.0.0.0 port=8080   # the web UI on the network (use TLS there)
+```
+A strictly confined snap opens a serial device only through an interface. `raw-usb`, which
+snapd itself provides on every Ubuntu and which you connect by hand, allows `/dev/ttyUSB*`
+and `/dev/ttyACM*`: USB serial adapters, also by their `/dev/serial/by-id` names.
+`serial-port` needs a slot that a gadget snap (Ubuntu Core) or snapd's experimental hotplug
+provides. Built-in UARTs (`/dev/ttyS*`, a Raspberry Pi's `/dev/ttyAMA0` / `serial0`) can't
+be reached from the snap on a regular Ubuntu: use the `.deb`, the binary or Docker for them.
+The service runs as root inside the confinement (as snap services do), with its data in
+`/var/snap/ser2netweb/common/data`, which `sudo snap remove --purge ser2netweb` deletes;
+`sudo snap logs ser2netweb.daemon` shows its log. `snap unset ser2netweb bind-ip port` goes
+back to `config.json`'s address. A snap with classic confinement (no sandbox) would need a
+Snap Store review the maintainer asks for; there is none.
+
 ### Command-line options
 `python3 ser2netweb.py [options]`, `ser2netweb-linux-x64 [options]`, `ser2netweb-windows-x64.exe
 [options]` (`--help` lists them). `ser2net.py`, the start script's name up to 2.9.x, still
@@ -795,7 +860,7 @@ works and runs the same, so units and scripts that name it need no change:
 
 | Option | What it does |
 |---|---|
-| `--data-dir DIR` | where `config.json`, its backups, the logs and traces live (default: `data/` next to `ser2netweb.py` or the binary, for Scoop's in its persist folder; `/var/lib/ser2netweb` for the `.deb` / `.rpm` package's; the user's data folder for a pip / pipx, winget or Chocolatey install, see *pipx / pip* and *Windows package managers*); give ser2netweb a folder of its own |
+| `--data-dir DIR` | where `config.json`, its backups, the logs and traces live (default: `data/` next to `ser2netweb.py` or the binary, for Scoop's in its persist folder; `/var/lib/ser2netweb` for the `.deb` / `.rpm` / AUR package's; the user's data folder for a pip / pipx, winget or Chocolatey install, see *pipx / pip* and *Windows package managers*; `$(brew --prefix)/var/ser2netweb` for Homebrew's; `/var/snap/ser2netweb/common/data` for the snap's, as root); give ser2netweb a folder of its own |
 | `--config FILE` | a `config.json` elsewhere; its folder is the data directory then |
 | `--reconfigure` | ask again for the admin UI's address and port on the console, then start |
 | `--online` | let the dependency bootstrap fall back to PyPI for a wheel `vendor/wheels/` lacks (source installs) |
@@ -886,7 +951,9 @@ Published image (every release; amd64, arm64, and arm/v7 for 32-bit ARM such as 
 Raspberry Pi OS): `docker pull ghcr.io/haliskilic/ser2netweb:latest`
 (or `:3.0`, `:3.0.0`); `docker-compose.yml` uses it. Up to 2.9.x the image was
 `ghcr.io/haliskilic/ser2net`, where the 3.x releases are published too (the same image);
-moving a 2.9.x container or compose file over: [`docs/DOCKER.md`](docs/DOCKER.md#upgrading-from-29x). Between releases `:latest` and `:X.Y`
+moving a 2.9.x container or compose file over: [`docs/DOCKER.md`](docs/DOCKER.md#upgrading-from-29x).
+The same image, by digest and with the same tags, is on Docker Hub as
+`docker.io/haliskilic/ser2netweb` (`docker pull haliskilic/ser2netweb:latest`). Between releases `:latest` and `:X.Y`
 are rebuilt on a newer Debian/Python base when it changes (weekly check; `:X.Y.Z` stays as
 released) — see [`docs/DOCKER.md`](docs/DOCKER.md).
 Inside the container the UI binds to `0.0.0.0` (set via `SER2NETWEB_BIND_IP` /

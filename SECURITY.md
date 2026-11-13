@@ -16,7 +16,7 @@ reporting; an upgrade from any 2.x release keeps `config.json` as it is.
 - e-mail: **mail@haliskilic.com.tr**
 
 Include the version (`ser2netweb --about`), how it is installed (binary, .deb / .rpm
-package, Docker, pip / pipx, source), the steps to reproduce and the impact you see. You
+package, Docker, pip / pipx, Homebrew, AUR, snap, source), the steps to reproduce and the impact you see. You
 will get an answer and we will agree on a disclosure date with you; please give a fix
 time before going public. Reporters are credited in the release notes unless they prefer
 otherwise.
@@ -103,7 +103,7 @@ yükseltmede `config.json` olduğu gibi kalır.
 - e-posta: **mail@haliskilic.com.tr**
 
 Sürümü (`ser2netweb --about`), kurulum şeklini (binary, .deb / .rpm paketi, Docker,
-pip / pipx, kaynak), tekrarlama adımlarını ve gördüğünüz etkiyi yazın. Size dönüş yapılır
+pip / pipx, Homebrew, AUR, snap, kaynak), tekrarlama adımlarını ve gördüğünüz etkiyi yazın. Size dönüş yapılır
 ve yayımlama tarihi sizinle birlikte belirlenir; herkese açıklamadan önce düzeltme için
 süre tanıyın. İstemediğiniz sürece adınız sürüm notlarında anılır.
 
