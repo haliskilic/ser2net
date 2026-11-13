@@ -431,8 +431,8 @@ def test_nar_hash():
 def test_workflow():
     wf = read("distro-packages-2.yml")
     on = wf.split("\non:\n", 1)[1].split("\n\npermissions:", 1)[0]
-    assert re.findall(r"(?m)^  ([a-z_]+):", on) == ["pull_request", "workflow_dispatch",
-                                                     "schedule"], on
+    assert re.findall(r"(?m)^  ([a-z_]+):", on) == ["push", "pull_request",
+                                                     "workflow_dispatch", "schedule"], on
     for path in ("packaging/nix/**", "packaging/void/**", "packaging/gentoo/**",
                  "packaging/freebsd/**", "packaging/macports/**", "tools/bump_recipes_2.py",
                  "tests/test_distro_recipes_2.py", ".github/workflows/distro-packages-2.yml"):
