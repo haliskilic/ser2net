@@ -1,0 +1,167 @@
+name: Distribution packages
+
+# The recipes in packaging/ for the distributions' own repositories (docs/PACKAGING.md,
+# "Recipes for distributions"), each built from source in a container of its distribution
+# with only that distribution's packages: Debian unstable and 13 and Ubuntu 26.04
+# (dpkg-buildpackage, lintian, autopkgtest), Fedora rawhide and the newest release, EPEL 10
+# on AlmaLinux 10 (rpmbuild, rpmlint), openSUSE Tumbleweed (rpmbuild, rpmlint), Arch Linux
+# (makepkg, namcap) and Alpine edge (abuild, apkbuild-lint). Each build runs the recipe's
+# check step (the tests that bind nothing); then the package is installed and started
+# (tests/distro_smoke.py). tests/distro_build.sh does the work, the same way on a machine
+# with docker.
+# The source is this commit's tree as the release tag's tarball holds it (git archive), or
+# with "tag" (Actions -> Distribution packages -> Run workflow) that tag's tarball from
+# GitHub; the recipes get its checksums (tools/bump_recipes.py, in the job only). It runs
+# for a pull request that changes a recipe, by hand, and every week, so a distribution's
+# new releases of the dependencies show up. Not a merge condition: ci.yml doesn't run it,
+# and EPEL 10 lacks what ser2netweb needs (it may fail, docs/PACKAGING.md says why).
+on:
+  pull_request:
+    paths:
+      - .github/workflows/distro-packages.yml
+      - packaging/alpine/**
+      - packaging/arch/**
+      - packaging/debian/**
+      - packaging/fedora/**
+      - packaging/opensuse/**
+      - tests/distro_build.sh
+      - tests/distro_smoke.py
+      - tools/bump_recipes.py
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: A release tag to build (vX.Y.Z; empty for this commit's tree)
+        type: string
+        default: ""
+  schedule:
+    - cron: "41 5 * * 1"  # Mondays
+
+permissions:
+  contents: read
+
+# a pull request's runs replace each other; every other run has its own group
+concurrency:
+  group: distro-packages-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  debian:
+    name: debian (${{ matrix.image }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - image: debian:unstable
+            id: debian-unstable
+          - image: debian:trixie
+            id: debian-trixie
+          - image: ubuntu:26.04
+            id: ubuntu-26.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - name: The source tarball and the recipe for it
+        env:
+          TAG: ${{ inputs.tag }}
+        run: sh tests/distro_build.sh prepare "$TAG"
+      - name: Build, lint, install and start in ${{ matrix.image }}
+        env:
+          IMAGE: ${{ matrix.image }}
+        run: docker run --rm -v "$PWD:/src" -w /src "$IMAGE" sh tests/distro_build.sh debian
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
+        if: always()
+        with:
+          name: distro-${{ matrix.id }}
+          path: build/distro/debian/
+          if-no-files-found: ignore
+          retention-days: 14
+
+  rpm:
+    name: ${{ matrix.target }} (${{ matrix.image }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    # EPEL 10 lacks what ser2netweb needs to build (docs/PACKAGING.md)
+    continue-on-error: ${{ matrix.target == 'epel' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - image: fedora:rawhide
+            target: fedora
+            id: fedora-rawhide
+          - image: fedora:latest
+            target: fedora
+            id: fedora-latest
+          - image: almalinux:10
+            target: epel
+            id: epel-10
+          - image: opensuse/tumbleweed
+            target: opensuse
+            id: opensuse-tumbleweed
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - name: The source tarball and the recipe for it
+        env:
+          TAG: ${{ inputs.tag }}
+        run: sh tests/distro_build.sh prepare "$TAG"
+      - name: Build, lint, install and start in ${{ matrix.image }}
+        env:
+          IMAGE: ${{ matrix.image }}
+          TARGET: ${{ matrix.target }}
+        run: docker run --rm -v "$PWD:/src" -w /src "$IMAGE" sh tests/distro_build.sh "$TARGET"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
+        if: always()
+        with:
+          name: distro-${{ matrix.id }}
+          path: build/distro/${{ matrix.target }}/
+          if-no-files-found: ignore
+          retention-days: 14
+
+  arch:
+    name: arch (archlinux:latest)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - name: The source tarball and the recipe for it
+        env:
+          TAG: ${{ inputs.tag }}
+        run: sh tests/distro_build.sh prepare "$TAG"
+      - name: Build, lint, install and start in archlinux:latest
+        run: docker run --rm -v "$PWD:/src" -w /src archlinux:latest sh tests/distro_build.sh arch
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
+        if: always()
+        with:
+          name: distro-arch
+          path: build/distro/arch/
+          if-no-files-found: ignore
+          retention-days: 14
+
+  alpine:
+    name: alpine (alpine:edge)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - name: The source tarball and the recipe for it
+        env:
+          TAG: ${{ inputs.tag }}
+        run: sh tests/distro_build.sh prepare "$TAG"
+      - name: Build, lint, install and start in alpine:edge
+        run: docker run --rm -v "$PWD:/src" -w /src alpine:edge sh tests/distro_build.sh alpine
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
+        if: always()
+        with:
+          name: distro-alpine
+          path: build/distro/alpine/
+          if-no-files-found: ignore
+          retention-days: 14
