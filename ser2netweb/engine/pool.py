@@ -172,14 +172,18 @@ class PoolManager:
 
     async def apply(self, pools: list[PortPool]) -> None:
         """Run exactly these pools: one that is gone, disabled or changed (its address or
-        port) stops, a new or changed one starts; the others go on untouched, with their
-        counters."""
+        port) stops, a new or changed one starts; the others go on listening, with their
+        counters (and ``rotate`` as it is now)."""
         async with self._lock:
             wanted = {p.name: p for p in pools if p.enabled}
             for name, running in list(self._pools.items()):
-                if wanted.get(name) != running.pool:
-                    del self._pools[name]
-                    await running.stop()
+                pool = wanted.get(name)
+                if pool is not None and (pool.bind_ip, pool.port) == (running.pool.bind_ip,
+                                                                     running.pool.port):
+                    running.pool.rotate = pool.rotate
+                    continue
+                del self._pools[name]
+                await running.stop()
             for name, pool in wanted.items():
                 if name not in self._pools:
                     listener = PoolListener(pool, functools.partial(self._members, name),

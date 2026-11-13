@@ -11,8 +11,9 @@
     talks to that mapping's device; a member that does not let the client's address in is
     passed over; when every member is in use the client reads "Busy: ..." and is
     disconnected, counted and logged; a freed member is used again; a pool whose port is
-    taken keeps trying; a changed pool moves while the clients handed over stay connected;
-    a pool stopped while it binds its port leaves no listener behind;
+    taken keeps trying; a changed pool moves while the clients handed over stay connected,
+    one whose rotate changed keeps listening; a pool stopped while it binds its port leaves
+    no listener behind;
   - REST: GET / PUT /api/v1/pools, pools in /status, the errors; the Settings form.
 
 Run: python3 tests/test_port_pools.py
@@ -303,6 +304,18 @@ async def _rotate():
                     await until(lambda: not any(m["clients"] for m in
                                                 sup.pools.status()["lab"]["members"]))
                 assert got == want, (rotate, got)
+                # rotate changed: the pool goes on listening, and the next client is handed
+                # by it at once
+                listener = sup.pools.get("lab")
+                cfg.pools[0].rotate = not rotate
+                await sup.apply_pools(cfg.pools)
+                assert sup.pools.get("lab") is listener, "restarted for a changed rotate"
+                st = sup.pools.status()["lab"]
+                assert st["rotate"] is not rotate and st["handed"] == 4, st
+                if not rotate:  # (the last client went to a: now b comes first)
+                    _r, w = await pool_client(pool_port)
+                    await until(lambda: sup.pools.status()["lab"]["members"][1]["clients"])
+                    w.close()
             finally:
                 await sup.stop_all()
                 await devices.close()
