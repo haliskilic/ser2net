@@ -8,12 +8,11 @@
 * it runs the whole CI (ci.yml, the checks ci-ok gates merges on) on the tagged commit,
   and nothing that writes (assets, attestations, the image) starts before all of it
   passed; its standalone job builds the released files. One release runs at a time.
-* the image is pushed by digest only, under ghcr.io/<owner>/ser2netweb and (the 3.x line)
-  its 2.9.x name ghcr.io/<owner>/ser2net, that digest is smoke-tested on amd64 and arm64
-  natively and on arm/v7 under QEMU (the old name checked to be the same image), and only
-  then (after the release files) does it get its tags under both names, unchanged, each
-  name attested. The tags come from the tag check: a pre-release never moves X.Y or
-  latest.
+* the image is pushed by digest only, as ghcr.io/<owner>/ser2netweb and under no other
+  name (ghcr.io/<owner>/ser2net, its name up to 2.9.x, stopped at 3.0.0), that digest is
+  smoke-tested on amd64 and arm64 natively and on arm/v7 under QEMU, and only then (after
+  the release files) does it get its tags, unchanged, and its attestation. The tags come
+  from the tag check: a pre-release never moves X.Y or latest.
 * the jobs that can mint attestations or write the release run GitHub's own actions only;
   the attest job can't write the release, and the release is created by the runner's gh
   CLI from exactly the attested files (a pre-release marked as one).
@@ -128,22 +127,18 @@ def test_image_published_as_tested():
     release = jobs(text)
     build = release[UNTAGGED_PUSH]
     assert permissions(build) == {"contents": "read", "packages": "write"}, permissions(build)
-    assert ('outputs: type=image,"name=${{ needs.verify.outputs.image }},'
-            '${{ needs.verify.outputs.old-image }}",push-by-digest=true,'
+    assert ("outputs: type=image,name=${{ needs.verify.outputs.image }},push-by-digest=true,"
             "name-canonical=true,push=true") in build, build
     assert "\n          tags: ${{" not in build and "\n          push: true" not in build, \
         "the build pushes no tag"
-    # before anything is published: tagging won't push another manifest, under either name
-    assert 'for image in "$IMAGE" "$OLD_IMAGE"; do' in build, build
-    assert 'docker buildx imagetools create --dry-run "$image@$DIGEST"' in build, build
+    # before anything is published: tagging won't push another manifest
+    assert 'docker buildx imagetools create --dry-run "$IMAGE@$DIGEST"' in build, build
     assert "value=latest" not in text and "{{major}}" not in text, \
         "image tags come from the tag check, not metadata-action"
     test = release["image-test"]
     assert "REF: ${{ needs.image-build.outputs.image }}@${{ needs.image-build.outputs.digest }}" \
         in test, test
-    assert 'tests/docker_smoke.sh "$REF" "$OLD_REF"' in test, test
-    assert ("OLD_REF: ${{ needs.image-build.outputs.old-image }}@"
-            "${{ needs.image-build.outputs.digest }}") in test, test
+    assert '      - run: tests/docker_smoke.sh "$REF"\n' in test, test
     assert "{ arch: amd64, runner: ubuntu-latest }" in test
     assert "{ arch: arm64, runner: ubuntu-24.04-arm }" in test
     assert "{ arch: arm/v7, runner: ubuntu-latest, platform: linux/arm/v7 }" in test
@@ -155,34 +150,37 @@ def test_image_published_as_tested():
     tag = release["image"]
     assert {"image-test", "publish"} <= transitive_needs(release, "image"), needs(tag)
     assert "TAGS: ${{ needs.verify.outputs.image-tags }}" in tag, tag
-    assert 'for image in "$IMAGE" "$OLD_IMAGE"; do' in tag, tag
-    assert 'docker buildx imagetools create "${refs[@]}" "$image@$DIGEST"' in tag, tag
+    assert 'docker buildx imagetools create "${refs[@]}" "$IMAGE@$DIGEST"' in tag, tag
     assert '[ "$got" = "$DIGEST" ]' in tag, "the tags must point at the tested digest"
     attested = re.findall(r"subject-name: \$\{\{ needs\.image-build\.outputs\.(\S+) \}\}", tag)
-    assert attested == ["image", "old-image"], attested
+    assert attested == ["image"], attested
+    assert tag.count("actions/attest-build-provenance@") == 1, tag
     print("the pushed digest is tested on amd64, arm64 and arm/v7, then tagged unchanged  OK")
 
 
 def test_image_names():
-    """The image is ghcr.io/<owner>/ser2netweb; the 3.x line goes out under its name up to
-    2.9.x as well (the same digest and tags), and image-refresh.yml refreshes the same
-    names, so the two can't drift apart."""
+    """The image is ghcr.io/<owner>/ser2netweb and image-refresh.yml refreshes that one. Its
+    name up to 2.9.x, ghcr.io/<owner>/ser2net, stopped at 3.0.0: no workflow names it, so
+    nothing is pushed, tagged or attested there any more."""
     verify = jobs(read("release.yml"))["verify"]
     assert 'owner=${GITHUB_REPOSITORY_OWNER,,}' in verify, verify
-    assert '{ echo "image=ghcr.io/$owner/ser2netweb"; echo "old-image=ghcr.io/$owner/ser2net"; }' \
-        in verify, verify
-    assert "      old-image: ${{ steps.tag.outputs.old-image }}" in verify
+    assert 'echo "image=ghcr.io/$owner/ser2netweb" >> "$GITHUB_OUTPUT"' in verify, verify
     build = jobs(read("release.yml"))["image-build"]
     assert "org.opencontainers.image.title=ser2netweb\n" in build, build
     assert ("org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}"
             in build), "the new package links to the repository by this label"
     check = jobs(read("image-refresh.yml"))["check"]
-    assert "*) image=ghcr.io/$owner/ser2netweb; old_image=ghcr.io/$owner/ser2net ;;" in check
-    assert "[0-2].*) image=ghcr.io/$owner/ser2net; old_image=\"\" ;;" in check, "2.x releases"
-    for name in names():  # (2.9.x named the image in each place, the old name only)
-        assert "${GITHUB_REPOSITORY_OWNER,,}/ser2net" not in read(name), name
-    print("image ghcr.io/<owner>/ser2netweb, the 3.x line also as ghcr.io/<owner>/ser2net, in "
-          "release.yml and image-refresh.yml alike  OK")
+    assert "\n          image=ghcr.io/$owner/ser2netweb\n" in check, check
+    for name in names():
+        text = read(name)
+        assert "${GITHUB_REPOSITORY_OWNER,,}/ser2net" not in text, name
+        # the old name only in comments (that it stopped), never in a step
+        for line in text.splitlines():
+            code = line.split("#", 1)[0]
+            assert not re.search(r"/ser2net(?!web)\b", code), (name, line)
+            assert not re.search(r"(?i)old[-_](image|ref)", code), (name, line)
+    print("image ghcr.io/<owner>/ser2netweb in release.yml and image-refresh.yml alike, "
+          "nothing under ghcr.io/<owner>/ser2net  OK")
 
 
 def test_privileged_jobs_run_only_github_actions():
@@ -307,7 +305,7 @@ def test_docker_hub_copy():
     assert key(refresh, "uses") == "./.github/workflows/docker-hub.yml"
     assert "tag" in needs(refresh) and "      digest: ${{ needs.build.outputs.digest }}\n" in refresh
     assert "      tags: ${{ needs.check.outputs.image-tags }}\n" in refresh, "X.Y and latest"
-    assert key(refresh, "if") == "needs.check.outputs.title == 'ser2netweb'", "3.x only"
+    assert key(refresh, "if") is None, "every refresh is copied"
 
     text = read("docker-hub.yml")
     on = text.split("\npermissions:", 1)[0]

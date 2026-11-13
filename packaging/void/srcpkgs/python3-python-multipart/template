@@ -1,0 +1,15 @@
+# Template file for 'python3-python-multipart'
+pkgname=python3-python-multipart
+version=0.0.33
+revision=1
+build_style=python3-pep517
+hostmakedepends="hatchling"
+depends="python3"
+checkdepends="python3-pytest python3-yaml"
+short_desc="Streaming multipart parser for Python"
+maintainer="Joel Beckmeyer <joel@beckmeyer.us>"
+license="Apache-2.0"
+homepage="https://github.com/Kludex/python-multipart"
+changelog="https://raw.githubusercontent.com/Kludex/python-multipart/master/CHANGELOG.md"
+distfiles="${PYPI_SITE}/p/python_multipart/python_multipart-${version}.tar.gz"
+checksum=b8112424a6abd162ec08d390565dd113ad699f2fe6fef3c987b8bbcbfe9e390d
