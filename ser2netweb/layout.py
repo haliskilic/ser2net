@@ -13,7 +13,9 @@
   homebrew    the Homebrew formula (haliskilic/tap/ser2netweb): pip's layout too, in the
               virtual environment of the formula's keg (<prefix>/Cellar/ser2netweb/<version>/
               libexec): <prefix>/var/ser2netweb, the data directory of its service
-              (brew services), which outlives the keg
+              (brew services), which outlives the keg; unless that folder has no
+              config.json and the user data folder has one (ser2netweb 3.0.0's, which took
+              the keg for a pip install: data of a copy run by hand, kept in use)
   snap        the standalone executable in the snap: root (the snap's service, sudo)
               $SNAP_COMMON/data, /var/snap/ser2netweb/common/data; another user
               $SNAP_USER_COMMON/data (the snap's folder in the home directory)
@@ -197,13 +199,20 @@ def default_data_dir(app_dir: str, kind_: Optional[str] = None) -> str:
     checkout, or the folder of a standalone executable, also Scoop's), the package's
     service's data directory, the user data folder (a pip install; winget's and
     Chocolatey's executable, unless `app_dir` has a data/ with a config.json already), the
-    Homebrew formula's <prefix>/var/ser2netweb or the snap's (snap_data_dir)."""
+    Homebrew formula's <prefix>/var/ser2netweb (unless only the user data folder has a
+    config.json: 3.0.0's default there) or the snap's (snap_data_dir)."""
     k = kind() if kind_ is None else kind_
     if k == PIP:
         return user_data_dir()
     if k == HOMEBREW:
-        prefix = homebrew_prefix()
-        return os.path.join(prefix, "var", NAME) if prefix else user_data_dir()
+        prefix, user = homebrew_prefix(), user_data_dir()
+        if not prefix:
+            return user
+        var = os.path.join(prefix, "var", NAME)
+        if (not os.path.isfile(os.path.join(var, "config.json"))
+                and os.path.isfile(os.path.join(user, "config.json"))):
+            return user
+        return var
     if k == PACKAGE:
         return PACKAGE_DATA_DIR
     if k == SNAP:

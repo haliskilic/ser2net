@@ -806,7 +806,9 @@ data, `all.log` too, in `$(brew --prefix)/var/ser2netweb`; `brew services info s
 shows it. After `brew upgrade ser2netweb`: `brew services restart ser2netweb`;
 `brew uninstall ser2netweb` keeps the data folder. `--data-dir` as above works with every
 version; after 3.0.0 that folder is also the default of a Homebrew install, and
-`ser2netweb --about` says `Build: Homebrew formula`. Serial ports: `/dev/cu.usbserial-*` /
+`ser2netweb --about` says `Build: Homebrew formula`. 3.0.0 without `--data-dir` kept its data
+in the user's data folder (as a pip install does): while that folder has a `config.json` and
+`$(brew --prefix)/var/ser2netweb` has none, later versions go on using it. Serial ports: `/dev/cu.usbserial-*` /
 `/dev/cu.usbmodem*` on macOS; on Linux your account needs the ports' group (`dialout`, `uucp`
 on Arch). The tap proposes each new release's formula within a day (its workflow "bump");
 `packaging/homebrew/make_formula.py` makes it.
@@ -861,7 +863,7 @@ works and runs the same, so units and scripts that name it need no change:
 
 | Option | What it does |
 |---|---|
-| `--data-dir DIR` | where `config.json`, its backups, the logs and traces live (default: `data/` next to `ser2netweb.py` or the binary, for Scoop's in its persist folder; `/var/lib/ser2netweb` for the `.deb` / `.rpm` / AUR package's; the user's data folder for a pip / pipx, winget or Chocolatey install, see *pipx / pip* and *Windows package managers*; `$(brew --prefix)/var/ser2netweb` for Homebrew's; `/var/snap/ser2netweb/common/data` for the snap's, as root); give ser2netweb a folder of its own |
+| `--data-dir DIR` | where `config.json`, its backups, the logs and traces live (default: `data/` next to `ser2netweb.py` or the binary, for Scoop's in its persist folder; `/var/lib/ser2netweb` for the `.deb` / `.rpm` / AUR package's; the user's data folder for a pip / pipx, winget or Chocolatey install, see *pipx / pip* and *Windows package managers*; `$(brew --prefix)/var/ser2netweb` for Homebrew's, or the user's data folder that 3.0.0 used there, see *Homebrew*; `/var/snap/ser2netweb/common/data` for the snap's, as root); give ser2netweb a folder of its own |
 | `--config FILE` | a `config.json` elsewhere; its folder is the data directory then |
 | `--reconfigure` | ask again for the admin UI's address and port on the console, then start |
 | `--online` | let the dependency bootstrap fall back to PyPI for a wheel `vendor/wheels/` lacks (source installs) |

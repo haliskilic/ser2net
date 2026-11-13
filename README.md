@@ -835,7 +835,10 @@ unit'i); verisi, `all.log` da, `$(brew --prefix)/var/ser2netweb`'tedir; `brew se
 ser2netweb` durumunu gösterir. `brew upgrade ser2netweb`'ten sonra: `brew services restart
 ser2netweb`; `brew uninstall ser2netweb` veri klasörünü bırakır. Yukarıdaki gibi `--data-dir`
 her sürümde çalışır; 3.0.0'dan sonraki sürümlerde Homebrew kurulumunun varsayılanı da bu
-klasördür ve `ser2netweb --about` `Build: Homebrew formula` der. Seri portlar: macOS'ta
+klasördür ve `ser2netweb --about` `Build: Homebrew formula` der. 3.0.0, `--data-dir`
+verilmeden çalıştırıldığında verisini (pip kurulumu gibi) kullanıcının veri klasöründe
+tutuyordu: o klasörde bir `config.json` varken `$(brew --prefix)/var/ser2netweb`'te yoksa
+sonraki sürümler orayı kullanmayı sürdürür. Seri portlar: macOS'ta
 `/dev/cu.usbserial-*` / `/dev/cu.usbmodem*`; Linux'ta hesabınızın portların grubunda olması
 gerekir (`dialout`, Arch'ta `uucp`). Tap her yeni sürümün formülünü bir gün içinde önerir
 (oradaki "bump" iş akışı); formülü `packaging/homebrew/make_formula.py` üretir.
@@ -890,7 +893,7 @@ unit'ler ve script'ler değişiklik gerektirmez:
 
 | Seçenek | Ne yapar |
 |---|---|
-| `--data-dir KLASÖR` | `config.json`, yedekleri, log'lar ve trace'lerin yeri (varsayılan: `ser2netweb.py`'nin ya da binary'nin yanındaki `data/`, Scoop'unki için onun persist klasöründe; `.deb` / `.rpm` / AUR paketininki için `/var/lib/ser2netweb`; pip / pipx, winget ya da Chocolatey kurulumu için kullanıcının veri klasörü, bkz. *pipx / pip* ve *Windows paket yöneticileri*; Homebrew'unki için `$(brew --prefix)/var/ser2netweb`; snap'inki için, root olarak, `/var/snap/ser2netweb/common/data`); ser2netweb'e kendine ait bir klasör verin |
+| `--data-dir KLASÖR` | `config.json`, yedekleri, log'lar ve trace'lerin yeri (varsayılan: `ser2netweb.py`'nin ya da binary'nin yanındaki `data/`, Scoop'unki için onun persist klasöründe; `.deb` / `.rpm` / AUR paketininki için `/var/lib/ser2netweb`; pip / pipx, winget ya da Chocolatey kurulumu için kullanıcının veri klasörü, bkz. *pipx / pip* ve *Windows paket yöneticileri*; Homebrew'unki için `$(brew --prefix)/var/ser2netweb` ya da 3.0.0'ın orada kullandığı kullanıcı veri klasörü, bkz. *Homebrew*; snap'inki için, root olarak, `/var/snap/ser2netweb/common/data`); ser2netweb'e kendine ait bir klasör verin |
 | `--config DOSYA` | başka bir yerdeki `config.json`; veri klasörü o zaman onun klasörüdür |
 | `--reconfigure` | yönetim arayüzünün adresini ve portunu konsolda yeniden sorar, sonra başlar |
 | `--online` | bağımlılık kurulumu `vendor/wheels/`'te olmayan bir wheel için PyPI'ye başvurabilir (kaynak kurulum) |
