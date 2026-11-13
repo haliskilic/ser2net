@@ -389,7 +389,7 @@ class Tracer:
 
     def _format(self, ts: float, direction: str, data: bytes) -> bytes:
         prefix = time.strftime("%Y-%m-%d %H:%M:%S ", time.localtime(ts)) if self._ts else ""
-        if self._hex:
+        if self._hex and direction != "!!":  # (a note of the trace's own stays text)
             return f"{prefix}{direction} [{len(data)}] {data.hex(' ')}\n".encode()
         return prefix.encode() + direction.encode() + b" " + data + b"\n"
 
@@ -404,7 +404,8 @@ class Tracer:
         if dropped:
             lines.append((self._format(ts, "!!", f"{dropped} bytes not traced "
                                        f"({reason})".encode()), dropped))
-        lines.append((self._format(ts, direction, data), len(data)))
+        # (a note (annotate) stands for no traffic: one not written is not counted)
+        lines.append((self._format(ts, direction, data), 0 if direction == "!!" else len(data)))
         return lines
 
     def _run(self) -> None:

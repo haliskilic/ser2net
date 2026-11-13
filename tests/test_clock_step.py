@@ -187,6 +187,18 @@ def test_trace_note():
             assert [ln[20:] for ln in lines] == [
                 "ser>net before", "!! the system clock was set forward by 3600.0 s",
                 "net>ser after"], lines
+            # in a hex trace the note is text too, and it is no traffic: one that can't be
+            # written is not counted as bytes not traced
+            hexed = bridge.Tracer(os.path.join(tmp, "m4-t.log"),
+                                  MappingOptions(trace_both="t.log", trace_hexdump=True))
+            hexed.write("ser>net", b"AB")
+            hexed.annotate("the system clock was set back by 5.0 s")
+            await hexed.aclose()
+            with open(os.path.join(tmp, "m4-t.log"), "rb") as fh:
+                lines = fh.read().decode().splitlines()
+            assert [ln[20:] for ln in lines] == [
+                "ser>net [2] 41 42", "!! the system clock was set back by 5.0 s"], lines
+            assert [n for _line, n in hexed._lines(0.0, "!!", b"note")] == [0]
             # a paused trace takes no note (it says how many bytes are missing instead)
             paused = bridge.Tracer(os.path.join(tmp, "m3-t.log"), MappingOptions())
             paused._set_error("disk full")
