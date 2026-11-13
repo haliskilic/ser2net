@@ -34,6 +34,7 @@ from _server import Browser, Server, free_port
 from ser2netweb import capture
 from ser2netweb.config import CAPTURE_MAX_S, MappingConfig, mapping_revision
 from ser2netweb.engine import bridge
+from ser2netweb.engine.supervisor import Supervisor
 from ser2netweb.web.auth import hash_password, hash_token
 
 PW = "trace-api-pass-1"
@@ -396,6 +397,32 @@ def test_units():
             assert any("ended" in line for line in log), log
 
     asyncio.run(hot_swap())
+
+    async def another_object():
+        # a runner built from an equal mapping that is not the configuration's object (kept
+        # across a merge import): Supervisor.retrace hands it the capture's end
+        with tempfile.TemporaryDirectory() as tmp:
+            current = MappingConfig.from_dict({"id": "kept", "name": "kept"})
+            built = MappingConfig.from_dict(current.to_dict())
+            status = bridge.RunnerStatus()
+            status.state = "running"
+            runner = type("R", (), {"mapping": built, "_tracer": None, "status": status})()
+            runner.retrace = lambda: bridge.retrace(runner, tmp, lambda _m: None)
+            sup = Supervisor(trace_dir=tmp, lookup=lambda mid: current)
+            sup._runners["kept"] = runner
+            current.options.trace_until = time.time() + 60
+            assert await sup.retrace("kept") is True and runner._tracer is not None
+            assert built.to_dict() == current.to_dict(), "still the settings it was built from"
+            current.options.trace_until = 0.0
+            assert await sup.retrace("kept") is True and runner._tracer is None
+            status.state = "stopped"
+            current.options.trace_until = time.time() + 60
+            assert await sup.retrace("kept") is False and runner._tracer is None, \
+                "a stopped runner opens its trace when it starts"
+            assert built.options.trace_until == current.options.trace_until
+            assert await sup.retrace("nosuch") is False
+
+    asyncio.run(another_object())
     print("units: trace_until loads leniently and is no part of the revision; a capture "
           "is bounded and counted on the monotonic clock; the trace is hot-swapped  OK")
 

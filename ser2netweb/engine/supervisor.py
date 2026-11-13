@@ -476,7 +476,15 @@ class Supervisor:
         async with self._turn(mapping_id):
             runner = self._runners.get(mapping_id)
             change = getattr(runner, "retrace", None)
-            if runner is None or change is None or runner.status.state not in ALIVE_STATES:
+            if runner is None or change is None:
+                return False
+            # a runner kept across a merge import was built from an equal mapping that is
+            # no longer the configuration's object: it takes the capture's end from that
+            built = getattr(runner, "mapping", None)
+            current = self._lookup(mapping_id) if self._lookup is not None else None
+            if current is not None and built is not None and built is not current:
+                built.options.trace_until = current.options.trace_until
+            if runner.status.state not in ALIVE_STATES:
                 return False
             return bool(await change())
 
