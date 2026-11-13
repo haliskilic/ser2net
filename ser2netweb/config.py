@@ -3045,7 +3045,7 @@ class ClusterSettings:
 NOTIFY_EVENTS = ("device_lost", "device_back", "start_failed", "link_lost", "link_back",
                  "client_connected", "client_disconnected", "login_failed", "disk_low",
                  "no_data", "data_back", "peer_offline", "peer_back", "service_started",
-                 "unit_offline", "unit_back", "cert_expiring")
+                 "unit_offline", "unit_back", "cert_expiring", "clock_step")
 # (a saved events list is kept as it is: these are what a config without one gets)
 NOTIFY_DEFAULT_EVENTS = ("device_lost", "device_back", "start_failed", "link_lost", "link_back")
 WEBHOOK_FORMATS = ("json", "slack", "teams", "discord", "telegram")

@@ -504,7 +504,8 @@ def build_api_routes(state: AppState) -> list[Route]:
     async def status(request):
         certificates = [c.view() for c in await state.certwatch.current()]
         return JSONResponse({"mappings": state.supervisor.all_status(),
-                             "certificates": certificates})
+                             "certificates": certificates,
+                             "clock_steps": state.clockwatch.steps})
 
     async def ports(request):
         return JSONResponse({"ports": await state.ports.current()})
@@ -713,6 +714,9 @@ def openapi_spec(admin, base: str = "") -> dict:
         "StatusMap": {"type": "object", "properties": {"mappings": {
             "type": "object", "description": "mapping id -> its live state",
             "additionalProperties": {"$ref": "#/components/schemas/MappingStatus"}},
+            "clock_steps": {"type": "integer",
+                            "description": "steps of the system clock of 1 s or more seen "
+                                           "since the start"},
             "certificates": {
                 "type": "array", "description": "the TLS certificates in use: the admin UI's "
                                                 "and each enabled TLS mapping's (read at "

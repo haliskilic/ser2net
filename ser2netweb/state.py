@@ -32,7 +32,7 @@ from contextlib import suppress as _suppress
 from logging.handlers import RotatingFileHandler
 from typing import Any
 
-from . import accounts, clock, envvars, logsetup, storage, tlsreload
+from . import accounts, clock, clockwatch, envvars, logsetup, storage, tlsreload
 from .capture import Captures
 from .certwatch import CertWatch
 from .config import (
@@ -738,6 +738,8 @@ class AppState:
         self.notifier = Notifier(self)
         self.captures = Captures(self)  # timed captures (ser2netweb/capture.py)
         self.certwatch = CertWatch(self)  # TLS certificates about to end (certwatch.py)
+        # steps of the system clock while this runs (ser2netweb/clockwatch.py)
+        self.clockwatch = clockwatch.ClockWatch(clockwatch.Reporter(self))
         self.config_lock = asyncio.Lock()
         self.started_at = time.time()        # when this process started (wall clock)
         self.started_mono = time.monotonic()  # the same for how long it runs (uptime)
@@ -1453,6 +1455,7 @@ class AppState:
         await self.cluster.start()  # no-op unless the LAN cluster is enabled + keyed
         await self.notifier.start()
         await self.captures.start()
+        await self.clockwatch.start()
         # run an immediate pass, then hourly, to enforce log retention
         self._maint_task = asyncio.create_task(self._log_maintenance_loop(), name="log-maintenance")
         self._requests_task = asyncio.create_task(self._account_requests_loop(),
@@ -1469,6 +1472,7 @@ class AppState:
         for records in (self.view_records, self.console_writes, self.api_auth_failures):
             records.flush()
         await self.captures.stop()
+        await self.clockwatch.stop()
         await self.notifier.stop()
         await self.cluster.stop()
         await self.supervisor.stop_all()

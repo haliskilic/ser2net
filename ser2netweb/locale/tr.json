@@ -1582,5 +1582,7 @@
   "Recording until {0}; it then stops by itself.": "{0} zamanına kadar kaydediliyor; sonra kendiliğinden durur.",
   "Recording stopped.": "Kayıt durduruldu.",
   "TLS certificate about to expire": "TLS sertifikasının süresi dolmak üzere",
-  "TLS certificate about to expire (the admin UI’s and each TLS mapping’s: 30, 7 and 1 days before, and once it has ended; checked daily)": "TLS sertifikasının süresi dolmak üzere (yönetim arayüzününki ve her TLS eşlemesininki: 30, 7 ve 1 gün kala ve süresi dolduğunda; günde bir kez kontrol edilir)"
+  "TLS certificate about to expire (the admin UI’s and each TLS mapping’s: 30, 7 and 1 days before, and once it has ended; checked daily)": "TLS sertifikasının süresi dolmak üzere (yönetim arayüzününki ve her TLS eşlemesininki: 30, 7 ve 1 gün kala ve süresi dolduğunda; günde bir kez kontrol edilir)",
+  "system clock stepped": "sistem saati değiştirildi",
+  "System clock stepped while ser2netweb runs (set by hand or by time sync, by 1 s or more: the times in logs and traces jump there)": "ser2netweb çalışırken sistem saati değiştirildi (elle ya da saat senkronizasyonuyla, 1 sn ya da daha fazla: log ve trace zamanları orada sıçrar)"
 }

@@ -90,7 +90,7 @@ mapping_bytes_dropped_total mapping_reconnects_total mapping_open_failures_total
 mapping_device_lost_total mapping_dropped_clients_total mapping_link_up
 mapping_connect_failures_total modbus_unit_up modbus_unit_poll_errors_total mqtt_connected
 mqtt_messages_dropped_total
-tls_certificate_expiry_seconds
+tls_certificate_expiry_seconds clock_steps_total
 """.split()]
 
 

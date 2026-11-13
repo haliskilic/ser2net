@@ -495,6 +495,17 @@ class Supervisor:
             listener.ssl = prepared.context
             return ""
 
+    def annotate_traces(self, text: str) -> int:
+        """Put a "!!" note into every running trace (bridge.Tracer.annotate): where the
+        system clock was stepped. Returns how many traces got it."""
+        count = 0
+        for runner in list(self._runners.values()):
+            tracer = getattr(runner, "tracer", None)
+            if tracer is not None and tracer.active:
+                tracer.annotate(text)
+                count += 1
+        return count
+
     async def renew_traces(self, begun_before: float) -> int:
         """Have every running trace whose file holds traffic from before `begun_before`
         begin a new one (bridge.Tracer.renew_if_older, in its writer thread). Returns how

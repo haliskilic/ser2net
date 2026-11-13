@@ -195,6 +195,8 @@ METRIC_INFO = {
                                                 "was (a loop that is held up)"),
     "ser2net_event_loop_stalls_total": ("counter", "Heartbeats of the event loop 2 s or more "
                                                    "late"),
+    "ser2net_clock_steps_total": ("counter", "Steps of the system clock of 1 s or more seen "
+                                             "since the start"),
     "ser2net_mappings_total": ("gauge", "Mappings configured"),
     "ser2net_open_fds": ("gauge", "Files the process has open (POSIX)"),
     "ser2net_fd_limit": ("gauge", "The process's open-file limit (POSIX)"),
@@ -258,6 +260,9 @@ def process_metrics(state) -> list[str]:
     if dog is not None:
         lines.append(f"ser2net_event_loop_lag_seconds {dog.lag:.3f}")
         lines.append(f"ser2net_event_loop_stalls_total {dog.slow_beats}")
+    watch = getattr(state, "clockwatch", None)  # (ser2netweb/clockwatch.py)
+    if watch is not None:
+        lines.append(f"ser2net_clock_steps_total {watch.steps}")
     return lines
 
 

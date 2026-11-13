@@ -396,7 +396,8 @@ everything from a **password-protected web UI** — no CLI or hand-edited config
   to any of its points in 3 polls in a row) or answers again, and a **TLS certificate about
   to expire** (the admin UI's and each enabled TLS mapping's, read once a day: one message
   when fewer than 30, 7 and 1 days are left and one once it has ended — once per
-  certificate and threshold, also across restarts; a renewed certificate starts afresh).
+  certificate and threshold, also across restarts; a renewed certificate starts afresh),
+  and the **system clock stepped** while ser2netweb runs (see *Time synchronisation*).
   Repeats are suppressed, and a test message can be sent. The same events are logged in all.log whether or not they are
   sent.
   With a public URL (Settings → Reverse proxy) each message ends with it, and the JSON
@@ -1079,7 +1080,8 @@ what differs and an option table: [`docs/MIGRATING-FROM-SER2NET.md`](docs/MIGRAT
   polled units whether each answers (`ser2net_modbus_unit_up`) and its failed reads
   (`ser2net_modbus_unit_poll_errors_total`); for a mapping that publishes to MQTT whether
   it is connected to its broker (`ser2net_mqtt_connected`) and the messages it could not
-  hand to it (`ser2net_mqtt_messages_dropped_total`); also `ser2net_up`, the number of
+  hand to it (`ser2net_mqtt_messages_dropped_total`); also `ser2net_up`, the steps of the system clock seen since the start
+  (`ser2net_clock_steps_total`), the number of
   mappings (`ser2net_mappings_total`), whether a mapping is past its no-data alarm
   (`ser2net_mapping_no_data`) and the event loop's late heartbeats
   (`ser2net_event_loop_stalls_total`, its lag `ser2net_event_loop_lag_seconds`). Every
@@ -1956,6 +1958,17 @@ chosen by name, which a clock that went back doesn't change), and makes date che
 codes, SSO, and TLS certificates (MQTT, SMTP, webhooks, SSO, and a self-signed certificate
 made while the clock was wrong). How long something has been running (uptime, connection
 times, the cluster's peer list) is measured with a clock that no clock step changes.
+
+**A clock set while ser2netweb runs** (by hand, by time sync catching up, by a VM host) is
+noticed: every 5 seconds the system clock is compared with a clock no step changes, and a
+jump of 1 second or more is written to `all.log` with its direction and size, recorded in
+the audit log (`clock_step`; at most one line a minute, which says how many more there
+were), marked in every running trace with a `!!` line where its times jump, counted in
+`/metrics` (`ser2net_clock_steps_total`; `clock_steps` in `/api/v1/status`) and sent as the
+optional **System clock stepped** notification. NTP's gradual slewing is not a step. On
+Linux a resume from suspend is not one either (the comparison clock, `CLOCK_BOOTTIME`,
+counts the time asleep), nor on macOS; on Windows a resume may be reported as a step
+forward.
 
 - **Linux:** keep `systemd-timesyncd` or `chrony` running, pointed at an NTP server the
   machine can reach; on an offline plant network a local one (a router, a domain

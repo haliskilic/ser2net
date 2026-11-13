@@ -411,7 +411,8 @@ düzenlemeye gerek yok.
   sertifikası** (yönetim arayüzününki ve etkin her TLS eşlemesininki, günde bir kez okunur:
   30, 7 ve 1 günden az kaldığında birer mesaj, süresi dolduğunda bir mesaj daha — sertifika
   ve eşik başına bir kez, yeniden başlatmalardan sonra da; yenilenen sertifika baştan
-  başlar). Tekrarlar bastırılır, test mesajı gönderilebilir. Bu olaylar gönderilsin ya da gönderilmesin all.log'a yazılır.
+  başlar) ve ser2netweb çalışırken **sistem saatinin değiştirilmesi** (bkz. *Saat
+  senkronizasyonu*). Tekrarlar bastırılır, test mesajı gönderilebilir. Bu olaylar gönderilsin ya da gönderilmesin all.log'a yazılır.
   Genel URL ayarlıysa (Ayarlar → Reverse proxy) her mesaj onunla biter, JSON biçiminde de
   bir `url` alanı olur. İstemci olayları istemcinin IP adresini, hatalı giriş hesap adını
   (ya da `(unknown user)`) ve IP adresini gönderir; *Kişisel verileri gönderme* seçeneği
@@ -1116,7 +1117,8 @@ Adımlar, farklar ve seçenek tablosu (İngilizce):
   periyodik okuduğu her unit için yanıt verip vermediği (`ser2net_modbus_unit_up`) ve
   başarısız okumaları (`ser2net_modbus_unit_poll_errors_total`); MQTT'ye yayın yapan bir
   eşlemenin broker'ına bağlı olup olmadığı (`ser2net_mqtt_connected`) ve broker'a teslim
-  edemediği mesajlar (`ser2net_mqtt_messages_dropped_total`); ayrıca `ser2net_up`, eşleme
+  edemediği mesajlar (`ser2net_mqtt_messages_dropped_total`); ayrıca `ser2net_up`, açılıştan beri görülen sistem saati atlamaları
+  (`ser2net_clock_steps_total`), eşleme
   sayısı (`ser2net_mappings_total`), bir eşlemenin veri yok alarmında olup olmadığı
   (`ser2net_mapping_no_data`) ve event loop'un geciken kalp atışları
   (`ser2net_event_loop_stalls_total`, gecikmesi `ser2net_event_loop_lag_seconds`). Her
@@ -2028,6 +2030,17 @@ tarih kontrollerini de bozar: oturumlar, iki adımlı giriş kodları, SSO ve TL
 (MQTT, SMTP, webhook'lar, SSO ve saat yanlışken üretilmiş bir self-signed sertifika). Bir
 şeyin ne kadar süredir çalıştığı (uptime, bağlantı süreleri, cluster'ın eş listesi) hiçbir
 saat atlamasından etkilenmeyen bir saatle ölçülür.
+
+**ser2netweb çalışırken ayarlanan saat** (elle, geç yetişen saat senkronizasyonuyla, bir VM
+ana makinesi tarafından) fark edilir: sistem saati 5 saniyede bir, hiçbir atlamadan
+etkilenmeyen bir saatle karşılaştırılır; 1 saniye ya da daha büyük bir sıçrama yönü ve
+büyüklüğüyle `all.log`'a yazılır, denetim kaydına işlenir (`clock_step`; dakikada en fazla
+bir satır, kaç tane daha olduğunu da söyler), çalışan her trace'te zamanların sıçradığı yere
+bir `!!` satırıyla işaretlenir, `/metrics`'te sayılır (`ser2net_clock_steps_total`;
+`/api/v1/status` içinde `clock_steps`) ve isteğe bağlı **Sistem saati değiştirildi**
+bildirimi olarak gönderilir. NTP'nin saati yavaşça kaydırması atlama sayılmaz. Linux'ta
+uykudan uyanma da sayılmaz (karşılaştırma saati `CLOCK_BOOTTIME`, uykuda geçen süreyi de
+sayar), macOS'te de; Windows'ta uyanma ileri doğru bir atlama olarak bildirilebilir.
 
 - **Linux:** `systemd-timesyncd` ya da `chrony` çalışsın ve makinenin ulaşabildiği bir NTP
   sunucusuna baksın; internete kapalı bir tesis ağında yerel bir sunucuya (bir router, bir

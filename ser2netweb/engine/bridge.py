@@ -319,6 +319,18 @@ class Tracer:
             self._queued += len(data)
         self._q.put((time.time(), direction, bytes(data)))
 
+    def annotate(self, text: str) -> None:
+        """Put a note into the trace, in turn with the traffic: a "!!" line like the one
+        that says how many bytes are missing (not while the trace is paused or closing)."""
+        data = text.encode("utf-8", "replace")
+        if self._closing:
+            return
+        with self._lock:
+            if self.error:
+                return
+            self._queued += len(data)
+        self._q.put((time.time(), "!!", data))
+
     def remove_files(self, paths) -> Optional[concurrent.futures.Future]:
         """Delete some of this trace's files in the writer thread, in turn with the lines
         queued before (so never in the middle of a rotation). The file it writes is

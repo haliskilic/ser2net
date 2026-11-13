@@ -1,8 +1,8 @@
 """Event notifications: tell someone when a serial device disappears or comes back,
 a mapping fails to start, clients come and go, a sign-in fails, the data disk is almost
 full, a device sends nothing, a cluster node goes offline, a Modbus unit that a gateway
-polls stops answering or answers again, a TLS certificate is about to end, or ser2netweb
-has started.
+polls stops answering or answers again, a TLS certificate is about to end, the system
+clock is stepped (clockwatch.py reports that itself), or ser2netweb has started.
 
 The Notifier watches the supervisor's status snapshot (every POLL_S seconds) and
 turns state changes into events; the login route reports failed sign-ins itself. Every
@@ -86,6 +86,7 @@ def title(event: str) -> str:
         "unit_offline": _("Modbus unit not answering"),
         "unit_back": _("Modbus unit answering again"),
         "cert_expiring": _("TLS certificate about to expire"),
+        "clock_step": _("system clock stepped"),
         "test": _("test notification"),
     }.get(event, event)
 
