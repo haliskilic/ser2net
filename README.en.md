@@ -950,7 +950,8 @@ limits).
 Published image (every release; amd64, arm64, and arm/v7 for 32-bit ARM such as 32-bit
 Raspberry Pi OS): `docker pull ghcr.io/haliskilic/ser2netweb:latest`
 (or `:3.0`, `:3.0.0`); `docker-compose.yml` uses it. Up to 2.9.x the image was
-`ghcr.io/haliskilic/ser2net`, where the 3.x releases are published too (the same image);
+`ghcr.io/haliskilic/ser2net`: that name stops at 3.0.0 and gets no later release, so
+change the image to `ghcr.io/haliskilic/ser2netweb` to keep getting updates;
 moving a 2.9.x container or compose file over: [`docs/DOCKER.md`](docs/DOCKER.md#upgrading-from-29x).
 The same image, by digest and with the same tags, is on Docker Hub as
 `docker.io/haliskilic/ser2netweb` (`docker pull haliskilic/ser2netweb:latest`). Between releases `:latest` and `:X.Y`

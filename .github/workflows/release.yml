@@ -16,10 +16,9 @@ name: Release
 # copy on Docker Hub (docker-hub.yml, when its secrets are set), and (not for a
 # pre-release) the release channels are started: package-repo.yml, winget.yml,
 # chocolatey.yml, aur.yml, snap.yml. The
-# image is ghcr.io/<owner>/ser2netweb; the 3.x line also gets the same digest and tags
-# under the image's name up to 2.9.x, ghcr.io/<owner>/ser2net, so composes and
-# auto-updaters on that path keep getting releases. The write permissions belong to the
-# publish jobs alone (and the untagged push).
+# image is ghcr.io/<owner>/ser2netweb and nothing else: its name up to 2.9.x,
+# ghcr.io/<owner>/ser2net, got its last release with 3.0.0 and is left as it is. The write
+# permissions belong to the publish jobs alone (and the untagged push).
 #
 # Actions -> Release -> Run workflow is a dry run on any branch: the same jobs check the
 # tag the current version gets, run CI (which builds and checks the PyPI package too),
@@ -52,7 +51,6 @@ jobs:
       prerelease: ${{ steps.tag.outputs.prerelease }}
       image-tags: ${{ steps.tag.outputs.image-tags }}
       image: ${{ steps.tag.outputs.image }}
-      old-image: ${{ steps.tag.outputs.old-image }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
@@ -66,11 +64,9 @@ jobs:
           else  # a dry run: the tag the current version gets
             python3 tools/release_guard.py tag
           fi
-          # the image, and its name up to 2.9.x, which the 3.x line is published under too
-          # (the same digest; image-refresh.yml refreshes both): drop old-image here and there
-          # once that path is retired
+          # the image's one name (image-refresh.yml refreshes the same)
           owner=${GITHUB_REPOSITORY_OWNER,,}
-          { echo "image=ghcr.io/$owner/ser2netweb"; echo "old-image=ghcr.io/$owner/ser2net"; } >> "$GITHUB_OUTPUT"
+          echo "image=ghcr.io/$owner/ser2netweb" >> "$GITHUB_OUTPUT"
       - name: The tagged commit is on main
         run: |
           if git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
@@ -112,7 +108,6 @@ jobs:
       packages: write        # the untagged push
     outputs:
       image: ${{ needs.verify.outputs.image }}
-      old-image: ${{ needs.verify.outputs.old-image }}
       digest: ${{ steps.push.outputs.digest }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -155,24 +150,21 @@ jobs:
           context: .
           platforms: linux/amd64,linux/arm64,linux/arm/v7
           build-args: BASE_IMAGE=${{ steps.base.outputs.image }}@${{ steps.base.outputs.digest }}
-          # both names, by digest only (the same index under each)
-          outputs: type=image,"name=${{ needs.verify.outputs.image }},${{ needs.verify.outputs.old-image }}",push-by-digest=true,name-canonical=true,push=true
+          # by digest only
+          outputs: type=image,name=${{ needs.verify.outputs.image }},push-by-digest=true,name-canonical=true,push=true
           labels: ${{ steps.meta.outputs.labels }}
           provenance: mode=max
           sbom: true
       # What the tag job will push, worked out now, before anything is published: with one
       # image index as its source, imagetools copies it byte for byte (the same digest).
-      - name: Tagging keeps this digest under both names (imagetools create --dry-run)
+      - name: Tagging keeps this digest (imagetools create --dry-run)
         env:
           IMAGE: ${{ needs.verify.outputs.image }}
-          OLD_IMAGE: ${{ needs.verify.outputs.old-image }}
           DIGEST: ${{ steps.push.outputs.digest }}
         run: |
-          for image in "$IMAGE" "$OLD_IMAGE"; do
-            docker buildx imagetools create --dry-run "$image@$DIGEST" > index.json
-            got="sha256:$(head -c -1 index.json | sha256sum | cut -d' ' -f1)"   # minus its newline
-            [ "$got" = "$DIGEST" ] || { echo "::error::tagging $image would push $got, not $DIGEST"; exit 1; }
-          done
+          docker buildx imagetools create --dry-run "$IMAGE@$DIGEST" > index.json
+          got="sha256:$(head -c -1 index.json | sha256sum | cut -d' ' -f1)"   # minus its newline
+          [ "$got" = "$DIGEST" ] || { echo "::error::tagging $IMAGE would push $got, not $DIGEST"; exit 1; }
 
   # The image exactly as pushed, on each architecture (amd64 and arm64 natively, arm/v7
   # under QEMU), with the smoke test CI runs on its local build (non-root, HEALTHCHECK,
@@ -194,7 +186,6 @@ jobs:
           - { arch: arm/v7, runner: ubuntu-latest, platform: linux/arm/v7 }
     env:
       REF: ${{ needs.image-build.outputs.image }}@${{ needs.image-build.outputs.digest }}
-      OLD_REF: ${{ needs.image-build.outputs.old-image }}@${{ needs.image-build.outputs.digest }}
       DOCKER_DEFAULT_PLATFORM: ${{ matrix.platform }}   # (the emulated leg's pull and runs)
       DOCKER_SMOKE_WAIT: ${{ matrix.platform && '300' || '60' }}
     steps:
@@ -229,8 +220,7 @@ jobs:
           fi
           echo "pulled image: $got"
           test "$got" = "$want" || { echo "::error::the pulled image is $got, not $want"; exit 1; }
-      # (the old name: the very same image, pulled by the same digest)
-      - run: tests/docker_smoke.sh "$REF" "$OLD_REF"
+      - run: tests/docker_smoke.sh "$REF"
 
   # Names and checks the release files, attests them and hands them on as one artifact.
   # It can mint attestations, so only GitHub's own actions run here, and it can't write
@@ -371,7 +361,6 @@ jobs:
       attestations: write    # (both)
     env:
       IMAGE: ${{ needs.image-build.outputs.image }}
-      OLD_IMAGE: ${{ needs.image-build.outputs.old-image }}
       DIGEST: ${{ needs.image-build.outputs.digest }}
     steps:
       - name: Sign in to GHCR
@@ -383,24 +372,17 @@ jobs:
           subject-name: ${{ needs.image-build.outputs.image }}
           subject-digest: ${{ needs.image-build.outputs.digest }}
           push-to-registry: true
-      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8  # v4.2.2
-        with:
-          subject-name: ${{ needs.image-build.outputs.old-image }}
-          subject-digest: ${{ needs.image-build.outputs.digest }}
-          push-to-registry: true
-      - name: Tag it ${{ needs.verify.outputs.image-tags }} (under both names)
+      - name: Tag it ${{ needs.verify.outputs.image-tags }}
         env:
           TAGS: ${{ needs.verify.outputs.image-tags }}
         run: |
-          for image in "$IMAGE" "$OLD_IMAGE"; do
-            refs=()
-            for tag in $TAGS; do refs+=(--tag "$image:$tag"); done
-            docker buildx imagetools create "${refs[@]}" "$image@$DIGEST"
-            for tag in $TAGS; do
-              got=$(docker buildx imagetools inspect "$image:$tag" | awk '$1 == "Digest:" {print $2; exit}')
-              echo "$image:$tag -> $got"
-              [ "$got" = "$DIGEST" ] || { echo "::error::$image:$tag is $got, not the tested $DIGEST"; exit 1; }
-            done
+          refs=()
+          for tag in $TAGS; do refs+=(--tag "$IMAGE:$tag"); done
+          docker buildx imagetools create "${refs[@]}" "$IMAGE@$DIGEST"
+          for tag in $TAGS; do
+            got=$(docker buildx imagetools inspect "$IMAGE:$tag" | awk '$1 == "Digest:" {print $2; exit}')
+            echo "$IMAGE:$tag -> $got"
+            [ "$got" = "$DIGEST" ] || { echo "::error::$IMAGE:$tag is $got, not the tested $DIGEST"; exit 1; }
           done
 
   # Once the tested digest has its GHCR tags: the same digest and tags on Docker Hub,
