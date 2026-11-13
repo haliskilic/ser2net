@@ -10,6 +10,9 @@ others only listen.
     output) but is not written; the log names the address once;
   - off (the default, and every config written without the key): everyone writes;
   - with read_only nobody writes; a connect-out mapping has one peer, which writes;
+  - with the allow-list and priority clients: they decide who gets a connection (a
+    priority listener kicks the writer at max_connections), the writer list only who
+    writes;
   - entries are read as the allow-list's: a list with no usable entry lets nobody write;
     edits refuse a bad entry, validate() does not;
   - the form field is its own presence marker.
@@ -154,6 +157,31 @@ async def _read_only_and_off():
         await device.close()
 
 
+async def _priority_and_allow_list():
+    device, logs = await FakeDevice().start(), []
+    try:
+        m = mapping(writer_client_ips=["127.0.0.2"], priority_client_ips=["127.0.0.3"],
+                    allowed_client_ips=["127.0.0.2", "127.0.0.3"], max_connections=1)
+        async with running(m, device, logs) as runner:
+            wr, ww = await connect_from(runner, "127.0.0.2")
+            await until(lambda: runner.status.client_count == 1)
+            lr, lw = await connect_from(runner, "127.0.0.3")  # priority, not a writer
+            assert await asyncio.wait_for(wr.read(100), 5) == b"", "kicked for the priority one"
+            await until(lambda: [c["listen_only"] for c in runner.status.as_dict()["clients"]]
+                        == [True])
+            lw.write(b"nope")
+            await until(lambda: runner.status.bytes_dropped == 4)
+            assert not device.heard, "a priority client that is no writer only listens"
+            # the allow-list still comes first: a writer address outside it is not let in
+            _r, w = await connect_from(runner, "127.0.0.4")
+            assert await asyncio.wait_for(_r.read(100), 5) == b""
+            assert any("127.0.0.4" in ln and "not in allowed list" in ln for ln in logs), logs
+            for writer in (ww, lw, w):
+                writer.close()
+    finally:
+        await device.close()
+
+
 class _FakeWriter:
     def __init__(self):
         self.data = bytearray()
@@ -237,6 +265,8 @@ def test_runner():
     print("telnet: a listener's data and BREAK are not passed on  OK")
     asyncio.run(_read_only_and_off())
     print("off: everyone writes; with read-only nobody does  OK")
+    asyncio.run(_priority_and_allow_list())
+    print("the allow-list and priority decide who connects, the writer list who writes  OK")
 
 
 def test_form():

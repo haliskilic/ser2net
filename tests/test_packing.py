@@ -8,6 +8,8 @@ forwarded to raw TCP / UDP clients as frames instead of as it is read.
   - a delimiter: each line goes out when its end arrives; an unfinished one after
     PACK_IDLE_FLUSH_S without a byte (no gap set), so nothing is held back for good;
   - UDP: one datagram per frame;
+  - stop with a frame waiting: its timer is cancelled and nothing is left for a timer to
+    send after the stop;
   - off (the default, every config written without the keys): no packer at all; telnet /
     RFC 2217: not packed, and the mapping says so (ignored_settings);
   - edits refuse values out of range (validate_input); validate() does not; a stored one
@@ -169,6 +171,25 @@ async def _udp():
         await device.close()
 
 
+async def _stop_mid_frame():
+    device, logs = await FakeDevice().start(), []
+    try:
+        async with running(mapping(pack_gap_ms=5000), device, logs) as runner:
+            r, w = await asyncio.open_connection("127.0.0.1", port_of(runner))
+            await until(lambda: runner.status.client_count == 1)
+            device.say(b"half a frame")
+            await until(lambda: runner.status.bytes_in == 12)
+            assert runner._pack_timer is not None and runner._packer.pending == 12
+        assert runner._pack_timer is None and runner._packer.pending == 0
+        loop = asyncio.get_running_loop()
+        flushes = [h for h in getattr(loop, "_scheduled", [])
+                   if not h.cancelled() and "_pack_flush" in repr(h)]
+        assert not flushes, flushes
+        w.close()
+    finally:
+        await device.close()
+
+
 def test_runner():
     asyncio.run(_tcp_gap())
     print("TCP raw, gap: pieces within the gap arrive as one frame, nothing before it  OK")
@@ -177,6 +198,8 @@ def test_runner():
           "close-on after its frame  OK")
     asyncio.run(_udp())
     print("UDP: one datagram per frame (delimiter, frame size, the rest)  OK")
+    asyncio.run(_stop_mid_frame())
+    print("stop with a frame waiting: no packing timer is left  OK")
 
 
 def test_form():
