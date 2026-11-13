@@ -206,3 +206,144 @@ Against the floors above (for the recipes of a package: `packaging/`):
   old 0.6, which ser2netweb doesn't use).
 
 No distribution here runs Python 3.10, so none needs exceptiongroup or taskgroup.
+
+## Recipes for distributions
+
+`packaging/` holds a source package recipe for each of these distributions. Each builds the
+release tag's tarball (`https://github.com/haliskilic/ser2netweb/archive/refs/tags/vX.Y.Z.tar.gz`,
+which has the tests) with only the distribution's own packages, leaves pyserial-asyncio-fast
+out (the built-in transport), installs `/usr/bin/ser2netweb`, the `.deb` / `.rpm`'s hardened
+unit (not enabled), the account `ser2netweb` (sysusers.d) and `/var/lib/ser2netweb`
+(tmpfiles.d, 0700), and runs in its check step the tests that start no server and open no
+network socket. No recipe names the classic C ser2net's package: the two install side by
+side.
+
+| Distribution | Recipe | Built in CI in | Linter |
+|---|---|---|---|
+| Debian, Ubuntu | `packaging/debian/debian/` (source and binary package `ser2netweb`) | `debian:unstable`, `debian:trixie`, `ubuntu:26.04` | lintian; autopkgtest runs `debian/tests` |
+| Fedora, EPEL | `packaging/fedora/ser2netweb.spec` | `fedora:rawhide`, `fedora:latest`; `almalinux:10` with EPEL (may fail) | rpmlint |
+| openSUSE | `packaging/opensuse/ser2netweb.spec`, `ser2netweb.changes` | `opensuse/tumbleweed` | rpmlint |
+| Arch Linux | `packaging/arch/ser2netweb/PKGBUILD`, `.SRCINFO` | `archlinux:latest` | namcap |
+| Alpine | `packaging/alpine/ser2netweb/APKBUILD` with an OpenRC service | `alpine:edge` | apkbuild-lint |
+
+**Building one locally** (docker; nothing is installed on the machine). From the
+repository's root:
+
+```sh
+sh tests/distro_build.sh prepare          # build/distro/: this commit's tree as the tag's tarball
+                                          # (or: prepare v3.0.1, that tag's tarball from GitHub)
+docker run --rm -v "$PWD:/src" -w /src debian:unstable     sh tests/distro_build.sh debian
+docker run --rm -v "$PWD:/src" -w /src fedora:rawhide      sh tests/distro_build.sh fedora
+docker run --rm -v "$PWD:/src" -w /src almalinux:10        sh tests/distro_build.sh epel
+docker run --rm -v "$PWD:/src" -w /src opensuse/tumbleweed sh tests/distro_build.sh opensuse
+docker run --rm -v "$PWD:/src" -w /src archlinux:latest    sh tests/distro_build.sh arch
+docker run --rm -v "$PWD:/src" -w /src alpine:edge         sh tests/distro_build.sh alpine
+```
+
+Each builds as an unprivileged user, lints (a linter's error fails), installs the package
+with the distribution's package manager and runs `tests/distro_smoke.py`: `--version`,
+`--about`, the unit or OpenRC script, the account, no relation to a package `ser2net`, then
+as the account `--set-password`, a start on 127.0.0.1 that answers `/healthz` and
+`--healthcheck`, and a stop. The packages and the linter's report land in
+`build/distro/<target>/`. `.github/workflows/distro-packages.yml` runs the same for a pull
+request that changes a recipe, by hand (optionally for a release tag) and every Monday, so a
+distribution's newer dependencies that break ser2netweb show up; it is not a merge
+condition.
+
+**After a release:** `python3 tools/bump_recipes.py X.Y.Z` sets every recipe's version, adds
+the changelog entries (Debian, Fedora, openSUSE), writes the checksums of the tag's tarball
+(Arch's sha256, Alpine's sha512) and Arch's `.SRCINFO`; commit the result.
+`tests/test_distro_recipes.py` checks the recipes against `pyproject.toml` (the dependencies
+and floors), `ser2netweb/__init__.py` (the version) and the `.deb` / `.rpm`'s unit, so a
+changed dependency or unit fails there until the recipes follow. **3.0.0 itself cannot be
+submitted:** its tag has the old, narrow dependency ranges and no built-in transport. The
+first release after it is the first a distribution can build.
+
+What a recipe's check step leaves out: `tests/test_dependency_internals.py` and
+`tests/test_serial_compat.py` ask for pyserial's Windows backend, which openSUSE's package
+doesn't ship, and the latter for a glibc detail a Fedora builder answers differently.
+
+### Debian and Ubuntu
+
+- **Layout:** `debhelper-compat (= 13)` with `dh-sequence-python3`,
+  `pybuild-plugin-pyproject` and `dh-sequence-installsysusers`; `Rules-Requires-Root: no`;
+  `3.0 (quilt)`; binary package `ser2netweb` (`Architecture: all`, section comm).
+- **The tarball is repacked** without `vendor/wheels` (prebuilt wheels, some with compiled
+  code): `Files-Excluded` in `debian/copyright`, version `X.Y.Z+ds-1`, `debian/watch` reads
+  GitHub's tags API (`uscan`).
+- **The browser libraries** in `ser2netweb/web/static/` (htmx, xterm.js, its fit addon) are
+  minified. Their sources go into `debian/missing-sources/`, made by
+  `python3 packaging/debian/missing_sources.py <source tree>` from the npm releases
+  `vendor/npm/package.json` records (about 1 MB, not kept in this repository; CI makes them
+  for every build). Debian's `libjs-htmx` is htmx 4 in unstable (ser2netweb is written for
+  htmx 2), and Starlette's static file handler doesn't follow links out of the package, so
+  the embedded copies stay.
+- **Service:** `dh_installsystemd --no-enable`: installed, neither enabled nor started; an
+  upgrade restarts it when it runs. `README.Debian` says how to turn it on.
+- **Ubuntu** takes the package from Debian. 26.04 builds it as it is; 24.04 is too old
+  (above).
+- **To submit:** (1) file the ITP bug (package wnpp) and put its number into `debian/changelog`
+  (`Closes: #NNNNNNN`; lintian warns `initial-upload-closes-no-bugs` until then); (2) a
+  salsa.debian.org account, the packaging in a git-buildpackage repository (ideally under
+  the Debian Python Team, with `Maintainer: Debian Python Team
+  <team+python@tracker.debian.org>`, `Uploaders:` the maintainer, and `Vcs-Git` /
+  `Vcs-Browser`); (3) upload to mentors.debian.net and ask for a sponsor (an RFS bug
+  against `sponsorship-requests`, or the Python Team's IRC channel / list).
+
+### Fedora and EPEL
+
+- `%pyproject_buildrequires` / `%pyproject_wheel` / `%pyproject_install` /
+  `%pyproject_save_files -l`; `%prep` deletes the pyserial-asyncio-fast line from
+  `pyproject.toml`, so the generated Requires are the other nine dependencies with their
+  floors. The extras are `Recommends`. `%check`: `%pyproject_check_import` and the tests.
+- The bundled code is declared: `Provides: bundled(js-htmx)`, `bundled(js-xterm)`,
+  `bundled(js-xterm-addon-fit)`, `bundled(python3dist(pyserial-asyncio-fast))`; the npm
+  releases of the browser libraries are `Source4`–`Source6`, so the SRPM carries their
+  sources.
+- **EPEL 10 is blocked:** RHEL 10's `python3-setuptools` is 69, and `pyproject.toml` needs
+  setuptools 77 (its licence fields, PEP 639): `%pyproject_buildrequires` finds no
+  `python3dist(setuptools) >= 77` (the CI leg on AlmaLinux 10 shows it and may fail).
+  `python3-authlib` 1.3.2 there is also below the OIDC extra's 1.4.0, a `Recommends` only.
+  RHEL 10 machines use the release's `.rpm` or the DNF repository meanwhile.
+- **To submit:** a Fedora account (FAS), `fedora-review -b <bug>` locally, a review request
+  in Red Hat Bugzilla (product Fedora, component Package Review) with links to
+  the spec and SRPM (a Copr build or fedorapeople space), and a sponsor into the `packager`
+  group for a first package. EPEL branches are requested after the Fedora package exists.
+
+### openSUSE
+
+- An application package for the distribution's default Python (`%define pythons python3`),
+  `%pyproject_wheel` / `%pyproject_install`, the account through `sysuser-tools`
+  (`%sysusers_generate_pre`), the service through `%service_add_*` / `%service_del_*`
+  (openSUSE's presets leave it disabled).
+- **To submit:** an openSUSE account; `osc mkpac ser2netweb` in a home project
+  (`home:<user>`), add the spec, `ser2netweb.changes`, the unit, sysusers and tmpfiles files
+  and the tarball (`osc service runall download_files` or a download by hand), build for
+  `openSUSE_Tumbleweed`, then `osc submitrequest` to a devel project that fits
+  (`devel:languages:python` or `hardware`), and from there to `openSUSE:Factory`.
+
+### Arch Linux
+
+- A source PKGBUILD (`python-build`, `python-installer`, `python-wheel`,
+  `python-setuptools`), the dependencies from the official repositories, the extras as
+  `optdepends`. The unit runs in the group `uucp`, Arch's group of the serial ports.
+- It and the AUR's `ser2netweb-bin` (`packaging/aur/`, the standalone executable) install
+  the same files: this one has `conflicts=('ser2netweb-bin')`, that one
+  `provides=('ser2netweb')` and `conflicts=('ser2netweb')`.
+- **To submit:** as a second AUR package, `ser2netweb`: `git clone
+  ssh://aur@aur.archlinux.org/ser2netweb.git`, copy the files of
+  `packaging/arch/ser2netweb/` (with `.SRCINFO`) in, commit and push with the AUR account's
+  SSH key. The official repositories need a Package Maintainer who adopts it.
+
+### Alpine
+
+- `py3-gpep517` / `py3-installer`, subpackages `-pyc`, `-doc`, `-openrc`. Alpine has no
+  systemd: `ser2netweb.initd` (supervise-daemon, as `ser2netweb`, data directory made 0700
+  at the start, `reload` sends SIGHUP) and `ser2netweb.confd` (data directory, bind address
+  and port, open files) stand in for the unit, and `ser2netweb.pre-install` makes the
+  account and adds it to `dialout`. Alpine has no optional dependencies: install
+  `py3-paho-mqtt`, `py3-ldap3`, `py3-authlib` or `py3-cryptography` for the features that
+  need them.
+- **To submit:** an account on gitlab.alpinelinux.org, fork `alpine/aports`, add
+  `testing/ser2netweb/` with the four files, commit as `testing/ser2netweb: new aport`,
+  open a merge request; its CI builds every architecture.
