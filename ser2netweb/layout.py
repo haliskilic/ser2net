@@ -3,15 +3,24 @@
   source      a source checkout (ser2netweb.py, bootstrap.py and ./lib beside the package),
               also the Docker image's /app: data/ in the checkout
   standalone  a standalone executable (PyInstaller): data/ next to the executable
-  package     that executable as the .deb / .rpm package installs it, /usr/bin/ser2netweb:
-              /var/lib/ser2netweb, the data directory of the package's service
+  package     that executable as the .deb / .rpm package (and the AUR's ser2netweb-bin)
+              installs it, /usr/bin/ser2netweb: /var/lib/ser2netweb, the data directory of
+              the package's service
   pip         installed by pip or pipx (the wheel from PyPI: the package in a site-packages
               folder, or wherever --target put it next to its .dist-info): the platform's
               folder for a user's application data, never next to the package, which pip
               owns (and may replace or delete on the next upgrade)
+  homebrew    the Homebrew formula (haliskilic/tap/ser2netweb): pip's layout too, in the
+              virtual environment of the formula's keg (<prefix>/Cellar/ser2netweb/<version>/
+              libexec): <prefix>/var/ser2netweb, the data directory of its service
+              (brew services), which outlives the keg
+  snap        the standalone executable in the snap: root (the snap's service, sudo)
+              $SNAP_COMMON/data, /var/snap/ser2netweb/common/data; another user
+              $SNAP_USER_COMMON/data (the snap's folder in the home directory)
 
---data-dir and --config choose another folder in every case. A pip install gets its
-dependencies from pip, so the offline bootstrap into ./lib (bootstrap.py) is not used there.
+--data-dir and --config choose another folder in every case. A pip install (and the Homebrew
+formula's) gets its dependencies from pip, so the offline bootstrap into ./lib (bootstrap.py)
+is not used there.
 Standard library only (the command line reads this before the dependencies load).
 """
 from __future__ import annotations
@@ -26,12 +35,19 @@ from typing import Optional
 
 NAME = "ser2netweb"
 SOURCE, STANDALONE, PACKAGE, PIP = "source", "standalone", "package", "pip"
+HOMEBREW, SNAP = "homebrew", "snap"
 # --about's "Build:" line
 LABELS = {SOURCE: "source", STANDALONE: "standalone executable",
-          PACKAGE: "standalone executable, .deb / .rpm package",
-          PIP: "Python package (pip / pipx)"}
-# where the .deb / .rpm package puts the executable, and its service's data directory
-# (packaging/nfpm.yaml; ser2netweb-install.sh and the standalone unit use /usr/local/bin)
+          PACKAGE: "standalone executable, Linux package (.deb / .rpm / AUR)",
+          PIP: "Python package (pip / pipx)", HOMEBREW: "Homebrew formula",
+          SNAP: "standalone executable, snap"}
+# the installations whose package pip put into a site-packages folder (pip, pipx, the
+# Homebrew formula's virtual environment): pip installed the dependencies, the licence
+# texts are in the .dist-info, and the command is ser2netweb
+PIP_KINDS = (PIP, HOMEBREW)
+# where the .deb / .rpm package (and the AUR's) puts the executable, and its service's data
+# directory (packaging/nfpm.yaml, packaging/aur; ser2netweb-install.sh and the standalone
+# unit use /usr/local/bin)
 PACKAGE_EXECUTABLE = "/usr/bin/ser2netweb"
 PACKAGE_DATA_DIR = "/var/lib/ser2netweb"
 PACKAGE_DIR = os.path.dirname(os.path.abspath(__file__))  # this package's folder
@@ -48,19 +64,43 @@ def _dist_infos(folder: str) -> list[str]:
                   if n.lower().startswith(NAME + "-") and n.lower().endswith(".dist-info"))
 
 
+def homebrew_prefix(package_dir: str = PACKAGE_DIR) -> Optional[str]:
+    """The Homebrew prefix (/opt/homebrew, /usr/local, /home/linuxbrew/.linuxbrew) of a copy
+    the ser2netweb formula installed, else None. Its virtual environment is the keg's
+    libexec: <prefix>/Cellar/ser2netweb/<version>/libexec/lib/python3.X/site-packages/
+    ser2netweb, also when it runs through <prefix>/opt/ser2netweb (a link to the keg)."""
+    parts = os.path.realpath(package_dir).split(os.sep)
+    if (len(parts) > 8 and parts[-8] == "Cellar" and parts[-7] == NAME
+            and parts[-5:-3] == ["libexec", "lib"] and parts[-3].startswith("python")
+            and parts[-2] == "site-packages"):
+        return os.sep.join(parts[:-8]) or os.sep
+    return None
+
+
+def _in_snap(executable: str, env: Mapping[str, str]) -> bool:
+    """Whether `executable` is the one in ser2netweb's snap ($SNAP: /snap/ser2netweb/<rev>;
+    a parallel install's name is ser2netweb_<key>)."""
+    name, snap = env.get("SNAP_NAME", ""), env.get("SNAP", "")
+    return (name == NAME and posixpath.isabs(snap)
+            and posixpath.normpath(executable).startswith(posixpath.normpath(snap) + "/"))
+
+
 def detect(frozen: bool, executable: str, package_dir: str,
-           platform: str = sys.platform) -> str:
-    """The kind of installation (SOURCE, STANDALONE, PACKAGE or PIP) of a copy whose package
-    is `package_dir`, run by `executable`."""
+           platform: str = sys.platform, environ: Optional[Mapping[str, str]] = None) -> str:
+    """The kind of installation (SOURCE, STANDALONE, PACKAGE, PIP, HOMEBREW or SNAP) of a
+    copy whose package is `package_dir`, run by `executable`."""
     if frozen:
         # (a Linux path, compared as one whatever OS this runs on; a frozen executable's
         # sys.executable is absolute)
-        if platform.startswith("linux") and posixpath.normpath(executable) == PACKAGE_EXECUTABLE:
-            return PACKAGE
+        if platform.startswith("linux"):
+            if posixpath.normpath(executable) == PACKAGE_EXECUTABLE:
+                return PACKAGE
+            if _in_snap(executable, os.environ if environ is None else environ):
+                return SNAP
         return STANDALONE
     parent = os.path.dirname(os.path.abspath(package_dir))
     if os.path.basename(parent).lower() in _SITE_FOLDERS or _dist_infos(parent):
-        return PIP
+        return HOMEBREW if homebrew_prefix(package_dir) else PIP
     # a source checkout (an editable install `pip install -e .` too: the package stays in
     # the checkout, so its data does as well)
     return SOURCE
@@ -95,15 +135,33 @@ def user_data_dir(platform: str = sys.platform, environ: Optional[Mapping[str, s
     return path.join(base, NAME)
 
 
+def snap_data_dir(environ: Optional[Mapping[str, str]] = None,
+                  root: Optional[bool] = None) -> str:
+    """The snap's data directory: $SNAP_COMMON/data for root (the snap's service runs as
+    root on it), $SNAP_USER_COMMON/data for another user; the user data folder without
+    them (not in a snap)."""
+    env = os.environ if environ is None else environ
+    if root is None:
+        root = getattr(os, "geteuid", lambda: -1)() == 0
+    base = env.get("SNAP_COMMON" if root else "SNAP_USER_COMMON", "")
+    return posixpath.join(base, "data") if posixpath.isabs(base) else user_data_dir()
+
+
 def default_data_dir(app_dir: str, kind_: Optional[str] = None) -> str:
     """The data directory without --data-dir / --config: data/ in `app_dir` (a source
     checkout, or the folder of a standalone executable), the package's service's data
-    directory, or a pip install's user data folder."""
+    directory, a pip install's user data folder, the Homebrew formula's
+    <prefix>/var/ser2netweb or the snap's (snap_data_dir)."""
     k = kind() if kind_ is None else kind_
     if k == PIP:
         return user_data_dir()
+    if k == HOMEBREW:
+        prefix = homebrew_prefix()
+        return os.path.join(prefix, "var", NAME) if prefix else user_data_dir()
     if k == PACKAGE:
         return PACKAGE_DATA_DIR
+    if k == SNAP:
+        return snap_data_dir()
     return os.path.join(app_dir, "data")
 
 
