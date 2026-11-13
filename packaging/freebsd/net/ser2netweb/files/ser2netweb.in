@@ -35,9 +35,9 @@ pidfile="/var/run/${name}/${name}.pid"
 _child_pidfile="/var/run/${name}/${name}.child.pid"
 procname="daemon"
 command="/usr/sbin/daemon"
+# (rc.subr starts it as ${ser2netweb_user}: daemon(8) gets no -u)
 command_args="-f -c -r -S -T ${name} -P ${pidfile} -p ${_child_pidfile} \
-    -u ${ser2netweb_user} %%PREFIX%%/bin/ser2netweb --data-dir ${ser2netweb_dir} \
-    ${ser2netweb_args}"
+    %%PREFIX%%/bin/ser2netweb --data-dir ${ser2netweb_dir} ${ser2netweb_args}"
 
 extra_commands="reload"
 start_precmd="${name}_prestart"
