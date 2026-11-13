@@ -1,0 +1,51 @@
+[Unit]
+Description=ser2netweb serial-to-network bridge
+Documentation=https://github.com/haliskilic/ser2netweb
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# acct-user/ser2netweb is in the dialout and uucp groups (the serial ports)
+User=ser2netweb
+Group=ser2netweb
+StateDirectory=ser2netweb
+StateDirectoryMode=0700
+# The web UI listens on 127.0.0.1:8080 at first; "systemctl edit ser2netweb" and
+#   [Service]
+#   Environment=SER2NETWEB_BIND_IP=0.0.0.0 SER2NETWEB_PORT=8080
+# put it elsewhere (they win over the web UI's own setting at every start).
+ExecStart=/usr/bin/ser2netweb --data-dir /var/lib/ser2netweb
+# read config.json again without a restart
+ExecReload=/bin/kill -HUP $MAINPID
+Restart=on-failure
+RestartSec=3
+# about three per running mapping (port, listener, log) and one per client
+LimitNOFILE=65536
+
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ProtectProc=invisible
+ProcSubset=pid
+ProtectControlGroups=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectClock=true
+ProtectHostname=true
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+# AF_NETLINK: the list of network interfaces
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+SystemCallErrorNumber=EPERM
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target
