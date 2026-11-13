@@ -214,6 +214,10 @@ def test_no_or_empty_lib_untouched():
     try:
         bs = load_bootstrap(root)
         bs._pip_install = no_pip
+        if importlib.util.find_spec("serial_asyncio_fast") is None:
+            # (an environment without it, as CI's job "minimum dependencies": a checkout
+            # would install the pinned set into lib/, pyserial-asyncio-fast with it)
+            bs.REQUIRED = [r for r in bs.REQUIRED if r[0] != "serial_asyncio_fast"]
         bs.ensure(refresh_lib=True)  # the modules come from this environment
         assert not os.path.exists(os.path.join(root, "lib")), "no lib/ made"
         os.makedirs(os.path.join(root, "lib"))
