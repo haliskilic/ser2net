@@ -12,7 +12,8 @@
     when it is there; CI compares with makepkg --printsrcinfo);
   * packaging/aur/ser2netweb-bin is what the script makes for its version (sha256 as recorded;
     CI checks them against the release);
-  * aur.yml: on a release (not a pre-release), by hand with a tag, and on pull requests that
+  * aur.yml: on a release (not a pre-release; release.yml's channels job starts it with the
+    tag), by hand with a tag, and on pull requests that
     change the package; makepkg / namcap / pacman in an archlinux container before anything
     is pushed; the push needs AUR_SSH_PRIVATE_KEY (skipped with a notice without it), checks
     the AUR's pinned host keys and has no GitHub permission.
@@ -197,6 +198,15 @@ def test_committed():
     print(f"packaging/aur/ser2netweb-bin: what make_pkgbuild.py makes for {version}  OK")
 
 
+def _started_by_release(workflow: str) -> None:
+    """release.yml's channels job starts `workflow` on main with the tag (a release made with
+    the GITHUB_TOKEN starts no workflow by itself)."""
+    channels = jobs(read("release.yml"))["channels"]
+    loop = next(line for line in channels.splitlines() if "for workflow in" in line)
+    assert workflow in re.findall(r"[\w.-]+\.yml", loop), loop
+    assert 'gh workflow run "$workflow" --ref main -f tag="$GITHUB_REF_NAME"' in channels
+
+
 def test_workflow():
     text = read("aur.yml")
     on = text.split("\npermissions:", 1)[0]
@@ -232,8 +242,10 @@ def test_workflow():
     for _kind, blob in keys:
         fp = base64.b64encode(hashlib.sha256(base64.b64decode(blob)).digest()).decode().rstrip("=")
         assert f"SHA256:{fp}" in push, fp
-    print("aur.yml: releases, by hand and pull requests; archlinux build and install first; "
-          "the push only with the key, to the pinned host keys, no GitHub permission  OK")
+    _started_by_release("aur.yml")
+    print("aur.yml: releases (release.yml starts it), by hand and pull requests; archlinux "
+          "build and install first; the push only with the key, to the pinned host keys, no "
+          "GitHub permission  OK")
 
 
 if __name__ == "__main__":
