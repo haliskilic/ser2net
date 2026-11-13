@@ -217,6 +217,9 @@ def test_formula():
     for name in sorted(WANT):
         assert f'\n  resource "{name}" do\n    url "https://files.pythonhosted.org/' in text, name
     assert "  def install\n    virtualenv_install_with_resources\n  end\n" in text
+    # (brew style refuses a post_install that only makes the service's folder: brew services
+    # makes it, and ser2netweb makes its data directory itself)
+    assert "post_install" not in text
     assert '    run [opt_bin/"ser2netweb", "--data-dir", var/"ser2netweb"]\n' in text
     assert "    keep_alive true\n" in text and '    log_path var/"log/ser2netweb.log"\n' in text
     assert '    environment_variables SER2NETWEB_LOG_STDOUT: "off"\n' in text

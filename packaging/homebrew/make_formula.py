@@ -385,10 +385,6 @@ class Ser2netweb < Formula
     virtualenv_install_with_resources
   end
 
-  def post_install
-    (var/"ser2netweb").mkpath
-  end
-
   def caveats
     <<~EOS
       The service (brew services start ser2netweb) keeps its data and its log
