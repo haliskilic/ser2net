@@ -1,0 +1,1 @@
+ser2netweb:*:407:407::0:0:ser2netweb serial-to-network bridge:/var/db/ser2netweb:/usr/sbin/nologin
