@@ -431,15 +431,17 @@ paho-mqtt 2.1.0 only up to Python 3.13, and no Authlib. FreeBSD's `devel/py-setu
 ### Void Linux
 
 - **Files:** `srcpkgs/ser2netweb/template` (`build_style=python3-pep517`, the system
-  account `_ser2netweb` in `dialout`, `/var/lib/ser2netweb` 0700, a `do_check` running three
-  of the tests), its runit service `files/ser2netweb/run` (`conf` there may export
-  `SER2NETWEB_BIND_IP` / `SER2NETWEB_PORT` or set `OPTS`) and `INSTALL.msg`;
-  `srcpkgs/python3-python-multipart` (an update from 0.0.9).
-- **Status:** builds with `xbps-src -Q` (checks included) at void-packages' master of
-  2026-11-13, xlint clean, installs and runs under runit. **Missing in Void:**
-  python-multipart newer than 0.0.9 (updated with it) and `python3-pyserial-asyncio-fast`
-  (left out: the built-in transport); Authlib (the OIDC extra) isn't packaged, ldap3 is
-  2.8.1.
+  account `_ser2netweb` in `dialout`, `/var/lib/ser2netweb` 0700, a `post_patch` that takes
+  pyserial-asyncio-fast out of `pyproject.toml`, as xbps-src checks the installed metadata's
+  dependencies against `depends`, a `do_check` running three of the tests), its runit
+  service `files/ser2netweb/run` (`conf` there may export `SER2NETWEB_BIND_IP` /
+  `SER2NETWEB_PORT` or set `OPTS`) and `INSTALL.msg`; `srcpkgs/python3-python-multipart`
+  (an update from 0.0.9).
+- **Status:** builds with `xbps-src -s -Q` (strict, as Void's CI; checks included) at
+  void-packages' master of 2026-11-13, xlint clean, installs and runs under runit.
+  **Missing in Void:** python-multipart newer than 0.0.9 (updated with it) and
+  `python3-pyserial-asyncio-fast` (left out: the built-in transport); Authlib (the OIDC
+  extra) isn't packaged, ldap3 is 2.8.1.
 - **Build it:** `git clone https://github.com/void-linux/void-packages`, copy
   `packaging/void/srcpkgs/*` into its `srcpkgs/`, then `./xbps-src binary-bootstrap`,
   `./xbps-src -Q pkg ser2netweb`, `sudo xbps-install -R hostdir/binpkgs ser2netweb` and

@@ -234,6 +234,12 @@ def test_dependencies_are_pyprojects():
             f"{target}: {os.path.relpath(path, ROOT)} says why {LEFT_OUT} is left out")
     for base, dirs, _found in os.walk(PKG):
         assert not [d for d in dirs if LEFT_OUT in d], (base, dirs)
+    # Void's build checks the installed metadata's dependencies against depends (strict in
+    # its CI): its template takes the line out of pyproject.toml, as Fedora's %prep does
+    assert re.search(r"(?m)^post_patch\(\) \{\n\tvsed -i '/\"pyserial-asyncio-fast>=/d' "
+                     r"pyproject\.toml\n\}$", text(LEFT_OUT_IN["void"])), "void: post_patch"
+    assert one(r'(?m)^ *"(pyserial-asyncio-fast>=[^"]*)",', text(ROOT, "pyproject.toml"),
+               "pyproject.toml"), "the line Void's vsed takes out"
     # Void's python-multipart (0.0.9) is below every floor: the update comes with them
     multipart = text(VOID, "python3-python-multipart", "template")
     assert version_tuple(one(r"^version=(.*)$", multipart, "multipart")) >= (0, 0, 20)
@@ -482,7 +488,7 @@ def test_workflow():
     assert len(re.findall(r"sum=[0-9a-f]{64} ;;", all_jobs["macports"])) >= 2
     assert 'shasum -a 256 -c -' in all_jobs["macports"]
     for target, call in (("nixpkgs", "callPackage ./packaging/nix/package.nix {}"),
-                         ("void", "./xbps-src -Q pkg"), ("gentoo", "emerge --oneshot"),
+                         ("void", "./xbps-src -s -Q pkg"), ("gentoo", "emerge --oneshot"),
                          ("gentoo", "pkgcheck scan"), ("freebsd", "portlint -AC"),
                          ("freebsd", "make DEVELOPER=yes BATCH=yes package"),
                          ("macports", "port lint --nitpick"),

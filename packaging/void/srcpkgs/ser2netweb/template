@@ -5,7 +5,8 @@ revision=1
 build_style=python3-pep517
 hostmakedepends="python3-setuptools"
 # pyserial-asyncio-fast is not in Void: ser2netweb runs on its built-in copy of that
-# library's serial transport (ser2netweb/engine/serial_transport.py)
+# library's serial transport (ser2netweb/engine/serial_transport.py); post_patch takes it
+# out of pyproject.toml, so the python dependency check agrees
 depends="python3-h11 python3-Jinja2 python3-MarkupSafe python3-psutil python3-pyserial
  python3-python-multipart python3-starlette python3-uvicorn python3-websockets"
 checkdepends="${depends}"
@@ -21,6 +22,10 @@ system_accounts="_ser2netweb"
 _ser2netweb_homedir="/var/lib/ser2netweb"
 _ser2netweb_descr="ser2netweb serial-to-network bridge"
 _ser2netweb_groups="dialout"
+
+post_patch() {
+	vsed -i '/"pyserial-asyncio-fast>=/d' pyproject.toml
+}
 
 do_check() {
 	# The whole suite (tests/run_all.py) also compares the pinned versions of the

@@ -177,8 +177,10 @@ jobs:
       - name: xbps-src pkg, with the check phase (as void-packages' CI on x86_64)
         working-directory: /void-packages
         run: |
+          # (-s: strict, as void-packages' CI builds: a python dependency of the metadata
+          # that no package in depends provides fails the build)
           for p in python3-python-multipart ser2netweb; do
-            sudo -Eu builder ./xbps-src -Q pkg "$p"
+            sudo -Eu builder ./xbps-src -s -Q pkg "$p"
           done
       - name: xbps-install, run the runit service
         working-directory: /void-packages
