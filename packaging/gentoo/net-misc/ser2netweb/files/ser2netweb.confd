@@ -1,0 +1,13 @@
+# /etc/conf.d/ser2netweb
+
+# The web UI's address and port. Set, they win over the web UI's own setting at every
+# start ("*": every interface, IPv4 and IPv6); unset, config.json decides (127.0.0.1:8080
+# on the first start).
+#SER2NETWEB_BIND_IP="127.0.0.1"
+#SER2NETWEB_PORT="8080"
+
+# The data directory (config.json, its backups, the logs), private to the ser2netweb user.
+#SER2NETWEB_DATA_DIR="/var/lib/ser2netweb"
+
+# More command line arguments (ser2netweb --help).
+SER2NETWEB_OPTS=""
