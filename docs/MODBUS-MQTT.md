@@ -91,6 +91,8 @@ points as fields**):
 | `writable` | MQTT may write it (coils and holding registers; not a string, not a bit) | false |
 | `min`, `max`, `allowed` | what MQTT may write (in the point's units, as published); a write outside them is refused | no limit |
 | `poll` | `false`: a write-only point (a command register), never read, a write not read back | true |
+| `pulse_ms` | a writable coil: a write of true is followed by a write of false this many milliseconds later, 50–600000 (see *Pulses*) | — |
+| `safe_value`, `safe_after_s` | a writable point: the value written once the broker (or the Sparkplug primary host) has been away for that many seconds, 1–86400 (see *Safe values*) | — |
 
 ```json
 [
@@ -145,6 +147,73 @@ command writes the point it was sent to, nothing more. A write to a point on uni
 broadcast to every slave and is not read back. Writes are made one at a time, in the order
 they came, between the polls and the Modbus/TCP masters' requests.
 
+## Pulses
+
+A writable coil with `"pulse_ms": 500` is a push button: a write of true (a `/set`, a
+Sparkplug DCMD) is followed, 500 ms after the slave acknowledged it, by a write of false.
+
+```json
+{"name": "start", "unit": 2, "fn": 1, "address": 8, "dtype": "bool", "writable": true, "pulse_ms": 500}
+```
+
+- The second write is a request of its own (FC5), which takes its turn on the bus like any
+  other: polls, other writes and the Modbus/TCP masters go on during the pulse, and on a
+  busy or slow line the coil stays on for the pulse plus the wait for the bus.
+- The `/set` is answered (`ok`) and the coil read back and published (`1`) when it is
+  switched on; the value is published again (`0`) once it is off.
+- A second true during the pulse starts it over (one false follows, a whole pulse after
+  it, also when the first pulse ends while the second true is on the bus); a false ends
+  it.
+- A mapping that stops, restarts or is saved during a pulse writes false at once, before
+  it closes the serial port. A write of true whose reply did not come (but whose request
+  went out) is followed by false all the same.
+- A false that can't be written (the unit does not answer, the serial port is down) is
+  tried again: three times half a second apart, then every 10 s until it is written (the
+  log says after the third try that the coil may still be ON, and when it is written). A
+  stop gives it three more tries, half a second apart (at most 10 s for all the pulses
+  under way), and the log names a coil that may still be ON.
+- It can't help when the service is killed or the machine loses power during a pulse:
+  where that matters, let the device time the pulse itself.
+- Modbus/TCP masters writing the coil are not affected, like the write limits.
+
+## Safe values
+
+A writable point with `safe_value` and `safe_after_s` is written to that value when
+nobody can command it any more:
+
+```json
+{"name": "setpoint", "unit": 2, "fn": 3, "address": 10, "dtype": "int16", "scale": 0.1,
+ "writable": true, "min": 5, "max": 80, "safe_value": 20, "safe_after_s": 60},
+{"name": "pump", "unit": 2, "fn": 1, "address": 0, "dtype": "bool", "writable": true,
+ "safe_value": false, "safe_after_s": 30}
+```
+
+- "Nobody" is the broker connection: once it has been lost for `safe_after_s` seconds, the
+  point is written. A Sparkplug B node with a **primary host ID** goes by that host
+  instead: its STATE saying offline, or the broker connection lost, for that long. A
+  connection that breaks without a word (a cable pulled, a router gone) is noticed by the
+  MQTT keepalive (30 s), up to a minute later; the time counts from then.
+- The time also runs from the mapping's start: a gateway that starts (or is saved, which
+  restarts it) and does not reach its broker, or does not see its primary host online,
+  within `safe_after_s` writes the safe values.
+- Each point is written once per outage, in its turn in the write queue (read back like
+  any write). The value has to be one the point takes: of its type and range (after the
+  scale) and within its `min` / `max` / `allowed` (an edit refuses another; a stored one is
+  not used, with a warning in the log at start). A write that fails (the unit does
+  not answer, the port is down) is tried again every 10 s until it works or the broker is
+  back. Back in time: nothing is written. Afterwards the point keeps the safe value until
+  a command changes it.
+- It is logged (`wrote 'setpoint' = 20 (… from its safe value: no broker for 60 s)`), shown
+  on the dashboard and in the status (`status.safe`: `state` ok / waiting / applied,
+  `since`, and per point `written`, `error`), and the notification **Safe values written**
+  (`safe_values`, off unless ticked in Settings → Notifications) reports it.
+- A read-only mapping never writes one (its log says so at start).
+- A coil with `pulse_ms` can only have the safe value false.
+- What it can't see: a broker that is connected while the application behind it is not
+  (plain MQTT has no such signal; Sparkplug's primary host does), and ser2netweb itself
+  being stopped or without power. For those, keep a heartbeat register and the PLC's own
+  watchdog (README → *MQTT commands*).
+
 ## Sparkplug B
 
 With **Payload format** *Sparkplug B (edge node)* the gateway is an edge node (Sparkplug
@@ -198,8 +267,8 @@ For Sparkplug B add `"payload_format": "sparkplug_b"` (and optionally
 For MQTT 5 add `"protocol": "5"` (and optionally `"clean_start"`, `"session_expiry_s"`,
 `"message_expiry_s"`).
 `GET /api/v1/openapi.json` lists every field with its default; `GET /api/v1/status` gives
-each point's last value, when it was read and why its last read failed, each unit's state
-and the MQTT connection's state.
+each point's last value, when it was read and why its last read failed, each unit's state,
+the MQTT connection's state and the safe values' (`safe`).
 
 ## Limits
 
@@ -210,9 +279,10 @@ and the MQTT connection's state.
   exception.
 - A text float is Python's shortest repr of the scaled value, not rounded to the device's
   precision (`1.2000000000000002`): round it in the consumer, or use an unscaled point.
-- ser2netweb writes no safe value by itself when the broker or the host goes away: use a
+- A safe value is written only for a point that has one (*Safe values*), and only while
+  ser2netweb runs: for anything that must hold when the gateway itself is gone, use a
   heartbeat register and the PLC's own watchdog (README → *MQTT commands*).
-- `min`, `max` and `allowed` limit MQTT only, not Modbus/TCP masters.
+- `min`, `max`, `allowed` and `pulse_ms` apply to MQTT only, not to Modbus/TCP masters.
 - Strings and register bits are read-only; a write goes to a single point (FC5, FC6 or
   FC16), never to a range.
 - Who may write is up to the broker: allow only trusted clients to publish to
@@ -222,5 +292,7 @@ and the MQTT connection's state.
   `length`, `min`, `max`, `allowed`, `poll`, the block reads, the unit map, the JSON
   values, the unit states and the MQTT TLS files, and 2.8 can't poll the new types.
 - A 3.0 node (a fleet edit from one keeps them; its own mappings can't have them) or
-  going back to 3.0 drops `mqtt.protocol`, `clean_start`, `session_expiry_s` and
-  `message_expiry_s`: the mapping then speaks MQTT 3.1.1.
+  going back to 3.0 drops `mqtt.protocol`, `clean_start`, `session_expiry_s`,
+  `message_expiry_s` and the points' `pulse_ms`, `safe_value` and `safe_after_s`: the
+  mapping then speaks MQTT 3.1.1, a pulsed coil stays on when it is written true, and no
+  safe value is written.

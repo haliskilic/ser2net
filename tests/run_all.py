@@ -129,6 +129,7 @@ PORTABLE = [
     "test_dashboard.py",
     "test_modbus_mqtt_write.py",
     "test_modbus_mqtt_broker.py",  # edge mode with real paho and a test broker; needs paho
+    "test_modbus_pulse_safe.py",   # a coil's pulse_ms, safe_value / safe_after_s
     "test_modbus_write.py",
     "test_sparkplug.py",
     "test_sparkplug_node.py",

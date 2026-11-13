@@ -347,7 +347,7 @@ jobs:
       - name: The MQTT tests (publisher, connection log, TLS, Modbus edge mode with a broker)
         run: |
           for t in test_mqtt_pub test_mqtt_link test_mqtt5 test_mqtt_tls \
-                   test_modbus_mqtt_write test_modbus_mqtt_broker; do
+                   test_modbus_mqtt_write test_modbus_mqtt_broker test_modbus_pulse_safe; do
             python "tests/$t.py" || exit 1
           done
 

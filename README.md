@@ -200,13 +200,24 @@ düzenlemeye gerek yok.
   atar. `"poll": false` yazılabilir bir noktayı, okunamayan bir komut register'ı için
   yalnızca yazılan bir nokta yapar: hiç okunmaz, yazıldıktan sonra geri okunmaz. Tamsayı
   tipleri ondalıklı bir değeri yuvarlar (eşitlikte çifte: `12.5` → 12) ve cevap yine `ok`
-  olur; yazmanın log satırı yazılan ham değeri gösterir (`raw value 12`). **Güvenli
-  çıkışlar:** ser2netweb, broker ya da host gidince kendiliğinden güvenli bir değer yazmaz.
+  olur; yazmanın log satırı yazılan ham değeri gösterir (`raw value 12`). **Darbeler
+  (pulse):** `"pulse_ms": 500` (50–600000) verilen yazılabilir bir coil, MQTT onu açtıktan o
+  kadar süre sonra kendi isteğiyle yeniden kapatılır; bu istek hatta sırasını bekler (poll
+  ve master'lar bu arada sürer). Darbe sırasında duran bir eşleme, portu kapatmadan önce
+  hemen false yazar; false yazılamazsa log coil'in hâlâ AÇIK olabileceğini söyler.
+  **Güvenli çıkışlar:** `"safe_value"` ve `"safe_after_s"` (1–86400) verilen yazılabilir bir
+  noktaya, broker bağlantısı (primary host'lu bir Sparkplug B düğümünde o host'un STATE'i)
+  o kadar saniye yok olunca bu değer yazılır; eşleme başladıktan sonra hiç gelmezse de.
+  Kesinti başına bir kez, yazma kuyruğu üzerinden ve noktanın sınırları içinde yazılır;
+  unit yanıt vermezse 10 sn'de bir yeniden denenir. Loga yazılır, panoda ve durumda
+  (`safe`) görünür, işaretlenmişse *Güvenli değerler yazıldı* bildirimi gönderilir; salt
+  okunur bir eşleme hiçbir zaman yazmaz. Bu ayarlar yoksa ser2netweb kendiliğinden güvenli
+  bir değer yazmaz; kendisi durmuşken ya da elektriği yokken de yazamaz.
   Bunun için heartbeat kullanın: host birkaç saniyede bir `/set` (ya da DCMD) ile bir
   holding register'a artan bir sayaç yazar, PLC'nin kendi mantığı (bir watchdog
   zamanlayıcısı) sayaç değişmez olunca çıkışları güvenli duruma alır. Cihazın kendi
   iletişim kaybı timeout'u tek başına yetmez, çünkü ser2netweb'in poll'u cihazla konuşmayı
-  sürdürür. Eşlemeyi durdurmak (onu değiştiren bir kayıt, yeniden başlatma ya da
+  sürdürür. İkisinin ayrıntıları: [docs/MODBUS-MQTT.md](docs/MODBUS-MQTT.md). Eşlemeyi durdurmak (onu değiştiren bir kayıt, yeniden başlatma ya da
   içe aktarma da) MQTT bağlantısı kapanmadan önce her yazmayı cevaplar: hattaki yazma
   bitebilir (en çok 2 sn; bitmezse `error: cancelled: mapping stopped (sent, outcome
   unknown)` ya da `(not sent)`), bekleyenler `error: cancelled: mapping stopped`, bu
@@ -407,7 +418,9 @@ düzenlemeye gerek yok.
   **ser2netweb'in başlaması** (bir açılıştan 15 sn sonra: hangi eşlemelerin çalıştığı ve önceki
   çalışmayı event loop watchdog'unun sonlandırıp sonlandırmadığı) ve bir gateway'in periyodik
   okuduğu bir **Modbus unit'inin yanıt vermeyi kesmesi** (3 okuma üst üste hiçbir noktasına
-  yanıt vermemesi) ve yeniden yanıt vermesi. Tekrarlar bastırılır, test mesajı
+  yanıt vermemesi) ve yeniden yanıt vermesi, ve **güvenli değerlerin yazılması** (bir
+  gateway noktalarına `safe_value` değerini yazdı: broker ya da Sparkplug primary host,
+  `safe_after_s` süresince yoktu). Tekrarlar bastırılır, test mesajı
   gönderilebilir. Bu olaylar gönderilsin ya da gönderilmesin all.log'a yazılır.
   Genel URL ayarlıysa (Ayarlar → Reverse proxy) her mesaj onunla biter, JSON biçiminde de
   bir `url` alanı olur. İstemci olayları istemcinin IP adresini, hatalı giriş hesap adını

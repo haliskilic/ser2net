@@ -197,12 +197,25 @@ everything from a **password-protected web UI** — no CLI or hand-edited config
   one) or a downgrade drops them. `"poll": false` makes a writable point write-only, for a
   command register that can't be read: never polled, a write not read back. An integer
   type rounds a fraction (ties to even: `12.5` → 12) and the answer is still `ok`; the log
-  line of the write names the raw value written (`raw value 12`). **Fail-safe outputs:**
-  ser2netweb writes no safe value by itself when the broker or the host goes away. Use a
+  line of the write names the raw value written (`raw value 12`). **Pulses:** a
+  writable coil with `"pulse_ms": 500` (50–600000) is switched off again that long after
+  MQTT switched it on, with a request of its own that takes its turn on the bus (polls
+  and masters go on meanwhile); a mapping that stops during a pulse writes false at once,
+  before it closes the port, and if false can't be written the log says the coil may
+  still be ON. **Fail-safe outputs:** a writable point with `"safe_value"` and
+  `"safe_after_s"` (1–86400) is written to that value once the broker connection (for a
+  Sparkplug B node with a primary host: that host's STATE) has been away for that many
+  seconds, also when it never comes after the mapping's start: once per outage, through
+  the write queue and within the point's limits, tried again every 10 s if the unit does
+  not answer, logged, shown on the dashboard and in the status (`safe`), and reported by
+  the notification *Safe values written* when that is ticked; never by a read-only
+  mapping. Without them ser2netweb writes no safe value by itself, and it can't write one
+  when it is stopped or without power itself. For that, use a
   heartbeat: the host writes a counter to a holding register through `/set` (or a DCMD)
   every few seconds, and the PLC's own logic (a watchdog timer) puts its outputs in a safe
   state when the counter stops changing. A device's own communication-loss timeout alone
-  won't do, as ser2netweb's polling keeps talking to it. Stopping the mapping (also a save, a restart or an
+  won't do, as ser2netweb's polling keeps talking to it. Details of both:
+  [docs/MODBUS-MQTT.md](docs/MODBUS-MQTT.md). Stopping the mapping (also a save, a restart or an
   import that changes it) answers every write before the MQTT connection closes: the one
   on the bus may finish (at most 2 s; else `error: cancelled: mapping stopped (sent,
   outcome unknown)` or `(not sent)`), the ones still waiting get `error: cancelled: mapping
@@ -393,7 +406,9 @@ everything from a **password-protected web UI** — no CLI or hand-edited config
   peer that misses two answers a minute apart) and back, and **ser2netweb started** (15 s
   after a start: which mappings run, and whether the previous run was ended by the event
   loop watchdog), and a **Modbus unit** that a gateway polls **stops answering** (no reply
-  to any of its points in 3 polls in a row) or answers again. Repeats are suppressed, and a
+  to any of its points in 3 polls in a row) or answers again, and **safe values written**
+  (a gateway wrote points to their `safe_value`: the broker or the Sparkplug primary host
+  was away for their `safe_after_s`). Repeats are suppressed, and a
   test message can be sent. The same events are logged in all.log whether or not they are
   sent.
   With a public URL (Settings → Reverse proxy) each message ends with it, and the JSON

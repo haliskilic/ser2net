@@ -82,6 +82,7 @@ def title(event: str) -> str:
         "service_started": _("ser2netweb started"),
         "unit_offline": _("Modbus unit not answering"),
         "unit_back": _("Modbus unit answering again"),
+        "safe_values": _("safe values written"),
         "test": _("test notification"),
     }.get(event, event)
 
@@ -104,8 +105,10 @@ def status_events(prev: dict, statuses: dict, names: dict) -> list[tuple[str, st
     it) goes through "connecting", not "down", so it is not reported.
 
     A Modbus unit is reported when it stops answering, and again once it answers (not
-    while its serial port is down: device_lost says that). An older snapshot (2-tuple:
-    no link, no units) still compares."""
+    while its serial port is down: device_lost says that). A Modbus gateway that wrote
+    points to their safe value (the broker, or the Sparkplug primary host, was away for
+    their safe_after_s) says so once per point and outage. An older snapshot (2-tuple:
+    no link, no units; 4-tuple: no safe values) still compares."""
     events = []
     for mid, st in statuses.items():
         name = names.get(mid)
@@ -144,7 +147,26 @@ def status_events(prev: dict, statuses: dict, names: dict) -> list[tuple[str, st
                 events.append(("unit_offline", f"{mid}:unit{unit}", name, f"unit {unit}"))
             elif was == _SILENT and now[0] == "online":
                 events.append(("unit_back", f"{mid}:unit{unit}", name, f"unit {unit}"))
+        new = [p for p in _safe_written(st) if p not in (old[4] if len(old) > 4 else ())]
+        if new:
+            safe = st.get("safe") or {}
+            rows = {p.get("name"): p for p in safe.get("points") or []}
+            longest = max((rows[n].get("after_s") or 0 for n, _t in new), default=0)
+            events.append(("safe_values", f"{mid}:safe", name, ", ".join(
+                f"{n} = {_safe_text(rows[n].get('value'))}" for n, _t in new)
+                + f" (no {safe.get('watching') or 'broker'} for {longest:g} s)"))
     return events
+
+
+def _safe_written(st: dict) -> tuple:
+    """The points a gateway wrote to their safe value in this outage: (name, when)."""
+    return tuple((p.get("name"), p.get("written"))
+                 for p in (st.get("safe") or {}).get("points") or [] if p.get("written"))
+
+
+def _safe_text(value) -> str:
+    return str(value).lower() if isinstance(value, bool) else f"{value:g}" if isinstance(
+        value, float) else str(value)
 
 
 def _client_host(peer: str) -> str:
@@ -292,8 +314,8 @@ def _units(st: dict) -> dict:
 
 
 def snapshot(statuses: dict, prev: Optional[dict] = None) -> dict:
-    """What status_events compares: each mapping's state, clients, connect-out link and
-    polled units. Given the previous snapshot, a unit that had stopped answering stays so
+    """What status_events compares: each mapping's state, clients, connect-out link,
+    polled units and the safe values written. Given the previous snapshot, a unit that had stopped answering stays so
     while it is "unknown" again (its mapping restarted, e.g. on a save), so its return is
     still reported."""
     snap = {}
@@ -305,7 +327,7 @@ def snapshot(statuses: dict, prev: Optional[dict] = None) -> dict:
                 if was == _SILENT and units.get(unit, ("",))[0] == "unknown":
                     units[unit] = _SILENT
         snap[mid] = (st.get("state"), {c.get("peer") for c in st.get("clients") or []},
-                     st.get("link") or "", units)
+                     st.get("link") or "", units, _safe_written(st))
     return snap
 
 

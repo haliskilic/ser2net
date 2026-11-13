@@ -145,8 +145,9 @@ def test_form():
         assert "MQTT session expiry" in str(e), str(e)
     else:
         raise AssertionError("a session expiry that is no number was accepted")
-    assert FORM_BLOCKS_SINCE["mqtt5"] == (3, 1, 0)
-    assert "mqtt5" in blocks_not_read((3, 0, 1)) and "mqtt5" not in blocks_not_read((3, 1, 0))
+    assert FORM_BLOCKS_SINCE["mqtt5"] == (3, 1, 0) and FORM_BLOCKS_SINCE["point_safety"] == (3, 1, 0)
+    assert {"mqtt5", "point_safety"} <= blocks_not_read((3, 0, 1))
+    assert not {"mqtt5", "point_safety"} & blocks_not_read((3, 1, 0))
     print("form: the MQTT version and MQTT 5's settings are parsed when posted, kept when "
           "not (3.1.1 selected, an older peer's form)  OK")
 

@@ -148,7 +148,8 @@ def device_id(unit: int) -> str:
 
 class SparkplugNode:
     def __init__(self, mapping, log: Callable[[str], None], write: Callable,
-                 state_dir: Optional[str] = None) -> None:
+                 state_dir: Optional[str] = None,
+                 supervision: Optional[Callable[[bool], None]] = None) -> None:
         mq = mapping.mqtt
         self.mapping = mapping
         self.group = mq.sparkplug_group_id.strip() or "ser2net"
@@ -184,6 +185,12 @@ class SparkplugNode:
         self._last_birth = 0.0       # time.monotonic() of the last births
         self._rebirth: Optional[asyncio.TimerHandle] = None  # a rebirth due (REBIRTH_EVERY_S)
         self._notes: dict[str, tuple[float, int]] = {}  # see _note
+        # whether someone can command the node: the broker is connected and, with a
+        # primary host, that host is online. ``supervision`` is told each change (on the
+        # event loop): the gateway's safe values go by it
+        self._supervision = supervision
+        self._link_up = False
+        self._supervised = False
 
     def topic(self, kind: str, device: str | None = None) -> str:
         return sparkplug.topic(self.group, kind, self.node, device)
@@ -256,11 +263,23 @@ class SparkplugNode:
         self._pub = MqttPublisher(self.mapping.mqtt, logger=self._log, will=self._will,
                                   birth=False, on_connect=self.birth, accept_retained=False,
                                   subscriptions=subscriptions, state_topics=state_topics,
-                                  clean=True)
+                                  clean=True, on_link=self._on_link)
         host = f"; births wait for primary host {self.primary_host!r}" if self.primary_host else ""
         self._log(f"Sparkplug B edge node {self.group}/{self.node}: "
                   f"{len(self.devices)} device(s), {len(self.points)} metrics{host}")
         return self._pub
+
+    def _on_link(self, up: bool) -> None:
+        """MqttPublisher: the broker accepted a connection / that connection is gone."""
+        self._link_up = up
+        self._tell_supervision()
+
+    def _tell_supervision(self) -> None:
+        up = self._link_up and (not self.primary_host or self._host_online)
+        if up != self._supervised:
+            self._supervised = up
+            if self._supervision is not None:
+                self._supervision(up)
 
     def _metric(self, name: str, now: int) -> sparkplug.Metric:
         """A point's metric: its last value, stamped with when it was read; a null (never
@@ -429,6 +448,7 @@ class SparkplugNode:
         if online is None:
             return
         self._host_online = online
+        self._tell_supervision()
         if online and not self._born and self._restart is None:
             self._log(f"Sparkplug: primary host {self.primary_host!r} is online")
             self.birth()

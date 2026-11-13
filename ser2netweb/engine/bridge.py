@@ -613,6 +613,13 @@ class RunnerStatus:
     # "since", "error", "dropped", "protocol" ("3.1.1" | "5"); MQTT 5 also "reason_code"
     # and "rejected"
     mqtt: dict = field(default_factory=dict)
+    # a Modbus gateway whose points have safe values (empty: none, or not running):
+    # "state" — ok (the broker, or the Sparkplug primary host, is there), waiting (it is
+    # away: the points' safe_after_s are running) or applied (every safe value is
+    # written); "watching": "broker" or "primary host"; "since" (unix time it went away,
+    # None while ok); "points": [{"name", "value", "after_s", "written" (unix time, None:
+    # not yet), "error" (why the last try to write it failed)}]
+    safe: dict = field(default_factory=dict)
 
     def set_clients(self, clients) -> None:
         """Publish the connected clients (access.Client: peer, seq, connected_at, priority),
@@ -689,6 +696,8 @@ class RunnerStatus:
             "units": [dict(u) for u in self.units],
             "points": [dict(p) for p in self.points],
             "mqtt": dict(self.mqtt),
+            "safe": ({**self.safe, "points": [dict(p) for p in self.safe.get("points", ())]}
+                     if self.safe else {}),
         }
 
 

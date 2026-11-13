@@ -462,6 +462,16 @@ _NOTES = {
                                           "after the connection ends (0: not at all).",
     ("MqttSettings", "message_expiry_s"): "MQTT 5: seconds after which the broker stops "
                                           "handing out retained data (0: never).",
+    ("ModbusPoint", "pulse_ms"): "A writable coil: a write of true from MQTT is followed by "
+                                 "a write of false this many milliseconds later (50-600000); "
+                                 "null: none.",
+    ("ModbusPoint", "safe_value"): "With safe_after_s: the value (true / false for a coil, a "
+                                   "number for a register) written to a writable point once "
+                                   "the broker, or the Sparkplug primary host, has been away "
+                                   "that long; null: none.",
+    ("ModbusPoint", "safe_after_s"): "Seconds (1-86400) without the broker, or the Sparkplug "
+                                     "primary host, after which safe_value is written; "
+                                     "null: none.",
     ("NetworkSettings", "tls_key_password"): "The password of an encrypted tls_key. Masked as "
                                              "******** for a viewer token; sent back so in a "
                                              "PUT or PATCH, the stored one stays.",
@@ -474,12 +484,21 @@ def _field_schema(cls, f, hint) -> dict:
     its JSON type with the default, the allowed values and a note where there are any."""
     if dataclasses.is_dataclass(hint):
         return {"$ref": f"#/components/schemas/{_schema_name(hint)}"}
+    nullable = hint is typing.Any  # (a point's safe_value: true / false or a number)
+    options = typing.get_args(hint)
+    if type(None) in options and len(options) == 2:  # Optional[...]: null = not set
+        hint = next(o for o in options if o is not type(None))
+        nullable = True
     origin = typing.get_origin(hint)
-    if origin is list:
+    if nullable:
+        out: dict = ({} if hint is typing.Any else {"type": "array", "items": {}}
+                     if hint is list else {"type": _JSON_TYPES.get(hint, "string")})
+        out["nullable"] = True
+    elif origin is list:
         (item,) = typing.get_args(hint)
         items = ({"$ref": f"#/components/schemas/{_schema_name(item)}"}
                  if dataclasses.is_dataclass(item) else {"type": _JSON_TYPES.get(item, "string")})
-        out: dict = {"type": "array", "items": items}
+        out = {"type": "array", "items": items}
     elif origin is dict or hint is dict:
         out = {"type": "object", "additionalProperties": True}
     else:
@@ -578,7 +597,13 @@ def openapi_spec(admin, base: str = "") -> dict:
                 "(connecting, connected, down, off), broker, since, error, dropped, "
                 "protocol (3.1.1 or 5); with MQTT 5 also reason_code (the broker's reason "
                 "code for refusing or ending the connection, else null) and rejected "
-                "(publications the broker refused).")}}},
+                "(publications the broker refused).")},
+            "safe": {"type": "object", "additionalProperties": True, "description": (
+                "A Modbus gateway whose points have a safe value ({}: none): state (ok, "
+                "waiting: the broker or the Sparkplug primary host is away, applied: every "
+                "safe value is written), watching (broker or primary host), since, and "
+                "points: name, value, after_s, written (Unix time, null: not yet), "
+                "error.")}}},
         "MappingList": {"type": "object", "properties": {
             "mappings": {"type": "array", "items": {"$ref": "#/components/schemas/Mapping"}}}},
         "StatusMap": {"type": "object", "properties": {"mappings": {

@@ -896,6 +896,10 @@ def main():
                         row = page.locator("#form-panel .point-row").nth(3)
                         row.locator('[data-k="word_order"]').select_option("CDAB")
                         row.locator('[data-k="address"]').fill("12")
+                        row.locator('[data-k="safe_value"]').fill("50")
+                        row.locator('[data-k="safe_after_s"]').fill("30")
+                        if row.locator('[data-field="pulse_ms"]').is_visible():
+                            problems.append("points editor: a pulse offered for a register")
                         alarm = page.locator("#form-panel .point-row").nth(2)
                         alarm.locator('[data-k="dtype"]').select_option("uint16")  # no bit now
                         page.click("#form-panel [data-points-add]")
@@ -905,9 +909,27 @@ def main():
                             problems.append(f"points editor: a key that no longer fits kept: {pts[2]}")
                         want = {"name": "Ayar", "unit": 2, "fn": 3, "address": 12, "dtype": "int64",
                                 "writable": True, "min": 0, "max": 100, "allowed": [0, 50, 100],
-                                "word_order": "CDAB", "scale": 1}
+                                "word_order": "CDAB", "scale": 1, "safe_value": 50,
+                                "safe_after_s": 30}
                         if pts[3] != want or len(pts) != 5 or pts[1].get("length") != 8:
                             problems.append(f"points editor: the JSON is not as edited: {pts}")
+                        coil = page.locator("#form-panel .point-row").nth(4)  # the new point
+                        coil.locator('[data-k="fn"]').select_option("1")
+                        coil.locator('[data-k="dtype"]').select_option("bool")
+                        if coil.locator('[data-field="pulse_ms"]').is_visible():
+                            problems.append("points editor: a pulse offered for a read-only coil")
+                        coil.locator('[data-k="writable"]').check()
+                        coil.locator('[data-k="pulse_ms"]').fill("500")
+                        coil.locator('[data-k="safe_value"]').fill("off")
+                        coil.locator('[data-k="safe_after_s"]').fill("10")
+                        new = json.loads(page.input_value(box))[4]
+                        if (new.get("pulse_ms"), new.get("safe_value"),
+                                new.get("safe_after_s")) != (500, False, 10):
+                            problems.append(f"points editor: pulse / safe value not as typed: {new}")
+                        coil.locator('[data-k="writable"]').uncheck()
+                        new = json.loads(page.input_value(box))[4]
+                        if {"pulse_ms", "safe_value", "safe_after_s", "writable"} & set(new):
+                            problems.append(f"points editor: a read-only point kept {new}")
                         page.click("#form-panel [data-points-mode]")
                         if not page.locator(box).is_visible():
                             problems.append("points editor: the JSON box is not shown again")

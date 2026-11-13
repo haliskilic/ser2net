@@ -33,6 +33,14 @@ each value as text (1 / 0 for a bit), or with mqtt.value_format "json" as {"valu
 (the read time, ms since the epoch), "quality": "good"}; then a point whose read fails, or
 whose unit goes offline, is published once as {"value": null, "quality": "bad"} until it
 reads again (encode_value).
+
+A writable coil with "pulse_ms" is switched off again that long after MQTT switched it on
+(_pulse_off): the off-write is a request of its own, which waits its turn on the bus like
+any other (the bus is free during the pulse), and a mapping that stops during a pulse
+writes it at once, before the port closes. A writable point with "safe_value" and
+"safe_after_s" is written to that value once whoever commands it has been away that long
+(_safe_watch): the broker connection, or for a Sparkplug B node with a primary host that
+host (its STATE); never by a read-only mapping.
 """
 from __future__ import annotations
 
@@ -47,8 +55,9 @@ from collections import deque
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Callable, Optional
 
-from ..config import (MappingConfig, ModbusPoint, modbus_response_timeout, modbus_unit_map,
-                      point_order, point_scale, poll_block_gap)
+from ..config import (MODBUS_PULSE_MS, MODBUS_SAFE_AFTER_S, MappingConfig, ModbusPoint,
+                      modbus_response_timeout, modbus_unit_map, point_order, point_scale,
+                      poll_block_gap)
 from . import modbus, netguard, sockopts, tls
 from .access import AccessPolicy, connection_order, server_ssl
 from .bridge import (
@@ -95,6 +104,18 @@ SET_MAX_BYTES = 64 * 1024
 # stop(): the write on the bus gets this long at most (and no longer than its reply can
 # take) to finish before it is cancelled; the ones still waiting are answered at once.
 WRITE_STOP_WAIT_S = 2.0
+# A pulsed coil's off-write that fails (no reply, an exception, the port down) is tried
+# again, PULSE_OFF_TRIES times PULSE_RETRY_S apart, then (the log says that the coil may
+# still be on) every PULSE_RETRY_LATER_S until it is written, the coil is written again or
+# the mapping stops. A stop gives it PULSE_OFF_TRIES more tries, PULSE_RETRY_S apart.
+PULSE_OFF_TRIES = 3
+PULSE_RETRY_S = 0.5
+PULSE_RETRY_LATER_S = 10.0
+# stop(): the off-writes of the pulses under way get this long in all, at most
+PULSE_STOP_WAIT_S = 10.0
+# A safe value that could not be written (the unit does not answer, the port is down) is
+# tried again this often, until it is written or whoever commands the point is back.
+SAFE_RETRY_S = 10.0
 # The mapping form's test read (read_now): at most this many points, for at most this long.
 READ_NOW_MAX = 32
 READ_NOW_S = 10.0
@@ -254,6 +275,21 @@ class ModbusGatewayRunner:
             p.name: {"name": p.name, "unit": u.unit, "value": None, "ts": None, "error": ""}
             for u in self._units.values() for p in u.points}
         self._bad: set[str] = set()  # plain JSON values: points last published as "bad"
+        # pulsed coils that are on: the task that writes each one off again; every such
+        # task still running (also one whose coil was written again meanwhile, while its
+        # request is on the line), with the job of its off-write (its stage: whether that
+        # request is on the line now); stop() sets the event, and they write at once
+        self._pulses: dict[str, asyncio.Task] = {}
+        self._pulse_tasks: dict[asyncio.Task, _Write] = {}
+        self._pulse_now = asyncio.Event()
+        # safe values: the points that have one (none for a read-only mapping), whether
+        # whoever commands them is there (see _supervision), and the task that writes
+        # them while it is not
+        self._safe_points: list[tuple[ModbusPoint, Any, float]] = [
+            (p, *usable) for p in mapping.modbus_poll.points
+            if (usable := _safe(p)) is not None and not mapping.network.read_only]
+        self._supervised = False
+        self._safe_task: Optional[asyncio.Task] = None
         self._cycle: Optional[_Reads] = None  # the reads of the unit being polled (see _Reads.drop)
 
     def _log(self, msg: str) -> None:
@@ -329,10 +365,13 @@ class ModbusGatewayRunner:
             # (plain topics, or as a Sparkplug B edge node); writable points take values back
             if self.mapping.mqtt.enabled and self.mapping.modbus_poll.points:
                 mq = self.mapping.mqtt
+                self._pulse_now.clear()
+                self._supervised = False
                 if mq.payload_format == "sparkplug_b":
                     from .sparkplug_node import SparkplugNode
                     self._sparkplug = SparkplugNode(self.mapping, self._log, functools.partial(
-                        self._write_soon, source="Sparkplug DCMD"), state_dir=self.state_dir)
+                        self._write_soon, source="Sparkplug DCMD"), state_dir=self.state_dir,
+                        supervision=self._supervision)
                     self._mqtt = self._sparkplug.publisher()
                 else:
                     from .mqtt_pub import MqttPublisher
@@ -340,9 +379,11 @@ class ModbusGatewayRunner:
                         mq, logger=self._log,
                         subscriptions=dict.fromkeys(self._set_points, self._on_set_message),
                         accept_retained=bool(mq.apply_retained_set),
-                        on_connect=self._publish_unit_states if mq.unit_status else None)
+                        on_connect=self._publish_unit_states if mq.unit_status else None,
+                        on_link=self._supervision)
                 self.status.mqtt = self._mqtt.state
                 self._mqtt.connect()
+                self._watch_safe()  # (from the start: a broker that never comes counts)
                 self._report_units()
                 self._poll_task = asyncio.create_task(
                     self._poll_loop(), name=f"modbus-poll:{self.mapping.name}")
@@ -370,7 +411,11 @@ class ModbusGatewayRunner:
             except Exception as e:  # it had died: say why, and still send NDEATH etc. below
                 self._log(f"polling had stopped: {e!r}")
             self._poll_task = None
+        if self._safe_task is not None:
+            self._safe_task.cancel()
+            self._safe_task = None
         await self._end_writes()  # (their answers go out before the MQTT connection closes)
+        await self._end_pulses()  # (a coil that is on for a pulse goes off before the port closes)
         if self._sparkplug is not None:
             sparkplug, self._sparkplug = self._sparkplug, None
             self._mqtt = None
@@ -397,6 +442,7 @@ class ModbusGatewayRunner:
         self.status.clients = []
         self.status.units = []
         self.status.points = []
+        self.status.safe = {}
         self._log("modbus gateway stopped")
 
     # ---------------- one RTU transaction on the shared bus ----------------
@@ -746,6 +792,7 @@ class ModbusGatewayRunner:
             raise ValueError("mapping is read-only")
         if not point.writable:
             raise ValueError(f"point {point.name!r} is not writable")
+        pulse: Optional[int] = None  # a coil switched on for this many ms (pulse_ms)
         if point.fn == modbus.READ_COILS:
             # only a bool: never a list (several coils), a number (a Sparkplug Int 2) or
             # text (a Sparkplug String "false")
@@ -755,6 +802,7 @@ class ModbusGatewayRunner:
             check_limits(point, value)
             pdu = modbus.write_single_coil_pdu(point.address, value)
             raw = ""
+            pulse = _pulse_ms(point) if value else None
         else:
             if point.dtype not in modbus.DTYPES:  # (a stored point the edits refuse)
                 what = "a bit of a register" if point.dtype == "bool" else shown(point.dtype)
@@ -767,15 +815,29 @@ class ModbusGatewayRunner:
             pdu = (modbus.write_single_register_pdu(point.address, regs[0]) if len(regs) == 1
                    else modbus.write_multiple_registers_pdu(point.address, regs))
             raw = _raw_text(value, regs, point)
-        rpdu = await self._transaction(point.unit, pdu, job)
-        self._check_answered(rpdu, point)  # (NoReply: the unit did not answer)
-        modbus.check_write_response(rpdu, pdu)
-        if job is not None:
-            job.stage = "written"
+        job = job or _Write(point, value)  # (its stage: whether the request went out)
+        rpdu = b""
+        try:
+            rpdu = await self._transaction(point.unit, pdu, job)
+            self._check_answered(rpdu, point)  # (NoReply: the unit did not answer)
+            modbus.check_write_response(rpdu, pdu)
+        except BaseException:  # (a stop that cancels the write too)
+            # a pulse whose "on" went out and was not refused by the slave may have been
+            # carried out (the reply was lost, or not waited for): the "off" follows
+            if pulse is not None and job.stage == "sent" and not _slave_exception(rpdu):
+                self._start_pulse(point, pulse, unsure=True)
+            raise
+        job.stage = "written"
+        if point.fn == modbus.READ_COILS and not value:
+            self._drop_pulse(point.name)  # switched off already: no "off" to follow
+        if pulse is not None:
+            self._start_pulse(point, pulse)
         if self._cycle is not None:  # a poll that read the point before the write is under way
             self._cycle.drop(point.name)
-        source = source or (job.source if job is not None else "")
+        source = source or job.source
         via = f", from {source}" if source else ""
+        if pulse is not None:
+            via += f"; a pulse: off again in {pulse} ms"
         if point.unit == modbus.BROADCAST:
             self._log(f"wrote '{point.name}' = {value!r} (broadcast to unit 0, FC{pdu[0]}{raw}"
                       f"{via}; not read back)")
@@ -788,6 +850,190 @@ class ModbusGatewayRunner:
         if self._closing:  # the mapping is stopping: no read-back
             return None
         return await self._read_back(point)
+
+    # ---------------- pulses (a coil with pulse_ms) ----------------
+    def _start_pulse(self, point, ms: int, unsure: bool = False) -> None:
+        """The coil was switched on (``unsure``: its request went out, the reply did not
+        come): switch it off in ``ms`` milliseconds. A pulse already under way for it
+        starts over."""
+        self._drop_pulse(point.name)
+        if unsure:
+            self._log(f"pulse '{point.name}': the write of true was sent but not confirmed; "
+                      f"false is written in {ms} ms all the same")
+        job = _Write(point, False)  # (registered at once: a stop that follows must see it)
+        task = asyncio.create_task(self._pulse_off(point, ms, job),
+                                   name=f"modbus-pulse:{self.mapping.name}:{point.name}")
+        self._pulses[point.name] = task
+        self._pulse_tasks[task] = job
+        task.add_done_callback(functools.partial(self._pulse_done, point.name))
+
+    def _pulse_done(self, name: str, task: asyncio.Task) -> None:
+        self._pulse_tasks.pop(task, None)
+        if self._pulses.get(name) is task:
+            del self._pulses[name]
+
+    def _drop_pulse(self, name: str) -> None:
+        """The pulse under way for a coil is over before its time (the coil was written
+        again): its "off" is not written, unless its request is on the line right now (a
+        request is never abandoned half-way: its reply would be taken for the next one's;
+        it is not tried again then). One that waits for the bus behind the new write is
+        dropped, so it can't switch the coil off right after it was switched on again."""
+        old = self._pulses.pop(name, None)
+        job = self._pulse_tasks.get(old) if old is not None else None
+        if old is not None and (job is None or job.stage != "sent"):
+            old.cancel()
+
+    async def _pulse_off(self, point, ms: int, job: _Write) -> None:
+        """Wait out the pulse (not holding the bus: polls, masters and other writes go on),
+        then write false with a request of its own; a failed one is tried again (see
+        PULSE_OFF_TRIES). A stop cuts the waits short and writes at once (_end_pulses)."""
+        task = asyncio.current_task()
+        with contextlib.suppress(asyncio.TimeoutError):
+            await asyncio.wait_for(self._pulse_now.wait(), timeout=ms / 1000)
+        pdu = modbus.write_single_coil_pdu(point.address, False)
+        where = "broadcast to unit 0" if point.unit == modbus.BROADCAST else f"unit {point.unit}"
+        failed = at_stop = 0  # tries that failed, and those of them since the stop began
+        while True:
+            stopping = self._pulse_now.is_set()
+            rpdu = await self._transaction(point.unit, pdu, job)
+            job.stage = "queued"  # (its request is not on the line any more)
+            try:
+                self._check_answered(rpdu, point)
+                modbus.check_write_response(rpdu, pdu)
+                break
+            except ValueError as e:
+                err = str(e) or type(e).__name__
+            if self._pulses.get(point.name) is not task:  # the coil was written meanwhile
+                return
+            failed += 1
+            at_stop += stopping
+            if at_stop >= PULSE_OFF_TRIES:
+                self._log(f"error: pulse '{point.name}': the mapping stopped before false "
+                          f"could be written ({where}, {failed} tries: {err}); the coil may "
+                          "still be ON")
+                return
+            if failed == PULSE_OFF_TRIES and not stopping:
+                self._log(f"error: pulse '{point.name}': false could not be written ({where}, "
+                          f"{failed} tries: {err}); the coil may still be ON. Tried again "
+                          f"every {PULSE_RETRY_LATER_S:g} s")
+            if stopping:
+                await asyncio.sleep(PULSE_RETRY_S)
+            else:
+                with contextlib.suppress(asyncio.TimeoutError):
+                    await asyncio.wait_for(self._pulse_now.wait(), timeout=(
+                        PULSE_RETRY_S if failed < PULSE_OFF_TRIES else PULSE_RETRY_LATER_S))
+        why = "the mapping is stopping" if stopping else f"pulse of {ms} ms over"
+        tries = f", after {failed} failed tries" if failed else ""
+        self._log(f"wrote '{point.name}' = False ({where}, FC{pdu[0]}; {why}{tries})")
+        if self._cycle is not None:
+            self._cycle.drop(point.name)
+        if point.unit == modbus.BROADCAST or not _polled(point):
+            return
+        try:
+            if not self._closing:
+                await self._read_back(point)
+            else:  # stopping (no read-back): what was written, so that a retained
+                stamps = {point.name: _now_ms()}  # "on" is not the broker's last word
+                self._remember({point.name: False}, stamps)
+                self._publish_values({point.name: False}, stamps, force=True)
+        except Exception as e:  # (nobody awaits this task: say it here)
+            self._log(f"pulse '{point.name}': publishing the value failed: {e!r}")
+
+    async def _end_pulses(self) -> None:
+        """stop(): the coils that are on for a pulse are switched off now, each with a
+        request of its own (the port is still open); what is not done within
+        PULSE_STOP_WAIT_S is given up, and the log names the coils that may still be on."""
+        self._pulse_now.set()
+        tasks = {t: job.point.name for t, job in self._pulse_tasks.items()}
+        if not tasks:
+            return
+        _done, late = await asyncio.wait(tasks, timeout=PULSE_STOP_WAIT_S)
+        for t in late:
+            t.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        stuck = sorted({tasks[t] for t in late})
+        if stuck:
+            self._log(f"error: the mapping stopped before false was written to {_names(stuck)} "
+                      f"(a pulse; no answer within {PULSE_STOP_WAIT_S:g} s): the coil(s) may "
+                      "still be ON")
+        self._pulses.clear()
+        self._pulse_tasks.clear()
+
+    # ---------------- safe values (safe_value / safe_after_s) ----------------
+    def _watching(self) -> str:
+        """Whose absence the safe values go by."""
+        host = self._sparkplug.primary_host if self._sparkplug is not None else ""
+        return f"primary host {host!r}" if host else "broker"
+
+    def _supervision(self, up: bool) -> None:
+        """MqttPublisher / SparkplugNode, on the event loop: whoever commands the points
+        (the broker connection; the Sparkplug primary host) is there / is gone."""
+        if self._closing or up == self._supervised:
+            return
+        self._supervised = up
+        if not self._safe_points:
+            return
+        if not up:
+            self._watch_safe()
+            return
+        if self._safe_task is not None:
+            self._safe_task.cancel()
+            self._safe_task = None
+        written = [p["name"] for p in self.status.safe.get("points", ()) if p.get("written")]
+        if written:
+            self._log(f"safe values: the {self._watching()} is back; {_names(written)} "
+                      "keep(s) the safe value until a command changes it")
+        self._safe_status("ok", None)
+
+    def _safe_status(self, state: str, since: Optional[float]) -> None:
+        self.status.safe = {
+            "state": state, "since": int(since) if since else None,
+            "watching": "primary host" if self._watching() != "broker" else "broker",
+            "points": [{"name": p.name, "value": value, "after_s": after,
+                        "written": None, "error": ""} for p, value, after in self._safe_points]}
+
+    def _watch_safe(self) -> None:
+        """Whoever commands the points is not there (from now): start their safe_after_s."""
+        if not self._safe_points or self._closing:
+            return
+        if self._safe_task is not None:
+            self._safe_task.cancel()
+        self._safe_status("waiting", time.time())
+        self._safe_task = asyncio.create_task(
+            self._safe_watch(), name=f"modbus-safe:{self.mapping.name}")
+
+    async def _safe_watch(self) -> None:
+        """Write each point's safe value once its safe_after_s has passed (in that order;
+        through the write queue, so within the point's limits and in turn with the other
+        writes), and try a failed one again every SAFE_RETRY_S. Cancelled when whoever
+        commands the points is back, and when the mapping stops."""
+        loop = asyncio.get_running_loop()
+        start, watching = loop.time(), self._watching()
+        rows = {row["name"]: row for row in self.status.safe["points"]}
+        due = {p.name: start + after for p, _value, after in self._safe_points}
+        points = {p.name: (p, value, after) for p, value, after in self._safe_points}
+        while due:
+            name = min(due, key=lambda n: due[n])
+            if (wait := due[name] - loop.time()) > 0:
+                await asyncio.sleep(wait)
+            p, value, after = points[name]
+            outcome: asyncio.Future = loop.create_future()
+
+            def done(err, _value=None, outcome=outcome) -> None:
+                if not outcome.done():
+                    outcome.set_result(err)
+            self._write_soon(p, value, done,
+                             source=f"its safe value: no {watching} for {after:g} s")
+            err = await outcome
+            if err is None:
+                del due[name]
+                rows[name].update(written=int(time.time()), error="")
+            else:
+                rows[name]["error"] = err
+                self._note(f"safe {name}", p.unit, f"safe value of '{name}' not written "
+                           f"({err}); trying again every {SAFE_RETRY_S:g} s")
+                due[name] = loop.time() + SAFE_RETRY_S
+        self.status.safe["state"] = "applied"
 
     async def _read_back(self, point) -> Any:
         """After a write: the point's value, read and published (Sparkplug B: in a DDATA
@@ -1123,6 +1369,16 @@ class ModbusGatewayRunner:
         if poll.reserved_unit_points:
             self._log(f"warning: poll point(s) {_names(poll.reserved_unit_points)} on units "
                       "248-255, which a Modbus serial line reserves (slave addresses are 1-247)")
+        safe = [p for p in poll.points if p.safe_value is not None or p.safe_after_s is not None]
+        if safe and self.mapping.mqtt.enabled:
+            if self.mapping.network.read_only:
+                self._log(f"safe values: not written, the mapping is read-only "
+                          f"({_names([p.name for p in safe])})")
+            elif self._safe_points:
+                self._log(f"safe values: {len(self._safe_points)} point(s) are written to "
+                          "their safe value once the broker connection (Sparkplug B with a "
+                          "primary host: that host) has been away for their safe_after_s, "
+                          "counted from the mapping's start too")
         if self._block_gap is not None and self.mapping.mqtt.enabled:
             blocks = [b for u in self._units.values() for b in (u.blocks or [])]
             self._log(f"block reads: {sum(len(b.points) for b in blocks)} point(s) with "
@@ -1134,6 +1390,15 @@ class ModbusGatewayRunner:
             if p.writable and unusable:
                 self._log(f"warning: point {p.name!r}: {' and '.join(unusable)} ignored (not a "
                           "number, or for allowed not a list of values of the point's type)")
+            if p.pulse_ms is not None and _pulse_ms(p) is None:
+                self._log(f"warning: point {p.name!r}: pulse_ms {shown(p.pulse_ms)} ignored "
+                          f"(for a writable coil, {MODBUS_PULSE_MS[0]}-{MODBUS_PULSE_MS[1]} ms): "
+                          "a write of true stays")
+            if (p.safe_value is not None or p.safe_after_s is not None) and _safe(p) is None:
+                self._log(f"warning: point {p.name!r}: safe_value {shown(p.safe_value)} / "
+                          f"safe_after_s {shown(p.safe_after_s)} ignored (a writable point, a "
+                          "value of its type within its min / max / allowed, "
+                          f"{MODBUS_SAFE_AFTER_S[0]}-{MODBUS_SAFE_AFTER_S[1]} s)")
             if point_scale(p) is not p.scale:
                 self._log(f"warning: point {p.name!r}: scale {shown(p.scale)} ignored (not a "
                           "number): its values are not scaled")
@@ -1258,6 +1523,46 @@ def encode_value(value, fmt: str, ts: int, good: bool = True) -> bytes:
 def _polled(point) -> bool:
     """Whether a point is read (False: "poll": false, a write-only point)."""
     return point.poll is not False
+
+
+def _pulse_ms(point) -> Optional[int]:
+    """A coil's pulse as the gateway can use it, or None (none set, or a stored one the
+    edits refuse: see ModbusPoll.validate_input)."""
+    ms = point.pulse_ms
+    usable = (point.fn == modbus.READ_COILS and point.writable is True
+              and isinstance(ms, int) and not isinstance(ms, bool)
+              and MODBUS_PULSE_MS[0] <= ms <= MODBUS_PULSE_MS[1])
+    return ms if usable else None
+
+
+def _safe(point) -> Optional[tuple[Any, float]]:
+    """A point's (safe value, seconds after which it is written), or None (none set, or
+    stored ones the edits refuse: a value write_point would refuse too, outside the
+    point's limits or its type's range, would be tried again and again)."""
+    value, after = point.safe_value, point.safe_after_s
+    if not (point.writable is True and _finite(after)
+            and MODBUS_SAFE_AFTER_S[0] <= after <= MODBUS_SAFE_AFTER_S[1]):
+        return None
+    try:
+        if point.fn == modbus.READ_COILS:
+            if not isinstance(value, bool):
+                return None
+        elif not (_finite(value) and point.dtype in modbus.DTYPES):
+            return None
+        else:
+            modbus.encode_value(value, point.dtype, point_scale(point) or 1.0,
+                                point_order(point))
+        check_limits(point, value)
+    except ValueError:
+        return None
+    return value, float(after)
+
+
+def _slave_exception(rpdu: bytes) -> bool:
+    """Whether ``rpdu`` is a slave's own exception reply (the request was not carried
+    out), not one the gateway made up for a reply that did not come."""
+    return (len(rpdu) == 2 and bool(rpdu[0] & 0x80)
+            and rpdu[1] not in (modbus.GATEWAY_TARGET_FAILED, modbus.GATEWAY_PATH_UNAVAILABLE))
 
 
 def _limit(point, key: str):

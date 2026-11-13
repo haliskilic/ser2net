@@ -82,7 +82,8 @@ BLOCK_FIELDS = {"usb_match": {"serial_usb_match_shown"}, "trace_rotation": {"opt
                 "value_format": {"mqtt_value_format"},
                 "unit_status": {"mqtt_unit_status_shown"},
                 "mqtt5": {"mqtt_protocol", "mqtt_v5_shown", "mqtt_clean_start",
-                          "mqtt_session_expiry_s", "mqtt_message_expiry_s"}}
+                          "mqtt_session_expiry_s", "mqtt_message_expiry_s"},
+                "point_safety": {"modbus_point_safety_shown"}}
 # fields of every older version's form that its own posts in the fixtures leave out
 # (boxes no kitchen-sink mapping ticks, a custom baud box not in use), and the MQTT
 # client ID, which every version's save reads although only 2.9.0's form shows it

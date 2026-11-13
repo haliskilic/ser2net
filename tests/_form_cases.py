@@ -130,9 +130,10 @@ _MQTT = {
     "session_expiry_s": 600, "message_expiry_s": 90}
 _POINTS = [
     {"name": "run", "unit": 2, "fn": 1, "address": 5, "dtype": "bool", "scale": 1.0,
-     "writable": True},
+     "writable": True, "pulse_ms": 500, "safe_value": False, "safe_after_s": 30},
     {"name": "setpoint", "unit": 1, "fn": 3, "address": 10, "dtype": "int16", "scale": 0.1,
-     "writable": True, "min": -50, "max": 150.5, "word_order": "BADC"},
+     "writable": True, "min": -50, "max": 150.5, "word_order": "BADC", "safe_value": 20,
+     "safe_after_s": 60.5},
     {"name": "temp", "unit": 1, "fn": 4, "address": 0, "dtype": "float32", "scale": 0.5},
     {"name": "door", "unit": 3, "fn": 2, "address": 1, "dtype": "bool", "scale": 1.0},
     {"name": "label", "unit": 1, "fn": 3, "address": 20, "dtype": "string", "length": 4},

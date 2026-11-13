@@ -437,8 +437,9 @@
     </div>
     {% endif %}
     <label>{{ _("Points — JSON array") }}
-      <span class="muted">[{"name","unit","fn":1 coils|2 discrete inputs|3 holding|4 input,"address","dtype":"uint16|int16|uint32|int32|float32|{% if 'point_options' not in hide %}int64|uint64|float64|string|{% endif %}bool","scale","writable":true}] — {{ _('writable points (coils, holding registers) take values from MQTT <span class="mono">&lt;topic&gt;/&lt;point&gt;/set</span> or a Sparkplug DCMD to their unit’s device (<span class="mono">unit&lt;N&gt;</span>)') }}{% if 'point_options' not in hide %}; {{ _('optional: <span class="mono">"min"</span>, <span class="mono">"max"</span> and <span class="mono">"allowed": [ … ]</span> limit what MQTT may write to a point, <span class="mono">"poll": false</span> makes a writable point write-only (never read)') }}; {{ _('<span class="mono">"word_order"</span>: <span class="mono">"CDAB"</span> (low register first), <span class="mono">"BADC"</span> (bytes swapped) or <span class="mono">"DCBA"</span> for a device that does not send ABCD; <span class="mono">"bit": 0–15</span> with <span class="mono">"dtype": "bool"</span> reads one bit of a register; a <span class="mono">"string"</span> takes <span class="mono">"length"</span> registers') }}{% endif %}</span>
+      <span class="muted">[{"name","unit","fn":1 coils|2 discrete inputs|3 holding|4 input,"address","dtype":"uint16|int16|uint32|int32|float32|{% if 'point_options' not in hide %}int64|uint64|float64|string|{% endif %}bool","scale","writable":true}] — {{ _('writable points (coils, holding registers) take values from MQTT <span class="mono">&lt;topic&gt;/&lt;point&gt;/set</span> or a Sparkplug DCMD to their unit’s device (<span class="mono">unit&lt;N&gt;</span>)') }}{% if 'point_options' not in hide %}; {{ _('optional: <span class="mono">"min"</span>, <span class="mono">"max"</span> and <span class="mono">"allowed": [ … ]</span> limit what MQTT may write to a point, <span class="mono">"poll": false</span> makes a writable point write-only (never read)') }}; {{ _('<span class="mono">"word_order"</span>: <span class="mono">"CDAB"</span> (low register first), <span class="mono">"BADC"</span> (bytes swapped) or <span class="mono">"DCBA"</span> for a device that does not send ABCD; <span class="mono">"bit": 0–15</span> with <span class="mono">"dtype": "bool"</span> reads one bit of a register; a <span class="mono">"string"</span> takes <span class="mono">"length"</span> registers') }}{% endif %}{% if 'point_safety' not in hide %}; {{ _('<span class="mono">"pulse_ms"</span> on a writable coil: a write of true is followed by false after that many milliseconds; <span class="mono">"safe_value"</span> with <span class="mono">"safe_after_s"</span> on a writable point: written once the broker (Sparkplug B with a primary host: that host) has been away for that many seconds') }}{% endif %}</span>
       {% if 'point_options' not in hide %}<input type="hidden" name="modbus_point_options_shown" value="1">{% endif %}
+      {% if 'point_safety' not in hide %}<input type="hidden" name="modbus_point_safety_shown" value="1">{% endif %}
       <textarea name="modbus_points" rows="5" spellcheck="false"
                 placeholder='[{"name":"temp","unit":1,"fn":4,"address":0,"dtype":"float32","scale":0.1}, {"name":"setpoint","unit":1,"fn":3,"address":10,"dtype":"int16","writable":true}]'>{{ modbus_points_json }}</textarea>
     </label>
@@ -456,6 +457,9 @@
       'word_order': _('Word order'), 'scale': _('Scale'), 'writable': _('Writable'),
       'fn1': _('1 coils'), 'fn2': _('2 discrete inputs'), 'fn3': _('3 holding registers'),
       'fn4': _('4 input registers'),
+      'pulse_ms': _('Pulse (ms)') if 'point_safety' not in hide else '',
+      'safe_value': _('Safe value') if 'point_safety' not in hide else '',
+      'safe_after_s': _('Safe after (s)') if 'point_safety' not in hide else '',
     } | tojson | forceescape }}">
       <button type="button" class="btn sm" data-points-mode>{{ _("Edit the points as fields") }}</button>
       <div class="points-msg" data-points-msg hidden></div>

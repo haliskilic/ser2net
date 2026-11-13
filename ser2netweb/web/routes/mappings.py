@@ -58,7 +58,8 @@ _SHOWN = ("state", "device", "last_error", "client_count", "dropped_clients", "b
           "trace_error",  # a trace that is not written now
           # a Modbus gateway's polled units, its MQTT link (only what the row shows of them:
           # _shown_status)
-          "units", "mqtt")
+          "units", "mqtt",
+          "safe")  # a gateway's points written to their safe value
 
 
 def _shown_status(st, key):
@@ -70,6 +71,8 @@ def _shown_status(st, key):
         return tuple(u.get("unit") for u in value or () if u.get("state") == "offline")
     if key == "mqtt":
         return tuple((value or {}).get(k) for k in ("state", "broker", "error"))
+    if key == "safe":
+        return tuple(p.get("name") for p in (value or {}).get("points") or () if p.get("written"))
     return value
 
 
