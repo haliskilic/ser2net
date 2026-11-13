@@ -59,11 +59,38 @@ inside() {  # inside PACKAGE VERSION [systemd]: in the container, as root
     grep -qx 'ExecStart=/usr/bin/ser2netweb --data-dir /var/lib/ser2netweb' "$unit" ||
         fail "$unit doesn't run /usr/bin/ser2netweb --data-dir /var/lib/ser2netweb"
     grep -qx 'User=ser2netweb' "$unit" || fail "$unit doesn't run as ser2netweb"
-    for f in /usr/lib/sysusers.d/ser2netweb.conf /usr/lib/tmpfiles.d/ser2netweb.conf \
-        /usr/share/doc/ser2netweb/LICENSE /usr/share/doc/ser2netweb/NOTICE \
-        /usr/share/doc/ser2netweb/THIRD-PARTY-LICENSES.txt; do
+    for f in /usr/lib/sysusers.d/ser2netweb.conf /usr/lib/tmpfiles.d/ser2netweb.conf; do
         [ -f "$f" ] || fail "missing: $f"
     done
+    # The licence texts: in the package, and on disk unless the image keeps dpkg from
+    # installing /usr/share/doc (Ubuntu's minimal images: path-exclude in
+    # /etc/dpkg/dpkg.cfg.d, which keeps the copyright files only)
+    case "$pkg" in
+        *.deb)
+            listed=$(dpkg-deb -c "$pkg" | awk '{print $NF}' | sed 's|^\.||')
+            if grep -qsxF 'path-exclude=/usr/share/doc/*' /etc/dpkg/dpkg.cfg.d/*; then
+                docs_installed=
+            else
+                docs_installed=1
+            fi
+            [ -f /usr/share/doc/ser2netweb/copyright ] || fail "missing: the copyright file"
+            ;;
+        *.rpm)
+            listed=$(rpm -qlp "$pkg")
+            docs_installed=1  # (not %doc files, which tsflags=nodocs would leave out)
+            ;;
+    esac
+    for f in /usr/share/doc/ser2netweb/LICENSE /usr/share/doc/ser2netweb/NOTICE \
+        /usr/share/doc/ser2netweb/COMMERCIAL_LICENSE.md \
+        /usr/share/doc/ser2netweb/THIRD-PARTY-NOTICES.md \
+        /usr/share/doc/ser2netweb/THIRD-PARTY-LICENSES.txt; do
+        echo "$listed" | grep -qxF "$f" || fail "the package has no $f"
+        if [ -n "$docs_installed" ]; then
+            [ -f "$f" ] || fail "missing: $f"
+        fi
+    done
+    [ -n "$docs_installed" ] || echo "(this image excludes /usr/share/doc: the licence texts" \
+        "are in the package, only the copyright file is installed)"
     entry=$(getent passwd ser2netweb) || fail "no account ser2netweb"
     uid=$(echo "$entry" | cut -d: -f3)
     home=$(echo "$entry" | cut -d: -f6)
