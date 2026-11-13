@@ -56,6 +56,7 @@ _SHOWN = ("state", "device", "last_error", "client_count", "dropped_clients", "b
           # a connect-out link's state, a serial port's hint and warnings, the bind retry
           "link", "link_error", "hint", "warnings", "retrying", "next_retry_s",
           "trace_error",  # a trace that is not written now
+          "waiting", "link_target",  # open on connect; the connect-out target in use
           # a Modbus gateway's polled units, its MQTT link (only what the row shows of them:
           # _shown_status)
           "units", "mqtt")

@@ -112,6 +112,7 @@ ROUTES = {
     ("POST", "/settings/cluster/identity"): (ADMIN, FORM),
     ("GET", "/settings/config/export"): (OPERATOR, NONE),  # mappings carry the MQTT password
     ("POST", "/settings/config/import"): (OPERATOR, FORM),
+    ("POST", "/settings/pools"): (OPERATOR, FORM),  # as the mappings they hand clients to
     ("POST", "/settings/config/import/apply"): (OPERATOR, FORM),
     ("POST", "/settings/notifications"): (ADMIN, FORM),
     ("GET", "/settings/audit"): (ADMIN, NONE),
@@ -130,6 +131,8 @@ ROUTES = {
     ("POST", "/api/v1/import"): (TOKEN_WRITE, NONE),
     ("GET", "/api/v1/info"): (TOKEN_READ, NONE),
     ("GET", "/api/v1/ports"): (TOKEN_READ, NONE),
+    ("GET", "/api/v1/pools"): (TOKEN_READ, NONE),
+    ("PUT", "/api/v1/pools"): (TOKEN_WRITE, NONE),
     ("GET", "/api/v1/mappings"): (TOKEN_READ, NONE),
     ("POST", "/api/v1/mappings"): (TOKEN_WRITE, NONE),
     ("GET", "/api/v1/mappings/{mid}"): (TOKEN_READ, NONE),

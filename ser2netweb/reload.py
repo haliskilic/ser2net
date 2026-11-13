@@ -122,6 +122,7 @@ async def apply_changes(state, before: Before, renew_tls: bool = False) -> Appli
             if why:
                 state.log(f"[{m.name}] WARNING: the TLS certificate files can't be loaded "
                           f"again ({why}): new connections keep the certificate in use")
+    await sup.apply_pools(cfg.pools)  # (only the pools that changed stop or start)
     now_parts = _parts(cfg)
     changed_parts = [k for k in now_parts if now_parts[k] != before.parts.get(k)]
     done.sections = [f"{k} (everyone was signed out)" if k == "secret_key" else k

@@ -13,6 +13,10 @@
   Only clients still connected count: one kicked (or otherwise on its way out) is neither
   counted nor kicked again, so connections that arrive together can't all take the same
   slot;
+- ``writer_client_ips`` (the transparent bridge: TCP server and UDP): blank lets every
+  admitted client send to the device, otherwise only those from the listed IPs/CIDRs;
+  the others only receive (the runner drops and counts what they send). Entries are read
+  as the allow-list's are, and a list with no usable entry lets nobody send;
 - ``read_only``: a client may watch the device but not change it. Each runner enforces it
   for its protocol: the bridge never writes a client's bytes to the port (and its RFC2217
   session refuses line changes), the Modbus gateway answers write requests with an
@@ -132,9 +136,18 @@ class AccessPolicy:
         # no allow-list = everyone; one whose entries are all unusable = nobody (the runner
         # logs which entries it left out at start: MappingConfig.ignored_settings)
         self._everyone = not net.allowed_client_ips
+        writers = net.writer_client_ips if isinstance(net.writer_client_ips, list) else []
+        self._writers = parse_nets(writers)
+        # some clients only listen (never for a connect-out link, which has one peer)
+        self.writers_only = bool(writers) and net.mode != "client"
 
     def allowed(self, ip: str) -> bool:
         return self._everyone or ip_in_nets(ip, self._allowed)
+
+    def may_write(self, ip: str) -> bool:
+        """An admitted client from ``ip`` may send to the device (writer_client_ips;
+        read_only is the runner's to enforce)."""
+        return not self.writers_only or ip_in_nets(ip, self._writers)
 
     def is_priority(self, ip: str) -> bool:
         return ip_in_nets(ip, self._priority)

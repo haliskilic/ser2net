@@ -372,3 +372,32 @@ def import_conflict(config, mappings, result) -> str:
 def import_counts(rows: list[dict]) -> dict[str, int]:
     """How many preview rows add, update, leave unchanged and remove a mapping."""
     return {a: sum(1 for r in rows if r["action"] == a) for a in ("add", "update", "same", "remove")}
+
+
+async def save_pools(state, pools: list) -> None:
+    """Replace the port pools (config.PortPool) and run them as they are now: the Settings
+    form and the REST API. Raises ConfigError when they can't be saved (AppConfig.
+    pools_problem, a failed write): nothing changed then."""
+    async with state.edit_config():
+        if problem := state.config.pools_problem(pools):
+            raise ConfigError(problem)
+        state.config.pools[:] = pools
+    await state.supervisor.apply_pools(state.config.pools)
+
+
+def pool_rows(state) -> list[dict]:
+    """Every configured port pool with what it does now (engine.pool.PoolListener.status;
+    a pool that is off or not started yet: state "stopped", its members from the config)."""
+    running = state.supervisor.pools.status()
+    rows = []
+    for pool in state.config.pools:
+        row = running.get(pool.name)
+        if row is None:
+            members = state.config.pool_members(pool.name)
+            row = {**dataclasses.asdict(pool), "state": "stopped", "last_error": "",
+                   "members": [{"id": m.id, "name": m.name, "state": "stopped", "clients": 0,
+                                "max_connections": m.network.max_connections}
+                               for m in members],
+                   "busy": 0, "handed": 0, "refused": 0, "last_refused": 0}
+        rows.append(row)
+    return rows

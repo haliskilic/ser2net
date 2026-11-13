@@ -17,7 +17,7 @@
     of its <section>; another one, at the top), which takes the keyboard focus (app.js);
     `submitted`: what a refused form had, shown again in it #}
 {% macro feedback(name) -%}
-{%- set where = section if section in ['account', 'admin-interface', 'access', 'audit-log', 'retention', 'users', 'ldap', 'oidc', 'cluster-settings', 'notifications', 'tls', 'reverse-proxy', 'api-token', 'import', 'backups'] else 'account' -%}
+{%- set where = section if section in ['account', 'admin-interface', 'access', 'audit-log', 'retention', 'users', 'ldap', 'oidc', 'cluster-settings', 'notifications', 'tls', 'reverse-proxy', 'api-token', 'pools', 'import', 'backups'] else 'account' -%}
 {%- if where == name -%}
 {% if ok %}<div class="banner ok" role="status" tabindex="-1" data-feedback>{{ ok }}</div>{% endif %}
 {% if error %}<div class="banner error" role="alert" tabindex="-1" data-feedback>{{ error }}</div>{% endif %}
@@ -674,6 +674,38 @@
 {% endif %}
 
 {% if is_operator %}
+<section class="panel panel-narrow" id="pools">
+  <div class="panel-head"><h2>{{ _("Port pools") }}</h2></div>
+  {{ feedback('pools') }}
+  <p class="muted">{{ _("A port pool is one listening TCP port for several mappings: each client that connects to it is handed to the first mapping of the pool with a free connection, in the order of the mappings, and is that mapping’s client from then on. When every one is in use, the client is told so and disconnected. A mapping joins a pool by the pool’s name (its “Port pool” field: TCP server, raw / telnet / RFC 2217, no TLS), and keeps its own port.") }}</p>
+  {% if pool_rows %}
+  <div class="table-scroll">
+  <table class="grid stackable" data-pools>
+    <thead><tr><th>{{ _("Pool") }}</th><th>{{ _("Listens on") }}</th><th>{{ _("State") }}</th><th>{{ _("Mappings in use") }}</th><th>{{ _("Clients handed over") }}</th><th>{{ _("Clients refused") }}</th></tr></thead>
+    <tbody>
+    {% for p in pool_rows %}
+    <tr>
+      <td class="mono" data-label="{{ _('Pool') }}">{{ p.name }}{% if p.rotate %} <span class="tag" title="{{ _('the search for a free mapping begins after the one that got the last client') }}">{{ _("rotates") }}</span>{% endif %}</td>
+      <td class="mono" data-label="{{ _('Listens on') }}">{{ shown_host(p.bind_ip) }}:{{ p.port }}</td>
+      <td data-label="{{ _('State') }}">{% if not p.enabled %}<span class="tag">{{ _("off") }}</span>{% elif p.state == 'listening' %}<span class="state state-running">{{ _("listening") }}</span>{% elif p.state == 'error' %}<span class="state state-error">{{ _("error") }}</span><div class="err-small">{{ p.last_error }}</div>{% else %}<span class="state state-stopped">{{ _("stopped") }}</span>{% endif %}</td>
+      <td data-label="{{ _('Mappings in use') }}">{% if p.members %}{{ _("%(busy)s of %(total)s", busy=p.busy, total=p.members|length) }} <span class="muted">({% for mem in p.members %}{{ mem.name }}{% if not loop.last %}, {% endif %}{% endfor %})</span>{% else %}<span class="err-small">{{ _("no mapping names this pool") }}</span>{% endif %}</td>
+      <td data-label="{{ _('Clients handed over') }}">{{ p.handed }}</td>
+      <td data-label="{{ _('Clients refused') }}">{{ p.refused }}</td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  {% endif %}
+  <form method="post" action="{{ base }}/settings/pools" class="authform">
+    <input type="hidden" name="_csrf" value="{{ request.state.csrf_token }}">
+    <label>{{ _("Pools, one per line") }} <span class="muted">({{ _("a name and a port, such as “lab 3000”; with an address to listen on that one only: “lab 192.168.1.5:3000”; then “rotate”: the search begins after the mapping that got the last client, as classic ser2net’s rotator does; “off”: it does not listen") }})</span>
+      <textarea name="pools" rows="4" class="mono" autocapitalize="none" autocorrect="off" spellcheck="false" placeholder="lab 3000">{{ submitted.pools if submitted.pools is defined else pools_text }}</textarea>
+    </label>
+    <button class="btn" type="submit">{{ _("Save") }}</button>
+  </form>
+</section>
+
 <section class="panel panel-narrow" id="import">
   <div class="panel-head"><h2>{{ _("Mappings export / import") }}</h2></div>
   {{ feedback('import') }}

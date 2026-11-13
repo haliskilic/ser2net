@@ -107,7 +107,10 @@ _NETWORK = {
     "connect_timeout_s": 2.5, "tls": True, "tls_cert": TLS_FILE, "tls_key": TLS_FILE,
     "tls_key_password": "kitchen-sink-key-pw", "tls_ca": TLS_FILE,
     "tls_fingerprint": "AB:" * 31 + "AB", "tls_client_ca": TLS_FILE,
-    "disconnect_without_device": True}
+    "disconnect_without_device": True,
+    "writer_client_ips": ["10.0.0.7", "10.0.1.0/28"], "open_on_connect": True,
+    "port_linger_s": 7.5, "pool": "lab-1",
+    "remote_targets": ["plc2.example:2001", "[fd00::9]:2002"], "failover_return_s": 120}
 _OPTIONS = {
     "banner": "Hello \\N on \\p", "openstr": "INIT\r\n", "closestr": "BYE\r",
     "closeon": "logout\r\n", "idle_timeout_s": 300, "max_connection_time_s": 86400,
@@ -117,6 +120,7 @@ _OPTIONS = {
     "modbus_response_timeout_s": 2.5, "no_data_alarm_s": 300, "no_data_reply_only": True,
     "console_encoding": "iso-8859-9", "rfc2217_signature": "ser2net kitchen sink",
     "poll_string": "P\\r\\n", "poll_interval_s": 0.5, "poll_with_clients": True,
+    "pack_gap_ms": 25, "pack_delimiter": "\\r\\x0a", "pack_max_bytes": 1400,
     "modbus_unit_map": {"255": 1, "0": 2}}
 _MQTT = {
     "enabled": True, "host": "broker.example", "port": 8883, "base_topic": "ser2net/plc1",
