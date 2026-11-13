@@ -1290,8 +1290,9 @@ apply when the form is saved). PEM files of at most 256 KB each (a CA file may b
 Before anything is kept they are loaded as ser2netweb will load them: a key that is not the
 certificate's, an encrypted key without its password or a CA file without a certificate
 is refused, and so is the admin UI's pair for a mapping (or a mapping's for the admin UI).
-They are kept in the data folder's `tls/` as `uploaded-<hash>-cert.pem` / `-key.pem` /
-`-ca.pem`, readable only by the account ser2netweb runs as, and every upload is in the
+They are kept in the data folder's `tls/` as `uploaded-<hash>-cert.pem` /
+`-key.pem` / `-ca.pem`, each named by its own hash (an upload never replaces a key in use),
+readable only by the account ser2netweb runs as, and every upload is in the
 audit log (`admin_tls_upload`, `tls_upload`). Files uploaded earlier stay there until you
 delete them (a configuration backup may still name them); the path fields work as before
 for files that are already on the host. Where certificates can't be managed, a VPN

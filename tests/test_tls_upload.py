@@ -2,12 +2,13 @@
 
 Checks:
   * store(): a certificate with its key (and CA files) is kept in <data>/tls with private
-    permissions under names made from the files' hashes, only after it loaded as
-    ser2netweb will load it: a key that is another certificate's, an encrypted key without
-    or with a wrong password, a file that is not PEM, a file over the size limit, a
-    certificate without its key and a CA file without a certificate are refused and leave
-    nothing behind; the admin UI's pair is refused for a mapping and a mapping's for the
-    admin UI;
+    permissions (also a tls/ folder made before with others' access) under names made
+    from each file's own hash (a key never replaces another pair's), only after it loaded
+    as ser2netweb will load it: a key that is another certificate's, an encrypted key
+    without or with a wrong password, a file that is not PEM, a file over the size limit,
+    a certificate without its key and a CA file without a certificate are refused and
+    leave nothing behind; uploads at the same time don't get in each other's way; the
+    admin UI's pair is refused for a mapping and a mapping's for the admin UI;
   * the mapping form (admins): POST /api/mappings/tls-upload stores the files and answers
     their paths for the form's fields (HX-Trigger: tlsUploaded), audited; operators 403,
     the CSRF header is required, a bad pair is 400 with the reason; a mapping saved with
@@ -20,6 +21,8 @@ Needs the optional cryptography package (to make certificates); skipped without 
 
 Run: python3 tests/test_tls_upload.py
 """
+import concurrent.futures
+import datetime
 import json
 import os
 import socket
@@ -53,6 +56,26 @@ def make_pair(folder, name):
     return read(cert), read(key)
 
 
+def other_cert_same_key(key_pem, name, password):
+    """Another certificate for the key in `key_pem`, and that key written another way
+    (traditional OpenSSL PEM, encrypted with `password`)."""
+    from cryptography import x509
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.x509.oid import NameOID
+
+    key = serialization.load_pem_private_key(key_pem, None)
+    subject = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, name)])
+    now = datetime.datetime.now(datetime.timezone.utc)
+    cert = (x509.CertificateBuilder().subject_name(subject).issuer_name(subject)
+            .public_key(key.public_key()).serial_number(x509.random_serial_number())
+            .not_valid_before(now - datetime.timedelta(days=1))
+            .not_valid_after(now + datetime.timedelta(days=30)).sign(key, hashes.SHA256()))
+    return (cert.public_bytes(serialization.Encoding.PEM),
+            key.private_bytes(serialization.Encoding.PEM,
+                              serialization.PrivateFormat.TraditionalOpenSSL,
+                              serialization.BestAvailableEncryption(password.encode())))
+
+
 def refused(text, **kwargs):
     try:
         tlsupload.store(**kwargs)
@@ -69,6 +92,9 @@ def test_store(src):
     enc_cert, enc_key = (read(p) for p in ca.issue(src, "enc", ["enc.example"], password=b"s3cret"))
     with tempfile.TemporaryDirectory() as data:
         tdir = os.path.join(data, "tls")
+        os.makedirs(tdir)
+        if os.name != "nt":  # (made before: by Generate, or by hand, with others' access)
+            os.chmod(tdir, 0o755)
         got = tlsupload.store(data, cert=cert_a, key=key_a, cas={"ca": read(ca.path),
                                                                "client_ca": None})
         assert set(got) == {"cert", "key", "ca"}, got
@@ -86,7 +112,20 @@ def test_store(src):
         assert tlsupload.store(data, cert=cert_a, key=key_a) == {
             "cert": got["cert"], "key": got["key"]}, "the same files again replace themselves"
         assert sorted(os.listdir(tdir)) == kept
-        print("store: kept in tls/ with private permissions, named by their hashes  OK")
+        # the same certificate with its key written another way (encrypted): a key file of
+        # its own, the one in use stays as it is
+        again_cert, again_key = other_cert_same_key(key_a, "a", "pw")
+        other = tlsupload.store(data, cert=cert_a, key=again_key, password="pw")
+        assert other["cert"] == got["cert"] and other["key"] != got["key"], other
+        assert read(got["key"]) == key_a and read(other["key"]) == again_key
+        os.remove(other["key"])
+        # uploads at the same time each have their own files aside
+        with concurrent.futures.ThreadPoolExecutor(8) as pool:
+            results = list(pool.map(lambda _i: tlsupload.store(data, cert=cert_a, key=key_a),
+                                    range(16)))
+        assert all(r == results[0] for r in results) and sorted(os.listdir(tdir)) == kept
+        print("store: kept in tls/ with private permissions, each file named by its own "
+              "hash; side by side uploads  OK")
 
         refused("can't be used with the uploaded key", data_dir=data, cert=cert_a, key=key_b)
         refused("password-protected", data_dir=data, cert=enc_cert, key=enc_key)

@@ -1349,6 +1349,7 @@ sertifikaya ait olmayan bir anahtar, parolası verilmemiş şifreli bir anahtar 
 sertifika içermeyen bir CA dosyası reddedilir; yönetim arayüzünün sertifika ve anahtarı bir
 eşleme için (ya da bir eşlemeninki yönetim arayüzü için) de reddedilir. Dosyalar veri
 klasörünün `tls/` dizininde `uploaded-<hash>-cert.pem` / `-key.pem` / `-ca.pem` adlarıyla,
+her biri kendi özetiyle adlandırılarak (bir yükleme kullanılan bir anahtarın yerine geçmez),
 yalnızca ser2netweb'in çalıştığı hesabın okuyabileceği şekilde saklanır ve her yükleme
 denetim kaydına yazılır (`admin_tls_upload`, `tls_upload`). Daha önce yüklenen dosyalar siz
 silene kadar orada kalır (bir yapılandırma yedeği onları hâlâ gösteriyor olabilir); sunucuda

@@ -3,13 +3,15 @@ installation whose admin has no shell on the host to put them there.
 
 An upload is a certificate with its key, and for a mapping a CA file as well. Before
 anything is kept, the files are written aside in the data folder's tls/ (private: the
-folder 0700, each file 0600) and loaded as ser2netweb will load them (engine/tls.py): the
-key must be the certificate's and decrypt with the password given, a CA file must hold a
-certificate, and a mapping's pair must not be the admin UI's (nor the admin UI's a
-mapping's): browsers send a site's cookies to every port of it. Only then they get their
-names, `uploaded-<16 hex digits of the file's SHA-256>-cert.pem` / `-key.pem` /
-`-ca.pem`: the same files uploaded again replace themselves, renewed ones stand next to
-the old (which stay until someone deletes them: a configuration backup may name them).
+folder 0700 or, on Windows, owner-only like the data folder; each file 0600) and loaded as
+ser2netweb will load them (engine/tls.py): the key must be the certificate's and decrypt
+with the password given, a CA file must hold a certificate, and a mapping's pair must not
+be the admin UI's (nor the admin UI's a mapping's): browsers send a site's cookies to
+every port of it. Only then they get their names,
+`uploaded-<16 hex digits of the file's SHA-256>-cert.pem` / `-key.pem` / `-ca.pem`: the
+same files uploaded again replace themselves, renewed ones stand next to the old (which
+stay until someone deletes them: a configuration backup may name them), and a key never
+replaces another one (a pair already in use keeps its key and its password).
 
 The upload only stores files and answers their paths. They go into the same settings a
 typed path goes into (admin_ui.tls_cert, network.tls_cert, ...), which keep working as
@@ -21,12 +23,12 @@ import contextlib
 import hashlib
 import os
 import re
+import tempfile
 from typing import Optional
 
-from ..config import data_path
+from ..config import data_path, lock_down_dir
 from ..engine import tls
 from ..i18n import _
-from .selfsigned import _write_aside
 
 MAX_FILE_BYTES = 256 * 1024      # one uploaded file (a certificate chain is a few KB)
 MAX_BODY_BYTES = 1024 * 1024     # the whole upload request
@@ -113,18 +115,17 @@ def store(data_dir: str, *, cert: Optional[bytes] = None, key: Optional[bytes] =
                 raise UploadError(reuse_message)
     folder = os.path.join(os.path.abspath(data_dir), TLS_DIR)
     os.makedirs(folder, mode=0o700, exist_ok=True)
+    lock_down_dir(folder)  # (also one made before, by Generate or by hand)
     files: dict[str, tuple[str, bytes]] = {}   # what -> (its path, its bytes)
     if cert is not None and key is not None:
-        tag = hashlib.sha256(cert).hexdigest()[:16]
-        files["cert"] = (os.path.join(folder, _NAME.format(tag, "cert")), cert)
-        files["key"] = (os.path.join(folder, _NAME.format(tag, "key")), key)
+        files["cert"] = (_path(folder, cert, "cert"), cert)
+        files["key"] = (_path(folder, key, "key"), key)
     for name, data in given.items():
-        tag = hashlib.sha256(data).hexdigest()[:16]
-        files[name] = (os.path.join(folder, _NAME.format(tag, "ca")), data)
-    aside = {what: path + ".tmp" for what, (path, _data) in files.items()}
+        files[name] = (_path(folder, data, "ca"), data)
+    aside: dict[str, str] = {}
     try:
-        for path, data in files.values():
-            _write_aside(path, data, mode=0o600)
+        for what, (_dest, data) in files.items():
+            aside[what] = _write_aside(folder, data)
         try:  # as ser2netweb will load them
             if "cert" in aside:
                 tls.tls_context(server_side=True, cert=aside["cert"], key=aside["key"],
@@ -140,6 +141,25 @@ def store(data_dir: str, *, cert: Optional[bytes] = None, key: Optional[bytes] =
             with contextlib.suppress(OSError):
                 os.remove(tmp)
     return {what: path for what, (path, _data) in files.items()}
+
+
+def _path(folder: str, data: bytes, what: str) -> str:
+    """Where a file is kept: named by its own hash, so a key never replaces another."""
+    return os.path.join(folder, _NAME.format(hashlib.sha256(data).hexdigest()[:16], what))
+
+
+def _write_aside(folder: str, data: bytes) -> str:
+    """Write `data` to a new private file of its own in `folder` (0600; another upload
+    at the same time has another); returns its path."""
+    fd, path = tempfile.mkstemp(prefix=".upload-", suffix=".tmp", dir=folder)
+    try:
+        with os.fdopen(fd, "wb") as fh:
+            fh.write(data)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            os.remove(path)
+        raise
+    return path
 
 
 async def read_file(form, name: str) -> Optional[bytes]:
