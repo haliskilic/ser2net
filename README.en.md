@@ -751,7 +751,7 @@ with the old `lib/` and
 says why in its log (`WARNING: … ./lib …`); when this version can't run on the old packages
 at all (2.8.1 and newer on 2.7's), the start stops with one line that says so.
 `python3 bootstrap.py` installs the set by hand (stop ser2netweb first, and run it as the
-account ser2netweb runs as, e.g. `sudo -u ser2net python3 /opt/ser2net/bootstrap.py`); with
+account ser2netweb runs as, e.g. `sudo -u ser2netweb python3 /opt/ser2netweb/bootstrap.py`); with
 `--no-bootstrap` that is the way after every upgrade, and the start-up log warns while
 `lib/` is out of date. The one-off commands (`--set-password`, `--sign-out-all`, `--reload`,
 `--about`, `--install-service`), which may run beside a running ser2netweb, leave `lib/` as it is and
@@ -1119,7 +1119,7 @@ when its broker connection has no TLS or no username. The same holds for a seria
 that writes `<topic>/tx` to the device (**CMD** too). A Mosquitto `acl_file` for the base
 topic `plant/line3`, for example:
 ```
-user ser2net
+user ser2netweb
 topic readwrite plant/line3/#
 user scada
 topic write plant/line3/+/set
@@ -1380,10 +1380,10 @@ directory's owner by itself):
 
 | Install | Command |
 |---|---|
-| source / Linux binary (systemd) | `sudo -u ser2net python3 /opt/ser2net/ser2netweb.py --data-dir /opt/ser2net/data --set-password admin` (binary with `ser2net-standalone.service`: `sudo -u ser2net /usr/local/bin/ser2net --data-dir /var/lib/ser2net --set-password admin`; started by hand: `./ser2netweb-linux-x64 --set-password admin`) |
-| Windows (elevated prompt, also while the service runs) | `ser2netweb-windows-x64.exe --data-dir C:\ProgramData\ser2net --set-password admin` (the service's data directory: `sc qc ser2net` shows it) |
-| an instance of `ser2net@.service` | `sudo -u ser2net python3 /opt/ser2net/ser2netweb.py --no-bootstrap --data-dir /var/lib/ser2net/<name> --set-password admin` |
-| Docker | `docker exec -it ser2net python /app/ser2netweb.py --no-bootstrap --data-dir /data --set-password admin` |
+| source / Linux binary (systemd) | `sudo -u ser2netweb python3 /opt/ser2netweb/ser2netweb.py --data-dir /opt/ser2netweb/data --set-password admin` (binary with `ser2netweb-standalone.service`: `sudo -u ser2netweb /usr/local/bin/ser2netweb --data-dir /var/lib/ser2netweb --set-password admin`; started by hand: `./ser2netweb-linux-x64 --set-password admin`; a 2.9.x install not moved over yet: the same with `ser2net`) |
+| Windows (elevated prompt, also while the service runs) | `ser2netweb-windows-x64.exe --data-dir C:\ProgramData\ser2netweb --set-password admin` (the service's data directory: `sc qc ser2netweb` shows it) |
+| an instance of `ser2netweb@.service` | `sudo -u ser2netweb python3 /opt/ser2netweb/ser2netweb.py --no-bootstrap --data-dir /var/lib/ser2netweb/<name> --set-password admin` |
+| Docker | `docker exec -it ser2netweb python /app/ser2netweb.py --no-bootstrap --data-dir /data --set-password admin` (the container's name; 2.9.x's compose file named it `ser2net`) |
 
 **First admin without the browser:** run `ser2netweb --set-password admin` before the first
 start (a source install under systemd: after the service's first start, which makes its
@@ -1767,7 +1767,7 @@ config file's folder). The data directory is locked to owner-only (POSIX `0700`;
 `icacls` owner/SYSTEM/Administrators), so the files inside aren't readable by other users,
 and on Linux/macOS the files the server creates are owner-only too. That applies to a folder
 ser2netweb made or one holding only its own files (the ones below): a folder with other files
-in it (`--config /etc/ser2net.json`, a home directory) keeps its permissions, only the
+in it (`--config /etc/ser2netweb.json`, a home directory) keeps its permissions, only the
 config file (and `backups/`, `logs/`, `traces/`) is made private, and the start-up log warns
 when other accounts can use the folder — give ser2netweb a folder of its own:
 - `config.json` — admin IP, password hashes, all mappings (atomic write), and the secrets
@@ -1913,10 +1913,10 @@ preview says so.
 
 **Changing `config.json` while ser2netweb runs:** ser2netweb reads it at start-up and then works
 from its copy in memory. After an edit by hand or by a tool (Ansible, a copied file), have it
-read the file again — no restart: `systemctl reload ser2net` (an instance:
-`systemctl reload ser2net@<name>`; all three units have `ExecReload`) or `kill -HUP <pid>`
-(SIGHUP, Linux/macOS; `docker kill -s HUP ser2net`), `ser2netweb --reload` with the same
-`--data-dir` (`/var/lib/ser2net` for the binary's unit, `/var/lib/ser2net/<name>` for an
+read the file again — no restart: `systemctl reload ser2netweb` (an instance:
+`systemctl reload ser2netweb@<name>`; all three units have `ExecReload`) or `kill -HUP <pid>`
+(SIGHUP, Linux/macOS; `docker kill -s HUP ser2netweb`), `ser2netweb --reload` with the same
+`--data-dir` (`/var/lib/ser2netweb` for the binary's unit, `/var/lib/ser2netweb/<name>` for an
 instance; any platform, also for the Windows service and in a container) or Settings →
 *Configuration backups* → *Reload config.json*. The file is checked as an edit is: when it
 can't be read or doesn't validate (a value of the wrong type in a changed mapping, two
@@ -1929,7 +1929,7 @@ change keeps running with its clients (one that should run but doesn't is starte
 changed one restarts, a removed one stops, a new one starts; the cluster restarts only when
 its settings changed. The admin UI's certificate files and those of unchanged TLS mappings
 are read again for new connections (a renewed certificate: e.g. certbot's
-`--deploy-hook "systemctl reload ser2net"`). The admin UI's address takes effect only at the
+`--deploy-hook "systemctl reload ser2netweb"`). The admin UI's address takes effect only at the
 next start (the log, the reply and Settings say so), as do `--data-dir` / `--config` and the
 environment variables. In a terminal, SIGHUP from the terminal closing still ends ser2netweb
 (cleanly). The log line and the audit record (`config_reload`) say what changed. An edit that
@@ -1948,7 +1948,7 @@ the first-run setup next sees that audit log — the earlier users' names, addre
 failed sign-ins — and those backups, with the earlier accounts and secrets, in Settings.
 Don't do it while ser2netweb runs: its next save writes the configuration it has in memory,
 accounts included, back to `config.json`. Copies outside the data directory stay too: the
-journal (`journalctl -u ser2net`), Docker's container log (`docker compose down -v` removes
+journal (`journalctl -u ser2netweb`), Docker's container log (`docker compose down -v` removes
 it with the `/data` volume, see [docs/DOCKER.md](docs/DOCKER.md)) and messages
 notifications have sent. To get back in after a lost password, use `--set-password`
 instead (see Security): it keeps everything else. `admin-requests/` only holds a
@@ -2026,7 +2026,7 @@ the version and **Licences**, a page with the licence texts this copy carries �
 NOTICE, the commercial licence and the third-party notices, or in an executable its
 `THIRD-PARTY-LICENSES.txt`). A modified version that others use over a network has to offer
 them its source (AGPL-3.0 section 13): point the link at it with `SER2NETWEB_SOURCE_URL`
-(`https://git.example.com/our-ser2net`; a value that is not an http(s) address is not used,
+(`https://git.example.com/our-ser2netweb`; a value that is not an http(s) address is not used,
 with a start-up warning).
 
 Contributions are welcome! On your first pull request you'll be asked to sign a one-time [Contributor License Agreement](https://gist.github.com/haliskilic/7a7fdcd355f54d1db6943959d7b76823); you keep the copyright to your work.

@@ -383,7 +383,7 @@ def _under(scope, prefix: str) -> None:
     it; it is put back, as ASGI wants root_path to be part of the path)."""
     path = scope["path"]
     if path == prefix or path.startswith(prefix + "/"):
-        if path == prefix:   # its pages are below it: /ser2net -> /ser2net/
+        if path == prefix:   # its pages are below it: /ser2netweb -> /ser2netweb/
             scope["path"], scope["raw_path"] = prefix + "/", (prefix + "/").encode()
         scope["root_path"] = prefix
         return

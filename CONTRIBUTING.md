@@ -187,10 +187,13 @@ pre-release) on the merge commit starts `.github/workflows/release.yml`:
 2. the whole CI runs on the tagged commit (`ci.yml`, the checks `ci-ok` gates merges on);
    its standalone build is what gets released;
 3. the image is built for amd64, arm64 and arm/v7, pushed to GHCR by digest only (no tag)
-   and that digest is smoke-tested on each (amd64 and arm64 natively, arm/v7 under QEMU);
+   as `ghcr.io/haliskilic/ser2netweb` and, for the 3.x line, as `ghcr.io/haliskilic/ser2net`
+   (its name up to 2.9.x), and that digest is smoke-tested on each (amd64 and arm64
+   natively, arm/v7 under QEMU);
 4. only then are the files attested and the GitHub release created with them (by `gh`; the
-   jobs that can write releases or attestations run GitHub's own actions only), and the
-   tested image gets its tags `X.Y.Z`, `X.Y` and `latest`. A pre-release gets only its own
+   jobs that can write releases or attestations run GitHub's own actions only; the files are
+   the `ser2netweb-*` ones `tools/release_guard.py assets` lists), and the tested image gets
+   its tags `X.Y.Z`, `X.Y` and `latest` under both names. A pre-release gets only its own
    image tag, is marked as a pre-release and never becomes "Latest".
 
 One release runs at a time. A job that failed for a passing reason is re-run (*Re-run
@@ -394,11 +397,14 @@ yazılır; bu birleştirilince merge commit'ine atılan açıklamalı bir `vX.Y.
 2. tag'lenen commit'te CI'ın tamamı çalışır (`ci.yml`, birleştirmede `ci-ok`'un beklediği
    kontroller); yayımlanan, onun standalone derlemesidir;
 3. imaj amd64, arm64 ve arm/v7 için derlenir, GHCR'a yalnızca digest ile (tag'siz)
-   gönderilir ve bu digest her mimaride smoke test'ten geçer (amd64 ve arm64 emülasyonsuz,
-   arm/v7 QEMU altında);
+   `ghcr.io/haliskilic/ser2netweb` ve 3.x serisi için 2.9.x'e kadarki adıyla
+   `ghcr.io/haliskilic/ser2net` olarak gönderilir ve bu digest her mimaride smoke test'ten
+   geçer (amd64 ve arm64 emülasyonsuz, arm/v7 QEMU altında);
 4. ancak bundan sonra dosyalar attest edilir ve GitHub release'i onlarla oluşturulur
    (`gh` ile; release ya da attestation yazabilen işlerde yalnızca GitHub'ın kendi
-   action'ları çalışır), test edilen imaj da `X.Y.Z`, `X.Y` ve `latest` tag'lerini alır.
+   action'ları çalışır; dosyalar `tools/release_guard.py assets`'in listelediği
+   `ser2netweb-*` dosyalarıdır), test edilen imaj da iki adı altında `X.Y.Z`, `X.Y` ve
+   `latest` tag'lerini alır.
    Ön sürüm yalnızca kendi imaj tag'ini alır, ön sürüm olarak işaretlenir ve hiçbir zaman
    "Latest" olmaz.
 
