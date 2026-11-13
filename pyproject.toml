@@ -1,0 +1,116 @@
+# The PyPI package ser2netweb (pip install ser2netweb, pipx install ser2netweb): the
+# ser2netweb package with its templates, static files and translations, and the command
+# ser2netweb (ser2netweb.cli:main). A source checkout doesn't need this file (python3
+# ser2netweb.py installs the pinned dependencies from vendor/wheels into ./lib), and the
+# standalone executables and the Docker image install the hash-locked pins
+# (requirements-lock.txt), not these ranges.
+#
+# Built by CI's job "pypi package" (python -m build --no-isolation, with build and
+# setuptools from the hash-locked requirements-build.txt, which the standalone builds use
+# too); release.yml publishes what it built and tested. A pip install keeps its data in the
+# user's data folder (ser2netweb/layout.py).
+[build-system]
+requires = ["setuptools>=77"]  # (license expressions, PEP 639)
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ser2netweb"
+dynamic = ["version"]  # ser2netweb/__init__.py's __version__
+description = "Serial-to-network bridge with a web UI: raw TCP, telnet, RFC 2217, UDP, Modbus gateway, MQTT"
+readme = "packaging/README.pypi.md"
+requires-python = ">=3.10"
+license = "AGPL-3.0-only"
+# also the browser libraries' texts (the web UI's static files carry htmx and xterm.js);
+# an install keeps them in its .dist-info/licenses, where the /licenses page reads them
+license-files = ["LICENSE", "NOTICE", "COMMERCIAL_LICENSE.md", "THIRD-PARTY-NOTICES.md",
+                 "tools/licenses/npm/*.txt"]
+authors = [{ name = "Halis KILIÇ", email = "mail@haliskilic.com.tr" }]
+keywords = ["serial", "rs232", "rs485", "rfc2217", "telnet", "serial-over-ip", "modbus",
+            "mqtt", "sparkplug", "iot"]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Environment :: Web Environment",
+    "Framework :: AsyncIO",
+    "Intended Audience :: Manufacturing",
+    "Intended Audience :: System Administrators",
+    "Intended Audience :: Telecommunications Industry",
+    "Operating System :: MacOS",
+    "Operating System :: Microsoft :: Windows",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Communications",
+    "Topic :: System :: Hardware",
+    "Topic :: System :: Networking",
+]
+# The packages ser2netweb imports, from requirements.txt as ranges: at least the pinned
+# version (the one every test ran with), below the next release that may break it (the
+# next major; for a 0.x package the next minor, 0.0.x: below 0.1). A pin
+# that leaves its range fails tests/test_pyproject.py, so the two are bumped together (as
+# Dependabot does). Pins of packages only these need (anyio, click, idna,
+# typing_extensions, colorama) come with them. psutil (the network interface lists) has
+# no pure-Python wheel: where PyPI has no wheel for the machine, pip builds it.
+dependencies = [
+    "pyserial>=3.5,<4",
+    "pyserial-asyncio-fast>=0.16,<0.17",  # ser2netweb/engine/serial_compat.py patches it
+    'starlette>=1.10.0,<2; python_version >= "3.11"',
+    'starlette>=1.7.0,<2; python_version < "3.11"',
+    "uvicorn>=0.54.0,<0.55",  # ser2netweb/web/httpguard.py hooks into its h11 protocol
+    "h11>=0.16.0,<0.17",
+    'websockets>=17.4,<18; python_version >= "3.11"',
+    'websockets>=16.1.1,<17; python_version < "3.11"',
+    'python-multipart>=0.0.33,<0.1; python_version >= "3.11"',
+    'python-multipart>=0.0.32,<0.1; python_version < "3.11"',
+    "jinja2>=3.1.6,<4",
+    "markupsafe>=3.0.4,<4",
+    "psutil>=7.2.2,<8",
+    'exceptiongroup>=1.3.1,<2; python_version < "3.11"',
+    'taskgroup>=0.2.2,<0.3; python_version < "3.11"',
+]
+
+# The features that need an optional package (requirements-optional.txt, which the
+# executables and the image bundle; each feature says what is missing without it):
+#   pipx install "ser2netweb[all]", or pipx inject ser2netweb paho-mqtt
+# The same ranges, but cryptography: its major version moves with every release (every
+# few months) and its security fixes only come in the newest, so only the pin's floor;
+# paho-mqtt from 1.6, as for a source install (CI's job "MQTT with paho-mqtt 1.6").
+[project.optional-dependencies]
+mqtt = ["paho-mqtt>=1.6,<3"]                 # MQTT publishing, Sparkplug B
+ldap = ["ldap3>=2.9.1,<3"]                   # LDAP / Active Directory sign-in
+oidc = ["authlib>=1.9.5,<2"]                 # OpenID Connect single sign-on
+tls = ["cryptography>=50.0.2"]               # self-signed certificates in-process
+all = ["ser2netweb[mqtt,ldap,oidc,tls]"]
+
+[project.scripts]
+ser2netweb = "ser2netweb.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/haliskilic/ser2netweb"
+Documentation = "https://github.com/haliskilic/ser2netweb/blob/main/README.en.md"
+Changelog = "https://github.com/haliskilic/ser2netweb/blob/main/CHANGELOG.md"
+Issues = "https://github.com/haliskilic/ser2netweb/issues"
+Source = "https://github.com/haliskilic/ser2netweb"
+
+# The ser2netweb package only (not the start scripts beside it, ser2netweb.py, ser2net.py
+# and bootstrap.py, which a source checkout runs), with the files it reads at run time.
+# The sdist has what the wheel is built from: these, the readme, the licence files and this
+# file; not the tests, vendor/wheels or anything a build left in the tree (no MANIFEST.in;
+# CI's job "pypi package" checks both files' contents).
+[tool.setuptools]
+include-package-data = false
+
+[tool.setuptools.packages.find]
+include = ["ser2netweb", "ser2netweb.*"]
+
+[tool.setuptools.package-data]
+ser2netweb = ["locale/*", "web/templates/*", "web/static/*"]
+
+# (named by its file: for "ser2netweb.__version__" setuptools would read ser2netweb.py, the
+# start script beside the package; it reads the assignment without importing anything)
+[tool.setuptools.dynamic]
+version = { attr = "ser2netweb.__init__.__version__" }
