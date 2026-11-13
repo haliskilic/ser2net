@@ -18,6 +18,7 @@ Build-Depends-Indep:
  python3-starlette (>= 0.46.1) <!nocheck>,
  python3-uvicorn (>= 0.32.0) <!nocheck>,
  python3-websockets (>= 14.2) <!nocheck>,
+ tzdata <!nocheck>,
 Rules-Requires-Root: no
 Standards-Version: 4.7.2
 Homepage: https://github.com/haliskilic/ser2netweb

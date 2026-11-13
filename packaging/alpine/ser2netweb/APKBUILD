@@ -32,6 +32,8 @@ makedepends="
 	py3-setuptools
 	py3-wheel
 	"
+# (the time stamp tests read zone files)
+checkdepends="tzdata"
 install="$pkgname.pre-install"
 subpackages="$pkgname-pyc $pkgname-doc $pkgname-openrc"
 source="$pkgname-$pkgver.tar.gz::https://github.com/haliskilic/ser2netweb/archive/refs/tags/v$pkgver.tar.gz

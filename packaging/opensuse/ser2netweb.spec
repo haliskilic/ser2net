@@ -82,7 +82,7 @@ Modbus points to MQTT and Sparkplug B. Everything is set up in a web UI with
 accounts, roles, two-factor sign-in, an audit log, a REST API and a cluster
 view of several machines; a web console shows a port's traffic live.
 
-The package installs a hardened systemd unit, which runs it as the system
+The package installs a hardened service unit, which runs it as the system
 account ser2netweb with its data in /var/lib/ser2netweb; it is not enabled by
 default. ser2netweb is an independent project, not related to the ser2net
 daemon (package ser2net), whose configuration files it can import.
