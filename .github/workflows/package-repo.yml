@@ -1,0 +1,193 @@
+name: Package repositories
+
+# The signed APT and DNF / zypper repositories on GitHub Pages,
+# https://haliskilic.github.io/ser2netweb/ (docs/PACKAGES.md). tools/package_repo.py builds
+# them from the .deb / .rpm files of the newest three releases (not pre-releases), each
+# checked against its release's SHA256SUMS and build provenance and never rebuilt:
+# apt-ftparchive and createrepo_c write the indexes, and the package signing key signs
+# InRelease, Release.gpg and each repodata/repomd.xml (the secrets PACKAGES_GPG_*, in the
+# signing step only). Every tree is tested before it is deployed: served on 127.0.0.1, it
+# is added in clean Debian, Ubuntu, Fedora, AlmaLinux and openSUSE containers (x64; Debian
+# and Fedora on arm64 too) with the commands docs/PACKAGES.md gives, ser2netweb installed
+# from it, updated and removed, and a copy whose InRelease and repomd.xml were changed
+# after signing must be refused. After the deployment the published site gets the same
+# test.
+# Started by release.yml once a release is out (GitHub starts no workflow for a release
+# that GITHUB_TOKEN created), by a release published by hand, and by Actions -> Package
+# repositories -> Run workflow (tag: the newest release to include, for a rebuild or a
+# rollback; empty: the newest release). A pull request that changes it builds and tests a
+# tree signed with a throwaway key made in the job and deploys nothing; so does a run
+# without the signing key (with a notice). The environment github-pages must allow main
+# and the v* tags.
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: The newest release to include (vX.Y.Z; empty for the newest release)
+        type: string
+        default: ""
+  pull_request:
+    paths:
+      - .github/workflows/package-repo.yml
+      - packaging/**
+      - tools/package_repo.py
+      - tests/package_repo_smoke.sh
+
+permissions:
+  contents: read
+
+# One deployment at a time, never cancelled; a pull request's runs replace each other
+concurrency:
+  group: ${{ github.event_name == 'pull_request' && format('package-repo-{0}', github.event.pull_request.number) || 'package-repo' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  build:
+    name: build and sign the repository tree
+    if: github.event_name != 'release' || !github.event.release.prerelease
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      attestations: read     # gh attestation verify
+    outputs:
+      version: ${{ steps.fetch.outputs.version }}
+      deploy: ${{ steps.sign.outputs.deploy }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - name: apt-ftparchive and createrepo_c
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends apt-utils createrepo-c >/dev/null
+          apt-ftparchive --version | head -1
+          createrepo_c --version
+      - name: The packages of the newest releases, checked against their SHA256SUMS
+        id: fetch
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+        run: python3 tools/package_repo.py fetch packages --tag "$TAG"
+      - name: Their build provenance (release.yml of this repository)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          for f in packages/*/*.deb packages/*/*.rpm; do
+            gh attestation verify "$f" --repo "$GITHUB_REPOSITORY" \
+              --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/release.yml" >/dev/null
+            echo "$f: build provenance OK"
+          done
+      - name: The repository tree
+        run: python3 tools/package_repo.py build packages site
+      - name: Sign it (InRelease, Release.gpg, repomd.xml.asc)
+        id: sign
+        env:
+          EVENT: ${{ github.event_name }}
+          # never handed to a pull request's run: a throwaway key signs that tree
+          PACKAGES_GPG_PRIVATE_KEY: ${{ github.event_name != 'pull_request' && secrets.PACKAGES_GPG_PRIVATE_KEY || '' }}
+          PACKAGES_GPG_PASSPHRASE: ${{ github.event_name != 'pull_request' && secrets.PACKAGES_GPG_PASSPHRASE || '' }}
+          PACKAGES_GPG_FINGERPRINT: ${{ github.event_name != 'pull_request' && secrets.PACKAGES_GPG_FINGERPRINT || '' }}
+        run: |
+          if [ "$EVENT" = pull_request ]; then
+            echo "::notice::A pull request: the tree is signed with a throwaway key made here, tested and not deployed"
+            python3 tools/package_repo.py sign site --test-key
+            echo "deploy=false" >> "$GITHUB_OUTPUT"
+          elif [ -z "$PACKAGES_GPG_PRIVATE_KEY" ]; then
+            echo "::notice::The secret PACKAGES_GPG_PRIVATE_KEY is not set: the tree is signed with a throwaway key, tested and not deployed"
+            python3 tools/package_repo.py sign site --test-key
+            echo "deploy=false" >> "$GITHUB_OUTPUT"
+          else
+            python3 tools/package_repo.py sign site --keyring packaging/ser2netweb-archive-keyring.asc
+            echo "deploy=true" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Every index against its files, every signature (gpgv)
+        env:
+          DEPLOY: ${{ steps.sign.outputs.deploy }}
+        run: |
+          if [ "$DEPLOY" = true ]; then
+            python3 tools/package_repo.py verify site
+          else
+            python3 tools/package_repo.py verify site --any-key
+          fi
+          du -sh site
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
+        with:
+          name: package-repo
+          path: site/
+          if-no-files-found: error
+      - if: steps.sign.outputs.deploy == 'true'
+        uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9  # v5.0.0
+        with:
+          path: site/
+
+  # The tree as built, served on 127.0.0.1, in a clean container of each distribution
+  # (tests/package_repo_smoke.sh): a copy with a changed InRelease / repomd.xml is refused,
+  # the repository added the documented way installs, updates and removes ser2netweb
+  test:
+    name: repository on ${{ matrix.image }} (${{ matrix.arch }})
+    needs: build
+    runs-on: ${{ matrix.arch == 'x64' && 'ubuntu-latest' || 'ubuntu-24.04-arm' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [x64]
+        image: ["debian:12", "ubuntu:24.04", "fedora:latest", "almalinux:9", "opensuse/leap:15.6"]
+        include:
+          - { arch: arm64, image: "debian:12" }
+          - { arch: arm64, image: "fedora:latest" }
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8.0.2
+        with:
+          name: package-repo
+          path: site
+      - name: Refused when changed; added, installed, updated and removed as documented
+        timeout-minutes: 20
+        env:
+          IMAGE: ${{ matrix.image }}
+          VERSION: ${{ needs.build.outputs.version }}
+        run: sh tests/package_repo_smoke.sh site "$IMAGE" "$VERSION"
+
+  deploy:
+    name: deploy to GitHub Pages
+    needs: [build, test]
+    if: github.event_name != 'pull_request' && needs.build.outputs.deploy == 'true'
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    permissions:
+      pages: write           # the deployment
+      id-token: write        # (deploy-pages proves the run with it)
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346  # v5.0.1
+
+  # The published site, once GitHub Pages serves this deployment's InRelease and
+  # repomd.xml: the documented commands as they are
+  live:
+    name: published repository on ${{ matrix.image }}
+    needs: [build, deploy]
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        image: ["debian:12", "fedora:latest"]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8.0.2
+        with:
+          name: package-repo
+          path: site
+      - name: Added, installed, updated and removed from https://haliskilic.github.io/ser2netweb
+        timeout-minutes: 20
+        env:
+          IMAGE: ${{ matrix.image }}
+          VERSION: ${{ needs.build.outputs.version }}
+        run: sh tests/package_repo_smoke.sh --live site "$IMAGE" "$VERSION"

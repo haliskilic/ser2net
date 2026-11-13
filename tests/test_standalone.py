@@ -31,7 +31,11 @@ CI 'standalone' jobs build the executables and set it):
      rate from a binary built for glibc 2.28) opens and relays the device's data;
   3. every shared library the running processes mapped comes from the bundle or
      the OS base (Linux /proc/<pid>/maps, Windows module list);
-  4. SER2NETWEB_STANDALONE_IMAGE=<docker image> runs part 2 inside a clean container
+  4. Windows: hard links of the exe where winget, Scoop and Chocolatey put it name their
+     package manager in --about, and --help the default data folder: the user's for
+     winget and Chocolatey (a data\\config.json next to the exe, 3.0.0's, stays in use),
+     data\\ next to the exe for Scoop (the folder its manifest persists);
+  5. SER2NETWEB_STANDALONE_IMAGE=<docker image> runs part 2 inside a clean container
      of that distribution (no Python, no openssl, empty PATH) instead (the host's
      /dev/pts is mounted at /dev/hostpts for the PTY mapping). The test CA
      is mounted over the CA bundle the image has (or, for base images that ship
@@ -867,6 +871,8 @@ def test_binary():
             assert re.search(r"ldap3\s+0\.0-override-test", about), \
                 f"SER2NETWEB_LIB_OVERRIDE did not replace ldap3:\n{about}"
             print(f"{where}: SER2NETWEB_LIB_OVERRIDE loads a replacement ldap3 (LGPL)  OK")
+        if WINDOWS and not IMAGE:
+            check_package_managers(run, work)
 
         # the ports picked just before the start: the runs above take a while, and a port
         # freed that long is anyone's
@@ -997,6 +1003,59 @@ def test_binary():
         provider.shutdown()
         shutil.rmtree(work, ignore_errors=True)
     print(f"\nPASS: standalone executable {where}")
+
+
+def _run_exe(exe, env, *args):
+    p = subprocess.run([exe, *args], env=env, capture_output=True, timeout=300)
+    return (p.stdout + p.stderr).decode("utf-8", "replace")
+
+
+def _default_data_dir(exe, env):
+    """The data folder --help names ("here: ...") for this exe."""
+    helptext = " ".join(_run_exe(exe, dict(env, COLUMNS="500"), "--help").split())
+    m = re.search(r"here: (.+?)\. For --install-service", helptext)
+    assert m, helptext
+    return m.group(1)
+
+
+def check_package_managers(run, work):
+    """The exe where winget (its portable package folder), Scoop (apps\\<app>\\<version>, with
+    the manifest.json and install.json it writes) and Chocolatey (lib\\<id>\\tools, next to
+    <id>.nupkg) put it: --about names the package manager, --help the data folder it uses
+    without --data-dir."""
+    base = os.path.join(os.path.realpath(work), "managers")  # (long names, not RUNNER~1)
+    env = dict(run.env(), LOCALAPPDATA=os.path.join(base, "local"))
+    user = os.path.join(base, "local", "ser2netweb")
+    winget = os.path.join(base, "WinGet", "Packages",
+                          "haliskilic.ser2netweb_Microsoft.Winget.Source_8wekyb3d8bbwe")
+    scoop = os.path.join(base, "scoop", "apps", "ser2netweb", "3.0.0")
+    choco = os.path.join(base, "chocolatey", "lib", "ser2netweb", "tools")
+    for name, folder, marks, data in (
+            ("winget", winget, [], user),
+            ("Scoop", scoop, ["manifest.json", "install.json"], os.path.join(scoop, "data")),
+            ("Chocolatey", choco, [os.path.join("..", "ser2netweb.nupkg")], user)):
+        os.makedirs(folder)
+        for mark in marks:
+            with open(os.path.join(folder, mark), "w", encoding="utf-8") as fh:
+                fh.write("{}")
+        exe = os.path.join(folder, "ser2netweb.exe")
+        try:
+            os.link(BIN, exe)
+        except OSError:
+            shutil.copy2(BIN, exe)
+        about = _run_exe(exe, env, "--about")
+        assert f"Build: standalone executable, {name} package" in about, f"{name}:\n{about}"
+        got = _default_data_dir(exe, env)
+        assert os.path.normcase(got) == os.path.normcase(data), f"{name}: {got}, not {data}"
+    # a data folder 3.0.0 made next to winget's exe stays in use
+    os.makedirs(os.path.join(winget, "data"))
+    with open(os.path.join(winget, "data", "config.json"), "w", encoding="utf-8") as fh:
+        fh.write("{}")
+    got = _default_data_dir(os.path.join(winget, "ser2netweb.exe"), env)
+    assert os.path.normcase(got) == os.path.normcase(os.path.join(winget, "data")), got
+    print("natively: the exe as winget, Scoop and Chocolatey install it names its package "
+          "manager; its data in the user's folder (winget, Chocolatey; a data\\ next to it "
+          "with a config.json kept) or the persisted data\\ (Scoop)  OK")
 
 
 def check_custom_baud(pty, port, data, where):

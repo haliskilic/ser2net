@@ -68,6 +68,11 @@ latter a throwaway VM only). The PyPI package:
 `python -m build --no-isolation --outdir pypi-dist`, then
 `python tests/pypi_smoke.py pypi-dist` (CI jobs `pypi package …`), which installs the wheel
 in a temporary venv and starts a server on a free port.
+The APT / DNF repositories on GitHub Pages (`tools/package_repo.py`, `docs/PACKAGES.md`)
+are checked by `tests/test_package_repo.py`; a pull request that changes them runs
+`package-repo.yml`, which builds them from the latest releases, signs them with a throwaway
+key and tests them in clean containers (`tests/package_repo_smoke.sh SITE IMAGE VERSION`,
+Docker), without deploying.
 
 A test that starts a server uses `tests/_server.py` (`Server`, or `server_log` for the
 output: a file, never an unread pipe) and listens on `free_port()` / `free_udp_port()` or
@@ -228,6 +233,11 @@ pre-release) on the merge commit starts `.github/workflows/release.yml`:
    installs only with `--pre`). Nothing waits for this job: when it fails the release and
    the image are out all the same, and *Re-run failed jobs* publishes once the cause is
    fixed.
+6. not for a pre-release, the job `start the release channels` starts
+   `package-repo.yml` on `main`: it adds the release's packages to the signed APT / DNF
+   repositories on GitHub Pages (the newest three releases, `docs/PACKAGES.md`) once they
+   passed its container tests. The environment `github-pages` must allow `main` and the
+   `v*` tags; without the secret `PACKAGES_GPG_PRIVATE_KEY` it deploys nothing.
 
 **Once, before the first release that goes to PyPI** (the maintainer, on pypi.org): *Your
 account → Publishing → Add a new pending publisher*, GitHub, with PyPI project name
@@ -320,6 +330,11 @@ konteynerlerine, `tests/package_smoke.sh --host` da runner'ın systemd'sine kura
 `python -m build --no-isolation --outdir pypi-dist`, ardından
 `python tests/pypi_smoke.py pypi-dist` (CI'daki `pypi package …` işleri); wheel'i geçici bir
 venv'e kurar ve boş bir portta bir sunucu başlatır.
+GitHub Pages'teki APT / DNF depolarını (`tools/package_repo.py`, `docs/PACKAGES.md`)
+`tests/test_package_repo.py` denetler; onları değiştiren bir pull request `package-repo.yml`'yi
+çalıştırır: depoları son sürümlerden derler, iş içinde üretilen geçici bir anahtarla imzalar
+ve temiz konteynerlerde dener (`tests/package_repo_smoke.sh SITE IMAGE VERSION`, Docker);
+yayımlamaz.
 
 Sunucu başlatan bir test `tests/_server.py`'yi kullanır (`Server` ya da çıktı için
 `server_log`: okunmayan bir pipe değil, bir dosya) ve sabit bir portu değil,
@@ -481,6 +496,11 @@ yazılır; bu birleştirilince merge commit'ine atılan açıklamalı bir `vX.Y.
    trusted publishing: token yok). Ön sürüm de ön sürüm olarak gider (`X.Y.ZrcN`; pip onu
    yalnızca `--pre` ile kurar). Bu işi bekleyen bir şey yoktur: başarısız olursa da release
    ve imaj yayımlanmış olur; neden giderilince *Re-run failed jobs* yayımlar.
+6. ön sürüm değilse `start the release channels` işi `package-repo.yml`'yi `main` üzerinde
+   başlatır: sürümün paketleri konteyner testlerinden geçince GitHub Pages'teki imzalı
+   APT / DNF depolarına eklenir (en yeni üç sürüm, `docs/PACKAGES.md`). `github-pages`
+   ortamı `main`'e ve `v*` tag'lerine izin vermelidir; `PACKAGES_GPG_PRIVATE_KEY` sırrı
+   yoksa hiçbir şey yayımlanmaz.
 
 **PyPI'ye giden ilk sürümden önce bir kez** (bakımcı, pypi.org'da): *Your account →
 Publishing → Add a new pending publisher*, GitHub; PyPI project name `ser2netweb`, owner
