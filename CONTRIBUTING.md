@@ -55,7 +55,17 @@ user, `/opt/ser2netweb` and the service, so run it only on a throwaway VM. A cha
 `systemd/ser2netweb-install.sh` is tested staged under a scratch folder (`--root`,
 `tests/test_install_script.py`) and for real by `tests/install_smoke.sh <binary>` (CI job
 `install script (binary)`), which installs the binary system-wide and remounts `/tmp`: a
-throwaway VM only, too.
+throwaway VM only, too. The `.deb` / `.rpm` packages (`packaging/`, built by
+`tools/build_packages.py` with the nfpm release it pins) are checked by
+`tests/test_packages.py` (with `SER2NETWEB_NFPM=<nfpm>` it also builds them from a stand-in
+binary; `python3 tools/build_packages.py fetch-nfpm DIR` downloads that nfpm), installed in
+clean Debian, Ubuntu, Fedora and AlmaLinux containers by `tests/package_smoke.sh IMAGE ARCH`
+and on the runner's systemd by `tests/package_smoke.sh --host` (CI jobs `package on …`; the
+latter a throwaway VM only). The PyPI package:
+`pip install --require-hashes --only-binary=:all: -r requirements-build.txt`,
+`python -m build --no-isolation --outdir pypi-dist`, then
+`python tests/pypi_smoke.py pypi-dist` (CI jobs `pypi package …`), which installs the wheel
+in a temporary venv and starts a server on a free port.
 
 A test that starts a server uses `tests/_server.py` (`Server`, or `server_log` for the
 output: a file, never an unread pipe) and listens on `free_port()` / `free_udp_port()` or
@@ -122,9 +132,13 @@ by hand: Actions → Refresh pinned files → Run workflow). Until the wheels ma
 it attaches the refreshed files as a patch (artifact `refreshed-pins`). The Docker image and the standalone
 executables install from hash-locked files instead (`pip install --require-hashes`):
 `requirements-lock.txt` (the same pins for Python 3.12, with the sha256 of each release's
-files) and `requirements-build.txt` (PyInstaller and its dependencies); Dependabot updates
-them with `requirements.txt`, and `python tools/refresh_locks.py` regenerates them after a
-hand-made change (`tests/test_build_lock.py` checks that they match). The browser libraries
+files) and `requirements-build.txt` (PyInstaller, and build + setuptools for the PyPI
+package, with their dependencies); Dependabot updates them with `requirements.txt`, and
+`python tools/refresh_locks.py` regenerates them after a hand-made change
+(`tests/test_build_lock.py` checks that they match). The PyPI package (`pyproject.toml`)
+lists the packages ser2netweb imports as ranges from each pin to below its next major (next
+minor for 0.x): a pin bumped out of its range fails `tests/test_pyproject.py` in the same
+job, so widen the range in the same pull request. The browser libraries
 in `ser2netweb/web/static/` (htmx, xterm.js) are pinned in `vendor/npm/package.json`; change a
 version there and run `python tools/refresh_assets.py`, which copies the files out of the npm
 release and records their sha256 (Dependabot proposes minor updates, `refresh-pins.yml`
@@ -185,21 +199,37 @@ pre-release) on the merge commit starts `.github/workflows/release.yml`:
    (`python tools/release_guard.py tag vX.Y.Z` checks these three locally), and the commit
    is on `main`;
 2. the whole CI runs on the tagged commit (`ci.yml`, the checks `ci-ok` gates merges on);
-   its standalone build is what gets released;
+   its standalone build is what gets released, with the `.deb` / `.rpm` packages it makes of
+   the Linux binaries and the PyPI sdist and wheel;
 3. the image is built for amd64, arm64 and arm/v7, pushed to GHCR by digest only (no tag)
    as `ghcr.io/haliskilic/ser2netweb` and, for the 3.x line, as `ghcr.io/haliskilic/ser2net`
    (its name up to 2.9.x), and that digest is smoke-tested on each (amd64 and arm64
    natively, arm/v7 under QEMU);
 4. only then are the files attested and the GitHub release created with them (by `gh`; the
    jobs that can write releases or attestations run GitHub's own actions only; the files are
-   the `ser2netweb-*` ones `tools/release_guard.py assets` lists), and the tested image gets
-   its tags `X.Y.Z`, `X.Y` and `latest` under both names. A pre-release gets only its own
-   image tag, is marked as a pre-release and never becomes "Latest".
+   the `ser2netweb-*` ones and this version's four packages, as
+   `tools/release_guard.py assets` lists them), and the tested image gets its tags `X.Y.Z`,
+   `X.Y` and `latest` under both names. A pre-release gets only its own image tag, is
+   marked as a pre-release and never becomes "Latest";
+5. last, the job `publish to PyPI` uploads the sdist and wheel CI built (environment `pypi`,
+   trusted publishing: no token). A pre-release goes up as one too (`X.Y.ZrcN`, which pip
+   installs only with `--pre`). Nothing waits for this job: when it fails the release and
+   the image are out all the same, and *Re-run failed jobs* publishes once the cause is
+   fixed.
+
+**Once, before the first release that goes to PyPI** (the maintainer, on pypi.org): *Your
+account → Publishing → Add a new pending publisher*, GitHub, with PyPI project name
+`ser2netweb`, owner `haliskilic`, repository name `ser2netweb`, workflow name
+`release.yml` and environment name `pypi`. The first upload then creates the project. In
+the repository's *Settings → Environments*, `pypi` (created by the first run otherwise) can
+get the same protection as `release` (deployment branches and tags: `v*`; required
+reviewers if wanted). Until the publisher exists the job fails with an `invalid-publisher`
+error from PyPI, after everything else is out.
 
 One release runs at a time. A job that failed for a passing reason is re-run (*Re-run
 failed jobs* keeps the built files and the pushed image digest); a release that needs a
 code change gets a new patch version instead of a moved tag. **Actions → Release → Run workflow** is a dry run of the same
-pipeline on any branch: it attests, releases and tags nothing (it leaves one untagged image
+pipeline on any branch: it attests, releases, tags and uploads nothing (it leaves one untagged image
 version on GHCR).
 
 The release commit also updates the version lines of `ROADMAP.md` (its header and the
@@ -265,7 +295,17 @@ yapılan değişiklik oradaki her unit'e uygulanır (`tests/test_systemd_units.p
 `systemd/ser2netweb-install.sh` geçici bir klasör altında hazırlanarak (`--root`,
 `tests/test_install_script.py`) ve gerçekten `tests/install_smoke.sh <binary>` ile (CI'daki
 `install script (binary)` işi) test edilir; o, binary'yi sisteme kurar ve `/tmp`'yi yeniden
-bağlar: onu da yalnızca silinebilir bir sanal makinede çalıştırın.
+bağlar: onu da yalnızca silinebilir bir sanal makinede çalıştırın. `.deb` / `.rpm` paketlerini
+(`packaging/`; sabitlediği nfpm sürümüyle `tools/build_packages.py` derler)
+`tests/test_packages.py` denetler (`SER2NETWEB_NFPM=<nfpm>` ile bir yer tutucu binary'den
+derler de; o nfpm'i `python3 tools/build_packages.py fetch-nfpm DIR` indirir);
+`tests/package_smoke.sh IMAGE ARCH` onları temiz Debian, Ubuntu, Fedora ve AlmaLinux
+konteynerlerine, `tests/package_smoke.sh --host` da runner'ın systemd'sine kurar (CI'daki
+`package on …` işleri; ikincisi yalnızca silinebilir bir sanal makinede). PyPI paketi:
+`pip install --require-hashes --only-binary=:all: -r requirements-build.txt`,
+`python -m build --no-isolation --outdir pypi-dist`, ardından
+`python tests/pypi_smoke.py pypi-dist` (CI'daki `pypi package …` işleri); wheel'i geçici bir
+venv'e kurar ve boş bir portta bir sunucu başlatır.
 
 Sunucu başlatan bir test `tests/_server.py`'yi kullanır (`Server` ya da çıktı için
 `server_log`: okunmayan bir pipe değil, bir dosya) ve sabit bir portu değil,
@@ -333,10 +373,14 @@ Run workflow). Wheel'ler eşleşene kadar yalnızca "offline wheels match requir
 işi başarısız olur (test işleri bu kontrolü ona bırakır) ve yenilenmiş dosyaları bir patch
 olarak ekler (`refreshed-pins` artifact'i). Docker imajı ve standalone binary'ler bunun yerine hash kilitli dosyalardan
 kurulur (`pip install --require-hashes`): `requirements-lock.txt` (Python 3.12 için aynı
-pin'ler, her sürümün dosyalarının sha256'larıyla) ve `requirements-build.txt` (PyInstaller ve
-bağımlılıkları). Dependabot bunları `requirements.txt` ile birlikte günceller; elle yapılan bir
-değişiklikten sonra `python tools/refresh_locks.py` yeniden üretir
-(`tests/test_build_lock.py` eşleştiklerini denetler). `ser2netweb/web/static/` içindeki tarayıcı
+pin'ler, her sürümün dosyalarının sha256'larıyla) ve `requirements-build.txt` (PyInstaller ile
+PyPI paketi için build + setuptools ve bağımlılıkları). Dependabot bunları `requirements.txt`
+ile birlikte günceller; elle yapılan bir değişiklikten sonra `python tools/refresh_locks.py`
+yeniden üretir (`tests/test_build_lock.py` eşleştiklerini denetler). PyPI paketi
+(`pyproject.toml`) ser2netweb'in import ettiği paketleri her pin'den bir sonraki major
+sürümün altına kadar (0.x için bir sonraki minor) aralıklar olarak listeler: aralığının
+dışına çıkan bir pin aynı işte `tests/test_pyproject.py`'yi düşürür, aralığı aynı PR'da
+genişletin. `ser2netweb/web/static/` içindeki tarayıcı
 kütüphaneleri (htmx, xterm.js) `vendor/npm/package.json`'da sabitlenir; oradaki sürümü
 değiştirip `python tools/refresh_assets.py` çalıştırın: dosyaları npm sürümünden kopyalar ve
 sha256'larını kaydeder (Dependabot minor güncellemeleri önerir, `refresh-pins.yml` onları
@@ -395,7 +439,8 @@ yazılır; bu birleştirilince merge commit'ine atılan açıklamalı bir `vX.Y.
    üçünü yerelde `python tools/release_guard.py tag vX.Y.Z` denetler) ve commit'in
    `main` üzerinde olması;
 2. tag'lenen commit'te CI'ın tamamı çalışır (`ci.yml`, birleştirmede `ci-ok`'un beklediği
-   kontroller); yayımlanan, onun standalone derlemesidir;
+   kontroller); yayımlanan, onun standalone derlemesi, Linux binary'lerinden yaptığı
+   `.deb` / `.rpm` paketleri ve PyPI sdist'i ile wheel'idir;
 3. imaj amd64, arm64 ve arm/v7 için derlenir, GHCR'a yalnızca digest ile (tag'siz)
    `ghcr.io/haliskilic/ser2netweb` ve 3.x serisi için 2.9.x'e kadarki adıyla
    `ghcr.io/haliskilic/ser2net` olarak gönderilir ve bu digest her mimaride smoke test'ten
@@ -403,16 +448,28 @@ yazılır; bu birleştirilince merge commit'ine atılan açıklamalı bir `vX.Y.
 4. ancak bundan sonra dosyalar attest edilir ve GitHub release'i onlarla oluşturulur
    (`gh` ile; release ya da attestation yazabilen işlerde yalnızca GitHub'ın kendi
    action'ları çalışır; dosyalar `tools/release_guard.py assets`'in listelediği
-   `ser2netweb-*` dosyalarıdır), test edilen imaj da iki adı altında `X.Y.Z`, `X.Y` ve
-   `latest` tag'lerini alır.
+   `ser2netweb-*` dosyaları ve bu sürümün dört paketidir), test edilen imaj da iki adı
+   altında `X.Y.Z`, `X.Y` ve `latest` tag'lerini alır.
    Ön sürüm yalnızca kendi imaj tag'ini alır, ön sürüm olarak işaretlenir ve hiçbir zaman
-   "Latest" olmaz.
+   "Latest" olmaz;
+5. en son `publish to PyPI` işi CI'ın derlediği sdist ve wheel'i yükler (`pypi` ortamı,
+   trusted publishing: token yok). Ön sürüm de ön sürüm olarak gider (`X.Y.ZrcN`; pip onu
+   yalnızca `--pre` ile kurar). Bu işi bekleyen bir şey yoktur: başarısız olursa da release
+   ve imaj yayımlanmış olur; neden giderilince *Re-run failed jobs* yayımlar.
+
+**PyPI'ye giden ilk sürümden önce bir kez** (bakımcı, pypi.org'da): *Your account →
+Publishing → Add a new pending publisher*, GitHub; PyPI project name `ser2netweb`, owner
+`haliskilic`, repository name `ser2netweb`, workflow name `release.yml`, environment name
+`pypi`. İlk yükleme projeyi oluşturur. Depodaki *Settings → Environments* altında `pypi`
+(yoksa ilk çalıştırma oluşturur) `release` ile aynı korumayı alabilir (deployment branches
+and tags: `v*`; istenirse required reviewers). Publisher tanımlanana kadar iş, her şey
+yayımlandıktan sonra PyPI'nin `invalid-publisher` hatasıyla başarısız olur.
 
 Aynı anda tek release çalışır. Geçici bir nedenle başarısız olan iş yeniden çalıştırılır
 (*Re-run failed jobs* derlenmiş dosyaları ve gönderilmiş imaj digest'ini korur); kod
 değişikliği gereken bir release tag taşınarak değil, yeni bir yama sürümüyle düzeltilir.
 **Actions → Release → Run workflow** aynı akışı herhangi bir dalda
-deneme olarak çalıştırır: hiçbir şeyi attest etmez, yayımlamaz ya da tag'lemez (GHCR'da
+deneme olarak çalıştırır: hiçbir şeyi attest etmez, yayımlamaz, tag'lemez ya da PyPI'ye yüklemez (GHCR'da
 tag'siz bir imaj sürümü bırakır).
 
 Sürüm commit'i `ROADMAP.md`'nin sürüm satırlarını (başlığı ve Shipped girdisini) ve iki
