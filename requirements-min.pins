@@ -1,0 +1,40 @@
+# ser2netweb — the minimum dependencies: every floor of pyproject.toml, exactly, and for the
+# packages these need in turn the oldest release a distribution in docs/PACKAGING.md
+# ships (that they accept). CI's job "minimum dependencies" installs this file alone
+# (pip install --no-deps, then pip check) on Python 3.10, the oldest supported, and runs
+# the whole suite on it. It is a test of the floors, not a way to install ser2netweb:
+# requirements.txt and requirements-lock.txt are the tested, shipped set. (Not named
+# *.txt, so that Dependabot, which updates requirements files, leaves these versions be.)
+#
+# pyserial-asyncio-fast is left out on purpose: its floor is its pin (0.16), which every
+# other job runs with, and most distributions don't package it, so this job runs on
+# ser2netweb's copy of its transport (ser2netweb/engine/serial_transport.py), as they do.
+# tests/test_pyproject.py checks this file against pyproject.toml.
+pyserial==3.5
+starlette==0.46.1
+uvicorn==0.32.0
+h11==0.14.0
+websockets==14.2
+python-multipart==0.0.20
+jinja2==3.1.6
+markupsafe==2.1.3
+psutil==5.9.8
+exceptiongroup==1.2.0 ; python_version < "3.11"
+taskgroup==0.2.2 ; python_version < "3.11"
+# what those need: Debian 13's anyio, RHEL 10's idna and typing_extensions, EPEL 10's
+# click (on Python 3.10 taskgroup needs typing_extensions 4.12.2)
+anyio==4.8.0
+sniffio==1.3.1
+idna==3.7
+click==8.1.7
+typing_extensions==4.12.2 ; python_version < "3.11"
+typing_extensions==4.9.0 ; python_version >= "3.11"
+colorama==0.4.6 ; platform_system == "Windows"
+# the extras (mqtt, ldap, oidc, tls) and what they need
+paho-mqtt==1.6.1
+ldap3==2.9.1
+pyasn1==0.6.1
+authlib==1.4.0
+cryptography==43.0.0
+cffi==1.17.1
+pycparser==2.22

@@ -3,7 +3,8 @@
 The ci-ok job in .github/workflows/ci.yml is the one check branch protection needs: it
 passes only when every job it needs passed. A job added to ci.yml but not to ci-ok's
 needs would not gate a merge, so this test fails until it is listed there (test-next,
-the newest Python, is the one job left out on purpose; it must be continue-on-error).
+the newest Python, and min-deps, the oldest dependencies pyproject.toml allows, are left
+out on purpose; they must be continue-on-error).
 Until branch protection requires ci-ok instead, it also asks for the 14 check names it
 requires today: a renamed or removed one would block every pull request. And every push
 to main gets a run of its own (no shared concurrency group that drops waiting runs).
@@ -15,7 +16,8 @@ import re
 from _workflows import jobs as _jobs
 from _workflows import read as _read
 
-NOT_GATING = {"test-next"}  # may fail (newest Python); not a merge condition
+# may fail (the newest Python; the floors of pyproject.toml): not merge conditions
+NOT_GATING = {"test-next", "min-deps"}
 
 
 def test_ci_ok_needs_every_job():
