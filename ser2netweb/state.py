@@ -33,6 +33,7 @@ from logging.handlers import RotatingFileHandler
 from typing import Any
 
 from . import accounts, clock, envvars, logsetup, storage, tlsreload
+from .capture import Captures
 from .config import (
     AppConfig, ConfigStore, ConfigWriteError, User, fold, lock_down_dir, mapping_file,
     valid_mapping_id,
@@ -734,6 +735,7 @@ class AppState:
         # uploaded imports waiting for the user to confirm the preview: token -> item
         self.pending_imports: dict[str, dict] = {}
         self.notifier = Notifier(self)
+        self.captures = Captures(self)  # timed captures (ser2netweb/capture.py)
         self.config_lock = asyncio.Lock()
         self.started_at = time.time()        # when this process started (wall clock)
         self.started_mono = time.monotonic()  # the same for how long it runs (uptime)
@@ -1020,6 +1022,17 @@ class AppState:
         failed += [(os.path.basename(p), e.strerror or str(e))
                    for p, e in result.items() if e is not None]
         return [os.path.basename(p) for p, e in result.items() if e is None], failed
+
+    def trace_list(self, mapping_id: str) -> list[dict]:
+        """A mapping's trace files (trace_files) as {name, path, size, mtime}, newest
+        first. Blocking."""
+        out = []
+        for path in self.trace_files(mapping_id):
+            with _suppress(OSError):
+                st = os.stat(path)
+                out.append({"name": os.path.basename(path), "path": path,
+                            "size": st.st_size, "mtime": st.st_mtime})
+        return out
 
     def traced_mapping_ids(self) -> set[str]:
         """The ids that have at least one file in data/traces: what comes before the first
@@ -1432,10 +1445,12 @@ class AppState:
         # drop the logs and traces of mappings that no longer exist
         self.prune_mapping_logs()
         self.prune_orphan_traces()
+        await self.captures.end_overdue()  # (before any of them is traced again)
         await self.ports.start()
         await self.supervisor.start_all(self.config)
         await self.cluster.start()  # no-op unless the LAN cluster is enabled + keyed
         await self.notifier.start()
+        await self.captures.start()
         # run an immediate pass, then hourly, to enforce log retention
         self._maint_task = asyncio.create_task(self._log_maintenance_loop(), name="log-maintenance")
         self._requests_task = asyncio.create_task(self._account_requests_loop(),
@@ -1451,6 +1466,7 @@ class AppState:
         self.failed_logins.flush()  # failed sign-ins counted but not recorded yet
         for records in (self.view_records, self.console_writes, self.api_auth_failures):
             records.flush()
+        await self.captures.stop()
         await self.notifier.stop()
         await self.cluster.stop()
         await self.supervisor.stop_all()

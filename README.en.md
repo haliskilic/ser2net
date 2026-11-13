@@ -1029,8 +1029,14 @@ what differs and an option table: [`docs/MIGRATING-FROM-SER2NET.md`](docs/MIGRAT
   what is typed with it, and the hex view's text column too. The bridge passes the bytes
   unchanged either way.
 - **Trace** (operators): the mapping's trace files, to list, download and delete (one
-  file or all, audited) — while tracing is on, and after it was switched off as long as
-  files are left.
+  file or all, audited). **Timed recording:** for a mapping whose trace is off, *Record*
+  traces it for 15 minutes, 1 hour or 24 hours and then turns the trace off by itself —
+  for catching a fault without leaving a trace on that fills the disk. Clients stay
+  connected (the mapping is not restarted), the traffic goes to
+  `traces/<id>-capture.log`, *Stop now* ends it early, and the end time is stored
+  (`options.trace_until` in `config.json`), so a restart neither loses nor prolongs it. A
+  mapping whose *Trace file name* is set is traced all the time and is never turned off
+  by this. Starts, stops and the automatic end are in the audit log.
 - **Settings:** change password, **two-factor sign-in**, **web UI access** (login required /
   open access with a role), admin TLS (provide paths or generate self-signed; a previous
   generated pair is kept as `*.bak`; new connections get it at once, no restart),
@@ -1125,9 +1131,16 @@ curl -X PATCH -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/me
   -d '{"network":{"port":4002}}' http://HOST:8080/api/v1/mappings/<id>
 # start / stop / restart
 curl -X POST -H "Authorization: Bearer $TOKEN" http://HOST:8080/api/v1/mappings/<id>/stop
+# record the traffic for 15 minutes, then list and fetch the trace files
+curl -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"minutes":15}' http://HOST:8080/api/v1/mappings/<id>/capture
+curl -H "Authorization: Bearer $TOKEN" http://HOST:8080/api/v1/mappings/<id>/traces
+curl -H "Authorization: Bearer $TOKEN" -O http://HOST:8080/api/v1/mappings/<id>/traces/<id>-capture.log
 ```
 Endpoints: `GET/POST /mappings`, `GET/PUT/PATCH/DELETE /mappings/{id}`,
-`POST /mappings/{id}/{start|stop|restart}`, `POST /import`, `GET /status`, `GET /ports`,
+`POST /mappings/{id}/{start|stop|restart}`, `GET/DELETE /mappings/{id}/traces`,
+`GET/DELETE /mappings/{id}/traces/{name}`, `POST/DELETE /mappings/{id}/capture`,
+`POST /import`, `GET /status`, `GET /ports`,
 `GET /metrics`, `GET /info` (ser2netweb's version, the API's version and its `features`),
 `GET /health` and `GET /openapi.json` (both unauthenticated). The web UI's own endpoints
 (`/api/status`, the dashboard's table, which answers `204` or only the changed counters to a
@@ -1143,6 +1156,17 @@ that changes only what the body names. An object merges into the stored one
 replaces it, and `null` resets a field to its default (`{"network":{"allowed_client_ips":null}}`).
 The result is checked like any edit; a refused patch changes nothing (HTTP 400). The
 previous configuration of every change stays in `backups/`.
+**Trace files:** `GET /mappings/{id}/traces` lists a mapping's trace files (`name`, `size`
+in bytes, `time` last written as Unix time; also `tracing`, the `file` written now and
+`capture_until`) for any token. Downloading one (`GET .../traces/{name}`) needs an
+**operator or admin token** — traces hold what is sent to the device too, which a viewer
+does not see in the web UI either (`403` for a viewer token) — and is recorded in the audit
+log. `DELETE .../traces/{name}` deletes one file, `DELETE .../traces` all of them (a trace
+that is on goes on in a new file). `POST /mappings/{id}/capture` with `{"minutes": n}`
+(1 to 1440) starts a timed recording as the Trace panel does, again while one runs sets a
+new end, `DELETE .../capture` ends it; a mapping that is traced by its `trace_both` answers
+`409`. A `PUT` that leaves `options.trace_until` out ends a running capture (and restarts the
+mapping, like any change); a `PATCH` of other fields keeps it.
 `GET /mappings/{id}` answers the mapping's revision in `ETag`: send it back in `If-Match`
 with a `PUT` or `DELETE` to change the mapping only if nobody changed it since (else `412`,
 `precondition_failed`); without `If-Match` they work as before.

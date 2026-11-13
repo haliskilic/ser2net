@@ -1565,5 +1565,20 @@
   "Source code": "Kaynak kodu",
   "Licences": "Lisanslar",
   "ser2netweb %(version)s is licensed under the GNU AGPL-3.0 or a separate commercial licence. The components it ships keep their own licences, listed below.": "ser2netweb %(version)s, GNU AGPL-3.0 ya da ayrı bir ticari lisansla lisanslanır. İçinde gelen bileşenler kendi lisanslarını korur; aşağıda listelenir.",
-  "Source code:": "Kaynak kodu:"
+  "Source code:": "Kaynak kodu:",
+  "Timed recording: stops by itself at %(time)s.": "Süreli kayıt: %(time)s zamanında kendiliğinden durur.",
+  "Stop now": "Şimdi durdur",
+  "Record for": "Kayıt süresi",
+  "Record on for": "Kaydı şu kadar sürdür",
+  "%(num)s minute": "%(num)s dakika",
+  "%(num)s minutes": "%(num)s dakika",
+  "%(num)s hour": "%(num)s saat",
+  "%(num)s hours": "%(num)s saat",
+  "● Record": "● Kaydet",
+  "then recording turns itself off; clients stay connected": "sonra kayıt kendiliğinden kapanır; istemciler bağlı kalır",
+  "the mapping is not running: nothing is recorded until it is started": "eşleme çalışmıyor: başlatılana kadar hiçbir şey kaydedilmez",
+  "Choose how long to record: 15 minutes, 1 hour or 24 hours.": "Ne kadar süre kaydedileceğini seç: 15 dakika, 1 saat ya da 24 saat.",
+  "This mapping is traced already (its trace file name is set): there is nothing to time.": "Bu eşlemenin trace'i zaten açık (trace dosya adı ayarlı): süreli kayda gerek yok.",
+  "Recording until {0}; it then stops by itself.": "{0} zamanına kadar kaydediliyor; sonra kendiliğinden durur.",
+  "Recording stopped.": "Kayıt durduruldu."
 }

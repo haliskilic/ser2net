@@ -91,7 +91,9 @@ def test_spec():
                 assert o["security"] == [], rel
                 continue
             assert {"401", "503"} <= codes, (method, rel, codes)
-            assert ("403" in codes) == (method in ("POST", "PUT", "PATCH", "DELETE")), (method, rel)
+            # (a trace download is the one GET a viewer token may not make)
+            assert ("403" in codes) == (method in ("POST", "PUT", "PATCH", "DELETE")
+                                        or rel == "/mappings/{mid}/traces/{name}"), (method, rel)
             for code, r in o["responses"].items():
                 if code[0] in "45" and code != "413":
                     assert r["$ref"].startswith("#/components/responses/"), (method, rel, code)

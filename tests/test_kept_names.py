@@ -126,7 +126,9 @@ def test_stored_and_sent_names():
     assert auth._payload_secret(secret) == want
     m = MappingConfig(name="m1")
     key = hmac.new(secret.encode(), f"{OLD} mapping revision".encode(), hashlib.sha256).digest()
-    body = json.dumps(m.to_dict(), sort_keys=True, separators=(",", ":"), default=str)
+    content = m.to_dict()
+    del content["options"]["trace_until"]  # (3.1: a timed capture's end is no setting)
+    body = json.dumps(content, sort_keys=True, separators=(",", ":"), default=str)
     assert mapping_revision(secret, m) == _hmac(key, body.encode())[:24]
     static = os.path.join(ROOT, "ser2netweb", "web", "static")
     with open(os.path.join(static, "app.js"), encoding="utf-8") as fh:

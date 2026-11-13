@@ -4,8 +4,8 @@ Checks:
   * operators delete one trace file or all of a mapping's from the trace panel (viewers
     403, CSRF header required, only names of the mapping's own list, audited as
     trace_delete); the file being written is closed by the trace writer, not left open
-    deleted, and tracing goes on; a mapping without tracing whose files are all gone no
-    longer offers Trace;
+    deleted, and tracing goes on; a mapping whose files are all gone still offers Trace
+    (a timed capture is started there);
   * Settings -> Retention (admin): trace files not written for N days are deleted at once
     and then every hour (0, the default, keeps them); a value out of range is refused;
     log and audit records and backups older than N days likewise (0, the default: their
@@ -135,7 +135,7 @@ def delete_traces():
         assert st == 200 and "Deleted 2 trace files." in page and "No trace files yet." in page
         assert not [n for n in os.listdir(traces) if n.startswith(f"{B}-")], os.listdir(traces)
         st, _, body = op.get("/api/status")
-        assert f'hx-get="/api/mappings/{B}/traces"' not in body, "no files, no tracing: no Trace"
+        assert f'hx-get="/api/mappings/{B}/traces"' in body, "Trace stays: a capture starts there"
         st, _, page = op.post(f"/api/mappings/{B}/traces", method="DELETE", htmx=True)
         assert st == 200 and "No trace files to delete." in page
         assert op.post("/api/mappings/nosuchmapping/traces", method="DELETE", htmx=True)[0] == 404

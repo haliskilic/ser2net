@@ -1062,8 +1062,15 @@ Adımlar, farklar ve seçenek tablosu (İngilizce):
   gösterir, yazılanı bununla gönderir; hex görünümünün metin sütunu da. Köprü baytları her
   durumda değiştirmeden iletir.
 - **Trace** (operator): eşlemenin trace dosyaları; listelenir, indirilir ve silinir (tek
-  dosya ya da tümü, denetim kaydına yazılır). Tracing açıkken ve kapatıldıktan sonra da
-  dosya kaldığı sürece görünür.
+  dosya ya da tümü, denetim kaydına yazılır). **Süreli kayıt:** trace'i kapalı bir eşlemede
+  *Kaydet*, trafiği 15 dakika, 1 saat ya da 24 saat boyunca kaydeder ve sonra trace'i
+  kendiliğinden kapatır — diski dolduran bir trace'i açık bırakmadan bir arızayı yakalamak
+  için. İstemciler bağlı kalır (eşleme yeniden başlatılmaz), trafik
+  `traces/<id>-capture.log` dosyasına yazılır, *Şimdi durdur* kaydı erken bitirir ve bitiş
+  zamanı saklanır (`config.json` içinde `options.trace_until`): yeniden başlatma kaydı ne
+  kaybettirir ne de uzatır. *Trace dosya adı* ayarlı bir eşleme sürekli kaydedilir ve bu
+  özellik onu asla kapatmaz. Başlatma, durdurma ve kendiliğinden bitiş denetim kaydına
+  yazılır.
 - **Ayarlar:** *Parolanı değiştir*, **iki adımlı giriş**, **web arayüzü erişimi** (giriş zorunlu /
   parolasız rol), admin TLS (yol ver veya self-signed üret; daha önce üretilen çift `*.bak`
   olarak saklanır; yeni bağlantılar hemen kullanır, yeniden başlatma gerekmez), **REST API
@@ -1169,9 +1176,16 @@ curl -X PATCH -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/me
   -d '{"network":{"port":4002}}' http://HOST:8080/api/v1/mappings/<id>
 # başlat / durdur / yeniden başlat
 curl -X POST -H "Authorization: Bearer $TOKEN" http://HOST:8080/api/v1/mappings/<id>/stop
+# trafiği 15 dakika kaydet, sonra trace dosyalarını listele ve indir
+curl -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"minutes":15}' http://HOST:8080/api/v1/mappings/<id>/capture
+curl -H "Authorization: Bearer $TOKEN" http://HOST:8080/api/v1/mappings/<id>/traces
+curl -H "Authorization: Bearer $TOKEN" -O http://HOST:8080/api/v1/mappings/<id>/traces/<id>-capture.log
 ```
 Uç noktalar: `GET/POST /mappings`, `GET/PUT/PATCH/DELETE /mappings/{id}`,
-`POST /mappings/{id}/{start|stop|restart}`, `POST /import`, `GET /status`, `GET /ports`,
+`POST /mappings/{id}/{start|stop|restart}`, `GET/DELETE /mappings/{id}/traces`,
+`GET/DELETE /mappings/{id}/traces/{name}`, `POST/DELETE /mappings/{id}/capture`,
+`POST /import`, `GET /status`, `GET /ports`,
 `GET /metrics`, `GET /info` (ser2netweb'in sürümü, API'nin sürümü ve sunduğu `features`),
 `GET /health` ve `GET /openapi.json` (ikisi de kimlik doğrulamasız). Web arayüzünün kendi uç
 noktaları (`/api/status`: panonun tablosu; `X-Content-Hash`'ini geri gönderen sayfaya `204`
@@ -1189,6 +1203,18 @@ adresini ve izin listesini korur), bir liste ya da değer eskisinin yerine geçe
 alanı varsayılanına döndürür (`{"network":{"allowed_client_ips":null}}`). Sonuç her düzenleme
 gibi denetlenir; reddedilen bir patch hiçbir şeyi değiştirmez (HTTP 400). Her değişiklikten
 önceki yapılandırma `backups/` içinde kalır.
+**Trace dosyaları:** `GET /mappings/{id}/traces` bir eşlemenin trace dosyalarını listeler
+(`name`, bayt olarak `size`, son yazılma zamanı Unix zamanı olarak `time`; ayrıca `tracing`,
+şu an yazılan `file` ve `capture_until`); her token okuyabilir. Bir dosyayı indirmek
+(`GET .../traces/{name}`) **operator ya da admin token'ı** ister — trace'ler cihaza
+gönderileni de içerir, viewer bunu web arayüzünde de görmez (viewer token'ına `403`) — ve
+denetim kaydına yazılır. `DELETE .../traces/{name}` tek dosyayı, `DELETE .../traces` hepsini
+siler (açık bir trace yeni bir dosyada sürer). `{"minutes": n}` (1 - 1440) gövdeli
+`POST /mappings/{id}/capture`, Trace panelindeki gibi süreli bir kayıt başlatır; kayıt
+sürerken yeniden gönderilirse yeni bitiş zamanı geçerli olur, `DELETE .../capture` kaydı
+bitirir; `trace_both` ile zaten kaydedilen bir eşleme `409` yanıtı verir.
+`options.trace_until` alanını içermeyen bir `PUT`, süren kaydı bitirir (ve her değişiklik
+gibi eşlemeyi yeniden başlatır); başka alanların `PATCH`'i kaydı korur.
 `GET /mappings/{id}` eşlemenin revizyonunu `ETag` olarak verir: bunu bir `PUT` ya da
 `DELETE` ile `If-Match` olarak geri gönderirsen eşleme yalnızca o zamandan beri kimse
 değiştirmediyse değişir (yoksa `412`, `precondition_failed`); `If-Match` olmadan eskisi gibi

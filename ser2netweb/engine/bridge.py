@@ -166,14 +166,14 @@ def trace_path(trace_dir: str, mapping: MappingConfig) -> str:
     prefix keeps two mappings with the same file name apart (and makes a mapping's
     files easy to find); the name is already sanitised by config.trace_file_name.
     Raises ValueError if that would not be a file in trace_dir (config.mapping_file)."""
-    return mapping_file(trace_dir, mapping.id, f"-{mapping.options.trace_both}")
+    return mapping_file(trace_dir, mapping.id, f"-{mapping.options.trace_file}")
 
 
 def open_tracer(mapping: MappingConfig, trace_dir: Optional[str], log,
                 status: Optional["RunnerStatus"] = None) -> Optional["Tracer"]:
     """The mapping's tracer when tracing is on (None when off or unavailable). `status`:
     the runner's, whose trace_error the tracer keeps up to date."""
-    if not mapping.options.trace_both:
+    if not mapping.options.trace_file:
         return None
     if not trace_dir:
         log("trace not written: no data directory to keep it in")
@@ -187,6 +187,28 @@ def open_tracer(mapping: MappingConfig, trace_dir: Optional[str], log,
     if not tracer.error:  # else it said why, and keeps trying
         log(f"tracing traffic to {tracer.path}")
     return tracer
+
+
+async def retrace(runner, trace_dir: Optional[str], log) -> bool:
+    """Open or close a running runner's trace as its mapping's options ask for now (a
+    timed capture begun or ended: MappingOptions.trace_file), leaving its clients, serial
+    port and listener as they are. Returns whether anything changed. Called in the
+    mapping's turn (Supervisor.retrace)."""
+    mapping = runner.mapping
+    want = ""
+    if mapping.options.trace_file and trace_dir:
+        with contextlib.suppress(ValueError):
+            want = trace_path(trace_dir, mapping)
+    old = runner._tracer
+    if (old.path if old is not None else "") == want:
+        return False
+    runner._tracer = None  # nothing is traced from here on
+    if old is not None:
+        await old.aclose()
+        log(f"tracing to {old.path} ended")
+    if want:
+        runner._tracer = open_tracer(mapping, trace_dir, log, runner.status)
+    return True
 
 
 def remove_files(paths) -> dict[str, Optional[OSError]]:
@@ -1018,6 +1040,10 @@ class MappingRunner:
     def tracer(self) -> Optional[Tracer]:
         """The trace writer while the mapping runs with tracing on."""
         return self._tracer
+
+    async def retrace(self) -> bool:
+        """Open or close the trace as the options ask for now (bridge.retrace)."""
+        return await retrace(self, self.trace_dir, self._log)
 
     @property
     def listener(self) -> Optional[netguard.Listener]:

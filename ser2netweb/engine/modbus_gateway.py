@@ -53,7 +53,7 @@ from . import modbus, netguard, sockopts, tls
 from .access import AccessPolicy, connection_order, server_ssl
 from .bridge import (
     FROM_DEVICE, TO_DEVICE, RunnerStatus, Tracer, describe_disconnect, fmt_duration,
-    log_ignored_settings, open_tracer,
+    log_ignored_settings, open_tracer, retrace,
 )
 from .mqtt_pub import shown
 from .serial_link import SerialLink
@@ -264,6 +264,10 @@ class ModbusGatewayRunner:
     def tracer(self) -> Optional[Tracer]:
         """The trace writer while the mapping runs with tracing on."""
         return self._tracer
+
+    async def retrace(self) -> bool:
+        """Open or close the trace as the options ask for now (bridge.retrace)."""
+        return await retrace(self, self.trace_dir, self._log)
 
     @property
     def listener(self) -> Optional[netguard.Listener]:

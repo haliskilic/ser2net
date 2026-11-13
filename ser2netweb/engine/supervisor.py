@@ -468,6 +468,18 @@ class Supervisor:
                 return await asyncio.wrap_future(done)
             return await asyncio.to_thread(remove_files, paths)
 
+    async def retrace(self, mapping_id: str) -> bool:
+        """In the mapping's turn: its running runner opens or closes its trace as the
+        options ask for now (a timed capture begun or ended), keeping its clients and its
+        serial port. A runner that is not running opens its trace when it starts.
+        Returns whether a trace was opened or closed."""
+        async with self._turn(mapping_id):
+            runner = self._runners.get(mapping_id)
+            change = getattr(runner, "retrace", None)
+            if runner is None or change is None or runner.status.state not in ALIVE_STATES:
+                return False
+            return bool(await change())
+
     async def renew_tls(self, mapping_id: str, build: Callable[[], Any]) -> Optional[str]:
         """In the mapping's turn: its running TLS listener gets a context made by build()
         (tlsreload.prepare) for the connections it accepts from now on; those open keep
