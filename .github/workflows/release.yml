@@ -12,7 +12,8 @@ name: Release
 # passed publish: the release assets (the executables, the packages) with SHA256SUMS,
 # SBOMs, license texts and build provenance, then the tags of the tested image (X.Y.Z, X.Y
 # and latest; a pre-release, vX.Y.Z-rc.N, only its own and marked as a pre-release) and the
-# PyPI package CI built and tested (trusted publishing, the environment pypi). The
+# PyPI package CI built and tested (trusted publishing, the environment pypi), and the
+# image's copy on Docker Hub (docker-hub.yml, when its secrets are set). The
 # image is ghcr.io/<owner>/ser2netweb; the 3.x line also gets the same digest and tags
 # under the image's name up to 2.9.x, ghcr.io/<owner>/ser2net, so composes and
 # auto-updaters on that path keep getting releases. The write permissions belong to the
@@ -399,6 +400,26 @@ jobs:
               [ "$got" = "$DIGEST" ] || { echo "::error::$image:$tag is $got, not the tested $DIGEST"; exit 1; }
             done
           done
+
+  # Once the tested digest has its GHCR tags: the same digest and tags on Docker Hub,
+  # docker.io/<owner>/ser2netweb (.github/workflows/docker-hub.yml: imagetools create, no
+  # rebuild). Without the secrets DOCKERHUB_USERNAME / DOCKERHUB_TOKEN it skips with a notice;
+  # a failure there leaves the release, GHCR and PyPI as they are (nothing waits for it, and
+  # a re-run copies again). Read-only here: the Docker Hub token is its only credential.
+  docker-hub:
+    name: copy the image to Docker Hub
+    needs: [verify, image-build, image]
+    if: github.event_name == 'push'
+    permissions:
+      contents: read
+      packages: read         # read the tagged image on GHCR
+    uses: ./.github/workflows/docker-hub.yml
+    with:
+      digest: ${{ needs.image-build.outputs.digest }}
+      tags: ${{ needs.verify.outputs.image-tags }}
+    secrets:
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+      DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
 
   # Once the GitHub release is out: the sdist and wheel CI built and checked from the tagged
   # commit (ci.yml's job "pypi package (build)", artifact pypi-dist) go to PyPI as they are,

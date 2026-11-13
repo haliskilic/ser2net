@@ -1,0 +1,135 @@
+name: Docker Hub mirror
+
+# The published image's copy on Docker Hub, docker.io/<owner>/ser2netweb (<owner>: the
+# repository variable DOCKERHUB_NAMESPACE, else the GitHub owner): the very digest GHCR has
+# (ghcr.io/<owner>/ser2netweb, which release.yml tested and tagged) under the same tags,
+# copied with docker buildx imagetools create, no rebuild. The image index, its manifests,
+# layers and in-index provenance / SBOM come over byte for byte, so the digest stays and
+# `gh attestation verify oci://docker.io/<owner>/ser2netweb:<tag> -R <owner>/ser2netweb`
+# finds the build provenance GitHub keeps for it (no attestation is pushed to Docker Hub).
+# Called by release.yml once the GHCR tags are there (X.Y.Z, X.Y, latest; a pre-release its
+# own tag only) and by image-refresh.yml once it moved X.Y / latest. By hand (Actions ->
+# Docker Hub mirror -> Run workflow) for an existing release, e.g. v3.0.0: its X.Y.Z, and
+# X.Y / latest when GHCR's still point at that digest.
+# Needs the repository secrets DOCKERHUB_USERNAME and DOCKERHUB_TOKEN (a Docker Hub access
+# token with Read & Write; docs/DOCKER.md: Docker Hub); without them it skips with a notice.
+on:
+  workflow_call:
+    inputs:
+      digest:
+        description: The image's digest on GHCR (sha256:...)
+        required: true
+        type: string
+      tags:
+        description: The tags to give it, space-separated (X.Y.Z X.Y latest)
+        required: true
+        type: string
+    secrets:
+      DOCKERHUB_USERNAME:
+        required: false
+      DOCKERHUB_TOKEN:
+        required: false
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: The release whose image to copy (vX.Y.Z)
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  mirror:
+    name: copy the image to Docker Hub
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: read         # pull the image from GHCR
+    # one copy at a time (a release and a refresh could otherwise move :latest together)
+    concurrency:
+      group: docker-hub
+      cancel-in-progress: false
+    env:
+      HUB_USER: ${{ secrets.DOCKERHUB_USERNAME }}
+      HUB_NAMESPACE: ${{ vars.DOCKERHUB_NAMESPACE }}
+    steps:
+      - id: hub
+        name: Are the Docker Hub secrets there?
+        env:
+          HUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+        run: |
+          if [ -z "$HUB_USER" ] || [ -z "$HUB_TOKEN" ]; then
+            echo "::notice::Docker Hub copy skipped: no secrets DOCKERHUB_USERNAME and DOCKERHUB_TOKEN (docs/DOCKER.md: Docker Hub)"
+            echo "copy=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "copy=true" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Sign in to GHCR (read) and Docker Hub
+        if: steps.hub.outputs.copy == 'true'
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          HUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+        run: |
+          echo "$TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          echo "$HUB_TOKEN" | docker login docker.io -u "$HUB_USER" --password-stdin
+      - id: what
+        name: The digest and its tags
+        if: steps.hub.outputs.copy == 'true'
+        env:
+          DIGEST: ${{ inputs.digest }}
+          TAGS: ${{ inputs.tags }}
+          RELEASE: ${{ inputs.tag }}
+        run: |
+          owner=${GITHUB_REPOSITORY_OWNER,,}
+          source=ghcr.io/$owner/ser2netweb
+          namespace=${HUB_NAMESPACE:-$owner}
+          namespace=${namespace,,}
+          if [ -z "$DIGEST" ]; then
+            # by hand: the release's image on GHCR, and which of its tags still point there
+            if ! printf '%s' "$RELEASE" | grep -Eqx 'v[0-9]+\.[0-9]+\.[0-9]+(-rc\.[0-9]+)?'; then
+              echo "::error::$RELEASE is not a release tag (vX.Y.Z)"; exit 1
+            fi
+            version=${RELEASE#v}
+            DIGEST=$(docker buildx imagetools inspect "$source:$version" --format '{{json .Manifest}}' | jq -r .digest)
+            TAGS=$version
+            case $version in
+              *-*) ;;  # a pre-release: its own tag only
+              *)
+                for tag in "${version%.*}" latest; do
+                  got=$(docker buildx imagetools inspect "$source:$tag" --format '{{json .Manifest}}' | jq -r .digest)
+                  if [ "$got" = "$DIGEST" ]; then
+                    TAGS="$TAGS $tag"
+                  else
+                    echo "::notice::$source:$tag is another image now ($got): not copied"
+                  fi
+                done
+                ;;
+            esac
+          fi
+          printf '%s' "$DIGEST" | grep -Eqx 'sha256:[0-9a-f]{64}' || { echo "::error::not a digest: $DIGEST"; exit 1; }
+          for tag in $TAGS; do
+            printf '%s' "$tag" | grep -Eqx '[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}' || { echo "::error::not a tag: $tag"; exit 1; }
+          done
+          printf '%s' "$namespace" | grep -Eqx '[a-z0-9]+([._-][a-z0-9]+)*' || { echo "::error::not a Docker Hub namespace: $namespace"; exit 1; }
+          echo "$source@$DIGEST -> docker.io/$namespace/ser2netweb: $TAGS"
+          { echo "source=$source"; echo "target=docker.io/$namespace/ser2netweb"
+            echo "digest=$DIGEST"; echo "tags=$TAGS"; } >> "$GITHUB_OUTPUT"
+      - name: Copy it (docker buildx imagetools create), the same digest under each tag
+        if: steps.hub.outputs.copy == 'true'
+        env:
+          SOURCE: ${{ steps.what.outputs.source }}
+          TARGET: ${{ steps.what.outputs.target }}
+          DIGEST: ${{ steps.what.outputs.digest }}
+          TAGS: ${{ steps.what.outputs.tags }}
+        run: |
+          refs=()
+          for tag in $TAGS; do refs+=(--tag "$TARGET:$tag"); done
+          docker buildx imagetools create "${refs[@]}" "$SOURCE@$DIGEST"
+          for tag in $TAGS; do
+            got=$(docker buildx imagetools inspect "$TARGET:$tag" --format '{{json .Manifest}}' | jq -r .digest)
+            echo "$TARGET:$tag -> $got"
+            [ "$got" = "$DIGEST" ] || { echo "::error::$TARGET:$tag is $got, not $DIGEST"; exit 1; }
+          done
+          echo "Docker Hub: $TARGET $TAGS -> $DIGEST" >> "$GITHUB_STEP_SUMMARY"
