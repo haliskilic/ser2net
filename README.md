@@ -1346,8 +1346,9 @@ anahtarıyla ve/veya yanında durduğu alanın CA dosyasını alır ve yolların
 yazar (form kaydedilince geçerli olurlar). Her biri en fazla 256 KB olan PEM dosyaları (CA
 dosyası DER de olabilir). Saklanmadan önce ser2netweb'in yükleyeceği gibi yüklenirler:
 sertifikaya ait olmayan bir anahtar, parolası verilmemiş şifreli bir anahtar ya da
-sertifika içermeyen bir CA dosyası reddedilir; yönetim arayüzünün sertifika ve anahtarı bir
-eşleme için (ya da bir eşlemeninki yönetim arayüzü için) de reddedilir. Dosyalar veri
+sertifika içermeyen bir CA dosyası reddedilir; yönetim arayüzünün anahtarı bir eşleme için
+(ya da bir eşlemeninki yönetim arayüzü için) de reddedilir, başka biçimde yazılmış bir
+kopyası ya da başka bir sertifikayla da (açık anahtarlar karşılaştırılır). Dosyalar veri
 klasörünün `tls/` dizininde `uploaded-<hash>-cert.pem` / `-key.pem` / `-ca.pem` adlarıyla,
 her biri kendi özetiyle adlandırılarak (bir yükleme kullanılan bir anahtarın yerine geçmez),
 yalnızca ser2netweb'in çalıştığı hesabın okuyabileceği şekilde saklanır ve her yükleme

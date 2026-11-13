@@ -1289,8 +1289,9 @@ file of the field it stands next to, and puts their paths into the form's fields
 apply when the form is saved). PEM files of at most 256 KB each (a CA file may be DER).
 Before anything is kept they are loaded as ser2netweb will load them: a key that is not the
 certificate's, an encrypted key without its password or a CA file without a certificate
-is refused, and so is the admin UI's pair for a mapping (or a mapping's for the admin UI).
-They are kept in the data folder's `tls/` as `uploaded-<hash>-cert.pem` /
+is refused, and so is the admin UI's key for a mapping (or a mapping's for the admin UI),
+also as a copy written another way or with another certificate (the public keys are
+compared). They are kept in the data folder's `tls/` as `uploaded-<hash>-cert.pem` /
 `-key.pem` / `-ca.pem`, each named by its own hash (an upload never replaces a key in use),
 readable only by the account ser2netweb runs as, and every upload is in the
 audit log (`admin_tls_upload`, `tls_upload`). Files uploaded earlier stay there until you

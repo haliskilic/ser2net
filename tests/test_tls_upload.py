@@ -8,7 +8,8 @@ Checks:
     without or with a wrong password, a file that is not PEM, a file over the size limit,
     a certificate without its key and a CA file without a certificate are refused and
     leave nothing behind; uploads at the same time don't get in each other's way; the
-    admin UI's pair is refused for a mapping and a mapping's for the admin UI;
+    admin UI's pair is refused for a mapping and a mapping's for the admin UI, also as
+    another certificate for the same key written another way (public key compared);
   * the mapping form (admins): POST /api/mappings/tls-upload stores the files and answers
     their paths for the form's fields (HX-Trigger: tlsUploaded), audited; operators 403,
     the CSRF header is required, a bad pair is 400 with the reason; a mapping saved with
@@ -160,9 +161,16 @@ def test_store(src):
                 key=key_a.replace(b"\n", b"\r\n"), others=(other,), reuse_message="reused")
         refused("reused", data_dir=data, cert=cert_a, key=key_a,
                 others=(("", ""), ("/no/such/cert", other[1])), reuse_message="reused")
+        # its key with another certificate, written another way (encrypted, PKCS#1)
+        refused("reused", data_dir=data, cert=again_cert, key=again_key, password="pw",
+                others=(other,), reuse_message="reused")
+        assert tlsupload.public_key(again_cert) == tlsupload.public_key(cert_a)
+        assert tlsupload.public_key(cert_b) != tlsupload.public_key(cert_a)
+        assert tlsupload.public_key(key_a) is None and tlsupload.public_key(b"x") is None
         assert tlsupload.store(data, cert=cert_b, key=key_b, others=(other,),
                                reuse_message="reused")
-        print("store: the admin UI's pair is not a mapping's (line ends aside)  OK")
+        print("store: the admin UI's pair is not a mapping's (line ends aside, its key "
+              "with another certificate, written another way)  OK")
 
 
 def served_cert(port):

@@ -6,8 +6,9 @@ anything is kept, the files are written aside in the data folder's tls/ (private
 folder 0700 or, on Windows, owner-only like the data folder; each file 0600) and loaded as
 ser2netweb will load them (engine/tls.py): the key must be the certificate's and decrypt
 with the password given, a CA file must hold a certificate, and a mapping's pair must not
-be the admin UI's (nor the admin UI's a mapping's): browsers send a site's cookies to
-every port of it. Only then they get their names,
+be the admin UI's (nor the admin UI's a mapping's), compared by the certificates' public
+key, so also as another copy of the key or with another certificate: browsers send a
+site's cookies to every port of it. Only then they get their names,
 `uploaded-<16 hex digits of the file's SHA-256>-cert.pem` / `-key.pem` / `-ca.pem`: the
 same files uploaded again replace themselves, renewed ones stand next to the old (which
 stay until someone deletes them: a configuration backup may name them), and a key never
@@ -19,6 +20,8 @@ before.
 """
 from __future__ import annotations
 
+import base64
+import binascii
 import contextlib
 import hashlib
 import os
@@ -68,19 +71,70 @@ def _check_shape(cert: Optional[bytes], key: Optional[bytes], cas: dict[str, byt
             raise UploadError(_("The uploaded CA file is empty."))
 
 
+def _der_element(der: bytes, at: int) -> tuple[int, int, int]:
+    """(tag, where its value begins, where it ends) of the DER element at `at`. Raises
+    ValueError for one that runs past the end."""
+    tag, length = der[at], der[at + 1]
+    at += 2
+    if length & 0x80:
+        size = length & 0x7F
+        if not 0 < size <= 4:
+            raise ValueError("DER length")
+        length, at = int.from_bytes(der[at:at + size], "big"), at + size
+    if at + length > len(der):
+        raise ValueError("DER length")
+    return tag, at, at + length
+
+
+def public_key(pem: bytes) -> Optional[bytes]:
+    """The subjectPublicKeyInfo (DER) of the first certificate in `pem`: the same for
+    every certificate of a key, however the key file is written (PKCS#1 or #8, encrypted
+    or not). None when there is none or it can't be read."""
+    body = next((b for kind, b in _PEM_BLOCK.findall(pem) if kind == b"CERTIFICATE"), None)
+    if body is None:
+        return None
+    try:
+        der = base64.b64decode(b"".join(body.split()), validate=True)
+        _tag, at, _end = _der_element(der, 0)       # Certificate
+        tag, at, end = _der_element(der, at)        # tbsCertificate
+        fields: list[tuple[int, int, int]] = []
+        while at < end and len(fields) < 8:
+            field = _der_element(der, at)
+            fields.append((field[0], at, field[2]))
+            at = field[2]
+        if fields and fields[0][0] == 0xA0:         # [0] version
+            fields = fields[1:]
+        # serialNumber, signature, issuer, validity, subject, subjectPublicKeyInfo
+        spki_tag, start, stop = fields[5]
+    except (ValueError, IndexError, binascii.Error):
+        return None
+    return der[start:stop] if tag == 0x30 and spki_tag == 0x30 else None
+
+
+def _read(path: str) -> Optional[bytes]:
+    """A file of the configuration (a relative path is one in the data directory); None
+    when it can't be read."""
+    if not path:
+        return None
+    try:
+        with open(data_path(path), "rb") as fh:
+            return fh.read(MAX_FILE_BYTES + 1)
+    except OSError:
+        return None
+
+
 def _same_pair(cert: bytes, key: bytes, other_cert: str, other_key: str) -> bool:
     """Is the uploaded pair the one in the files `other_cert` / `other_key` (paths from
-    the configuration; a file that can't be read is not the same)?"""
-    for mine, path, label in ((key, other_key, b"PRIVATE KEY"), (cert, other_cert, b"CERTIFICATE")):
-        if not path:
-            continue
-        try:
-            with open(data_path(path), "rb") as fh:
-                theirs = _blocks(fh.read(MAX_FILE_BYTES + 1), label)
-        except OSError:
-            continue
-        ours = _blocks(mine, label)
-        if ours and theirs and ours[0] == theirs[0]:
+    the configuration; a file that can't be read is not the same)? The same public key
+    in the certificates, or the same key or certificate block."""
+    theirs_cert, theirs_key = _read(other_cert), _read(other_key)
+    mine = public_key(cert)
+    if mine is not None and theirs_cert is not None and public_key(theirs_cert) == mine:
+        return True
+    for ours, theirs, label in ((key, theirs_key, b"PRIVATE KEY"),
+                                (cert, theirs_cert, b"CERTIFICATE")):
+        a, b = _blocks(ours, label), _blocks(theirs or b"", label)
+        if a and b and a[0] == b[0]:
             return True
     return False
 
