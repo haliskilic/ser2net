@@ -17,8 +17,13 @@
 * the jobs that can mint attestations or write the release run GitHub's own actions only;
   the attest job can't write the release, and the release is created by the runner's gh
   CLI from exactly the attested files (a pre-release marked as one).
+* the PyPI package goes up last, once the release is out: the sdist and wheel ci.yml's job
+  "pypi package (build)" made and checked (artifact pypi-dist), by trusted publishing
+  (id-token only, the environment pypi, PyPI's own action pinned by SHA, no checkout); a
+  failure there (no trusted publisher yet) leaves the release and the image as they are;
 * a manual run (workflow_dispatch) is a dry run: it checks, builds and tests the same way
-  but attests, releases and tags nothing, and neither waits for nor blocks a release.
+  but attests, releases, tags and uploads nothing, and neither waits for nor blocks a
+  release.
 * the release files are the ser2netweb-* names tools/release_guard.py lists (ser2net-* up
   to 2.9.x, none of which a release has any more) and the .deb / .rpm packages
   standalone.yml built from the released binaries, checked by its `assets` and `sboms`
@@ -179,7 +184,8 @@ def test_privileged_jobs_run_only_github_actions():
     release = jobs(read("release.yml"))
     privileged = {job: block for job, block in release.items()
                   if {"contents", "id-token", "attestations"}
-                  & {s for s, level in permissions(block).items() if level == "write"}}
+                  & {s for s, level in permissions(block).items() if level == "write"}
+                  and job != "pypi"}  # (test_pypi_published_last)
     assert set(privileged) == {"attest", "publish", "image"}, sorted(privileged)
     for job, block in privileged.items():
         for _line, ref, _rest in uses(block):
@@ -205,7 +211,7 @@ def test_dry_run_publishes_nothing():
     assert "\n  workflow_dispatch:\n" in text.split("\npermissions:", 1)[0]
     release = jobs(text)
     push_only = "github.event_name == 'push'"
-    for job in ("publish", "image"):
+    for job in ("publish", "image", "pypi"):
         assert key(release[job], "if") == push_only, f"{job} must not run in a dry run"
     attestations = [s for s in steps(release["attest"]) if "uses: actions/attest-" in s]
     assert len(attestations) == 4, attestations
@@ -253,6 +259,31 @@ def test_release_files_named():
           "attested; every executable has both attestations, every package its provenance  OK")
 
 
+def test_pypi_published_last():
+    release = jobs(read("release.yml"))
+    pypi = release["pypi"]
+    assert permissions(pypi) == {"id-token": "write"}, permissions(pypi)
+    assert "publish" in needs(pypi), "after the GitHub release"
+    assert "pypi" not in {n for job in release for n in needs(release[job])}, \
+        "nothing waits for PyPI: a missing trusted publisher can't hold the release up"
+    assert "\n    environment:\n      name: pypi\n" in pypi, pypi
+    assert "actions/checkout" not in pypi, "no repository code runs with the id-token"
+    refs = [ref for _line, ref, _rest in uses(pypi)]
+    assert [r.split("@")[0] for r in refs] == ["actions/download-artifact",
+                                               "pypa/gh-action-pypi-publish"], refs
+    download = steps(pypi)[0]
+    assert "name: pypi-dist\n" in download and "path: dist\n" in download, download
+    # the artifact: built and checked by ci.yml, which the release ran on the tagged commit
+    ci = jobs(read("ci.yml"))
+    build = ci["pypi-build"]
+    assert "name: pypi-dist\n" in build and "twine check --strict pypi-dist/*" in build
+    assert "pip install --require-hashes --only-binary=:all: -r requirements-build.txt" in build
+    assert "python -m build --no-isolation --outdir pypi-dist" in build
+    assert "pypi-build" in needs(ci["pypi-install"])
+    print("PyPI: after the release, the sdist and wheel CI built and tested, trusted "
+          "publishing (id-token only, environment pypi), nothing waits for it  OK")
+
+
 if __name__ == "__main__":
     test_actions_pinned_by_sha()
     test_tag_checked_first()
@@ -263,4 +294,5 @@ if __name__ == "__main__":
     test_dry_run_publishes_nothing()
     test_release_files_named()
     test_image_names()
+    test_pypi_published_last()
     print("\nPASS: release pipeline")
