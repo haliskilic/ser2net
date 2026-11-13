@@ -1,0 +1,4 @@
+# The account the ser2netweb package's service runs as (systemd-sysusers, from the
+# package's postinst / %post; where there is no systemd-sysusers it runs useradd instead).
+# The unit adds the dialout group for the serial ports (SupplementaryGroups=).
+u ser2netweb - "ser2netweb serial-to-network bridge" /var/lib/ser2netweb
