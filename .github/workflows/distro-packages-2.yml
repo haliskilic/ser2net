@@ -17,6 +17,8 @@ name: Distribution packages (nixpkgs, Void, Gentoo, FreeBSD, MacPorts)
 # Not a merge condition: a workflow of its own that no required check names; a distribution
 # tree that moves on breaks here first (weekly), not in a pull request of something else.
 on:
+  push:  # (only while the workflow isn't on main, which a dispatch needs; removed before merging)
+    branches: [ch/p2b-distros]
   pull_request:
     paths:
       - "packaging/nix/**"
