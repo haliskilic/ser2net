@@ -130,7 +130,7 @@ jobs:
       - name: nixfmt (nixpkgs' formatting)
         run: nix-shell -I "nixpkgs=$NIXPKGS" -p nixfmt --run 'nixfmt --check packaging/nix/*.nix'
       - name: The NixOS module in a VM (systemd, /healthz, --set-password, reload)
-        run: nix-build -I "nixpkgs=$NIXPKGS" packaging/nix/ci.nix -A test --no-out-link -L
+        run: nix-build -I "nixpkgs=$NIXPKGS" packaging/nix/ci.nix -A test --no-out-link
 
   void:
     name: Void Linux (xbps-src, runit)
@@ -235,6 +235,8 @@ jobs:
           printf '%s\n' 'masters = gentoo' 'thin-manifests = true' 'sign-manifests = false' \
             > "$overlay/metadata/layout.conf"
           mkdir -p /etc/portage/repos.conf /etc/portage/package.accept_keywords
+          # (pkgcheck reads /etc/portage/repos.conf alone: ::gentoo is to be named there too)
+          cp /usr/share/portage/config/repos.conf /etc/portage/repos.conf/gentoo.conf
           printf '[ser2netweb]\nlocation = %s\n' "$overlay" > /etc/portage/repos.conf/ser2netweb.conf
           # GURU is ~arch only; so are a few of the dependencies
           printf '%s\n' '*/*::ser2netweb ~amd64' 'dev-python/starlette ~amd64' \
@@ -315,6 +317,7 @@ jobs:
             cd /usr/ports
             git config core.sparseCheckout true
             printf '%s\n' /Mk/ /Templates/ /Keywords/ /UIDs /GIDs /MOVED /LEGAL /net/Makefile \
+              '/lang/python*/' /ports-mgmt/pkg/ \
               /comms/py-pyserial/ /comms/py-pyserial-asyncio-fast/ /www/py-starlette/ \
               /www/py-uvicorn/ /www/py-python-multipart/ /net/py-h11/ /devel/py-websockets/ \
               /devel/py-Jinja2/ /textproc/py-markupsafe/ /sysutils/py-psutil/ \

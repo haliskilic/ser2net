@@ -22,4 +22,8 @@ RDEPEND="
 	dev-python/pyserial[${PYTHON_USEDEP}]
 "
 
+PATCHES=(
+	"${FILESDIR}/${P}-py314-event-loop.patch"
+)
+
 distutils_enable_tests pytest
