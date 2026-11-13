@@ -7,6 +7,8 @@
   writes all of it from the npm releases);
 * xterm comes from the maintained @xterm/* packages (the unscoped xterm / xterm-addon-fit
   ones are deprecated upstream), with the globals app.js uses (Terminal, FitAddon);
+* xterm.js and its fit addon are one release (published from one commit, which the record
+  names): one of them bumped alone is reported, by the offline check and by a refresh;
 * the pages link the assets with ?v=<hash of ser2netweb/web/static>, and a request carrying the
   current one gets an immutable Cache-Control (other requests are revalidated as before).
 
@@ -43,6 +45,8 @@ def test_record_matches_the_files():
         "the unscoped xterm packages are deprecated"
     assert pkgs["@xterm/xterm"]["purl"] == f"pkg:npm/%40xterm/xterm@{pkgs['@xterm/xterm']['version']}"
     assert pkgs["@xterm/xterm"]["version"].startswith("5."), "6.x changes the console: plan it"
+    assert pkgs["@xterm/xterm"]["commit"] and \
+        pkgs["@xterm/xterm"]["commit"] == pkgs["@xterm/addon-fit"]["commit"], "one xterm.js release"
     assert {p["license"] for p in pkgs.values()} == {"0BSD", "MIT"}
     with open(os.path.join(ROOT, pkgs["@xterm/xterm"]["license_file"]), encoding="utf-8") as fh:
         assert "The xterm.js authors" in fh.read()
@@ -71,6 +75,44 @@ def test_a_changed_file_is_reported():
     assert "ser2netweb/web/static/htmx.min.js: differs from the recorded sha256" in found, found
     assert any(p.startswith("htmx.org: recorded for") for p in found), found
     print("an altered file and a version bump without a refresh are reported  OK")
+
+
+def test_xterm_and_its_addons_are_one_release():
+    """@xterm/xterm and @xterm/addon-* are published together, from one commit; an addon
+    with another xterm.js than its own (fit 0.11 with xterm.js 5.5: it takes the
+    scrollbar's width from an option 5.5 doesn't have) is refused, whichever was bumped."""
+    one, other = "f447274f430fd22513f6adbf9862d19524471c04", "9ba6c00a195c95fcf8292a2b9084d91450e5daae"
+    assert ra.unpaired({"@xterm/xterm": one, "@xterm/addon-fit": one, "htmx.org": "x"}) == ""
+    assert ra.unpaired({"htmx.org": ""}) == "", "only xterm.js's packages are paired"
+    for commits in ({"@xterm/xterm": other, "@xterm/addon-fit": one},
+                    {"@xterm/xterm": one, "@xterm/addon-fit": other}):
+        why = ra.unpaired(commits)
+        assert "not of one release" in why and "bump them together" in why, why
+    assert "no commit known for @xterm/addon-fit" in ra.unpaired(
+        {"@xterm/xterm": one, "@xterm/addon-fit": ""})
+    # the offline check reads the record's commits
+    doc = ra.load()
+    assert ra.unpaired({p["name"]: p["commit"] for p in ra.packages(doc)}) == ""
+    doc["ser2net"]["packages"]["@xterm/addon-fit"]["commit"] = "0" * 40
+    assert any("not of one release" in p for p in ra.check(doc=doc)), ra.check(doc=doc)
+
+    # a refresh of such a set stops before it writes anything
+    def fake(name, version):
+        return None, "sha512-x", other if name == "@xterm/addon-fit" else one
+
+    real, ra.tarball = ra.tarball, fake
+    try:
+        try:
+            ra.refresh()
+        except SystemExit as e:
+            assert "not of one release" in str(e), e
+        else:
+            raise AssertionError("a refresh took an addon of another xterm.js release")
+    finally:
+        ra.tarball = real
+    assert ra.check() == [], "the refused refresh changed nothing"
+    print("xterm.js and its addons: one release (one commit), or the refresh and the "
+          "check refuse  OK")
 
 
 def test_console_globals():
@@ -117,6 +159,7 @@ if __name__ == "__main__":
     else:
         test_record_matches_the_files()
         test_a_changed_file_is_reported()
+        test_xterm_and_its_addons_are_one_release()
     test_console_globals()
     test_cache_headers()
     print("\nPASS: vendored browser assets")

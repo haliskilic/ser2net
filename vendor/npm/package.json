@@ -36,19 +36,22 @@
         "version": "0.10.0",
         "integrity": "sha512-UFYkDm4HUahf2lnEyHvio51TNGiLK66mqP2JoATy7hRZeXaGMRDr00JiSF7m63vR5WKATF605yEggJKsw0JpMQ==",
         "license": "MIT",
-        "license_file": "tools/licenses/npm/xterm-addon-fit.txt"
+        "license_file": "tools/licenses/npm/xterm-addon-fit.txt",
+        "commit": "9ba6c00a195c95fcf8292a2b9084d91450e5daae"
       },
       "@xterm/xterm": {
         "version": "5.5.0",
         "integrity": "sha512-hqJHYaQb5OptNunnyAnkHyM8aCjZ1MEIDTQu1iIbbTD/xops91NB5yq1ZK/dC2JDbVWtF23zUtl9JE2NqwT87A==",
         "license": "MIT",
-        "license_file": "tools/licenses/npm/xterm.txt"
+        "license_file": "tools/licenses/npm/xterm.txt",
+        "commit": "9ba6c00a195c95fcf8292a2b9084d91450e5daae"
       },
       "htmx.org": {
         "version": "2.0.11",
         "integrity": "sha512-Thx/WtpeOQqSrqBCw/A1cwGJGg4UrVa3+sW0GmrM3p4gJgO89ecH4qtbnyzDDWFvBTqjnIMCgELTNt636dtamA==",
         "license": "0BSD",
-        "license_file": "tools/licenses/npm/htmx.org.txt"
+        "license_file": "tools/licenses/npm/htmx.org.txt",
+        "commit": "fa978b24e75fb03c137bf2cdae4fef0e711cf8a1"
       }
     }
   }
