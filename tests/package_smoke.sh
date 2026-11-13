@@ -116,7 +116,7 @@ inside() {  # inside PACKAGE VERSION [systemd]: in the container, as root
             ;;
     esac
     [ -z "$others" ] || fail "the package names another: $others"
-    ser2netweb --about | grep -qxF "Build: standalone executable, .deb / .rpm package" ||
+    ser2netweb --about | grep -qxF "Build: standalone executable, Linux package (.deb / .rpm / AUR)" ||
         fail "--about: $(ser2netweb --about | grep Build:)"
     COLUMNS=500 ser2netweb --help | grep -qF "here: /var/lib/ser2netweb." ||
         fail "--help names another default data directory"

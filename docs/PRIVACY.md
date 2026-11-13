@@ -13,7 +13,8 @@ the organisation running it to decide. Nothing here is legal advice.
 
 Everything ser2netweb writes is in its data directory (default `data/`; Docker: `/data`;
 systemd: `/opt/ser2netweb/data` for a source checkout, `/var/lib/ser2netweb` for the binary
-and the `.deb` / `.rpm` package, `/var/lib/ser2netweb/<name>` for an instance; Windows
+and the `.deb` / `.rpm` / AUR package, `/var/lib/ser2netweb/<name>` for an instance; Homebrew:
+`$(brew --prefix)/var/ser2netweb`; the snap: `/var/snap/ser2netweb/common/data`; Windows
 service: `C:\ProgramData\ser2netweb`, a named one `C:\ProgramData\ser2netweb\<name>`; the
 same with `ser2net` up to 2.9.x; a pip / pipx install: the user's data folder,
 `~/.local/share/ser2netweb`, `~/Library/Application Support/ser2netweb` or
@@ -151,8 +152,9 @@ hukuki tavsiye değildir.
 ### Neler, ne kadar süre saklanır
 
 ser2netweb'in yazdığı her şey veri dizinindedir (varsayılan `data/`; Docker: `/data`; systemd:
-kaynak kurulumda `/opt/ser2netweb/data`, binary'de ve `.deb` / `.rpm` paketinde
-`/var/lib/ser2netweb`, bir örnekte `/var/lib/ser2netweb/<ad>`; Windows servisi:
+kaynak kurulumda `/opt/ser2netweb/data`, binary'de ve `.deb` / `.rpm` / AUR paketinde
+`/var/lib/ser2netweb`, bir örnekte `/var/lib/ser2netweb/<ad>`; Homebrew:
+`$(brew --prefix)/var/ser2netweb`; snap: `/var/snap/ser2netweb/common/data`; Windows servisi:
 `C:\ProgramData\ser2netweb`, adlandırılmış bir servis `C:\ProgramData\ser2netweb\<ad>`; 2.9.x'e
 kadar aynıları `ser2net` ile; pip / pipx kurulumunda kullanıcının veri klasörü,
 `~/.local/share/ser2netweb`, `~/Library/Application Support/ser2netweb` ya da

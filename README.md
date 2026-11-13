@@ -610,8 +610,11 @@ düzenlemeye gerek yok.
 | [`.deb` / `.rpm` paketi](#linux-paketleri-deb--rpm) (apt / dnf) | Debian 11+, Ubuntu 20.04+, 64-bit Raspberry Pi OS; Fedora, RHEL / AlmaLinux / Rocky 8+ (x86_64, arm64) | hiçbir şey; veri `/var/lib/ser2netweb`'te |
 | [APT deposu](#paket-depoları-apt-dnf-zypper) | Debian 11+, Ubuntu 20.04+, 64-bit Raspberry Pi OS (amd64, arm64) | hiçbir şey; güncellemeler `apt upgrade` ile gelir |
 | [DNF / YUM deposu](#paket-depoları-apt-dnf-zypper) (zypper da) | Fedora, RHEL / AlmaLinux / Rocky 8+, openSUSE Leap 15.6+ (x86_64, aarch64) | hiçbir şey; güncellemeler `dnf upgrade` / `zypper update` ile gelir |
-| [Docker](#docker) | Linux host'lar: amd64, arm64, arm/v7 (32-bit Raspberry Pi OS) | Docker |
+| [Docker](#docker) (GHCR, Docker Hub) | Linux host'lar: amd64, arm64, arm/v7 (32-bit Raspberry Pi OS) | Docker |
 | [pipx / pip](#pipx--pip) (PyPI) | her işletim sistemi ve işlemci | Python 3.10+, pipx; veri kullanıcının veri klasöründe |
+| [Homebrew](#homebrew-macos-linux) (`brew install haliskilic/tap/ser2netweb`) | macOS (Apple silicon, Intel), Linux | Homebrew; veri `$(brew --prefix)/var/ser2netweb`'te |
+| [AUR](#arch-linux-aur) (`ser2netweb-bin`) | Arch Linux, Manjaro, EndeavourOS (x86_64, aarch64) | bir AUR yardımcısı ya da `makepkg`; veri `/var/lib/ser2netweb`'te |
+| [Snap](#snap) (`snap install ser2netweb`) | snapd olan Linux (amd64, arm64): yalnızca USB seri adaptörler | snapd; veri `/var/snap/ser2netweb/common/data`'da |
 | Kaynaktan (aşağıda) | her işletim sistemi ve işlemci: macOS, 32-bit ARM, ARM üzerinde Windows da | pip'li Python 3.10+; paketlenmiş wheel'lerle offline |
 
 ```bash
@@ -817,6 +820,67 @@ gösterir, `ser2netweb --about` da `Build: Python package (pip / pipx)` der.
 pip kurulumu Windows servisi olamaz (`--install-service` reddeder) ve kendine ait bir systemd
 unit'i yoktur.
 
+### Homebrew (macOS, Linux)
+`haliskilic/tap` tap'indeki formül ser2netweb'i sürümün kaynağından, Homebrew'un Python
+3.14'ünün bir sanal ortamına derler; binary'lerin taşıdığı her bileşen de içindedir (MQTT,
+LDAP, OIDC; `cryptography` Homebrew'un kendi formülünden gelir):
+```bash
+brew trust haliskilic/tap                 # bir kez: Homebrew başka bir tap'in formüllerini ancak güvenilince yükler
+brew install haliskilic/tap/ser2netweb
+brew services start ser2netweb            # web arayüzü 127.0.0.1:8080'de, yeniden başlatmadan sonra da
+ser2netweb --data-dir "$(brew --prefix)/var/ser2netweb" --set-password admin
+```
+Servis sizin hesabınızla çalışır (macOS'ta bir launchd agent'ı, Linux'ta bir systemd kullanıcı
+unit'i); verisi, `all.log` da, `$(brew --prefix)/var/ser2netweb`'tedir; `brew services info
+ser2netweb` durumunu gösterir. `brew upgrade ser2netweb`'ten sonra: `brew services restart
+ser2netweb`; `brew uninstall ser2netweb` veri klasörünü bırakır. Yukarıdaki gibi `--data-dir`
+her sürümde çalışır; 3.0.0'dan sonraki sürümlerde Homebrew kurulumunun varsayılanı da bu
+klasördür ve `ser2netweb --about` `Build: Homebrew formula` der. Seri portlar: macOS'ta
+`/dev/cu.usbserial-*` / `/dev/cu.usbmodem*`; Linux'ta hesabınızın portların grubunda olması
+gerekir (`dialout`, Arch'ta `uucp`). Tap her yeni sürümün formülünü bir gün içinde önerir
+(oradaki "bump" iş akışı); formülü `packaging/homebrew/make_formula.py` üretir.
+
+### Arch Linux (AUR)
+AUR paketi `ser2netweb-bin`, sürümün x86_64 ve aarch64 binary'sidir ve `.deb`'in kurduğu gibi
+kurulur:
+```bash
+yay -S ser2netweb-bin                     # ya da paru, ya da elle:
+# git clone https://aur.archlinux.org/ser2netweb-bin.git && cd ser2netweb-bin && makepkg -si
+sudo systemctl enable --now ser2netweb    # kurmak servisi başlatmaz
+sudo -u ser2netweb ser2netweb --set-password admin
+```
+`/usr/bin/ser2netweb`'i, `/usr/lib/systemd/system/ser2netweb.service` unit'ini (bu yol ve
+Arch'ın seri port grubu `SupplementaryGroups=uucp` ile `ser2netweb-standalone.service`), `ser2netweb`
+hesabını ve `/var/lib/ser2netweb`'i (`.deb`'deki gibi sysusers.d / tmpfiles.d) ve lisans
+metinlerini `/usr/share/licenses/ser2netweb-bin` altına kurar. Güncelleme çalışan servisi
+yeniden başlatmaz (`sudo systemctl try-restart ser2netweb`); paketi kaldırmak veriyi ve hesabı
+bırakır. Klasik daemon'un `ser2net` paketiyle ilgisi yoktur: ikisi birlikte kurulabilir. Her
+sürüm onu günceller (`.github/workflows/aur.yml`, önce bir Arch container'ında derleyip kurar);
+`PKGBUILD`'i `packaging/aur/make_pkgbuild.py` üretir.
+
+### Snap
+`ser2netweb` snap'i (strict confinement; amd64, arm64) sürümün binary'sidir; servisi siz
+açana kadar kapalıdır:
+```bash
+sudo snap install ser2netweb
+sudo snap connect ser2netweb:raw-usb            # USB seri adaptörler (kendiliğinden bağlanmaz)
+sudo snap connect ser2netweb:hardware-observe   # port listesinin ayrıntıları (isteğe bağlı)
+sudo snap start --enable ser2netweb.daemon      # web arayüzü 127.0.0.1:8080'de
+sudo ser2netweb --data-dir /var/snap/ser2netweb/common/data --set-password admin
+sudo snap set ser2netweb bind-ip=0.0.0.0 port=8080   # web arayüzü ağda (orada TLS kullanın)
+```
+Strict confinement'taki bir snap seri cihazı yalnızca bir arayüz (interface) üzerinden açar.
+snapd'nin her Ubuntu'da kendisinin sağladığı ve sizin elle bağladığınız `raw-usb`
+`/dev/ttyUSB*` ve `/dev/ttyACM*`'e izin verir: USB seri adaptörler, `/dev/serial/by-id`
+adlarıyla da. `serial-port` için bir gadget snap'inin (Ubuntu Core) ya da snapd'nin deneysel
+hotplug özelliğinin sağladığı bir slot gerekir. Dahili UART'lara (`/dev/ttyS*`, Raspberry Pi'nin
+`/dev/ttyAMA0` / `serial0`'ı) normal bir Ubuntu'da snap'ten erişilemez: onlar için `.deb`'i,
+binary'yi ya da Docker'ı kullanın. Servis confinement içinde root olarak çalışır (snap
+servisleri böyle çalışır); verisi `/var/snap/ser2netweb/common/data`'dadır ve `sudo snap remove
+--purge ser2netweb` onu siler; log'unu `sudo snap logs ser2netweb.daemon` gösterir. `snap unset
+ser2netweb bind-ip port` `config.json`'daki adrese döner. Classic confinement'lı (sandbox'sız)
+bir snap için bakımcının isteyeceği bir Snap Store incelemesi gerekirdi; böyle bir snap yoktur.
+
 ### Komut satırı seçenekleri
 `python3 ser2netweb.py [seçenekler]`, `ser2netweb-linux-x64 [seçenekler]`,
 `ser2netweb-windows-x64.exe [seçenekler]` (`--help` hepsini listeler). Başlatma script'inin
@@ -825,7 +889,7 @@ unit'ler ve script'ler değişiklik gerektirmez:
 
 | Seçenek | Ne yapar |
 |---|---|
-| `--data-dir KLASÖR` | `config.json`, yedekleri, log'lar ve trace'lerin yeri (varsayılan: `ser2netweb.py`'nin ya da binary'nin yanındaki `data/`, Scoop'unki için onun persist klasöründe; `.deb` / `.rpm` paketininki için `/var/lib/ser2netweb`; pip / pipx, winget ya da Chocolatey kurulumu için kullanıcının veri klasörü, bkz. *pipx / pip* ve *Windows paket yöneticileri*); ser2netweb'e kendine ait bir klasör verin |
+| `--data-dir KLASÖR` | `config.json`, yedekleri, log'lar ve trace'lerin yeri (varsayılan: `ser2netweb.py`'nin ya da binary'nin yanındaki `data/`, Scoop'unki için onun persist klasöründe; `.deb` / `.rpm` / AUR paketininki için `/var/lib/ser2netweb`; pip / pipx, winget ya da Chocolatey kurulumu için kullanıcının veri klasörü, bkz. *pipx / pip* ve *Windows paket yöneticileri*; Homebrew'unki için `$(brew --prefix)/var/ser2netweb`; snap'inki için, root olarak, `/var/snap/ser2netweb/common/data`); ser2netweb'e kendine ait bir klasör verin |
 | `--config DOSYA` | başka bir yerdeki `config.json`; veri klasörü o zaman onun klasörüdür |
 | `--reconfigure` | yönetim arayüzünün adresini ve portunu konsolda yeniden sorar, sonra başlar |
 | `--online` | bağımlılık kurulumu `vendor/wheels/`'te olmayan bir wheel için PyPI'ye başvurabilir (kaynak kurulum) |
@@ -917,7 +981,9 @@ arm/v7): `docker pull ghcr.io/haliskilic/ser2netweb:latest`
 (ya da `:3.0`, `:3.0.0`); `docker-compose.yml` bunu kullanır. 2.9.x'e kadar imaj
 `ghcr.io/haliskilic/ser2net` idi; 3.x sürümleri oraya da (aynı imaj olarak) yayımlanır.
 2.9.x'ten kalan bir container'ı ya da compose dosyasını taşımak:
-[`docs/DOCKER.md`](docs/DOCKER.md#upgrading-from-29x). Sürümler arasında Debian/Python
+[`docs/DOCKER.md`](docs/DOCKER.md#upgrading-from-29x). Aynı imaj, aynı digest ve etiketlerle,
+Docker Hub'da da `docker.io/haliskilic/ser2netweb` olarak vardır (`docker pull
+haliskilic/ser2netweb:latest`). Sürümler arasında Debian/Python
 tabanı değişince `:latest` ve `:X.Y` yeni tabanla yeniden derlenir (haftalık kontrol;
 `:X.Y.Z` yayımlandığı gibi kalır) — bkz. [`docs/DOCKER.md`](docs/DOCKER.md).
 Container'da arayüz `0.0.0.0`'a bağlanır (`SER2NETWEB_BIND_IP` / `SER2NETWEB_PORT` env ile

@@ -1,0 +1,22 @@
+#!/bin/sh
+# snap set ser2netweb bind-ip=ADDRESS port=PORT (snap unset ser2netweb bind-ip port: back to
+# config.json's address): checked here, then a running service restarts with them.
+set -eu
+bind_ip=$(snapctl get bind-ip)
+port=$(snapctl get port)
+case "$bind_ip" in
+    *[!0-9A-Fa-f.:*]*) echo "bind-ip must be an IPv4 or IPv6 address, or * (every interface)" >&2
+        exit 1 ;;
+esac
+if [ -n "$port" ]; then
+    case "$port" in
+        *[!0-9]* ) echo "port must be a number from 1 to 65535" >&2; exit 1 ;;
+    esac
+    if [ "$port" -lt 1 ] || [ "$port" -gt 65535 ]; then
+        echo "port must be a number from 1 to 65535" >&2
+        exit 1
+    fi
+fi
+if snapctl services ser2netweb.daemon | grep -qw active; then
+    snapctl restart ser2netweb.daemon
+fi
