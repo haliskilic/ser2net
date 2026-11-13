@@ -97,8 +97,9 @@ jobs:
         run: tests/systemd_smoke.sh dist/ser2netweb
 
   # The binary installed by systemd/ser2netweb-install.sh from files laid out as a release has
-  # them: fresh, again (an upgrade), a changed file, --uninstall, a noexec /tmp
-  # (tests/install_smoke.sh)
+  # them: over a 2.9.0 install made by that release's own files (the move to the new names),
+  # again (an upgrade), a changed file, --uninstall --remove-old-user, fresh with a noexec
+  # /tmp, beside a ser2net.service that isn't 2.9.x's (tests/install_smoke.sh)
   linux-install:
     name: install script (binary)
     needs: linux
@@ -111,8 +112,8 @@ jobs:
         with:
           name: ser2netweb-linux-x64
           path: dist
-      - name: sudo sh ser2netweb-install.sh, as the README says
-        timeout-minutes: 10
+      - name: sudo sh ser2netweb-install.sh, as the README says (also over 2.9.0)
+        timeout-minutes: 15
         run: tests/install_smoke.sh dist/ser2netweb
 
   linux-distros:
