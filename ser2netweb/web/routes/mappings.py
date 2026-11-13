@@ -13,6 +13,9 @@ import urllib.parse
 from starlette.responses import PlainTextResponse, Response, StreamingResponse
 from starlette.routing import Route
 
+from .. import tlsupload
+from ..starlette_compat import Route as LimitedRoute
+
 from ... import capture, clock
 from ...config import (ConfigError, MappingConfig, ModbusPoll, console_charset, console_encoding,
                        mapping_revision)
@@ -252,6 +255,44 @@ def routes(ctx: Ctx) -> list:
             rev=mapping_revision(state.config.secret_key, m),
             links=portlist.links(portlist.visible(ports), (m.serial.port, m.serial_b.port)),
             mqtt_stored=m.mqtt.password))
+
+    async def mapping_tls_upload(request):
+        """TLS files uploaded in the mapping form (admins; tlsupload.py): a certificate
+        with its key, and / or a CA file for the field it stands next to. Checked and kept
+        in the data folder's tls/; the answer names their paths (HX-Trigger: tlsUploaded),
+        which the page puts into the form's path fields - saved with the form, like paths
+        that were typed. `mid`: the mapping being edited, for its stored key password when
+        none is typed."""
+        if deny := require_role(request, "admin"):
+            return deny
+        form = await request.form(max_files=4)  # certificate, key, CA, client CA
+        m = state.config.get_mapping(str(form.get("mid") or ""))
+        password = str(form.get("network_tls_key_password") or "") or (
+            m.network.tls_key_password if m is not None else "")
+        admin = state.config.admin_ui
+        try:
+            paths = await asyncio.to_thread(
+                tlsupload.store, state.data_dir,
+                cert=await tlsupload.read_file(form, "cert"),
+                key=await tlsupload.read_file(form, "key"), password=password,
+                cas={"ca": await tlsupload.read_file(form, "ca"),
+                     "client_ca": await tlsupload.read_file(form, "client_ca")},
+                others=((admin.tls_cert, admin.tls_key),), reuse_message=_(
+                    "This certificate and key are the admin UI's own. Give the mapping a "
+                    "certificate and key of its own."))
+        except tlsupload.UploadError as e:
+            return PlainTextResponse(str(e), status_code=400)
+        except OSError as e:
+            return PlainTextResponse(_("The uploaded files could not be stored: {0}").format(
+                e.strerror or e), status_code=500)
+        names = ", ".join(os.path.basename(p) for p in paths.values())
+        state.log(f"TLS files uploaded for mapping {m.name if m else '(new)'!r}: {names}")
+        ctx.audit(request, "tls_upload", f"{m.name if m else '(new)'}: {names}")
+        fields = {"network_tls_" + what: path for what, path in paths.items()}
+        return Response(status_code=204, headers={
+            "HX-Trigger": json.dumps({"tlsUploaded": fields}),  # (ASCII: \u escapes)
+            **notice(_("Uploaded and checked. The paths are in the form: save it to use "
+                       "them."))})
 
     async def mapping_modbus_read(request):
         """The mapping form's test read: the points in the posted points JSON, as typed (not
@@ -498,6 +539,8 @@ def routes(ctx: Ctx) -> list:
         Route("/api/mappings/{mid}/duplicate", mapping_duplicate, methods=["POST"]),
         Route("/api/status", api_status),
         Route("/api/mappings/bulk", mapping_bulk, methods=["POST"]),
+        LimitedRoute("/api/mappings/tls-upload", mapping_tls_upload, methods=["POST"],
+                     max_body_size=tlsupload.MAX_BODY_BYTES),
         Route("/api/mappings/form", mapping_form_new),
         Route("/api/mappings/{mid}/form", mapping_form_edit),
         Route("/api/mappings/{mid}/modbus-read", mapping_modbus_read, methods=["POST"]),

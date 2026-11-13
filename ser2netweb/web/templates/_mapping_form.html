@@ -206,6 +206,21 @@
         <p class="sub mb-sm">{{ _("Without a CA file or a fingerprint the link is encrypted, but the server’s certificate is not checked: anyone on the network path could pose as the server. The mapping’s log shows the fingerprint of the certificate at each connection.") }}</p>
       </div>
       {% endif %}
+      {% if not remote and request.state.user and request.state.user.role == 'admin' %}
+      <details class="mb-sm" id="tls-upload-box">
+        <summary>{{ _("Upload TLS files from this computer…") }}</summary>
+        <p class="muted mb-sm">{{ _('PEM files, up to %(kb)s KB each. They are checked (the key must be the certificate’s; an encrypted key needs its password in the field below), kept in the data folder’s <span class="mono">tls/</span> and their paths are put into the fields above: save the form to use them.', kb=tls_upload_kb) }}</p>
+        <div class="grid2">
+          <label>{{ _("Certificate file") }} <input type="file" name="cert" form="tls-upload" accept=".pem,.crt,.cer,.cert,.txt"></label>
+          <label>{{ _("Key file") }} <input type="file" name="key" form="tls-upload" accept=".pem,.key,.txt"></label>
+        </div>
+        {% if 'tls_checks' not in hide %}
+        <label data-show-when="network_mode=server">{{ _("Client CA certificate file") }} <input type="file" name="client_ca" form="tls-upload" accept=".pem,.crt,.cer,.cert,.der,.txt"></label>
+        <label data-show-when="network_mode=client">{{ _("CA certificate file") }} <input type="file" name="ca" form="tls-upload" accept=".pem,.crt,.cer,.cert,.der,.txt"></label>
+        {% endif %}
+        <button class="btn sm" type="submit" form="tls-upload" id="tls-upload-send">{{ _("Upload and check") }}</button>
+      </details>
+      {% endif %}
       {% if 'tls_key_password' not in hide %}
       {% set tls_pw_kept = tls_pw_stored if tls_pw_stored is defined else mapping.network.tls_key_password %}
       <div class="grid2">
@@ -475,3 +490,10 @@
 
   <button class="btn primary" type="submit">{{ _("Create mapping") if is_new else _("Save changes") }}</button>
 </form>
+{% if not remote and request.state.user and request.state.user.role == 'admin' %}
+{# the upload's own form: its file inputs sit in the form above (form="tls-upload") and are no part of that one #}
+<form id="tls-upload" hx-post="{{ base }}/api/mappings/tls-upload" hx-encoding="multipart/form-data" hx-swap="none"
+      hx-include="[name='network_tls_key_password']" hx-disabled-elt="#tls-upload-send">
+  <input type="hidden" name="mid" value="{{ '' if is_new else mapping.id }}">
+</form>
+{% endif %}

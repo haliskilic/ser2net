@@ -1042,7 +1042,7 @@ what differs and an option table: [`docs/MIGRATING-FROM-SER2NET.md`](docs/MIGRAT
   mapping whose *Trace file name* is set is traced all the time and is never turned off
   by this. Starts, stops and the automatic end are in the audit log.
 - **Settings:** change password, **two-factor sign-in**, **web UI access** (login required /
-  open access with a role), admin TLS (provide paths or generate self-signed; a previous
+  open access with a role), admin TLS (provide paths, upload the files or generate self-signed; a previous
   generated pair is kept as `*.bak`; new connections get it at once, no restart),
   generate/revoke **REST API tokens** or change the first token's role only (a one-time
   token has a Copy button), **Mappings export / import** (JSON), **Configuration backups**
@@ -1280,7 +1280,21 @@ ser2netweb never
 asks for one on the console, and without it the mapping, or the start for the admin UI's
 key, fails with an error that says so. The form and the REST API load a mapping's files when
 it is saved and refuse a key that is the admin UI's own; the form never shows the stored
-key password, and the REST API masks it for a viewer token. Where certificates can't be managed, a VPN
+key password, and the REST API masks it for a viewer token.
+**Uploading the files in the browser** (admins): instead of copying files onto the host,
+*Upload a certificate and key from this computer…* under Settings → Admin TLS takes the
+admin UI's pair, sets it and serves it to new connections at once; in a mapping's form,
+*Upload TLS files from this computer…* takes a certificate with its key and / or the CA
+file of the field it stands next to, and puts their paths into the form's fields (they
+apply when the form is saved). PEM files of at most 256 KB each (a CA file may be DER).
+Before anything is kept they are loaded as ser2netweb will load them: a key that is not the
+certificate's, an encrypted key without its password or a CA file without a certificate
+is refused, and so is the admin UI's pair for a mapping (or a mapping's for the admin UI).
+They are kept in the data folder's `tls/` as `uploaded-<hash>-cert.pem` / `-key.pem` /
+`-ca.pem`, readable only by the account ser2netweb runs as, and every upload is in the
+audit log (`admin_tls_upload`, `tls_upload`). Files uploaded earlier stay there until you
+delete them (a configuration backup may still name them); the path fields work as before
+for files that are already on the host. Where certificates can't be managed, a VPN
 (WireGuard) or an stunnel in front of an untrusted network is the alternative.
 
 **HSTS:** with admin TLS, pages and REST API answers carry `Strict-Transport-Security` with
@@ -2088,7 +2102,8 @@ when other accounts can use the folder — give ser2netweb a folder of its own:
   too, that many days after its last write). Deleting a
   mapping deletes its traces; those of mappings a replace import or a restore removed stay until
   the next start (an undone restore finds them), which deletes them and logs how many.
-- `tls/` — certificate/key if self-signed is generated. A relative TLS path (admin UI, a
+- `tls/` — certificate/key if self-signed is generated, and the TLS files uploaded in the
+  browser (`uploaded-<hash>-cert.pem`, `-key.pem`, `-ca.pem`). A relative TLS path (admin UI, a
   mapping or its MQTT connection: certificate, key, CA files; not the LDAP CA file) is a file
   in the data directory, e.g. `tls/cert.pem`,
   so it keeps working when the data directory moves. An absolute path that is no longer

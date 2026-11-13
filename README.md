@@ -1076,7 +1076,7 @@ Adımlar, farklar ve seçenek tablosu (İngilizce):
   özellik onu asla kapatmaz. Başlatma, durdurma ve kendiliğinden bitiş denetim kaydına
   yazılır.
 - **Ayarlar:** *Parolanı değiştir*, **iki adımlı giriş**, **web arayüzü erişimi** (giriş zorunlu /
-  parolasız rol), admin TLS (yol ver veya self-signed üret; daha önce üretilen çift `*.bak`
+  parolasız rol), admin TLS (yol ver, dosyaları yükle veya self-signed üret; daha önce üretilen çift `*.bak`
   olarak saklanır; yeni bağlantılar hemen kullanır, yeniden başlatma gerekmez), **REST API
   token'ları** üret/iptal et ya da ilk token'ın yalnızca rolünü değiştir (tek seferlik
   token'ın Kopyala düğmesi var), **Eşlemeleri dışa / içe aktar** (JSON), **Yapılandırma
@@ -1336,7 +1336,22 @@ parolası*, `admin_ui.tls_key_password`): ser2netweb
 konsolda asla parola sormaz; parola yoksa eşleme, yönetim arayüzünün anahtarındaysa açılış,
 bunu söyleyen bir hatayla durur. Form ve REST API bir eşlemenin dosyalarını kaydederken
 yükler ve yönetim arayüzünün kendi anahtarını reddeder; form kayıtlı anahtar parolasını hiç
-göstermez, REST API de viewer token'ına maskeli verir. Sertifika yönetilemeyen yerlerde güvenilmeyen
+göstermez, REST API de viewer token'ına maskeli verir.
+**Dosyaları tarayıcıdan yükleme** (admin): dosyaları sunucuya kopyalamak yerine, Ayarlar →
+*Yönetim arayüzü için TLS (HTTPS)* altındaki *Bu bilgisayardan sertifika ve anahtar yükle…*
+yönetim arayüzünün sertifika ve anahtarını alır, ayarlar ve yeni bağlantılara hemen sunar;
+bir eşlemenin formundaki *Bu bilgisayardan TLS dosyaları yükle…* ise bir sertifikayı
+anahtarıyla ve/veya yanında durduğu alanın CA dosyasını alır ve yollarını formun alanlarına
+yazar (form kaydedilince geçerli olurlar). Her biri en fazla 256 KB olan PEM dosyaları (CA
+dosyası DER de olabilir). Saklanmadan önce ser2netweb'in yükleyeceği gibi yüklenirler:
+sertifikaya ait olmayan bir anahtar, parolası verilmemiş şifreli bir anahtar ya da
+sertifika içermeyen bir CA dosyası reddedilir; yönetim arayüzünün sertifika ve anahtarı bir
+eşleme için (ya da bir eşlemeninki yönetim arayüzü için) de reddedilir. Dosyalar veri
+klasörünün `tls/` dizininde `uploaded-<hash>-cert.pem` / `-key.pem` / `-ca.pem` adlarıyla,
+yalnızca ser2netweb'in çalıştığı hesabın okuyabileceği şekilde saklanır ve her yükleme
+denetim kaydına yazılır (`admin_tls_upload`, `tls_upload`). Daha önce yüklenen dosyalar siz
+silene kadar orada kalır (bir yapılandırma yedeği onları hâlâ gösteriyor olabilir); sunucuda
+zaten bulunan dosyalar için yol alanları eskisi gibi çalışır. Sertifika yönetilemeyen yerlerde güvenilmeyen
 ağın önünde bir VPN (WireGuard) ya da stunnel seçenektir.
 
 **HSTS:** admin TLS açıkken sayfalar ve REST API yanıtları bir yıllık `max-age` ile
@@ -2168,7 +2183,8 @@ klasörünü verin:
   Bir eşleme silinince trace'leri de silinir; değiştirerek içe aktarma (replace) ya da geri yüklemeyle kaldırılan
   eşlemelerinkiler sonraki açılışa kadar kalır (geri alınan bir geri yükleme onları bulur),
   açılış onları siler ve kaç dosya olduğunu log'a yazar.
-- `tls/` — self-signed üretilirse sertifika/anahtar. Göreli bir TLS yolu (yönetim arayüzü,
+- `tls/` — self-signed üretilirse sertifika/anahtar ve tarayıcıdan yüklenen TLS dosyaları
+  (`uploaded-<hash>-cert.pem`, `-key.pem`, `-ca.pem`). Göreli bir TLS yolu (yönetim arayüzü,
   bir eşleme ya da onun MQTT bağlantısı: sertifika, anahtar, CA dosyaları; LDAP CA dosyası
   değil) veri klasöründeki bir dosyadır, örneğin
   `tls/cert.pem`; böylece veri klasörü taşınınca da çalışır. Taşımadan ya da başka bir

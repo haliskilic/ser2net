@@ -87,6 +87,7 @@ ROUTES = {
     ("POST", "/settings/sessions/signout-others"): (ACCOUNT, FORM),
     ("POST", "/settings/tls"): (ADMIN, FORM),
     ("POST", "/settings/tls/generate"): (ADMIN, FORM),
+    ("POST", "/settings/tls/upload"): (ADMIN, FORM),
     ("POST", "/settings/access"): (ADMIN, FORM),
     ("POST", "/settings/proxy"): (ADMIN, FORM),
     ("POST", "/settings/node-name"): (ADMIN, FORM),
@@ -152,6 +153,7 @@ ROUTES = {
     ("POST", "/api/mappings/{mid}/duplicate"): (OPERATOR, HEADER),
     ("GET", "/api/status"): (VIEWER, NONE),
     ("POST", "/api/mappings/bulk"): (OPERATOR, HEADER),
+    ("POST", "/api/mappings/tls-upload"): (ADMIN, HEADER),  # TLS files for a mapping
     ("GET", "/api/mappings/form"): (OPERATOR, NONE),  # the form renders stored secrets
     ("GET", "/api/mappings/{mid}/form"): (OPERATOR, NONE),
     ("POST", "/api/mappings/{mid}/modbus-read"): (OPERATOR, HEADER),  # a test read on the bus

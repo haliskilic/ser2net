@@ -378,6 +378,21 @@ window.addEventListener("beforeunload", function (e) {
   if (dirtyForm()) { e.preventDefault(); e.returnValue = ""; }
 });
 
+// 3b) TLS files uploaded from the mapping form (its "Upload and check"): the server
+//     answers where it keeps them (HX-Trigger: tlsUploaded {field name: path}); they go
+//     into the form's path fields, to be saved with it, and the file inputs are emptied.
+document.addEventListener("tlsUploaded", function (e) {
+  var f = document.querySelector("#form-panel form.mform"), paths = e.detail || {};
+  if (!f) return;
+  Object.keys(paths).forEach(function (name) {
+    var input = /^network_tls_\w+$/.test(name) ? f.elements[name] : null;
+    if (input && typeof paths[name] === "string") input.value = paths[name];
+  });
+  Array.prototype.forEach.call(document.querySelectorAll("input[type=file][form=tls-upload]"),
+                               function (input) { input.value = ""; });
+  f.setAttribute("data-dirty", "1");
+});
+
 // 3a) Cancel/Close buttons clear the form/log panel. Done via a delegated
 //     listener (not inline onclick, which the Content-Security-Policy blocks).
 document.addEventListener("click", function (e) {
