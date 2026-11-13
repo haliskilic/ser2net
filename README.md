@@ -56,6 +56,7 @@ düzenlemeye gerek yok.
 - İki seri portu birbirine köprüleme (serial↔serial)
 
 **Rehberler** (`docs/` altında, İngilizce): [Docker](docs/DOCKER.md) ·
+[Linux paket depoları](docs/PACKAGES.md) ·
 [Windows](docs/WINDOWS.md) · [Linux seri portları](docs/LINUX-SERIAL.md) ·
 [reverse proxy](docs/REVERSE-PROXY.md) ·
 [MQTT, Modbus noktaları ve Sparkplug B](docs/MODBUS-MQTT.md) ·
@@ -606,6 +607,8 @@ düzenlemeye gerek yok.
 | [Scoop](#windows-paket-yöneticileri-winget-scoop-chocolatey) (`haliskilic/scoop-bucket` bucket'ı) | Windows 10/11, Windows Server 2016 ya da daha yenisi (x64) | Scoop; veri `~\scoop\persist\ser2netweb\data`'da |
 | [Chocolatey](#windows-paket-yöneticileri-winget-scoop-chocolatey) (`choco install ser2netweb`) | Windows 10/11, Windows Server 2016 ya da daha yenisi (x64) | Chocolatey; veri `%LOCALAPPDATA%\ser2netweb`'de |
 | [`.deb` / `.rpm` paketi](#linux-paketleri-deb--rpm) (apt / dnf) | Debian 11+, Ubuntu 20.04+, 64-bit Raspberry Pi OS; Fedora, RHEL / AlmaLinux / Rocky 8+ (x86_64, arm64) | hiçbir şey; veri `/var/lib/ser2netweb`'te |
+| [APT deposu](#paket-depoları-apt-dnf-zypper) | Debian 11+, Ubuntu 20.04+, 64-bit Raspberry Pi OS (amd64, arm64) | hiçbir şey; güncellemeler `apt upgrade` ile gelir |
+| [DNF / YUM deposu](#paket-depoları-apt-dnf-zypper) (zypper da) | Fedora, RHEL / AlmaLinux / Rocky 8+, openSUSE Leap 15.6+ (x86_64, aarch64) | hiçbir şey; güncellemeler `dnf upgrade` / `zypper update` ile gelir |
 | [Docker](#docker) | Linux host'lar: amd64, arm64, arm/v7 (32-bit Raspberry Pi OS) | Docker |
 | [pipx / pip](#pipx--pip) (PyPI) | her işletim sistemi ve işlemci | Python 3.10+, pipx; veri kullanıcının veri klasöründe |
 | Kaynaktan (aşağıda) | her işletim sistemi ve işlemci: macOS, 32-bit ARM, ARM üzerinde Windows da | pip'li Python 3.10+; paketlenmiş wheel'lerle offline |
@@ -757,6 +760,34 @@ bunu `ser2netweb-install.sh` yapar (*Servis olarak çalıştırma* altında *2.9
 yükseltme*). `ser2netweb-install.sh` ile kurulmuş bir binary'nin unit'i
 `/etc/systemd/system`'dedir ve paketinkini gizler: önce
 `sudo sh ser2netweb-install.sh --uninstall` (veri kalır), sonra paket.
+
+### Paket depoları (apt, dnf, zypper)
+Aynı paketler GitHub Pages'teki imzalı depolardan da gelir,
+<https://haliskilic.github.io/ser2netweb/>; böylece paket yöneticisi onları güncel tutar (en
+yeni üç sürüm, x86_64 ve arm64; güncelleme, kaldırma ve nasıl denetlendikleri
+[docs/PACKAGES.md](docs/PACKAGES.md)'de):
+```bash
+# Debian, Ubuntu, Raspberry Pi OS (64-bit)
+sudo curl -fsSLo /usr/share/keyrings/ser2netweb-archive-keyring.gpg https://haliskilic.github.io/ser2netweb/ser2netweb-archive-keyring.gpg
+sudo curl -fsSLo /etc/apt/sources.list.d/ser2netweb.sources https://haliskilic.github.io/ser2netweb/ser2netweb.sources
+sudo apt update
+sudo apt install ser2netweb
+# Fedora, RHEL, AlmaLinux, Rocky
+sudo curl -fsSLo /etc/yum.repos.d/ser2netweb.repo https://haliskilic.github.io/ser2netweb/ser2netweb.repo
+sudo dnf install ser2netweb
+# openSUSE
+sudo rpm --import https://haliskilic.github.io/ser2netweb/ser2netweb-archive-keyring.asc
+sudo zypper addrepo https://haliskilic.github.io/ser2netweb/ser2netweb.repo
+sudo zypper refresh
+sudo zypper install ser2netweb
+sudo systemctl enable --now ser2netweb             # kurulum servisi kendisi başlatmaz
+```
+Depolar `B587 60E7 C0B0 515E 81D2  50F9 8164 D694 711B B799` anahtarıyla imzalıdır
+(RSA 4096, 2031-11-12'ye kadar; sitede `ser2netweb-archive-keyring.asc` / `.gpg`, depoda
+[`packaging/ser2netweb-archive-keyring.asc`](packaging/ser2netweb-archive-keyring.asc)):
+dnf ilk kurulumda onu gösterir, yalnızca bu parmak iziyle onaylayın. `.rpm` dosyalarının kendisi imzalı değildir;
+dnf ve zypper her paketin SHA-256'sını taşıyan imzalı depo meta verisini denetler
+(`repo_gpgcheck=1`, `gpgcheck=0`).
 
 ### pipx / pip
 PyPI paketi `ser2netweb`, Python 3.10 ya da daha yenisinin olduğu her işletim sistemi ve
