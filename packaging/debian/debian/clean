@@ -1,0 +1,3 @@
+# what setuptools leaves in the source tree
+*.egg-info/
+build/

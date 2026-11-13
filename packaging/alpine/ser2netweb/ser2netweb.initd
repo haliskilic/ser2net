@@ -1,0 +1,38 @@
+#!/sbin/openrc-run
+
+# ser2netweb as the account ser2netweb (ser2netweb.pre-install made it, in the group
+# dialout for the serial ports), with its data in /var/lib/ser2netweb: the OpenRC version
+# of ser2netweb's systemd unit. Settings: /etc/conf.d/ser2netweb. To run it now and at
+# boot: rc-update add ser2netweb && rc-service ser2netweb start
+
+name="ser2netweb"
+description="Serial-to-network bridge with a web UI"
+
+: "${SER2NETWEB_DATA_DIR:=/var/lib/ser2netweb}"
+
+command="/usr/bin/ser2netweb"
+command_args="--data-dir $SER2NETWEB_DATA_DIR $SER2NETWEB_ARGS"
+command_user="ser2netweb:ser2netweb"
+supervisor="supervise-daemon"
+respawn_delay=3
+# the admin UI's address and port (127.0.0.1 and 8080 unless /etc/conf.d/ser2netweb sets
+# them)
+supervise_daemon_args="${SER2NETWEB_BIND_IP:+--env SER2NETWEB_BIND_IP=$SER2NETWEB_BIND_IP} ${SER2NETWEB_PORT:+--env SER2NETWEB_PORT=$SER2NETWEB_PORT}"
+extra_started_commands="reload"
+
+depend() {
+	need net
+	after firewall
+}
+
+start_pre() {
+	# private to the account, as the systemd unit's StateDirectoryMode=0700
+	checkpath -d -m 0700 -o ser2netweb:ser2netweb "$SER2NETWEB_DATA_DIR"
+}
+
+reload() {
+	# read config.json again without a restart (SIGHUP)
+	ebegin "Reloading $RC_SVCNAME"
+	supervise-daemon "$RC_SVCNAME" --signal HUP
+	eend $?
+}

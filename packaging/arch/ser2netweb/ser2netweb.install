@@ -1,0 +1,10 @@
+post_install() {
+  echo "==> ser2netweb: set the first admin password, then run the service now and at boot:"
+  echo "    sudo -u ser2netweb ser2netweb --data-dir /var/lib/ser2netweb --set-password admin"
+  echo "    sudo systemctl enable --now ser2netweb"
+  echo "    (the web UI on 127.0.0.1:8080; to change it: sudo systemctl edit ser2netweb)"
+}
+
+post_upgrade() {
+  echo "==> ser2netweb: a running service keeps the old version until: sudo systemctl try-restart ser2netweb"
+}

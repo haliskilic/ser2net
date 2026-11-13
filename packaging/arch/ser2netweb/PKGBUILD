@@ -1,0 +1,102 @@
+# Maintainer: Halis KILIÇ <mail at haliskilic dot com dot tr>
+# Kept in packaging/arch/ser2netweb/ of https://github.com/haliskilic/ser2netweb (CI builds
+# it in an Arch Linux container: .github/workflows/distro-packages.yml;
+# tools/bump_recipes.py moves it to a release and writes .SRCINFO).
+pkgname=ser2netweb
+pkgver=3.0.0
+pkgrel=1
+pkgdesc='Serial-to-network bridge with a web UI: raw TCP, telnet, RFC 2217, UDP, Modbus, MQTT'
+arch=('any')
+url='https://github.com/haliskilic/ser2netweb'
+# ser2netweb: AGPL-3.0-only; copied code of pyserial-asyncio-fast and Starlette:
+# BSD-3-Clause; xterm.js and its fit addon: MIT; htmx: 0BSD
+license=('AGPL-3.0-only AND BSD-3-Clause AND MIT AND 0BSD')
+# pyserial-asyncio-fast is not in the Arch repositories: ser2netweb runs on its built-in
+# copy of that library's serial transport (ser2netweb/engine/serial_transport.py)
+depends=('python'
+         'python-h11'
+         'python-jinja'
+         'python-markupsafe'
+         'python-psutil'
+         'python-pyserial'
+         'python-python-multipart'
+         'python-starlette'
+         'python-websockets'
+         'uvicorn')
+makedepends=('python-build' 'python-installer' 'python-setuptools' 'python-wheel')
+optdepends=('python-authlib: OpenID Connect sign-in'
+            'python-cryptography: self-signed TLS certificates'
+            'python-ldap3: LDAP / Active Directory sign-in'
+            'python-paho-mqtt: MQTT publishing and Sparkplug B')
+# the AUR's ser2netweb-bin installs the standalone executable in the same places
+conflicts=('ser2netweb-bin')
+install=ser2netweb.install
+source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz"
+        'ser2netweb.service'
+        'ser2netweb.sysusers'
+        'ser2netweb.tmpfiles')
+sha256sums=('b6610d614abce4071895f4a3d829da61cb87ddc7890034584a8ea5d71a60d0e5'
+            'ea1533c52dce4fec4766e55fd4edb6acaf499326d3fdab43bee75312bfbff11c'
+            'ce8f251e7a9eaa83b45f3385087507969c348a5588355e3f537b31a133b61585'
+            '2efcad1f7d0286c4555d9538f6f88d261e48ab1dd0308c3a63007084ac2cbefd')
+# the tests that start no server and open no network socket (each a script)
+_check_tests=(test_access_policy.py
+              test_clock_check.py
+              test_cluster_peer_save.py
+              test_config_types.py
+              test_config_validation.py
+              test_console_log.py
+              test_env_bind.py
+              test_explain.py
+              test_kept_names.py
+              test_live_table.py
+              test_log_maintenance.py
+              test_log_read.py
+              test_log_rotation.py
+              test_login_throttle.py
+              test_mapping_form_roundtrip.py
+              test_mixed_version_edit.py
+              test_modbus_frame.py
+              test_modbus_write.py
+              test_password_hashing.py
+              test_protocol_commands.py
+              test_public_url.py
+              test_retention.py
+              test_rfc2217_readonly.py
+              test_rfc2217_settings.py
+              test_secure_cookies.py
+              test_ser2net_import.py
+              test_serial_mqtt.py
+              test_sparkplug.py
+              test_sparkplug_node.py
+              test_starlette_compat.py
+              test_text_fold.py
+              test_time_stamps.py
+              test_traffic_counters.py
+              test_trusted_proxies.py
+              test_ui_contrast.py
+              test_ui_markup.py)
+
+build() {
+  cd "$pkgname-$pkgver"
+  python -m build --wheel --no-isolation
+}
+
+check() {
+  cd "$pkgname-$pkgver"
+  local t
+  for t in "${_check_tests[@]}"; do
+    PYTHONDONTWRITEBYTECODE=1 python "tests/$t"
+  done
+}
+
+package() {
+  cd "$pkgname-$pkgver"
+  python -m installer --destdir="$pkgdir" dist/*.whl
+  install -Dm644 ../ser2netweb.service "$pkgdir/usr/lib/systemd/system/ser2netweb.service"
+  install -Dm644 ../ser2netweb.sysusers "$pkgdir/usr/lib/sysusers.d/ser2netweb.conf"
+  install -Dm644 ../ser2netweb.tmpfiles "$pkgdir/usr/lib/tmpfiles.d/ser2netweb.conf"
+  install -Dm644 -t "$pkgdir/usr/share/licenses/$pkgname" \
+    LICENSE NOTICE COMMERCIAL_LICENSE.md THIRD-PARTY-NOTICES.md
+  install -Dm644 -t "$pkgdir/usr/share/doc/$pkgname" README.en.md README.md CHANGELOG.md
+}

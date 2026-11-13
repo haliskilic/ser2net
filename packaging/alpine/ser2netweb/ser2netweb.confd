@@ -1,0 +1,18 @@
+# Settings of /etc/init.d/ser2netweb
+
+# The data directory: config.json, its backups, the logs and traces. Commands run by hand
+# on it go as the account ser2netweb, never as root, for example:
+#   su -s /bin/sh -c 'ser2netweb --data-dir /var/lib/ser2netweb --set-password admin' ser2netweb
+#SER2NETWEB_DATA_DIR="/var/lib/ser2netweb"
+
+# The admin UI's address and port: 127.0.0.1 and 8080 unless set here. To reach the UI
+# from the network:
+#SER2NETWEB_BIND_IP="0.0.0.0"
+#SER2NETWEB_PORT="8080"
+
+# More command line options (ser2netweb --help)
+#SER2NETWEB_ARGS=""
+
+# Open files: about three per running mapping plus one per client (ser2netweb also raises
+# its soft limit toward the hard one at start)
+rc_ulimit="-n 65536"

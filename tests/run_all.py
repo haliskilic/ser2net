@@ -114,6 +114,7 @@ PORTABLE = [
     "test_windows_channels.py",  # winget / Scoop / Chocolatey packages and their workflows
     "test_packages.py",         # .deb / .rpm: packaging/, the unit, the scripts (CI installs them)
     "test_package_repo.py",     # APT / DNF repositories on Pages: releases, files, docs, workflow
+    "test_distro_recipes.py",   # packaging/{debian,fedora,opensuse,arch,alpine}: versions, deps, units
     "test_distro_recipes_2.py",  # nixpkgs / Void / Gentoo / FreeBSD / MacPorts recipes agree
     "test_pyproject.py",        # the PyPI package: ranges hold the pins, package data, build tools
     "test_homebrew_formula.py",  # the Homebrew formula's generator (PyPI stand-ins, no network)
