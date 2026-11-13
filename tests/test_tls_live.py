@@ -91,8 +91,9 @@ def test_beacon_and_hints() -> None:
     kind, cmd = console.reconfigure_hint("/opt/s2n data", environ={})
     assert kind == "console" and cmd.endswith("--reconfigure --data-dir " + (
         '"/opt/s2n data"' if os.name == "nt" else "'/opt/s2n data'")), cmd
-    kind, cmd = console.reconfigure_hint("/x", "ser2net", environ={})
-    assert kind == "service" and cmd.endswith("--install-service --reconfigure"), cmd
+    for default in ("ser2netweb", "ser2net"):  # (2.x's name: --install-service moves it over)
+        kind, cmd = console.reconfigure_hint("/x", default, environ={})
+        assert kind == "service" and cmd.endswith("--install-service --reconfigure"), cmd
     kind, cmd = console.reconfigure_hint("/x", "s2n-b", environ={})
     assert cmd.endswith("--install-service --reconfigure --service-name s2n-b"), cmd
     print("beacon: the served port and scheme; address hint per installation  OK")

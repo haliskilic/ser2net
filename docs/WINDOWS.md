@@ -11,8 +11,11 @@ separate:
 
 | | Path | Why |
 |---|---|---|
-| Program (exe) | `C:\Program Files\ser2net\ser2net.exe` | admin-only, so a standard user can't replace the exe the service runs as SYSTEM |
-| Data | `C:\ProgramData\ser2net\` | config, logs, backups, TLS — kept private, writable by the service |
+| Program (exe) | `C:\Program Files\ser2netweb\ser2netweb.exe` | admin-only, so a standard user can't replace the exe the service runs as SYSTEM |
+| Data | `C:\ProgramData\ser2netweb\` | config, logs, backups, TLS — kept private, writable by the service |
+
+(Up to 2.9.x the service, the folders and the exe were called `ser2net`: *Upgrading from 2.x*
+below.)
 
 Do **not** run the service from a folder a standard user can write to (for example a
 folder you created at the root of `C:\` or `D:\`, or your `Downloads`). On Windows 10/11
@@ -20,9 +23,9 @@ those grant *Modify* to every signed-in user, who could then replace the exe and
 service run their code as SYSTEM.
 
 When you run `--install-service` from the standalone exe, it **copies itself into
-`C:\Program Files\ser2net\` for you** and registers the service from there, so you can
+`C:\Program Files\ser2netweb\` for you** and registers the service from there, so you can
 run the downloaded exe from anywhere. A new service keeps its data in
-`C:\ProgramData\ser2net\` unless you pass `--data-dir`.
+`C:\ProgramData\ser2netweb\` unless you pass `--data-dir`.
 
 Both folders end up owned by *Administrators*, with only SYSTEM and Administrators able to
 change them (Users may read and run the program) — not even your own account outside an
@@ -53,10 +56,13 @@ ser2netweb-windows-x64.exe --install-service
 The service starts at boot as LocalSystem, restarts 5 s after a failure, and the console
 asks once for the admin UI address. Then open the printed URL and set the admin password.
 
-Manage it with `sc stop ser2net` / `sc start ser2net`, or *Services* (`services.msc`).
-Run several instances side by side with `--service-name NAME`: from the standalone exe a
-named service gets `C:\Program Files\ser2net\NAME.exe` and `C:\ProgramData\ser2net\NAME` by
-itself (from a source checkout give each its own `--data-dir`). Remove one with `--uninstall-service` (the data directory is kept):
+Manage it with `sc stop ser2netweb` / `sc start ser2netweb`, or *Services*
+(`services.msc`, where it is listed as *ser2netweb*). Run several instances side by side
+with `--service-name NAME`: from the standalone exe a named service gets
+`C:\Program Files\ser2netweb\NAME.exe` and `C:\ProgramData\ser2netweb\NAME` by itself
+(from a source checkout give each its own `--data-dir`). Remove one with
+`--uninstall-service` (the data directory is kept; without a ser2netweb service it removes
+2.x's `ser2net` one):
 
 ```bat
 ser2netweb-windows-x64.exe --uninstall-service
@@ -70,14 +76,15 @@ stops while it starts (its exit code, and where to look) instead of success. A s
 whose event loop is stuck for 90 s writes `hang.log` and exits, and is started again 5 s
 later (`SER2NETWEB_LOOP_WATCHDOG`, a system environment variable, sets the limit; `0` = off).
 
-Look in the data directory (`C:\ProgramData\ser2net\` by default):
+Look in the data directory (`C:\ProgramData\ser2netweb\` by default):
 
 - `all.log` — ser2netweb's log, with the reason a start failed (a `config.json` that can't be
   read, an admin UI address that is in use or not on this machine, a TLS file that can't
   be loaded).
 - `service.log` — what Python itself reports (a traceback no handler took, a crash
   dump), begun anew at each start; the previous start's is `service.log.1`.
-- *Event Viewer → Windows Logs → Application*, source `ser2net` (the service name): one
+- *Event Viewer → Windows Logs → Application*, source `ser2netweb` (the service name;
+  `ser2net` for 2.x's service): one
   error entry with the reason when the service stops on an error. (The source is not
   registered, so Event Viewer first says it can't find a description for event 1; the
   reason follows.)
@@ -91,19 +98,53 @@ Download the new `ser2netweb-windows-x64.exe` and, from an elevated prompt, run
 ser2netweb-windows-x64.exe --install-service
 ```
 
-It stops the service, replaces the copy in `C:\Program Files\ser2net\`, and starts it
+It stops the service, replaces the copy in `C:\Program Files\ser2netweb\`, and starts it
 again — **in place**, keeping the service name and the data directory the service uses
 (read from its registration, so leave out `--data-dir`). If the new version doesn't start,
-the previous one is put back and started again. This also upgrades a service installed by
-ser2net 2.8.0 that still runs from a folder like `C:\ser2net\`: from then on it runs from
-`C:\Program Files\ser2net\` and keeps its data where it was (`C:\ser2net\data`).
+the previous one is put back and started again.
 
 When other accounts can rename a folder above that data directory (as with a folder made at
 the root of `C:\`), the upgrade warns: they could swap it for one of their own. Move it to
-`C:\ProgramData\ser2net`: `sc stop ser2net`, copy the folder there, then
-`--install-service --data-dir C:\ProgramData\ser2net`; keep the old folder until the
+`C:\ProgramData\ser2netweb`: `sc stop ser2netweb`, copy the folder there, then
+`--install-service --data-dir C:\ProgramData\ser2netweb`; keep the old folder until the
 service works. (`--data-dir` pointing to a folder without a `config.json` while the
 current one has one is refused, so an upgrade can't start over empty.)
+
+### Upgrading from 2.x (the service called ser2net)
+
+Up to 2.9.x the service was `ser2net`, the exe `C:\Program Files\ser2net\ser2net.exe` and
+the data `C:\ProgramData\ser2net\`. Download the new exe and run the same command, from an
+elevated prompt, without `--service-name` or `--data-dir`:
+
+```bat
+ser2netweb-windows-x64.exe --install-service
+```
+
+- It finds the `ser2net` service and checks that it is one ser2net installed (by its
+  registered command line: `--service --service-name ser2net --data-dir …`, run by a
+  `ser2net*.exe` or `ser2net.py`). A `ser2net` service of another program is left alone.
+- It stops it, puts the new exe in `C:\Program Files\ser2netweb\`, installs and starts the
+  `ser2netweb` service, and once that one runs deletes the `ser2net` service and its exe
+  copy in `C:\Program Files\ser2net\`. If the new service doesn't start, everything is put
+  back and the `ser2net` service starts again.
+- **Data:** `C:\ProgramData\ser2net\` moves to `C:\ProgramData\ser2netweb\` (one rename, the
+  admin-only permissions go along) when that folder doesn't exist yet. A data directory
+  anywhere else (a 2.8.0 install's `C:\ser2net\data`, a `--data-dir` of yours) stays where
+  it is, and so does `C:\ProgramData\ser2net\` while it also holds the folder of a named
+  service (`C:\ProgramData\ser2net\NAME`): upgrade the named services first (next point),
+  then the default one.
+- **Named services** (`--service-name NAME`, *ser2net (NAME)* in the Services list) keep
+  their name: run `--install-service --service-name NAME` for each. Each is upgraded in
+  place, to `C:\Program Files\ser2netweb\NAME.exe` and, when its data was in
+  `C:\ProgramData\ser2net\NAME`, `C:\ProgramData\ser2netweb\NAME`.
+- **Windows Firewall:** a rule names the program, which moved. Add the rule
+  `--install-service` prints (below) and delete the old one:
+  `netsh advfirewall firewall delete rule name="ser2net"` (a named service's:
+  `name="ser2net (NAME)"`).
+- Scripts and tools that use the old service name (`sc stop ser2net`, monitoring) need the
+  new one. To keep the old name instead, install with `--service-name ser2net`: that
+  upgrades the `ser2net` service in place like a named one (its exe and data then move to
+  `C:\Program Files\ser2netweb\ser2net.exe` and `C:\ProgramData\ser2netweb\ser2net`).
 
 ### Installing from a source checkout
 
@@ -114,8 +155,8 @@ the checkout and Python under `C:\Program Files\` (or another admin-only folder)
 Administrators; for a folder you already have, from an elevated prompt:
 
 ```bat
-icacls "C:\Program Files\ser2net-src" /setowner *S-1-5-32-544 /t /c
-icacls "C:\Program Files\ser2net-src" /reset /t /c
+icacls "C:\Program Files\ser2netweb-src" /setowner *S-1-5-32-544 /t /c
+icacls "C:\Program Files\ser2netweb-src" /reset /t /c
 ```
 
 If you trust the location as it is, add `--allow-unsafe-location`; the service then logs a
@@ -133,18 +174,18 @@ works, which is why this isn't obvious at first.
 program-scoped rule covers the admin UI, every mapping port and the cluster:
 
 ```bat
-netsh advfirewall firewall add rule name="ser2net" dir=in action=allow program="C:\Program Files\ser2net\ser2net.exe" enable=yes
+netsh advfirewall firewall add rule name="ser2netweb" dir=in action=allow program="C:\Program Files\ser2netweb\ser2netweb.exe" enable=yes
 ```
 
 Remove it with:
 
 ```bat
-netsh advfirewall firewall delete rule name="ser2net"
+netsh advfirewall firewall delete rule name="ser2netweb"
 ```
 
 A named service (`--service-name NAME`) needs a rule of its own for its exe,
-`C:\Program Files\ser2net\NAME.exe`; `--install-service` prints it with the rule name it
-uses.
+`C:\Program Files\ser2netweb\NAME.exe`; `--install-service` prints it with the rule name it
+uses (`ser2netweb (NAME)`).
 
 Two environment variables change how ser2netweb uses Windows (for the service: system
 environment variables, then restart it): `SER2NETWEB_WINDOWS_LOOP=proactor` lifts the
@@ -182,7 +223,7 @@ After editing `config.json` (by hand or with a deployment tool), have the runnin
 read it again — no restart, mappings whose settings didn't change keep their clients:
 
 ```bat
-"C:\Program Files\ser2net\ser2net.exe" --reload --data-dir C:\ProgramData\ser2net
+"C:\Program Files\ser2netweb\ser2netweb.exe" --reload --data-dir C:\ProgramData\ser2netweb
 ```
 
 (or Settings → *Configuration backups* → *Reload config.json*). A file that doesn't
