@@ -2,7 +2,7 @@
 
   * every string wrapped for translation — _("...") in the templates and in the Python
     sources, and both forms of an ngettext("...", "...", n) — has an entry in
-    app/locale/tr.json, and every entry is still used; the two forms of a text with a
+    ser2netweb/locale/tr.json, and every entry is still used; the two forms of a text with a
     count have the same placeholders, and no text writes a count as "(s)";
   * the languages are listed once (i18n.LANGUAGES; config.UI_LANGUAGES is derived from
     it), and every one but English has its catalog file;
@@ -28,11 +28,11 @@ import tempfile
 import markupsafe
 from _server import ROOT, Browser, Server
 
-from app import i18n
-from app.web.auth import hash_password
+from ser2netweb import i18n
+from ser2netweb.web.auth import hash_password
 
-TEMPLATES = os.path.join(ROOT, "app", "web", "templates")
-CATALOG = os.path.join(ROOT, "app", "locale", "tr.json")
+TEMPLATES = os.path.join(ROOT, "ser2netweb", "web", "templates")
+CATALOG = os.path.join(ROOT, "ser2netweb", "locale", "tr.json")
 # _("...") / _('...') in templates (the first argument; Jinja string escapes are rare)
 _TEMPLATE_CALL = re.compile(r"""\b_\(\s*(?P<q>["'])(?P<s>(?:\\.|(?!(?P=q)).)*)(?P=q)""", re.S)
 # ngettext("one", "other", n) in templates: both forms; for app.js (base.html) the two
@@ -70,10 +70,10 @@ def template_strings(plurals: list | None = None) -> set:
 
 
 def python_strings(plurals: list | None = None) -> set:
-    """Literal first arguments of _() calls in app/**/*.py, both of an ngettext()
+    """Literal first arguments of _() calls in ser2netweb/**/*.py, both of an ngettext()
     (implicitly concatenated literals are one Constant in the AST)."""
     out = set()
-    for f in glob.glob(os.path.join(ROOT, "app", "**", "*.py"), recursive=True):
+    for f in glob.glob(os.path.join(ROOT, "ser2netweb", "**", "*.py"), recursive=True):
         tree = ast.parse(open(f, encoding="utf-8").read())
         for node in ast.walk(tree):
             name = isinstance(node, ast.Call) and (getattr(node.func, "id", None)
@@ -124,11 +124,11 @@ def test_catalog_complete():
 
 
 def test_language_registry():
-    from app.config import UI_LANGUAGES
+    from ser2netweb.config import UI_LANGUAGES
     assert UI_LANGUAGES == ("auto", *i18n.LANGUAGES), UI_LANGUAGES
     for code in i18n.LANGUAGES:
         if code != i18n.DEFAULT:
-            assert os.path.isfile(os.path.join(ROOT, "app", "locale", f"{code}.json")), code
+            assert os.path.isfile(os.path.join(ROOT, "ser2netweb", "locale", f"{code}.json")), code
     assert i18n.ngettext("%(num)s record", "%(num)s records", 1) == "%(num)s record"
     assert i18n.ngettext("%(num)s record", "%(num)s records", 0) == "%(num)s records"
     print("languages: one list (UI_LANGUAGES derived), a catalog for each; ngettext's forms  OK")
@@ -157,7 +157,7 @@ def test_negotiation():
 def test_missing_catalog_reported():
     assert i18n.missing_catalogs() == [], "every offered language has its catalog"
     real = i18n.LOCALE_DIR
-    with tempfile.TemporaryDirectory() as empty:  # a build that left app/locale out
+    with tempfile.TemporaryDirectory() as empty:  # a build that left ser2netweb/locale out
         i18n.LOCALE_DIR = empty
         i18n.catalog.cache_clear()
         try:

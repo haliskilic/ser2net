@@ -1,6 +1,6 @@
 """A pin bump fails one CI job, and Dependabot's branches get their wheels refreshed.
 
-* The test matrix and the coverage job set SER2NET_SKIP_PIN_CHECKS, so the checks of
+* The test matrix and the coverage job set SER2NETWEB_SKIP_PIN_CHECKS, so the checks of
   vendor/wheels and the build locks against the pins run in the "offline wheels match
   requirements.txt" job alone (plus their comparison with PyPI); when it fails it attaches
   the refreshed files as a patch and says how to apply them.
@@ -18,10 +18,10 @@ from _workflows import jobs, key, permissions, read, steps, uses
 def test_one_job_checks_the_pins():
     ci = jobs(read("ci.yml"))
     for job in ("test", "test-next", "coverage"):
-        assert re.search(r'(?m)^      SER2NET_SKIP_PIN_CHECKS: "1"$', ci[job]), job
+        assert re.search(r'(?m)^      SER2NETWEB_SKIP_PIN_CHECKS: "1"$', ci[job]), job
     vendor = ci["vendor"]
     assert key(vendor, "name") == "offline wheels match requirements.txt"
-    assert "SER2NET_SKIP_PIN_CHECKS" not in vendor.split("\n    steps:\n", 1)[1]
+    assert "SER2NETWEB_SKIP_PIN_CHECKS" not in vendor.split("\n    steps:\n", 1)[1]
     for cmd in ("python tests/test_vendor_wheels.py", "python tests/test_build_lock.py",
                 "python tests/test_vendor_assets.py", "python tests/test_third_party.py",
                 "python tools/refresh_wheels.py --verify",

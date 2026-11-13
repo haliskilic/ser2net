@@ -13,9 +13,9 @@ import time
 
 from _server import Browser, Server, ui_cookie
 
-from app.config import (SESSION_TIMEOUT_DEFAULT_S, SESSION_TIMEOUT_MAX_S, SESSION_TIMEOUT_MIN_S,
+from ser2netweb.config import (SESSION_TIMEOUT_DEFAULT_S, SESSION_TIMEOUT_MAX_S, SESSION_TIMEOUT_MIN_S,
                         AppConfig, ConfigError)
-from app.web.auth import hash_password
+from ser2netweb.web.auth import hash_password
 
 PASSWORD = "session-pass-1"
 

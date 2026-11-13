@@ -21,9 +21,9 @@ import tempfile
 
 from _server import Browser, Server
 
-from app import __version__
-from app.config import AppConfig, ConfigStore
-from app.web.auth import hash_password
+from ser2netweb import __version__
+from ser2netweb.config import AppConfig, ConfigStore
+from ser2netweb.web.auth import hash_password
 
 PW = "downgrade-pass-1"
 
@@ -57,7 +57,7 @@ def test_newer_writer_and_unknown_keys():
         assert any("a newer version than this one" in n for n in cfg.load_notes) is newer
     cfg = AppConfig.from_dict({"written_by": "99.0.0"})
     assert cfg.load_notes == [
-        f"config.json was written by ser2net 99.0.0, a newer version than this one "
+        f"config.json was written by ser2netweb 99.0.0, a newer version than this one "
         f"({__version__}): what only 99.0.0 knows is not used here and is left out when this "
         "version saves config.json. backups/ keeps the file as 99.0.0 left it: restore it "
         "there after upgrading again"], cfg.load_notes
@@ -115,13 +115,13 @@ def test_settings_page():
               "admin_ui": {"theme": "dark"}}
     with Server(config) as srv:
         log = srv.output()
-        assert "config.json was written by ser2net 99.0.0, a newer version than this one" in log
+        assert "config.json was written by ser2netweb 99.0.0, a newer version than this one" in log
         assert "not settings of this version" in log and "future, admin_ui.theme" in log, log
         b = Browser(srv.base)
         b.login("admin", PW)
         st, _h, page = b.get("/settings")
         assert st == 200
-        assert ("At start-up, config.json had been written by ser2net 99.0.0, a newer version "
+        assert ("At start-up, config.json had been written by ser2netweb 99.0.0, a newer version "
                 f"than this one ({__version__})") in page, page[page.find('id="backups"'):][:1500]
         assert ("At start-up, config.json had settings this version doesn’t know: future, "
                 "admin_ui.theme.") in page
@@ -129,14 +129,14 @@ def test_settings_page():
         rows = re.findall(r"<tr>(.*?)</tr>", table, re.S)
         assert len(rows) == 3, rows  # header, the file as 99.0.0 left it, the one written now
         assert '<span class="tag">in use</span>' in rows[1], rows[1]
-        assert f"written by ser2net {__version__}" in rows[1], rows[1]
-        assert "written by ser2net 99.0.0" in rows[2] and "in use" not in rows[2], rows[2]
+        assert f"written by ser2netweb {__version__}" in rows[1], rows[1]
+        assert "written by ser2netweb 99.0.0" in rows[2] and "in use" not in rows[2], rows[2]
         assert srv.saved_config()["written_by"] == __version__
         tr = Browser(srv.base)
         tr.get("/lang/tr?next=/login")
         tr.login("admin", PW)
         st, _h, page = tr.get("/settings")
-        assert "yazan: ser2net 99.0.0" in page and "kullanımda" in page, page[-3000:]
+        assert "yazan: ser2netweb 99.0.0" in page and "kullanımda" in page, page[-3000:]
     print("Settings: the newer writer and unknown keys pointed out; each backup's writer, "
           "the one in use marked  OK")
 

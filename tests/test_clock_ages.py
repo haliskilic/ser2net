@@ -33,14 +33,14 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from _clock import WallClock
 
-from app.config import AppConfig, ClusterSettings, ConfigStore
-from app.engine import access, bridge, cluster, serial_link
-from app.engine.cluster import (LEGACY_SEEN_S, NOTE_TTL, PEER_TTL,
+from ser2netweb.config import AppConfig, ClusterSettings, ConfigStore
+from ser2netweb.engine import access, bridge, cluster, serial_link
+from ser2netweb.engine.cluster import (LEGACY_SEEN_S, NOTE_TTL, PEER_TTL,
                                 ClusterDiscovery, _sign, key_header)
-from app.state import AppState
-from app.web import auth, oidc_auth
-from app.web.routes import cluster as cluster_routes
-from app.web.server import build_app
+from ser2netweb.state import AppState
+from ser2netweb.web import auth, oidc_auth
+from ser2netweb.web.routes import cluster as cluster_routes
+from ser2netweb.web.server import build_app
 
 KEY = "clock-ages-key"
 DAY = 86400.0

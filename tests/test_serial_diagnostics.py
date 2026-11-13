@@ -1,4 +1,4 @@
-"""What ser2net tells about a mapping's serial port: why it can't be opened, and settings the
+"""What ser2netweb tells about a mapping's serial port: why it can't be opened, and settings the
 port did not take.
 
   - a hint next to the raw error (status `hint`; `last_error` is kept as it is), when the
@@ -60,15 +60,15 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import serial
 from serial.serialutil import SerialBase
 
-from app import i18n
-from app.config import MappingConfig, SerialSettings
-from app.engine import portdiag, serial_compat, serial_io
-from app.engine.bridge import RunnerStatus
-from app.engine.protocols.rfc2217 import Rfc2217Session
-from app.engine.serial_link import SerialLink
+from ser2netweb import i18n
+from ser2netweb.config import MappingConfig, SerialSettings
+from ser2netweb.engine import portdiag, serial_compat, serial_io
+from ser2netweb.engine.bridge import RunnerStatus
+from ser2netweb.engine.protocols.rfc2217 import Rfc2217Session
+from ser2netweb.engine.serial_link import SerialLink
 
 ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
-TR = json.load(open(os.path.join(ROOT, "app", "locale", "tr.json"), encoding="utf-8"))
+TR = json.load(open(os.path.join(ROOT, "ser2netweb", "locale", "tr.json"), encoding="utf-8"))
 IAC, SB, SE = 255, 250, 240
 
 
@@ -240,7 +240,7 @@ def test_status_and_log():
 
 
 def test_dashboard_shows_warnings():
-    from app.web.server import make_templates
+    from ser2netweb.web.server import make_templates
     env = make_templates().env
     m = MappingConfig.from_dict({"name": "rs", "serial": {"port": "/dev/ttyUSB0"}})
     st = RunnerStatus(state="running", warnings=(portdiag.Note("rs485", ("ENOTTY",)),))
@@ -301,11 +301,11 @@ def test_no_access_hints():
     cases = [  # (stat, account, kind, text)
         (_stat(20), {}, "group", "/dev/ttyUSB0 belongs to group dialout (gid 20), and user svc "
          "is not in it: add the user to the group (usermod -aG dialout svc; the systemd unit: "
-         "SupplementaryGroups=dialout), then restart ser2net"),
+         "SupplementaryGroups=dialout), then restart ser2netweb"),
         (_stat(14), {}, "group", "group uucp (gid 14)"),
         (_stat(986), {}, "group", "group 986 (gid 986)"),  # no name for it here
         (_stat(20), {"listed": (20,)}, "restart", "user svc was added to group dialout after "
-         "ser2net started"),
+         "ser2netweb started"),
         (_stat(18), {"container": True, "names": {}}, "container_group",
          "group 18 (gid 18), which this container doesn't have: start it with --group-add 18"),
         (_stat(20, mode=0o20600), {"groups": (20,)}, "mode", "/dev/ttyUSB0 is crw------- "
@@ -330,7 +330,7 @@ def test_no_access_hints():
 
 
 async def _two_mappings_one_port(path, alias):
-    from app.engine.bridge import MappingRunner
+    from ser2netweb.engine.bridge import MappingRunner
     logs = []
     first = MappingRunner(MappingConfig.from_dict(
         {"name": "first", "serial": {"port": path},
@@ -371,7 +371,7 @@ async def _until(check, timeout=10.0):
 
 
 async def _hint_follows_the_cause():
-    from app.engine import serial_link
+    from ser2netweb.engine import serial_link
     status = RunnerStatus()
     stop = asyncio.Event()
     logs = []
@@ -442,7 +442,7 @@ def test_port_in_use_hints():
         shutil.rmtree(folder, ignore_errors=True)
 
     m = MappingConfig.from_dict({"name": "second", "serial": {"port": alias}})
-    from app.web.server import make_templates
+    from ser2netweb.web.server import make_templates
     html = make_templates().env.get_template("_mappings_body.html").render(
         mappings=[m], statuses={m.id: st}, can_edit=False)
     assert "Could not exclusively lock port" in html and \
@@ -535,8 +535,8 @@ def test_port_warnings():
 def test_ports_page():
     from serial.tools import list_ports
 
-    from app.engine import portlist
-    from app.web.server import make_templates
+    from ser2netweb.engine import portlist
+    from ser2netweb.web.server import make_templates
     port = types.SimpleNamespace(device="/dev/ttyAMA0", name="ttyAMA0", description="UART",
                                  hwid="", vid=None, pid=None, serial_number=None,
                                  manufacturer=None, product=None, location=None)
@@ -561,7 +561,7 @@ def test_ports_page():
     ports[0].pop("access")
     html = tpl.render(ports=ports, show_all=False, hidden=0, in_use=set())
     assert "tag-warn" not in html
-    print("ports page: what else uses a port and a port ser2net may not open are shown as "
+    print("ports page: what else uses a port and a port ser2netweb may not open are shown as "
           "badges (TR too)  OK")
 
 
@@ -602,7 +602,7 @@ def test_open_port_says_what_else_uses_it():
 
 
 async def _hangup(pty):
-    from app.engine import serial_link
+    from ser2netweb.engine import serial_link
     logs = []
     status = RunnerStatus()
     stop = asyncio.Event()
@@ -781,4 +781,4 @@ if __name__ == "__main__":
     test_hangup_told_from_an_unplug()
     test_tiocexcl()
     test_uucp_locks()
-    print("\nPASS: what ser2net tells about a mapping's serial port")
+    print("\nPASS: what ser2netweb tells about a mapping's serial port")

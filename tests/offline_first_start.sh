@@ -5,8 +5,8 @@
 #   tests/offline_first_start.sh [python]     # from a checkout without lib/
 # 1. bootstrap.py installs vendor/wheels into ./lib with pip --no-index; without a psutil
 #    wheel for this machine it installs the set without it, and says so;
-# 2. the app imports its dependencies from ./lib, and ser2net.py --about runs;
-# 3. ser2net starts from ./lib on a fresh data directory and answers /healthz (the
+# 2. the app imports its dependencies from ./lib, and ser2netweb.py --about runs;
+# 3. ser2netweb starts from ./lib on a fresh data directory and answers /healthz (the
 #    interface lists then come from the standard library); then it is stopped.
 # ./lib and the data directory are removed again.
 set -eu
@@ -28,7 +28,7 @@ cat "$data/bootstrap.log"
 
 echo "== 2. the app imports from ./lib; --about"
 psutil=$("$PY" -c "import os, sys; sys.path[:0] = ['lib', '.']
-import importlib.util, serial, starlette, uvicorn, jinja2, app.runtime, app.web.server
+import importlib.util, serial, starlette, uvicorn, jinja2, ser2netweb.runtime, ser2netweb.web.server
 lib = os.path.abspath('lib')
 for m in (serial, starlette, uvicorn, jinja2):
     assert os.path.abspath(m.__file__).startswith(lib), m.__file__
@@ -39,15 +39,15 @@ if [ "$psutil" = no ]; then
         || { echo "FAIL: psutil missing from ./lib, and bootstrap.py didn't say so"; exit 1; }
 fi
 echo "psutil in ./lib: $psutil"
-"$PY" ser2net.py --about
+"$PY" ser2netweb.py --about
 
 echo "== 3. a start from ./lib answers /healthz"
-SER2NET_BIND_IP=127.0.0.1 SER2NET_PORT=18091 "$PY" ser2net.py --data-dir "$data/d" \
+SER2NETWEB_BIND_IP=127.0.0.1 SER2NETWEB_PORT=18091 "$PY" ser2netweb.py --data-dir "$data/d" \
     > "$data/server.log" 2>&1 &
 pid=$!
 ok=""
 for _ in $(seq 1 120); do  # (emulated: a start takes much longer)
-    if "$PY" ser2net.py --no-bootstrap --data-dir "$data/d" --healthcheck >/dev/null 2>&1; then
+    if "$PY" ser2netweb.py --no-bootstrap --data-dir "$data/d" --healthcheck >/dev/null 2>&1; then
         ok=1
         break
     fi

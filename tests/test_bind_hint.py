@@ -1,4 +1,4 @@
-"""Ports the system refuses say why and what to do (app/engine/bindhint.py).
+"""Ports the system refuses say why and what to do (ser2netweb/engine/bindhint.py).
 
 On Linux a process that isn't root needs CAP_NET_BIND_SERVICE for a port below 1024 (the
 systemd unit's user, the Docker image's on the host network). The refused bind said only
@@ -26,10 +26,10 @@ import time
 
 from _server import ROOT, Browser, Server
 
-from app.config import MappingConfig
-from app.engine import bindhint
-from app.engine.supervisor import Supervisor
-from app.web.auth import hash_password
+from ser2netweb.config import MappingConfig
+from ser2netweb.engine import bindhint
+from ser2netweb.engine.supervisor import Supervisor
+from ser2netweb.web.auth import hash_password
 
 PW = "hint-pass-1"
 LOW = 502  # Modbus/TCP's port: below 1024, refused to an account without the capability
@@ -126,9 +126,9 @@ def test_dashboard_and_api():
         return
     users = [{"username": "admin", "password_hash": hash_password(PW), "role": "admin",
               "pwd_version": 1}]
-    with open(os.path.join(ROOT, "app", "locale", "tr.json"), encoding="utf-8") as fh:
+    with open(os.path.join(ROOT, "ser2netweb", "locale", "tr.json"), encoding="utf-8") as fh:
         tr = json.load(fh)
-    en_text = ("Ports below 1024 need extra rights on Linux: give ser2net the "
+    en_text = ("Ports below 1024 need extra rights on Linux: give ser2netweb the "
                "CAP_NET_BIND_SERVICE capability")
     tr_text = next(v for k, v in tr.items() if k.startswith(en_text))
     with Server({"users": users, "mappings": [_mapping()]}) as srv:
@@ -152,12 +152,12 @@ def test_admin_ui_port_warning():
     users = [{"username": "admin", "password_hash": hash_password(PW), "role": "admin",
               "pwd_version": 1}]
     srv = Server({"users": users})
-    srv.env["SER2NET_PORT"] = "80"
+    srv.env["SER2NETWEB_PORT"] = "80"
     log_path = os.path.join(srv.tmp, "server.log")
     try:
         with open(log_path, "wb") as log:
             proc = subprocess.Popen(
-                [sys.executable, "ser2net.py", "--no-bootstrap", "--data-dir", srv.data],
+                [sys.executable, "ser2netweb.py", "--no-bootstrap", "--data-dir", srv.data],
                 cwd=ROOT, env=srv.env, stdin=subprocess.DEVNULL, stdout=log,
                 stderr=subprocess.STDOUT)
             try:

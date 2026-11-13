@@ -31,9 +31,9 @@ from unittest import mock
 
 from _server import Browser, Server, free_port
 
-from app.config import ConfigStore
-from app.web.auth import hash_password
-from app.web.routes import settings as settings_routes
+from ser2netweb.config import ConfigStore
+from ser2netweb.web.auth import hash_password
+from ser2netweb.web.routes import settings as settings_routes
 
 PW = "prg-pass-123"
 
@@ -63,9 +63,9 @@ def test_flash_store():
 def test_sections_exist():
     """Every section a Settings form names has its place for the message, with that id."""
     root = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
-    with open(os.path.join(root, "app", "web", "routes", "settings.py"), encoding="utf-8") as fh:
+    with open(os.path.join(root, "ser2netweb", "web", "routes", "settings.py"), encoding="utf-8") as fh:
         code = fh.read()
-    with open(os.path.join(root, "app", "web", "templates", "settings.html"), encoding="utf-8") as fh:
+    with open(os.path.join(root, "ser2netweb", "web", "templates", "settings.html"), encoding="utf-8") as fh:
         html = fh.read()
     named = set(re.findall(r'(?:_done|_failed|refused)\(request, "([a-z-]+)"', code))
     named |= set(re.findall(r'section="([a-z-]+)"', code))

@@ -26,8 +26,8 @@ import urllib.request
 
 from _server import Browser, Server, free_udp_port
 
-from app.engine.cluster import _sign, key_header
-from app.web.auth import hash_password
+from ser2netweb.engine.cluster import _sign, key_header
+from ser2netweb.web.auth import hash_password
 
 PW = "cluster-settings-1"
 KEY = "settings-test-key-0123456789"

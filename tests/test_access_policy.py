@@ -19,11 +19,11 @@ from unittest import mock
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "lib"))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from app.config import MappingConfig, NetworkSettings, client_networks
-from app.engine import access, bridge, netguard
-from app.engine.bridge import MappingRunner
-from app.engine.modbus_gateway import ModbusGatewayRunner
-from app.engine.serial_link import Backoff
+from ser2netweb.config import MappingConfig, NetworkSettings, client_networks
+from ser2netweb.engine import access, bridge, netguard
+from ser2netweb.engine.bridge import MappingRunner
+from ser2netweb.engine.modbus_gateway import ModbusGatewayRunner
+from ser2netweb.engine.serial_link import Backoff
 
 
 class FakeClient:

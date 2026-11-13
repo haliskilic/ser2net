@@ -27,11 +27,11 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "lib"))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from app.config import ConfigError, MappingConfig, MqttSettings, mqtt_tx_topics, poll_bytes
-from app.engine import bridge
-from app.engine.bridge import MappingRunner
-from app.engine.mqtt_pub import MAX_LINE_BUFFER, MqttPublisher
-from app.web.routes.forms import _build_mapping_dict, _preserve_unmanaged_fields
+from ser2netweb.config import ConfigError, MappingConfig, MqttSettings, mqtt_tx_topics, poll_bytes
+from ser2netweb.engine import bridge
+from ser2netweb.engine.bridge import MappingRunner
+from ser2netweb.engine.mqtt_pub import MAX_LINE_BUFFER, MqttPublisher
+from ser2netweb.web.routes.forms import _build_mapping_dict, _preserve_unmanaged_fields
 
 
 class FakeClient:

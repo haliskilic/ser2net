@@ -171,7 +171,7 @@ fi
 version=$(TMPDIR=${scratch:-${TMPDIR:-/tmp}} "$root$BIN_DEST.new" --version 2>&1) \
     || die "$binary doesn't run here: $version"
 case $version in
-    "ser2net "*) say "binary: $version" ;;
+    "ser2netweb "*|"ser2net "*) say "binary: $version" ;;  # (ser2net: 2.9.x and older)
     *) die "$binary is not ser2net (--version said: $version)" ;;
 esac
 

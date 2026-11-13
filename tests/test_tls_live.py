@@ -1,4 +1,4 @@
-"""Admin UI TLS changes apply to new connections while ser2net runs, and what the UI really
+"""Admin UI TLS changes apply to new connections while ser2netweb runs, and what the UI really
 serves decides the cookies' Secure flag, HSTS, the cluster beacon's scheme and the Settings
 page's "Listening on" (a saved change that waits for the next start doesn't).
 
@@ -26,10 +26,10 @@ import urllib.request
 from _optional import need
 from _server import Browser, Server, _NoRedirect
 
-from app import console
-from app.config import AppConfig
-from app.engine.cluster import ClusterDiscovery
-from app.web.auth import hash_password
+from ser2netweb import console
+from ser2netweb.config import AppConfig
+from ser2netweb.engine.cluster import ClusterDiscovery
+from ser2netweb.web.auth import hash_password
 
 PW = "tls-live-pass-1"
 
@@ -87,7 +87,7 @@ def test_beacon_and_hints() -> None:
     disco.serving = lambda: ("10.1.2.3", 8080, False)  # saved, not served yet
     assert disco.advertised() == ("10.1.2.3", 8080, "http"), disco.advertised()
 
-    assert console.reconfigure_hint("/data", environ={"SER2NET_BIND_IP": "0.0.0.0"}) == ("env", "")
+    assert console.reconfigure_hint("/data", environ={"SER2NETWEB_BIND_IP": "0.0.0.0"}) == ("env", "")
     kind, cmd = console.reconfigure_hint("/opt/s2n data", environ={})
     assert kind == "console" and cmd.endswith("--reconfigure --data-dir " + (
         '"/opt/s2n data"' if os.name == "nt" else "'/opt/s2n data'")), cmd

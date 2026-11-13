@@ -29,11 +29,11 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "lib"))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from app.config import MappingConfig
-from app.engine import bridge, modbus_gateway, netguard, supervisor
-from app.engine.bridge import MappingRunner, RunnerStatus
-from app.engine.modbus_gateway import ModbusGatewayRunner
-from app.engine.supervisor import Supervisor
+from ser2netweb.config import MappingConfig
+from ser2netweb.engine import bridge, modbus_gateway, netguard, supervisor
+from ser2netweb.engine.bridge import MappingRunner, RunnerStatus
+from ser2netweb.engine.modbus_gateway import ModbusGatewayRunner
+from ser2netweb.engine.supervisor import Supervisor
 
 PORTS: dict = {}     # port -> the fake runner listening on it
 LIVE: set = set()    # fake runners started and not stopped yet

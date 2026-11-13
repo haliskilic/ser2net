@@ -34,10 +34,10 @@ import urllib.request
 
 from _server import ROOT, Browser, Server, free_port
 
-from app.config import AppConfig, MappingConfig
-from app.engine import netguard
-from app.web import httpguard
-from app.web.auth import hash_password, hash_token
+from ser2netweb.config import AppConfig, MappingConfig
+from ser2netweb.engine import netguard
+from ser2netweb.web import httpguard
+from ser2netweb.web.auth import hash_password, hash_token
 
 PW = "ui-first-pass-1"
 USERS = [{"username": "admin", "password_hash": hash_password(PW), "role": "admin",
@@ -222,8 +222,8 @@ def test_tls_that_does_not_load():
                "mappings": [mapping("Never", free_port(), "never0000001")]}
         with open(os.path.join(data, "config.json"), "w", encoding="utf-8") as fh:
             json.dump(cfg, fh)
-        env = dict(os.environ, SER2NET_BIND_IP="127.0.0.1", SER2NET_PORT=str(port))
-        p = subprocess.run([sys.executable, "ser2net.py", "--no-bootstrap", "--data-dir", data],
+        env = dict(os.environ, SER2NETWEB_BIND_IP="127.0.0.1", SER2NETWEB_PORT=str(port))
+        p = subprocess.run([sys.executable, "ser2netweb.py", "--no-bootstrap", "--data-dir", data],
                            cwd=ROOT, env=env, stdin=subprocess.DEVNULL, capture_output=True,
                            encoding="utf-8", errors="replace", timeout=60)
         out = p.stdout + p.stderr
@@ -240,7 +240,7 @@ def test_tls_that_does_not_load():
 
 
 def test_tls_checked_when_saved():
-    from app.web import selfsigned
+    from ser2netweb.web import selfsigned
 
     with Server({"users": USERS}) as srv:
         b = Browser(srv.base)

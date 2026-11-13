@@ -26,9 +26,9 @@ from types import SimpleNamespace
 from _optional import need
 from _server import Browser, Server, _NoRedirect, ui_cookie
 
-from app.config import HSTS_MAX_AGE_DEFAULT, HSTS_MAX_AGE_MAX, AdminUI, AppConfig
-from app.web.auth import hash_password
-from app.web.server import GuardMiddleware
+from ser2netweb.config import HSTS_MAX_AGE_DEFAULT, HSTS_MAX_AGE_MAX, AdminUI, AppConfig
+from ser2netweb.web.auth import hash_password
+from ser2netweb.web.server import GuardMiddleware
 
 PW = "hsts-pass-1"
 YEAR = 31536000
@@ -132,7 +132,7 @@ def main():
             test_form(srv, b)
         print("\nPASS: HSTS max-age")
         return
-    from app.web.selfsigned import generate
+    from ser2netweb.web.selfsigned import generate
     srv = Server({"users": users})
     cert, key = os.path.join(srv.tmp, "cert.pem"), os.path.join(srv.tmp, "key.pem")
     generate(cert, key)

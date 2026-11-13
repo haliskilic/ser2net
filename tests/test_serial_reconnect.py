@@ -31,10 +31,10 @@ from contextlib import suppress
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "lib"))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from app import notify
-from app.config import MappingConfig, SerialSettings
-from app.engine import modbus, serial_io
-from app.engine.supervisor import Supervisor
+from ser2netweb import notify
+from ser2netweb.config import MappingConfig, SerialSettings
+from ser2netweb.engine import modbus, serial_io
+from ser2netweb.engine.supervisor import Supervisor
 
 REPLY_PDU = bytes([0x03, 0x02, 0x12, 0x34])  # read holding registers: one word
 READ_PDU = bytes([0x03, 0x00, 0x00, 0x00, 0x01])

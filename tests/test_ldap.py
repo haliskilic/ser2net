@@ -10,7 +10,7 @@ LDAP server speaking the real protocol (_ldap_server.py), which answers like Act
 Directory where needed: sign-in names that are no DN (user@domain, DOMAIN\\user), the
 RootDSE, nested groups. Those parts need ldap3 (the escape helpers the code uses live in
 it): without it they are skipped with a SKIP line (tests/run_all.py repeats it), and with
-SER2NET_OPTIONAL_TESTS=1 the test fails instead. Run: python3 tests/test_ldap.py
+SER2NETWEB_OPTIONAL_TESTS=1 the test fails instead. Run: python3 tests/test_ldap.py
 """
 import dataclasses
 import os
@@ -22,8 +22,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from _names import OTHER_GROUP, SAME_GROUP
 from _optional import need
 
-from app.config import AccountNameError, AppConfig, LdapSettings, User
-from app.web import ldap_auth
+from ser2netweb.config import AccountNameError, AppConfig, LdapSettings, User
+from ser2netweb.web import ldap_auth
 
 OPER_GROUP = "cn=ser2net-operators,ou=groups,dc=ex,dc=com"
 ADMIN_GROUP = "cn=ser2net-admins,ou=groups,dc=ex,dc=com"

@@ -2,12 +2,13 @@
 # One ser2net per instance name: systemctl enable --now ser2net@line1 ser2net@line2
 # Each keeps its data (config.json, logs) in /var/lib/ser2net/<name>, made by systemd.
 # Give each its own web UI address in /etc/ser2net/<name>.env, for example:
-#   SER2NET_BIND_IP=0.0.0.0
-#   SER2NET_PORT=8081
+#   SER2NETWEB_BIND_IP=0.0.0.0
+#   SER2NETWEB_PORT=8081
 # (without it a first start binds 127.0.0.1:8080, which the next instance then can't
 # have: all.log says so). The instance name is also the name notifications, the browser
-# tab and the cluster's fleet view give it; an empty SER2NET_NODE_NAME= in that file
-# leaves the name to Settings -> Admin interface.
+# tab and the cluster's fleet view give it; an empty SER2NETWEB_NODE_NAME= in that file
+# leaves the name to Settings -> Admin interface. (The SER2NET_* names of 2.9.x and older
+# still work in it; a SER2NETWEB_* one wins.)
 # Several instances on one machine: README.en.md, "Run as a service".
 Description=ser2net (%i) — serial-to-network bridge with web config UI
 After=network-online.target
@@ -35,6 +36,7 @@ WorkingDirectory=/opt/ser2net
 # at deploy time and after each upgrade (sudo -u ser2net python3 /opt/ser2net/bootstrap.py,
 # or as root followed by chown -R ser2net /opt/ser2net/lib), so no instance writes to it
 # (the start-up log warns while ./lib is out of date).
+# (the old name on purpose: SER2NETWEB_NODE_NAME, or SER2NET_NODE_NAME, in the .env file wins)
 Environment=SER2NET_NODE_NAME=%i
 EnvironmentFile=-/etc/ser2net/%i.env
 StateDirectory=ser2net/%i
@@ -43,7 +45,7 @@ ExecStart=/usr/bin/python3 /opt/ser2net/ser2net.py --no-bootstrap --data-dir /va
 # Every log line goes to the instance's all.log (rotated) and to stdout, which the journal
 # keeps too (journalctl -u ser2net@<name>). To keep the lines only in all.log, uncomment
 # (or set it in /etc/ser2net/<name>.env):
-# Environment=SER2NET_LOG_STDOUT=off
+# Environment=SER2NETWEB_LOG_STDOUT=off
 # `systemctl reload ser2net@<name>`: read the instance's config.json again without a
 # restart (SIGHUP; see ser2net.service)
 ExecReload=/bin/kill -HUP $MAINPID

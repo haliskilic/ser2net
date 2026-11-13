@@ -42,7 +42,7 @@ if (-not (Test-Path $PY)) { throw "interpreter not found at $PY after extraction
 if ($LASTEXITCODE -ne 0) { throw "pip install failed" }
 
 # license texts of the native libraries PBS links into the interpreter (OpenSSL, libffi,
-# zlib, ...), from the same release tag — so `ser2net --licenses` covers them on Windows
+# zlib, ...), from the same release tag — so `ser2netweb --licenses` covers them on Windows
 # too (the python.org build folded these into its own LICENSE.txt; PBS keeps them apart).
 $licdir = "build\licenses-native"
 New-Item -ItemType Directory -Force -Path $licdir | Out-Null
@@ -57,7 +57,7 @@ if ($LASTEXITCODE -ne 0) { throw "version resource generation failed" }
 if ($LASTEXITCODE -ne 0) { throw "license bundle failed" }
 & $PY tools\release_guard.py interpreter --min-openssl $MIN_OPENSSL
 if ($LASTEXITCODE -ne 0) { throw "release guard failed (OpenSSL below $MIN_OPENSSL)" }
-& $PY -m PyInstaller --clean --noconfirm ser2net.spec
+& $PY -m PyInstaller --clean --noconfirm ser2netweb.spec
 if ($LASTEXITCODE -ne 0) { throw "PyInstaller failed" }
 # after the build: the spec lists the binaries the exe carries (pyexpat.pyd, _decimal.pyd ...)
 & $PY tools\third_party.py sbom build\ser2net.cdx.json --strict --binaries build\bundled-binaries.txt

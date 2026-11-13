@@ -54,9 +54,9 @@ in Turkish, whose texts are longer:
     it unchanged keeps every setting of the mapping.
 
 Opt-in: needs `pip install playwright && python -m playwright install chromium`.
-Skipped when Playwright or its browser is missing, unless SER2NET_UI_TESTS=1 (the
+Skipped when Playwright or its browser is missing, unless SER2NETWEB_UI_TESTS=1 (the
 CI 'ui' job sets it, so a missing browser fails there instead of skipping). Set
-SER2NET_UI_ARTIFACTS=<dir> to keep a screenshot of every page and width.
+SER2NETWEB_UI_ARTIFACTS=<dir> to keep a screenshot of every page and width.
 Like test_cluster.py, the two nodes open their UDP cluster-discovery socket.
 
 Run: python3 tests/test_ui_layout.py
@@ -78,13 +78,14 @@ sys.path.insert(0, ROOT)
 import _form_cases as form_cases
 from _formsubmit import browser_post
 
-from app.web.auth import hash_password
+from ser2netweb import envvars
+from ser2netweb.web.auth import hash_password
 
-REQUIRED = os.environ.get("SER2NET_UI_TESTS") == "1"
-ARTIFACTS = os.environ.get("SER2NET_UI_ARTIFACTS", "")
+REQUIRED = envvars.get("SER2NETWEB_UI_TESTS") == "1"
+ARTIFACTS = envvars.get("SER2NETWEB_UI_ARTIFACTS", "")
 WIDTHS = (1440, 1280, 1024, 960, 768, 390)  # desktop … half-screen … tablet … phone
 
-with open(os.path.join(ROOT, "app", "locale", "tr.json"), encoding="utf-8") as _fh:
+with open(os.path.join(ROOT, "ser2netweb", "locale", "tr.json"), encoding="utf-8") as _fh:
     TR = json.load(_fh)
 
 LONG_NAME = "PRODUCTION_LINE_3_PLC_SIEMENS_S7_1500_MAIN_CONTROLLER_BUILDING_B_EAST_WING"
@@ -253,7 +254,7 @@ def start_node(cfg, backup=False):
                            users=cfg["users"][:1]), fh)
     # output to a file, never an unread pipe (a full pipe blocks the server)
     log = open(os.path.join(tmp, "server.log"), "wb")
-    proc = subprocess.Popen([sys.executable, "ser2net.py", "--no-bootstrap", "--config", path],
+    proc = subprocess.Popen([sys.executable, "ser2netweb.py", "--no-bootstrap", "--config", path],
                             cwd=ROOT, stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT)
     return proc, tmp, log
 
@@ -464,7 +465,7 @@ def feedback_checks(browser, base, problems):
             bad(f"a restart did not show {text!r} in the console: {page.evaluate(screen)!r}")
     page.click("#console-close")
     # the console text encoding: a code page's bytes shown and typed as its characters
-    from app.config import console_charset
+    from ser2netweb.config import console_charset
     decoded = page.evaluate("cs => decodeBytes(new Uint8Array([0xDE, 0xDD, 0x20, 0xB0, 0x41]), cs)",
                             console_charset("iso-8859-9"))
     typed = page.evaluate("cs => Array.from(encodeText('şİ°A€', cs))", console_charset("cp857"))
@@ -506,7 +507,7 @@ def feedback_checks(browser, base, problems):
         bad("the lost-connection note stayed after the server answered again")
 
     # an ended session: a lasting note with a sign-in link; signing in (another tab) clears it
-    # (the session cookie's name carries the port: app/web/proxy.py cookie_name)
+    # (the session cookie's name carries the port: ser2netweb/web/proxy.py cookie_name)
     ctx.clear_cookies(name=next(c["name"] for c in ctx.cookies()
                                 if c["name"].startswith("ser2net_session")))
     if not until("() => document.querySelector('#mappings.stale') && "
@@ -746,7 +747,7 @@ def settings_checks(browser, base, problems, config_path):
 
 def skip(why):
     if REQUIRED:
-        raise AssertionError(f"SER2NET_UI_TESTS=1 but {why}")
+        raise AssertionError(f"SER2NETWEB_UI_TESTS=1 but {why}")
     print(f"SKIP browser layout test: {why} "
           "(pip install playwright && python -m playwright install chromium)")
 

@@ -20,7 +20,7 @@ import os
 class TestCA:
     __test__ = False   # not a test class
 
-    def __init__(self, folder: str, name: str = "ser2net test CA"):
+    def __init__(self, folder: str, name: str = "ser2netweb test CA"):
         from cryptography import x509
         from cryptography.hazmat.primitives import serialization
         from cryptography.hazmat.primitives.asymmetric import ec

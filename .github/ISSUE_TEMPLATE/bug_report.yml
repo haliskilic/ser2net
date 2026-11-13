@@ -5,10 +5,10 @@ body:
   - type: markdown
     attributes:
       value: |
-        Güvenlik açığı bildirmek için bu formu **kullanmayın**; bkz. [SECURITY.md](https://github.com/haliskilic/ser2net/blob/main/SECURITY.md).
-        Do **not** use this form for security vulnerabilities — see [SECURITY.md](https://github.com/haliskilic/ser2net/blob/main/SECURITY.md).
+        Güvenlik açığı bildirmek için bu formu **kullanmayın**; bkz. [SECURITY.md](https://github.com/haliskilic/ser2netweb/blob/main/SECURITY.md).
+        Do **not** use this form for security vulnerabilities — see [SECURITY.md](https://github.com/haliskilic/ser2netweb/blob/main/SECURITY.md).
 
-        Linux'ta açılmayan bir seri port için önce / For a serial port that doesn't open on Linux, first see [docs/LINUX-SERIAL.md](https://github.com/haliskilic/ser2net/blob/main/docs/LINUX-SERIAL.md).
+        Linux'ta açılmayan bir seri port için önce / For a serial port that doesn't open on Linux, first see [docs/LINUX-SERIAL.md](https://github.com/haliskilic/ser2netweb/blob/main/docs/LINUX-SERIAL.md).
   - type: textarea
     id: what
     attributes:
@@ -28,8 +28,8 @@ body:
   - type: textarea
     id: about
     attributes:
-      label: "`ser2net --about` çıktısı / output"
-      description: "Sürüm, işletim sistemi ve bileşenler. Bilinen klasörler kısaltılır (`<python>`, `<ser2net>`, `<bundle>`, `<override>`, `~`); kalan yollarda hesap adınız görünebilir, göndermeden önce bakın. / Version, OS and components. Known folders are shortened (`<python>`, `<ser2net>`, `<bundle>`, `<override>`, `~`); other paths can show your account name, so check before posting."
+      label: "`ser2netweb --about` çıktısı / output"
+      description: "Sürüm, işletim sistemi ve bileşenler. Bilinen klasörler kısaltılır (`<python>`, `<ser2netweb>`, `<bundle>`, `<override>`, `~`); kalan yollarda hesap adınız görünebilir, göndermeden önce bakın. / Version, OS and components. Known folders are shortened (`<python>`, `<ser2net>`, `<bundle>`, `<override>`, `~`); other paths can show your account name, so check before posting."
       render: text
     validations:
       required: true
@@ -42,7 +42,7 @@ body:
         - Windows servisi / Windows service (--install-service)
         - Linux binary (elle / by hand)
         - Linux binary, systemd (ser2net-install.sh)
-        - Kaynak / source (python ser2net.py)
+        - Kaynak / source (python ser2netweb.py)
         - Kaynak, systemd / source, systemd (ser2net.service, ser2net@.service)
         - Docker
         - Diğer / Other

@@ -8,7 +8,7 @@ absolute POSIX and Windows paths). This test:
     still there after a save — except the documented trace-path change (only the
     file name is kept; traces go to data/traces) — while the new settings take their
     defaults;
-  * boots the real server on it the Docker/headless way (SER2NET_BIND_IP re-saves the
+  * boots the real server on it the Docker/headless way (SER2NETWEB_BIND_IP re-saves the
     config): the old passwords and API token work, the trace move is logged, and the
     untouched 2.7.1 file is kept in data/backups/;
   * saves every mapping unchanged through the web form (posted as a browser posts it,
@@ -27,7 +27,7 @@ import urllib.request
 from _formsubmit import browser_post
 from _server import Browser, Server, free_port
 
-from app.config import AppConfig, ConfigStore
+from ser2netweb.config import AppConfig, ConfigStore
 
 FIXTURE = os.path.join(os.path.dirname(__file__), "fixtures", "config-2.7.1.json")
 # what 2.8 changes in a 2.7.1 config on purpose (path -> file name; see config.trace_file_name)

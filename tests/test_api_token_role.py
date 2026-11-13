@@ -29,8 +29,8 @@ import urllib.request
 
 from _server import Browser, Server, free_port, server_log, show_log_on_failure, ui_cookie
 
-from app.config import AppConfig
-from app.web.auth import hash_password, hash_token
+from ser2netweb.config import AppConfig
+from ser2netweb.web.auth import hash_password, hash_token
 
 ROOT = os.path.join(os.path.dirname(__file__), "..")
 UI = free_port()
@@ -179,7 +179,7 @@ def main():
     with open(cfg, "w") as fh:
         json.dump({"admin_ui": {"bind_ip": "127.0.0.1", "port": UI}}, fh)
     out = server_log(tmp)  # the server's output: a file, never an unread pipe
-    srv = subprocess.Popen([sys.executable, "ser2net.py", "--no-bootstrap", "--config", cfg],
+    srv = subprocess.Popen([sys.executable, "ser2netweb.py", "--no-bootstrap", "--config", cfg],
                            cwd=ROOT, stdin=subprocess.DEVNULL,
                            stdout=out, stderr=subprocess.STDOUT)
     out.close()  # (the server has its own copy)

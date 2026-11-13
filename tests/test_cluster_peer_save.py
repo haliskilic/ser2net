@@ -21,8 +21,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from starlette.datastructures import FormData
 
-from app.config import MappingConfig
-from app.web.routes.cluster import _peer_below_2_8, _peer_save_fields, not_kept
+from ser2netweb.config import MappingConfig
+from ser2netweb.web.routes.cluster import _peer_below_2_8, _peer_save_fields, not_kept
 
 
 def form(**kw):

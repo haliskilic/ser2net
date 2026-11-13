@@ -1,5 +1,5 @@
 """The admin UI listener closes connections that send no request, and caps them
-(app/web/httpguard.py).
+(ser2netweb/web/httpguard.py).
 
 uvicorn's h11 server kept a connection for as long as the client did while no complete
 request arrived (none at all, half a header, or half a header after a first request on a
@@ -36,8 +36,8 @@ import time
 
 from _server import Browser, Server, closed_by_server, free_port, silent_tls_client
 
-from app.config import AppConfig
-from app.web.auth import hash_password
+from ser2netweb.config import AppConfig
+from ser2netweb.web.auth import hash_password
 
 PW = "admin-limits-pass-1"
 
@@ -234,7 +234,7 @@ def test_send_deadline():
 
     import uvicorn
 
-    from app.web import httpguard
+    from ser2netweb.web import httpguard
 
     payload = b"x" * 300_000
 
@@ -430,7 +430,7 @@ def test_many_idle_sockets():
 
 
 def test_https():
-    from app.web.selfsigned import CertError, generate
+    from ser2netweb.web.selfsigned import CertError, generate
 
     d = tempfile.mkdtemp(prefix="s2n_admtls_")
     cert, key = os.path.join(d, "cert.pem"), os.path.join(d, "key.pem")

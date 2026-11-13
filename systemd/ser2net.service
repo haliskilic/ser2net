@@ -25,7 +25,7 @@ WorkingDirectory=/opt/ser2net
 # admin UI to 127.0.0.1:8080 (loopback, never network-exposed without an explicit
 # choice). To expose it on the LAN, run "systemctl edit ser2net" and add
 #   [Service]
-#   Environment=SER2NET_BIND_IP=0.0.0.0 SER2NET_PORT=8080
+#   Environment=SER2NETWEB_BIND_IP=0.0.0.0 SER2NETWEB_PORT=8080
 # (README: "Run as a service"). Commands run by hand on this data directory go as the
 # service user, never as root (root would own what they write, and the service could no
 # longer read it): sudo -u ser2net python3 /opt/ser2net/ser2net.py --data-dir
@@ -42,7 +42,7 @@ ExecStart=/usr/bin/python3 /opt/ser2net/ser2net.py --data-dir /opt/ser2net/data
 # Every log line goes to data/all.log (rotated) and to stdout, which the journal keeps too
 # (journalctl -u ser2net), readable by the systemd-journal and adm groups and kept as long
 # as the journal keeps it. To keep the lines only in all.log, uncomment:
-# Environment=SER2NET_LOG_STDOUT=off
+# Environment=SER2NETWEB_LOG_STDOUT=off
 # `systemctl reload ser2net`: read config.json again without a restart (SIGHUP; ser2net
 # 2.9.0 or newer — an older one ends on SIGHUP, and systemd then leaves it stopped)
 ExecReload=/bin/kill -HUP $MAINPID

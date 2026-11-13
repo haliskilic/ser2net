@@ -1,4 +1,4 @@
-"""A source install's ./lib follows the pins after an upgrade (bootstrap.py, ser2net.py).
+"""A source install's ./lib follows the pins after an upgrade (bootstrap.py, ser2netweb.py).
 
 lib/ is not in git, so `git pull` or new source unpacked over the old keeps the packages
 an older release installed there; before 2.9 the bootstrap only checked that they import,
@@ -15,7 +15,7 @@ place and offline. Checked here, with the real pip and vendor/wheels in a scratc
 - one-off commands and --no-bootstrap only warn; no lib/ (a virtualenv) or an empty one
   is left alone; a comment-only change to requirements.txt refreshes nothing;
 - `python3 bootstrap.py` reinstalls whatever is there, and refuses while lib/ is in use;
-- ser2net.py: a server start refreshes, --about doesn't, the warnings reach the start-up
+- ser2netweb.py: a server start refreshes, --about doesn't, the warnings reach the start-up
   log, an old lib/ that can't run this version stops the start with one line (2.8.1's
   code doesn't import with 2.7's starlette), and the Windows service loads its
   dependencies only after connecting to the Service Control Manager (a stop asked
@@ -202,7 +202,7 @@ def test_only_a_server_start_refreshes():
     bs = load_bootstrap(Scratch.root)
     bs._pip_install = no_pip
     bs.ensure(refresh_lib=False)
-    assert any("next ser2net start" in n for n in bs.notes), bs.notes
+    assert any("next ser2netweb start" in n for n in bs.notes), bs.notes
     bs = load_bootstrap(Scratch.root)
     bs.warn_if_stale()
     assert any("--no-bootstrap" in n for n in bs.notes), bs.notes
@@ -248,7 +248,7 @@ def test_record():
 
 
 def _holder(lib: str):
-    """A process with an extension module of lib/ loaded (a running ser2net), or None
+    """A process with an extension module of lib/ loaded (a running ser2netweb), or None
     when lib/ has none for this platform."""
     exts = [p for p in glob.glob(os.path.join(lib, "**", "*"), recursive=True)
             if p.endswith((".so", ".pyd"))]
@@ -278,7 +278,7 @@ def test_lib_in_use_not_refreshed():
         bs._pip_install = no_pip
         assert bs.lib_in_use(), "the other process's loaded extension is seen"
         assert bs.refresh() is False
-        assert any("not refreshing ./lib" in n and "another ser2net" in n for n in bs.notes)
+        assert any("not refreshing ./lib" in n and "another ser2netweb" in n for n in bs.notes)
         assert bs.main([]) == 1, "python3 bootstrap.py refuses while lib/ is in use"
     finally:
         holder.stdin.close()
@@ -300,8 +300,8 @@ def test_bootstrap_py_reinstalls():
 
 
 def test_ser2net_entry_points():
-    import ser2net as cli
-    from app import runtime, standalone, winservice
+    from ser2netweb import cli
+    from ser2netweb import runtime, standalone, winservice
 
     calls: list = []
     stub = SimpleNamespace(
@@ -339,28 +339,28 @@ def test_ser2net_entry_points():
 
         # dependencies from an old lib/ that couldn't be refreshed and lack what this
         # version imports: one line that says what to do, not a traceback
-        import app
+        import ser2netweb
         stub.lib_is_stale = lambda: True
-        saved_attr, saved_mod = app.runtime, sys.modules["app.runtime"]
-        del app.runtime
-        sys.modules["app.runtime"] = None  # type: ignore[assignment]  (import fails)
+        saved_attr, saved_mod = ser2netweb.runtime, sys.modules["ser2netweb.runtime"]
+        del ser2netweb.runtime
+        sys.modules["ser2netweb.runtime"] = None  # type: ignore[assignment]  (import fails)
         try:
             cli._import_runtime()
             raise AssertionError("no SystemExit")
         except SystemExit as e:
             assert "older release" in str(e.code) and "bootstrap.py" in str(e.code), e.code
         finally:
-            app.runtime, sys.modules["app.runtime"] = saved_attr, saved_mod
+            ser2netweb.runtime, sys.modules["ser2netweb.runtime"] = saved_attr, saved_mod
         stub.lib_is_stale = lambda: False
         try:  # not the old lib/'s fault: the error as it is
-            del app.runtime
-            sys.modules["app.runtime"] = None  # type: ignore[assignment]
+            del ser2netweb.runtime
+            sys.modules["ser2netweb.runtime"] = None  # type: ignore[assignment]
             cli._import_runtime()
             raise AssertionError("no ImportError")
         except ImportError:
             pass
         finally:
-            app.runtime, sys.modules["app.runtime"] = saved_attr, saved_mod
+            ser2netweb.runtime, sys.modules["ser2netweb.runtime"] = saved_attr, saved_mod
 
         calls.clear()
         winservice.run = fake_run
@@ -379,7 +379,7 @@ def test_ser2net_entry_points():
         runtime._ready_hooks.clear()
         standalone.notes.clear()
         shutil.rmtree(d, ignore_errors=True)
-    print("ser2net.py: a start refreshes, --about doesn't; warnings reach the log; an old "
+    print("ser2netweb.py: a start refreshes, --about doesn't; warnings reach the log; an old "
           "lib/ that can't run this version stops with one line; the service connects to "
           "the SCM before loading its dependencies  OK")
 

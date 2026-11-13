@@ -63,7 +63,7 @@ jobs:
         run: pip install -r requirements.txt cryptography pyelftools
       - name: Bundle contents, empty-PATH run, loaded libraries
         env:
-          SER2NET_STANDALONE_BIN: dist/ser2net
+          SER2NETWEB_STANDALONE_BIN: dist/ser2net
         run: python tests/test_standalone.py
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
         with:
@@ -155,9 +155,9 @@ jobs:
       - run: pip install -r requirements.txt cryptography
       - name: Runs in a clean ${{ matrix.image }} container (no Python, no openssl, empty PATH)
         env:
-          SER2NET_STANDALONE_BIN: dist/ser2net
-          SER2NET_STANDALONE_IMAGE: ${{ matrix.image }}
-          SER2NET_STANDALONE_CA: ${{ matrix.ca }}
+          SER2NETWEB_STANDALONE_BIN: dist/ser2net
+          SER2NETWEB_STANDALONE_IMAGE: ${{ matrix.image }}
+          SER2NETWEB_STANDALONE_CA: ${{ matrix.ca }}
         run: python tests/test_standalone.py
 
   windows:
@@ -245,12 +245,12 @@ jobs:
 
       - name: Bundle contents, empty-PATH run, loaded libraries
         env:
-          SER2NET_STANDALONE_BIN: dist/ser2net.exe
+          SER2NETWEB_STANDALONE_BIN: dist/ser2net.exe
         run: python tests/test_standalone.py
       - name: Windows service — install, crash restart, stop, uninstall (the exe)
         env:
-          SER2NET_STANDALONE_BIN: dist/ser2net.exe
-          SER2NET_SERVICE_TESTS: "1"
+          SER2NETWEB_STANDALONE_BIN: dist/ser2net.exe
+          SER2NETWEB_SERVICE_TESTS: "1"
         run: python tests/test_windows_service.py
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
         with:

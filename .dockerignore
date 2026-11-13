@@ -2,7 +2,8 @@
 # the build context. Tests, the offline wheels, docs, a local .venv / build / dist and
 # caches stay out, also in a local `docker build .`.
 *
-!app
+!ser2netweb
+!ser2netweb.py
 !ser2net.py
 !bootstrap.py
 !requirements.txt

@@ -1,5 +1,5 @@
 """Runs inside the systemd unit's sandbox (tests/systemd_smoke.sh, a oneshot copy of
-systemd/ser2net.service with only ExecStart= and Type= changed) and checks what ser2net
+systemd/ser2net.service with only ExecStart= and Type= changed) and checks what ser2netweb
 needs there:
 - the sandbox is in force: /proc/net is hidden (ProcSubset=pid), no capability;
 - the network interfaces are still listed by name (psutil over netlink, without
@@ -19,7 +19,7 @@ import tempfile
 ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
 sys.path[:0] = [os.path.join(ROOT, "lib"), ROOT]
 
-from app.engine import cluster, netinfo  # (after the path above)
+from ser2netweb.engine import cluster, netinfo  # (after the path above)
 
 
 def main() -> int:

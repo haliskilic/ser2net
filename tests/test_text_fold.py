@@ -21,9 +21,9 @@ import subprocess
 
 from _server import ROOT
 
-from app.config import fold as config_fold
-from app.engine import portlist
-from app.textfold import fold, natural_key, search_key
+from ser2netweb.config import fold as config_fold
+from ser2netweb.engine import portlist
+from ser2netweb.textfold import fold, natural_key, search_key
 
 # (text, fold(text), search_key(text))
 VECTORS = [
@@ -52,7 +52,7 @@ SEARCHES = [   # (typed, row text): found
 
 
 def test_fold_and_search_key():
-    assert config_fold is fold, "app.config.fold is the same function (old import path)"
+    assert config_fold is fold, "ser2netweb.config.fold is the same function (old import path)"
     bad = [(t, fold(t), want) for t, want, _k in VECTORS if fold(t) != want]
     bad += [(t, search_key(t), key) for t, _f, key in VECTORS if search_key(t) != key]
     assert not bad, bad
@@ -87,7 +87,7 @@ def test_app_js_fold():
         print("SKIP: node is not installed: app.js's searchKey is checked in Chromium only "
               "(test_ui_layout)")
         return
-    src = open(os.path.join(ROOT, "app", "web", "static", "app.js"), encoding="utf-8").read()
+    src = open(os.path.join(ROOT, "ser2netweb", "web", "static", "app.js"), encoding="utf-8").read()
     code = re.search(r"\n  var MARKS = .*?\n  function searchKey\(s\) \{.*?\n  \}\n", src, re.S)
     assert code, "searchKey not found in app.js"
     texts = [t for t, _f, _k in VECTORS] + [t for pair in SEARCHES for t in pair]

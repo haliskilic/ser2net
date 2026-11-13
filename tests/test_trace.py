@@ -53,9 +53,9 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from collections import namedtuple
 from unittest import mock
 
-from app import storage
-from app.config import AppConfig, ConfigError, MappingConfig, MappingOptions, trace_file_name
-from app.engine.bridge import MappingRunner, RunnerStatus, Tracer, trace_path
+from ser2netweb import storage
+from ser2netweb.config import AppConfig, ConfigError, MappingConfig, MappingOptions, trace_file_name
+from ser2netweb.engine.bridge import MappingRunner, RunnerStatus, Tracer, trace_path
 
 FIXTURE = os.path.join(os.path.dirname(__file__), "fixtures", "config-2.7.1.json")
 
@@ -442,7 +442,7 @@ async def _download(response, path, method="GET"):
 async def test_live_download(tmp):
     from starlette.responses import FileResponse
 
-    from app.web.routes.mappings import snapshot_response
+    from ser2netweb.web.routes.mappings import snapshot_response
     path = os.path.join(tmp, "abc123-live.log")
     original = bytes(range(256)) * 781 + b"end\n"  # 199940 bytes: four 64 KiB reads
     with open(path, "wb") as fh:
@@ -504,7 +504,7 @@ async def test_tracer_remove_files(tmp):
 
 
 def test_thread_errors_logged():
-    from app import runtime
+    from ser2netweb import runtime
     logs = []
     before = threading.excepthook
     try:
@@ -557,8 +557,8 @@ async def test_runner_confined(tmp):
 
 
 def test_state_files(tmp):
-    from app.config import ConfigStore
-    from app.state import AppState
+    from ser2netweb.config import ConfigStore
+    from ser2netweb.state import AppState
     data = os.path.join(tmp, "data")
     st = AppState(ConfigStore(os.path.join(data, "config.json")), AppConfig())
     assert st.traces_dir == os.path.join(data, "traces") and os.path.isdir(st.traces_dir)
@@ -592,7 +592,7 @@ def test_state_files(tmp):
 
 
 def test_retention_setting():
-    from app.config import TRACE_DAYS_MAX
+    from ser2netweb.config import TRACE_DAYS_MAX
     assert AppConfig().trace_max_age_days == 0 and AppConfig.from_dict({}).trace_max_age_days == 0
     assert AppConfig.from_dict({"trace_max_age_days": 30}).to_dict()["trace_max_age_days"] == 30
     for raw, used in ((-1, 0), (TRACE_DAYS_MAX + 1, TRACE_DAYS_MAX), ("nope", 0)):
@@ -604,8 +604,8 @@ def test_retention_setting():
 
 
 async def test_retention(tmp):
-    from app.config import ConfigStore
-    from app.state import AppState
+    from ser2netweb.config import ConfigStore
+    from ser2netweb.state import AppState
     data = os.path.join(tmp, "data")
     st = AppState(ConfigStore(os.path.join(data, "config.json")), AppConfig())
     logs = []
@@ -666,8 +666,8 @@ async def test_forget_mappings(tmp):
     runner (with its trace writer) and log file are closed at once, their files stay."""
     import logging
 
-    from app.config import ConfigStore
-    from app.state import AppState
+    from ser2netweb.config import ConfigStore
+    from ser2netweb.state import AppState
     data = os.path.join(tmp, "data")
     st = AppState(ConfigStore(os.path.join(data, "config.json")), AppConfig())
     st.log = lambda _m: None

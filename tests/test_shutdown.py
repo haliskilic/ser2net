@@ -26,10 +26,10 @@ from unittest import mock
 
 from _server import ROOT, free_port
 
-from app import runtime
-from app.engine import supervisor
-from app.engine.supervisor import Supervisor
-from app.web.auth import hash_password
+from ser2netweb import runtime
+from ser2netweb.engine import supervisor
+from ser2netweb.engine.supervisor import Supervisor
+from ser2netweb.web.auth import hash_password
 
 
 class FakeRunner:
@@ -80,8 +80,8 @@ async def _after_a_late_stop():
     until it ends; the start_all that follows (an import, a restore) starts the others at
     once and that one in the background when its stop has ended, and a removal of one that
     is gone doesn't wait for it either."""
-    from app.config import AppConfig
-    from app.engine.bridge import RunnerStatus
+    from ser2netweb.config import AppConfig
+    from ser2netweb.engine.bridge import RunnerStatus
     started, lines = [], []
 
     class Startable:
@@ -143,7 +143,7 @@ CHILD = textwrap.dedent("""
     sys.path.insert(0, {root!r})
     sys.path.insert(0, os.path.join({root!r}, "lib"))
     import uvicorn
-    from app import runtime, state
+    from ser2netweb import runtime, state
 
     seen = {{}}
     real_start, real_serve = state.AppState.start_engine, uvicorn.Server.serve

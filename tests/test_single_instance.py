@@ -1,4 +1,4 @@
-"""One ser2net per data directory (app.datalock), tested on Linux and Windows alike.
+"""One ser2netweb per data directory (ser2netweb.datalock), tested on Linux and Windows alike.
 
 A second instance on the same data directory would save its own config.json over the
 first's and lose its edits. runtime.main() takes an exclusive lock on <data>/ser2net.lock
@@ -23,13 +23,13 @@ from _server import ROOT, free_port, wait_port
 sys.path.insert(0, os.path.join(ROOT, "lib"))
 sys.path.insert(0, ROOT)
 
-from app import datalock, runtime
+from ser2netweb import datalock, runtime
 
 # A subprocess that tries to take the lock and reports what happened, so the holder is a
 # different process (an flock is per-process: the same process would re-lock its own fd).
 _PROBE = (
     "import sys; sys.path.insert(0, sys.argv[2]); sys.path.insert(0, sys.argv[2] + '/lib')\n"
-    "from app import datalock as l\n"
+    "from ser2netweb import datalock as l\n"
     "try:\n"
     "    note = l.acquire(sys.argv[1])\n"
     "    print('ACQUIRED' + (' WARN ' + note if note else ''))\n"
@@ -102,7 +102,7 @@ def test_second_server_refuses_to_start():
     try:
         assert wait_port(port), "first server did not start"
         env = dict(os.environ, PYTHONIOENCODING="utf-8")
-        p = subprocess.run([sys.executable, "ser2net.py", "--no-bootstrap", "--data-dir", d],
+        p = subprocess.run([sys.executable, "ser2netweb.py", "--no-bootstrap", "--data-dir", d],
                            cwd=ROOT, capture_output=True, text=True, timeout=60,
                            stdin=subprocess.DEVNULL, env=env)
         assert p.returncode != 0, p.stdout + p.stderr
@@ -119,7 +119,7 @@ def test_second_server_refuses_to_start():
 # Holds the lock in another process (brief or not) for argv[3] seconds.
 _HOLD = (
     "import sys, time; sys.path.insert(0, sys.argv[2]); sys.path.insert(0, sys.argv[2] + '/lib')\n"
-    "from app import datalock as l\n"
+    "from ser2netweb import datalock as l\n"
     "assert l.acquire(sys.argv[1], brief=sys.argv[4] == 'brief') is None\n"
     "print('held', flush=True)\n"
     "time.sleep(float(sys.argv[3]))\n"
@@ -171,7 +171,7 @@ def test_a_start_waits_for_a_brief_holder():
         except SystemExit as e:
             assert "already running with the data directory" in str(e.code), e.code
         assert time.monotonic() - t < 5, "an ordinary holder must be refused without the wait"
-        print("... and refuses, saying so, when it takes too long; another ser2net is refused "
+        print("... and refuses, saying so, when it takes too long; another ser2netweb is refused "
               "at once  OK")
     finally:
         datalock.BRIEF_WAIT_S = saved

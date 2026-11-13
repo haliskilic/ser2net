@@ -15,7 +15,7 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "lib"))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from app.engine.protocols.rfc2217 import _ModemSafeSerial, Rfc2217Session
+from ser2netweb.engine.protocols.rfc2217 import _ModemSafeSerial, Rfc2217Session
 
 
 class FakeSerial:

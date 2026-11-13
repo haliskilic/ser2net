@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% from "_macros.html" import lang_switch %}
+{% from "_footer.html" import site_footer with context %}
+{% block body %}
+{#- this page's address, without the base path (page_url: the one a page sent as the answer
+    to a form names) #}
+{% set here = page_url or (route_path(request) ~ ('?' ~ request.url.query if request.url.query else '')) %}
+<header class="topbar">
+  <div class="brand">⇄ ser2netweb{% if node_name %} <span class="node-name" title="{{ _('the name of this instance') }}">{{ node_name }}</span>{% endif %}</div>
+  <nav>
+    <a href="{{ base }}/">{{ _("Mappings") }}</a>
+    <a href="{{ base }}/settings">{{ _("Settings") }}</a>
+    {% set u = request.state.user %}
+    {% if u and u.source == 'anonymous' %}<span class="muted mono who" title="{{ _('login is switched off — open access') }}">{{ _("no login · %(role)s", role=u.role) }}</span>
+    {%- if login_notice_url %} <a href="{{ login_notice_url }}" target="_blank" rel="noopener noreferrer">{{ _("Notice") }}</a>
+    {%- elif login_notice %} <a href="{{ base }}/login#notice">{{ _("Notice") }}</a>{% endif %}
+    {% elif u %}<span class="muted mono who" title="{{ _('signed in as %(user)s · %(role)s', user=u.username, role=u.role) }}">{{ u.username }} · {{ u.role }}</span>{% endif %}
+    {{ lang_switch(request, request.state.lang, here) }}
+    <button class="link" type="button" data-theme-toggle title="{{ _('Toggle light / dark theme') }}" aria-label="{{ _('Toggle theme') }}">◐</button>
+    {% if u and u.source == 'anonymous' %}
+    <a href="{{ base }}/login{% if route_path(request) != '/' %}?next={{ here|urlencode }}{% endif %}">{{ _("Sign in") }}</a>
+    {% else %}
+    <form method="post" action="{{ base }}/logout" class="inline">
+      <input type="hidden" name="_csrf" value="{{ request.state.csrf_token }}">
+      <button class="link" type="submit">{{ _("Logout") }}</button>
+    </form>
+    {% endif %}
+  </nav>
+</header>
+{#- data-page-url: app.js puts it in the address bar, so a reload doesn't post the form again #}
+<main{% if page_url %} data-page-url="{{ base }}{{ page_url }}"{% endif %}>
+  {% block main %}{% endblock %}
+</main>
+{# what an action did and why a request failed (app.js "feedback"): live regions, so
+   screen readers announce what is put in them #}
+<div class="feedback">
+  <div id="ui-alert" role="alert" aria-atomic="false"></div>
+  <div id="ui-status" role="status" aria-atomic="false"></div>
+</div>
+{{ site_footer(true) }}
+{% endblock %}

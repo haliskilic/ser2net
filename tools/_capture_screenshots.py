@@ -4,7 +4,7 @@
     python tools/_capture_screenshots.py [--lang en tr] [--out docs/screenshots]
                                          [--as-version X.Y.Z]
 
-Starts TWO ser2net nodes that share a cluster key, so the dashboard's LAN cluster panel
+Starts TWO ser2netweb nodes that share a cluster key, so the dashboard's LAN cluster panel
 shows a real multi-host view, with demo mappings and accounts only (no real names,
 addresses or devices: one mapping reads a socat PTY fed with made-up NMEA sentences, the
 others are stopped). For each language (the English images in --out, the Turkish ones in
@@ -12,7 +12,7 @@ others are stopped). For each language (the English images in --out, the Turkish
 panel, a new mapping's form, the console in its hex view and Settings → Notifications — at
 1280 px and device scale 1, panels as single elements, so they can be read at README size
 and keep the repository small. --as-version shows that version in the UI (screenshots
-taken before the release commit bumps app/__init__.py). Needs socat on PATH for the
+taken before the release commit bumps ser2netweb/__init__.py). Needs socat on PATH for the
 console (else that one is skipped). Run it where nothing else uses the network, e.g. a
 throwaway network namespace. Not part of the app or the test suite.
 """
@@ -35,7 +35,7 @@ sys.path.insert(0, ROOT)
 
 from playwright.sync_api import sync_playwright
 
-from app.web.auth import hash_password
+from ser2netweb.web.auth import hash_password
 
 CLUSTER_KEY = "demo-cluster-key-0123456789"
 PASSWORD = "demo-pass-123"  # noqa: S105  (the demo accounts' password)
@@ -108,16 +108,16 @@ def start_node(tmp: str, name: str, cfg: dict, version: str):
     path = os.path.join(folder, "config.json")
     with open(path, "w", encoding="utf-8") as fh:
         json.dump(cfg, fh)
-    # --as-version: the version is set before ser2net.py imports app (every module takes it
+    # --as-version: the version is set before ser2netweb.py imports ser2netweb (every module takes it
     # from there)
-    code = ("import runpy, sys, app\n"
-            f"if {version!r}: app.__version__ = {version!r}\n"
-            "sys.argv = ['ser2net.py'] + sys.argv[1:]\n"
-            "runpy.run_path('ser2net.py', run_name='__main__')\n")
+    code = ("import runpy, sys, ser2netweb\n"
+            f"if {version!r}: ser2netweb.__version__ = {version!r}\n"
+            "sys.argv = ['ser2netweb.py'] + sys.argv[1:]\n"
+            "runpy.run_path('ser2netweb.py', run_name='__main__')\n")
     log = open(os.path.join(folder, "out.log"), "wb")
     # run in the temporary folder, where the demo GPS device is (a short relative path on
-    # the pages instead of this machine's folders); ser2net.py by its full path
-    code = code.replace("'ser2net.py', run_name", repr(os.path.join(ROOT, "ser2net.py")) + ", run_name")
+    # the pages instead of this machine's folders); ser2netweb.py by its full path
+    code = code.replace("'ser2netweb.py', run_name", repr(os.path.join(ROOT, "ser2netweb.py")) + ", run_name")
     return subprocess.Popen([sys.executable, "-c", code, "--no-bootstrap", "--config", path],
                             cwd=tmp, stdin=subprocess.DEVNULL, stdout=log, stderr=log,
                             env=dict(os.environ, PYTHONPATH=ROOT))

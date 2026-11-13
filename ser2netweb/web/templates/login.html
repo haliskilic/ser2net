@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+{% from "_macros.html" import lang_switch %}
+{% from "_footer.html" import site_footer with context %}
+{% block title %}{{ _("Sign in") }} — ser2netweb{% endblock %}
+{% block body %}
+<div class="auth-wrap">
+  {{ lang_switch(request, request.state.lang) }}
+  <div class="panel">
+    <h1>⇄ ser2netweb</h1>
+    <p class="muted">{{ _("Sign in to manage serial-to-network mappings.") }}</p>
+    {% include "_login_notice.html" %}
+    {% if error %}<div class="banner error" role="alert">{{ error }}</div>{% endif %}
+    {% if oidc_error %}<div class="banner error" role="alert">{{ oidc_error }}</div>{% endif %}
+    {% if oidc_enabled %}
+    <a class="btn primary w-full" href="{{ base }}/auth/oidc/login{% if next %}?next={{ next|urlencode }}{% endif %}">{{ _("Sign in with SSO") }}</a>
+    <p class="muted or-line">{{ _("— or —") }}</p>
+    {% endif %}
+    <form method="post" action="{{ base }}/login" class="authform">
+      <input type="hidden" name="_csrf" value="{{ request.state.csrf_token }}">
+      {% if next %}<input type="hidden" name="next" value="{{ next }}">{% endif %}
+      <label>{{ _("Username") }}
+        <input type="text" name="username" value="{{ username or 'admin' }}" autocomplete="username" autocapitalize="none" autocorrect="off" spellcheck="false" required>
+      </label>
+      <label>{{ _("Password") }}
+        <input type="password" name="password" autocomplete="current-password" required>
+      </label>
+      <button class="btn primary w-full" type="submit">{{ _("Sign in") }}</button>
+    </form>
+  </div>
+</div>
+{{ site_footer(false) }}
+{% endblock %}

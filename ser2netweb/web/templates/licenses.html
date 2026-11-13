@@ -1,0 +1,18 @@
+{% extends "_shell.html" %}
+{% block title %}{{ _("Licences") }} — ser2netweb{% endblock %}
+{% block main %}
+<section class="panel">
+  <div class="panel-head"><h2>{{ _("Licences") }}</h2></div>
+  <p>{{ _("ser2netweb %(version)s is licensed under the GNU AGPL-3.0 or a separate commercial licence. The components it ships keep their own licences, listed below.", version=app_version) }}</p>
+  <p>{{ _("Source code:") }} <a class="mono" href="{{ source_url }}" rel="noopener noreferrer">{{ source_url }}</a></p>
+  <ul class="cell-list">
+    {% for anchor, title, _text in texts %}<li><a href="#{{ anchor }}">{{ title }}</a></li>{% endfor %}
+  </ul>
+</section>
+{% for anchor, title, text in texts %}
+<section class="panel" id="{{ anchor }}">
+  <div class="panel-head"><h2>{{ title }}</h2></div>
+  <pre class="licence-text">{{ text }}</pre>
+</section>
+{% endfor %}
+{% endblock %}

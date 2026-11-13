@@ -16,11 +16,11 @@ import os
 
 from _server import Browser, Server
 
-from app.config import (
+from ser2netweb.config import (
     LOGIN_NOTICE_MAX, AppConfig, clean_login_notice, login_notice_problem,
     login_notice_url_problem,
 )
-from app.web.auth import hash_password
+from ser2netweb.web.auth import hash_password
 
 PW = "notice-pass-1"
 USERS = [{"username": "admin", "password_hash": hash_password(PW), "role": "admin",

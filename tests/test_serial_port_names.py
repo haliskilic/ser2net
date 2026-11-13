@@ -21,11 +21,11 @@ import urllib.request
 
 from _server import Browser, Server, free_port
 
-from app.config import AppConfig, ConfigError, MappingConfig, canonical_device, serial_conflict
-from app.engine import portlist
-from app.importer import parse_mappings_file
-from app.web.auth import hash_password, hash_token
-from app.web.routes.ops import apply_usb_match
+from ser2netweb.config import AppConfig, ConfigError, MappingConfig, canonical_device, serial_conflict
+from ser2netweb.engine import portlist
+from ser2netweb.importer import parse_mappings_file
+from ser2netweb.web.auth import hash_password, hash_token
+from ser2netweb.web.routes.ops import apply_usb_match
 
 PW = "port-names-pass-1"
 TOKEN = "s2n_port-names-token"

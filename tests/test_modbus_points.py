@@ -34,12 +34,12 @@ import urllib.request
 
 from _server import Browser, Server, free_port
 
-from app.config import (ConfigError, MappingConfig, ModbusPoint, ModbusPoll, point_scale,
+from ser2netweb.config import (ConfigError, MappingConfig, ModbusPoint, ModbusPoll, point_scale,
                         unstorable_text)
-from app.importer import parse_mappings_file
-from app.web.auth import hash_password, hash_token
-from app.web.routes import cluster as cluster_routes
-from app.web.routes.forms import (_build_mapping_dict, _form_error, _modbus_points_json,
+from ser2netweb.importer import parse_mappings_file
+from ser2netweb.web.auth import hash_password, hash_token
+from ser2netweb.web.routes import cluster as cluster_routes
+from ser2netweb.web.routes.forms import (_build_mapping_dict, _form_error, _modbus_points_json,
                                   _parse_modbus_points, _preserve_unmanaged_fields, json_text,
                                   mapping_for_rerender)
 
@@ -309,7 +309,7 @@ def test_form_block_reads():
     """Block reads are off by default and in the form (with their own marker); a form
     without them (an older peer's, another protocol) keeps the stored ones; an edit
     refuses values that can't be used and a stored one reads as off / gap 0."""
-    from app.config import poll_block_gap
+    from ser2netweb.config import poll_block_gap
     assert poll_block_gap(gateway([]).modbus_poll) is None, "off by default"
     stored = gateway([{"name": "a", "fn": 3}], id="abcdef012345",
                      modbus_poll={"points": [{"name": "a", "fn": 3}], "block_reads": True,
@@ -347,7 +347,7 @@ def test_form_block_reads():
 def test_form_unit_map():
     """The unit map in the form: "255=1, 0=1"; a form without the field (an older peer's,
     another protocol) keeps the stored one; a pair that is not one is refused."""
-    from app.web.routes.forms import _parse_unit_map
+    from ser2netweb.web.routes.forms import _parse_unit_map
     assert _parse_unit_map("255=1, 0=1;7=2  ", strict=True) == {"255": 1, "0": 1, "7": 2}
     assert _parse_unit_map("", strict=True) == {}
     for bad in ("255", "a=1", "1=b", "1=2=3", "²=1", "-1=2"):

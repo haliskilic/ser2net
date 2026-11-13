@@ -1,6 +1,6 @@
 # Sign-in with LDAP / Active Directory or OpenID Connect
 
-Besides its own accounts, ser2net can let users sign in against a directory (**Settings →
+Besides its own accounts, ser2netweb can let users sign in against a directory (**Settings →
 LDAP / Active Directory**, needs the optional `ldap3` package) or an identity provider
 (**Settings → Single sign-on (OIDC)**, needs `authlib`). Both are in the standalone
 executables and the Docker image. The user's groups decide the role (admin, operator,
@@ -11,7 +11,7 @@ Each directory or SSO user gets a *shadow account* of that name (no password, it
 refreshed at every sign-in), which is how the Users panel shows them. A sign-in never takes
 over another kind of account: when a local account (or an account of the other method) has
 the name, letter case aside, the sign-in is refused and logged. Keep a local admin account
-in case the directory is unreachable; `ser2net --set-password NAME` makes one offline.
+in case the directory is unreachable; `ser2netweb --set-password NAME` makes one offline.
 
 ## Groups and roles
 
@@ -19,13 +19,13 @@ in case the directory is unreachable; `ser2net --set-password NAME` makes one of
 one a user is in gives the role, else **Default role** (*— deny login —*: refused). A group
 setting matches only a whole group name, in any letter case (Turkish İ/ı too):
 
-- a group's own name: the CN of a DN (`ser2net-admins` matches
-  `CN=ser2net-admins,OU=Groups,DC=example,DC=com`), the last part of a path (Keycloak's
-  `/team/ser2net-admins`) or the part after `DOMAIN\`;
-- the full DN, or its leading RDNs (`cn=ser2net-admins,ou=groups`);
+- a group's own name: the CN of a DN (`ser2netweb-admins` matches
+  `CN=ser2netweb-admins,OU=Groups,DC=example,DC=com`), the last part of a path (Keycloak's
+  `/team/ser2netweb-admins`) or the part after `DOMAIN\`;
+- the full DN, or its leading RDNs (`cn=ser2netweb-admins,ou=groups`);
 - the value exactly as the provider sends it (an Entra ID group's Object ID).
 
-Part of a name doesn't match (`admins` doesn't match `ser2net-admins` or `Domain Admins`).
+Part of a name doesn't match (`admins` doesn't match `ser2netweb-admins` or `Domain Admins`).
 2.8.0 and older matched any text inside a group name: a setting that only matched that way
 is logged as a `WARNING` at the user's sign-in and shown in Settings, with the value to
 enter instead.
@@ -41,7 +41,7 @@ enter instead.
 | **Also count nested groups** | groups through other groups (`LDAP_MATCHING_RULE_IN_CHAIN`) | — |
 
 - **Direct bind** binds with the user's own name and password. With an AD sign-in name
-  (`user@domain`, `DOMAIN\user`) ser2net then looks the user up (by `userPrincipalName`,
+  (`user@domain`, `DOMAIN\user`) ser2netweb then looks the user up (by `userPrincipalName`,
   or `sAMAccountName` in that domain) to read the groups, under the user search base if
   one is set, else the domain the server names.
 - **Search + bind** binds as the service account, finds the user with the filter, then
@@ -57,9 +57,9 @@ enter instead.
 
 ## OpenID Connect
 
-1. Register ser2net as a confidential web client (authorization code flow) at the
+1. Register ser2netweb as a confidential web client (authorization code flow) at the
    provider. The **Redirect URI to register** is shown at the top of the OIDC panel:
-   `https://ser2net.example.com/auth/oidc/callback`. Behind a reverse proxy set it in
+   `https://ser2netweb.example.com/auth/oidc/callback`. Behind a reverse proxy set it in
    **Redirect URI**, or set **Settings → Reverse proxy → Public URL** (the redirect URI is
    then made from it); most providers accept `http://` only for `localhost`.
 2. Enter **Issuer URL**, **Client ID** and **Client secret**. Every address the provider's
@@ -68,13 +68,13 @@ enter instead.
    are tried; an e-mail address the provider marks `email_verified: false` names nobody)
    and the **Groups/roles claim** (default `groups`).
 
-ser2net reads only the **ID token** (signature, issuer, audience, expiry and nonce checked,
+ser2netweb reads only the **ID token** (signature, issuer, audience, expiry and nonce checked,
 two minutes of clock skew allowed); it doesn't call the userinfo endpoint. So the groups
 must be a **top-level claim of the ID token**, a list of strings (or one string).
 
 | Provider | What to set |
 |---|---|
-| **Keycloak** | Issuer `https://keycloak.example.com/realms/main`. Add a *Group Membership* mapper (claim `groups`, *Add to ID token* on; *Full group path* gives `/team/ser2net-admins`, which the group's own name matches). Realm and client roles are nested (`realm_access.roles`) and can't be read: map them with a *User Realm Role* mapper to a flat claim such as `roles` (*Add to ID token* on) and set that as **Groups/roles claim**. |
+| **Keycloak** | Issuer `https://keycloak.example.com/realms/main`. Add a *Group Membership* mapper (claim `groups`, *Add to ID token* on; *Full group path* gives `/team/ser2netweb-admins`, which the group's own name matches). Realm and client roles are nested (`realm_access.roles`) and can't be read: map them with a *User Realm Role* mapper to a flat claim such as `roles` (*Add to ID token* on) and set that as **Groups/roles claim**. |
 | **Entra ID** (Azure AD) | Issuer `https://login.microsoftonline.com/<tenant id>/v2.0`. The `groups` claim (Token configuration → *Add groups claim*) carries the groups' **Object IDs**: enter the IDs as the group settings. A user in more than 200 groups gets no `groups` claim at all: use **app roles** instead (App roles, assigned to users or groups) with **Groups/roles claim** `roles`, and the role values as the group settings. |
 | **Google** | Issuer `https://accounts.google.com`. Google sends no groups, so only **Default role** can give a role, and there is no allowed-domain setting: with an *External* OAuth consent screen any Google account gets it. Use an *Internal* consent screen (Google Workspace), or a provider in between that adds groups (Keycloak, Authentik, Dex). |
 | **Authentik, Okta, Dex, others** | The issuer URL from the provider; a groups claim in the ID token (Okta: a *Groups claim* filter on the app's ID token). |

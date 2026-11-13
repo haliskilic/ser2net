@@ -121,7 +121,7 @@ With **Payload format** *Sparkplug B (edge node)* the gateway is an edge node (S
 3.0 topic namespace `spBv1.0`); the base topic is not used for its data, but a mapping
 with MQTT on still needs one.
 
-| Sparkplug | ser2net |
+| Sparkplug | ser2netweb |
 |---|---|
 | group ID | **Sparkplug group ID** (`mqtt.sparkplug_group_id`), default `ser2net` |
 | edge node ID | **Sparkplug edge node ID**, or the mapping's name with `/`, `+`, `#`, spaces and control characters made `_` |
@@ -148,7 +148,7 @@ commands are never retained; a retained NCMD / DCMD is ignored.
 
 ```bash
 curl -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
-  http://ser2net.example.com:8080/api/v1/mappings -d '{
+  http://ser2netweb.example.com:8080/api/v1/mappings -d '{
   "name": "line-3-plc",
   "serial": {"port": "/dev/ttyUSB0", "baudrate": 19200, "parity": "E"},
   "network": {"mode": "server", "protocol": "modbus", "bind_ip": "0.0.0.0", "port": 1502},
@@ -173,12 +173,12 @@ and the MQTT connection's state.
 
 - One broker per mapping, no broker list to walk; nothing is stored while the broker or
   the Sparkplug primary host is away (no store and forward), and a command published
-  while ser2net is not connected is not delivered later.
+  while ser2netweb is not connected is not delivered later.
 - Plain values are published at every poll, changed or not; only Sparkplug B reports by
   exception.
 - A text float is Python's shortest repr of the scaled value, not rounded to the device's
   precision (`1.2000000000000002`): round it in the consumer, or use an unscaled point.
-- ser2net writes no safe value by itself when the broker or the host goes away: use a
+- ser2netweb writes no safe value by itself when the broker or the host goes away: use a
   heartbeat register and the PLC's own watchdog (README → *MQTT commands*).
 - `min`, `max` and `allowed` limit MQTT only, not Modbus/TCP masters.
 - Strings and register bits are read-only; a write goes to a single point (FC5, FC6 or

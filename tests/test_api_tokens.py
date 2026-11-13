@@ -26,8 +26,8 @@ import urllib.request
 
 from _server import Browser, Server, free_port
 
-from app.config import AppConfig
-from app.web.auth import hash_password, hash_token
+from ser2netweb.config import AppConfig
+from ser2netweb.web.auth import hash_password, hash_token
 
 MAIN = "s2n_api-tokens-main-admin-token"
 OLD = "s2n_api-tokens-expired-token"

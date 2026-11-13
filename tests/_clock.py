@@ -5,7 +5,7 @@ In place of a module's ``time``, ``WallClock`` answers time.time() moved by ``sh
 seconds; everything else (time.monotonic(), time.sleep(), ...) is the real time module.
 Only that module's view changes, in this process: the system clock is never touched.
 
-    with WallClock.patch(cluster) as clock:   # app.engine.cluster sees the stepped clock
+    with WallClock.patch(cluster) as clock:   # ser2netweb.engine.cluster sees the stepped clock
         clock.shift = 2 * 86400               # two days forward
 """
 from __future__ import annotations

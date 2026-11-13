@@ -11,7 +11,7 @@
 - [ ] Mevcut `config.json` dosyaları değişiklik gerekmeden açılıyor (yeni alanların varsayılanı var) / Existing `config.json` files still load unchanged (new fields have defaults)
 - [ ] `requirements.txt` değiştiyse `python tools/refresh_wheels.py` ve `python tools/refresh_locks.py` çalıştırıldı / If `requirements.txt` changed, `python tools/refresh_wheels.py` and `python tools/refresh_locks.py` were run
 - [ ] Gerekirse README (TR + EN) ve CHANGELOG güncellendi / README (TR + EN) and CHANGELOG updated where needed
-- [ ] Arayüzdeki yeni metinler `_()` ile sarıldı ve `app/locale/tr.json`'a eklendi / New UI texts are wrapped in `_()` and added to `app/locale/tr.json`
+- [ ] Arayüzdeki yeni metinler `_()` ile sarıldı ve `ser2netweb/locale/tr.json`'a eklendi / New UI texts are wrapped in `_()` and added to `ser2netweb/locale/tr.json`
 - [ ] Arayüz değiştiyse önce/sonra ekran görüntüsü eklendi / UI changes come with before / after screenshots
 - [ ] REST API ve CLI yalnızca büyüyor: alan, uç nokta ya da bayrak kaldırılmadı veya anlamı değişmedi / The REST API and the CLI only grow: no field, endpoint or flag removed or changed in meaning
 - [ ] Yeni bir route `tests/test_route_access.py`'de bir erişim sınıfına sahip / A new route has an access class in `tests/test_route_access.py`

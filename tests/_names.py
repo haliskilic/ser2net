@@ -1,9 +1,9 @@
-"""Group names as an admin types them into ser2net and as a directory or identity
+"""Group names as an admin types them into ser2netweb and as a directory or identity
 provider stores them — Turkish dotted/dotless I in either letter case, decomposed
 (NFD) text, no-break spaces. Shared by test_ldap.py and test_oidc.py."""
 import unicodedata
 
-# (typed in ser2net, as the directory / provider has it): the same group
+# (typed in ser2netweb, as the directory / provider has it): the same group
 SAME_GROUP = [
     ("Bilgi İşlem", "BİLGİ İŞLEM"),
     ("bilgi işlem", "Bilgi İşlem"),

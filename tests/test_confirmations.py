@@ -24,13 +24,13 @@ import urllib.request
 
 from _server import ROOT, Browser, Server, _NoRedirect
 
-from app.config import MappingConfig
-from app.web import selfsigned
-from app.web.auth import hash_password
-from app.web.server import make_templates
+from ser2netweb.config import MappingConfig
+from ser2netweb.web import selfsigned
+from ser2netweb.web.auth import hash_password
+from ser2netweb.web.server import make_templates
 
 PW = "confirm-pass-1"
-with open(os.path.join(ROOT, "app", "locale", "tr.json"), encoding="utf-8") as _fh:
+with open(os.path.join(ROOT, "ser2netweb", "locale", "tr.json"), encoding="utf-8") as _fh:
     TR = json.load(_fh)
 
 
@@ -117,7 +117,7 @@ def test_settings():
         assert "data-confirm" not in delete_form("dir-user"), "a directory account comes back"
         gen = re.search(r'<form method="post" action="/settings/tls/generate"[^>]*>', page).group(0)
         assert not cert or ("data-confirm=" in gen and "ours.pem" in gen), gen
-    js = open(os.path.join(ROOT, "app", "web", "static", "app.js"), encoding="utf-8").read()
+    js = open(os.path.join(ROOT, "ser2netweb", "web", "static", "app.js"), encoding="utf-8").read()
     assert 'e.submitter' in js and '(b && b.getAttribute("data-confirm"))' in js
     print("settings: local-account delete and replacing a set certificate ask (in Turkish)  OK")
 

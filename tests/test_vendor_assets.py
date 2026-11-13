@@ -1,16 +1,16 @@
 """The vendored browser libraries are recorded, current and cached by content.
 
 * vendor/npm/package.json pins htmx.org, @xterm/xterm and @xterm/addon-fit (GitHub's
-  dependency graph and Dependabot read it) and records, for every file in app/web/static
+  dependency graph and Dependabot read it) and records, for every file in ser2netweb/web/static
   copied from them, the package file and its sha256, plus each package's npm integrity
   and license; the license texts are in tools/licenses/npm/ (tools/refresh_assets.py
   writes all of it from the npm releases);
 * xterm comes from the maintained @xterm/* packages (the unscoped xterm / xterm-addon-fit
   ones are deprecated upstream), with the globals app.js uses (Terminal, FitAddon);
-* the pages link the assets with ?v=<hash of app/web/static>, and a request carrying the
+* the pages link the assets with ?v=<hash of ser2netweb/web/static>, and a request carrying the
   current one gets an immutable Cache-Control (other requests are revalidated as before).
 
-With SER2NET_SKIP_PIN_CHECKS=1 (CI's test legs) the record is left to the job "offline
+With SER2NETWEB_SKIP_PIN_CHECKS=1 (CI's test legs) the record is left to the job "offline
 wheels match requirements.txt", so a Dependabot bump fails that one job.
 
 Run: python3 tests/test_vendor_assets.py
@@ -30,6 +30,8 @@ sys.path.insert(0, HERE)
 
 import refresh_assets as ra
 
+from ser2netweb import envvars
+
 
 def test_record_matches_the_files():
     problems = ra.check()
@@ -44,9 +46,9 @@ def test_record_matches_the_files():
     assert {p["license"] for p in pkgs.values()} == {"0BSD", "MIT"}
     with open(os.path.join(ROOT, pkgs["@xterm/xterm"]["license_file"]), encoding="utf-8") as fh:
         assert "The xterm.js authors" in fh.read()
-    statics = {f for f in os.listdir(os.path.join(ROOT, "app", "web", "static"))}
+    statics = {f for f in os.listdir(os.path.join(ROOT, "ser2netweb", "web", "static"))}
     recorded = {os.path.basename(d) for d in doc["ser2net"]["files"]}
-    # ser2net's own: the page script and style, the theme switch, the Modbus points editor
+    # ser2netweb's own: the page script and style, the theme switch, the Modbus points editor
     assert statics - recorded == {"app.css", "app.js", "theme.js", "points.js"}, \
         "every third-party file is recorded"
     print(f"vendor/npm/package.json records {len(recorded)} files of {len(pkgs)} packages  OK")
@@ -62,21 +64,21 @@ def test_a_changed_file_is_reported():
             os.makedirs(os.path.dirname(os.path.join(tmp, pkg["license_file"])), exist_ok=True)
             shutil.copy2(os.path.join(ROOT, pkg["license_file"]), os.path.join(tmp, pkg["license_file"]))
         assert ra.check(tmp, doc) == []
-        with open(os.path.join(tmp, "app/web/static/htmx.min.js"), "ab") as fh:
+        with open(os.path.join(tmp, "ser2netweb/web/static/htmx.min.js"), "ab") as fh:
             fh.write(b"\n")
         doc["dependencies"]["htmx.org"] = "9.9.9"  # a bump without its refresh
         found = ra.check(tmp, json.loads(json.dumps(doc)))
-    assert "app/web/static/htmx.min.js: differs from the recorded sha256" in found, found
+    assert "ser2netweb/web/static/htmx.min.js: differs from the recorded sha256" in found, found
     assert any(p.startswith("htmx.org: recorded for") for p in found), found
     print("an altered file and a version bump without a refresh are reported  OK")
 
 
 def test_console_globals():
-    with open(os.path.join(ROOT, "app/web/static/xterm.js"), encoding="utf-8") as fh:
+    with open(os.path.join(ROOT, "ser2netweb/web/static/xterm.js"), encoding="utf-8") as fh:
         xterm = fh.read()
-    with open(os.path.join(ROOT, "app/web/static/xterm-addon-fit.js"), encoding="utf-8") as fh:
+    with open(os.path.join(ROOT, "ser2netweb/web/static/xterm-addon-fit.js"), encoding="utf-8") as fh:
         fit = fh.read()
-    with open(os.path.join(ROOT, "app/web/static/app.js"), encoding="utf-8") as fh:
+    with open(os.path.join(ROOT, "ser2netweb/web/static/app.js"), encoding="utf-8") as fh:
         app_js = fh.read()
     # UMD bundles: Terminal is copied onto the global object, FitAddon set as e.FitAddon
     assert "e.Terminal=" in xterm and "e.FitAddon=t()" in fit
@@ -87,7 +89,7 @@ def test_console_globals():
 def test_cache_headers():
     from _server import Browser, Server
 
-    from app.web.server import asset_version
+    from ser2netweb.web.server import asset_version
 
     version = asset_version()
     with Server() as srv:
@@ -95,7 +97,7 @@ def test_cache_headers():
         st, headers, body = br.get(f"/static/htmx.min.js?v={version}", raw=True)
         assert st == 200 and headers.get("Cache-Control") == "public, max-age=31536000, immutable", \
             (st, headers.get("Cache-Control"))
-        with open(os.path.join(ROOT, "app/web/static/htmx.min.js"), "rb") as fh:
+        with open(os.path.join(ROOT, "ser2netweb/web/static/htmx.min.js"), "rb") as fh:
             assert body == fh.read()
         for path in ("/static/htmx.min.js", "/static/htmx.min.js?v=2.8.1",
                      f"/static/htmx.min.js?v={version}&v=x"):
@@ -110,7 +112,7 @@ def test_cache_headers():
 
 
 if __name__ == "__main__":
-    if os.environ.get("SER2NET_SKIP_PIN_CHECKS") == "1":
+    if envvars.get("SER2NETWEB_SKIP_PIN_CHECKS") == "1":
         print("SKIP: the record against the files (CI: job 'offline wheels match requirements.txt')")
     else:
         test_record_matches_the_files()

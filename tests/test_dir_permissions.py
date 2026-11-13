@@ -9,14 +9,14 @@ gets its own entry (also on a folder an elevated administrator made private to i
 which Windows Server has Administrators own), but a service's data directory as
 --install-service leaves it, and what inherits from it, are left as they are.
 
-Only a folder that is ser2net's own is locked: one it just made, or one holding only what
+Only a folder that is ser2netweb's own is locked: one it just made, or one holding only what
 it puts there. ConfigStore used to lock whatever folder held the config file, so
-`sudo ser2net --config /etc/ser2net.json` made /etc 0700 (and on Windows a shared tree lost
+`sudo ser2netweb --config /etc/ser2net.json` made /etc 0700 (and on Windows a shared tree lost
 its inherited entries). Such a folder now keeps its permissions; the config file is made
 private (also after every save), and the start-up log warns when other accounts can use the
 folder. On POSIX the server creates its files owner-only (umask 077), so its logs are
 private there too. Given both --data-dir and --config elsewhere, the state is kept next to
-the config file (as always), and ser2net says so instead of following --data-dir silently.
+the config file (as always), and ser2netweb says so instead of following --data-dir silently.
 
 Run: python3 tests/test_dir_permissions.py
 """
@@ -34,8 +34,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from _server import free_port, server_log, show_log_on_failure, wait_port
 
-from app import accounts, datalock, winservice
-from app.config import (
+from ser2netweb import accounts, datalock, winservice
+from ser2netweb.config import (
     OWN_NAMES,
     AppConfig,
     ConfigStore,
@@ -77,7 +77,7 @@ def icacls(*args: str) -> str:
 
 def has_entry(path: str, sid: str) -> bool:
     """An entry that allows `sid` something on `path` itself."""
-    from app import winservice
+    from ser2netweb import winservice
 
     sec = winservice.read_security(path)
     return sec is not None and any(
@@ -89,7 +89,7 @@ def mkdir_with_sddl(path: str, sddl: str) -> None:
     """Create the folder `path` with the security descriptor `sddl` (Windows)."""
     import ctypes
 
-    from app import winservice
+    from ser2netweb import winservice
 
     s = winservice._secapi()
     psd = ctypes.c_void_p()
@@ -103,7 +103,7 @@ def mkdir_with_sddl(path: str, sddl: str) -> None:
 
 
 def test_windows_owner_only_acl():
-    from app import winservice
+    from ser2netweb import winservice
 
     me = winservice._current_user_sid()
     with tempfile.TemporaryDirectory() as d:
@@ -138,7 +138,7 @@ def test_windows_admin_owned_folders():
     permissions; a folder an elevated administrator made private to itself (Python's
     mkdir(0o700) on Windows Server: SYSTEM, Administrators, OWNER RIGHTS, owned by
     Administrators) gets that account's entry, so it can still use it unelevated."""
-    from app import winservice as w
+    from ser2netweb import winservice as w
 
     me = w._current_user_sid()
     base = tempfile.mkdtemp(prefix="s2n_perm_")
@@ -180,9 +180,9 @@ def test_windows_admin_owned_folders():
 
 
 def test_own_names():
-    """The names ser2net puts in its data directory are the ones the code uses."""
-    from app import state, watchdog
-    from app.engine import sparkplug_node
+    """The names ser2netweb puts in its data directory are the ones the code uses."""
+    from ser2netweb import state, watchdog
+    from ser2netweb.engine import sparkplug_node
 
     for name in (datalock.LOCK_NAME, accounts.REQUEST_DIR, state.SETUP_CODE_FILE,
                  sparkplug_node.BDSEQ_FILE, watchdog.HANG_LOG, winservice.SERVICE_LOG,
@@ -200,7 +200,7 @@ def test_own_names():
         assert foreign_entries(d, "my.json") == ["all.log.bak", "config.json", "config.json.old",
                                                  "passwd"]
     assert foreign_entries(os.path.join(ROOT, "no-such-folder")) is None
-    print("ser2net's own names: the lock, admin-requests/, setup-code.txt, the bdSeq file, "
+    print("ser2netweb's own names: the lock, admin-requests/, setup-code.txt, the bdSeq file, "
           "hang.log, service.log, rotated logs and temporary files  OK")
 
 
@@ -226,7 +226,7 @@ def test_posix_own_folder_locked():
             assert store.own_dir and store.load().load_notes == [], name
     finally:
         shutil.rmtree(base, ignore_errors=True)
-    print("POSIX: a new folder and one with only ser2net's files are locked to 0700  OK")
+    print("POSIX: a new folder and one with only ser2netweb's files are locked to 0700  OK")
 
 
 def test_posix_shared_folder_left_alone():
@@ -239,7 +239,7 @@ def test_posix_shared_folder_left_alone():
         cfg = os.path.join(etc, "ser2net.json")
         os.chmod(cfg, 0o644)
         store = ConfigStore(cfg)
-        assert mode(etc) == 0o755, f"a folder that isn't ser2net's was changed: {oct(mode(etc))}"
+        assert mode(etc) == 0o755, f"a folder that isn't ser2netweb's was changed: {oct(mode(etc))}"
         assert mode(cfg) == 0o600, oct(mode(cfg))
         assert not store.own_dir
         notes = store.load().load_notes
@@ -274,8 +274,8 @@ def _start(args: list[str], folder: str, port: int):
     log = server_log(folder)
     try:
         return subprocess.Popen(
-            [sys.executable, "ser2net.py", "--no-bootstrap", *args], cwd=ROOT,
-            env=dict(os.environ, SER2NET_BIND_IP="127.0.0.1", SER2NET_PORT=str(port)),
+            [sys.executable, "ser2netweb.py", "--no-bootstrap", *args], cwd=ROOT,
+            env=dict(os.environ, SER2NETWEB_BIND_IP="127.0.0.1", SER2NETWEB_PORT=str(port)),
             stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT)
     finally:
         log.close()
@@ -317,7 +317,7 @@ def test_posix_server_files_private():
             assert mode(os.path.join(shared, name)) == 0o700, name
         with open(os.path.join(shared, "all.log"), encoding="utf-8") as fh:
             text = fh.read()
-        assert f"WARNING: {shared}, the folder of ser2net.json, holds files ser2net didn't " \
+        assert f"WARNING: {shared}, the folder of ser2net.json, holds files ser2netweb didn't " \
                "put there (README.txt)" in text, text[-2000:]
         with open(os.path.join(shared, "ser2net.json"), encoding="utf-8") as fh:
             assert json.load(fh)["admin_ui"]["port"] == port
@@ -332,8 +332,8 @@ def test_posix_server_files_private():
 
 def test_split_layout_named():
     """--data-dir and a --config elsewhere: the state stays next to the config file (as
-    always), and ser2net says so; the Windows service texts name that folder."""
-    import ser2net as cli
+    always), and ser2netweb says so; the Windows service texts name that folder."""
+    from ser2netweb import cli
 
     base = tempfile.mkdtemp(prefix="s2n_perm_")
     try:
@@ -345,26 +345,26 @@ def test_split_layout_named():
         assert cli.split_layout_note(cli.parse_args(
             ["--data-dir", b + os.sep, "--config", cfg])) == ""
         note = cli.split_layout_note(cli.parse_args(["--data-dir", a, "--config", cfg]))
-        assert note == (f"WARNING: --config {cfg} is not in --data-dir {a}: ser2net keeps the "
+        assert note == (f"WARNING: --config {cfg} is not in --data-dir {a}: ser2netweb keeps the "
                         f"backups, logs and traces next to the config file, in {b}"), note
-        p = subprocess.run([sys.executable, "ser2net.py", "--no-bootstrap", "--about",
+        p = subprocess.run([sys.executable, "ser2netweb.py", "--no-bootstrap", "--about",
                             "--data-dir", a, "--config", cfg], cwd=ROOT, capture_output=True,
                            text=True, timeout=120)
-        assert p.returncode == 0 and f"ser2net: {note}" in p.stderr, (p.returncode, p.stderr)
-        p = subprocess.run([sys.executable, "ser2net.py", "--no-bootstrap", "--about",
+        assert p.returncode == 0 and f"ser2netweb: {note}" in p.stderr, (p.returncode, p.stderr)
+        p = subprocess.run([sys.executable, "ser2netweb.py", "--no-bootstrap", "--about",
                             "--data-dir", b, "--config", cfg], cwd=ROOT, capture_output=True,
                            text=True, timeout=120)
         assert "WARNING" not in p.stderr, p.stderr
         assert winservice.state_dir(a, cfg) == b and winservice.state_dir(a, None) == a
     finally:
         shutil.rmtree(base, ignore_errors=True)
-    print("--data-dir + a --config elsewhere: ser2net names the folder it uses  OK")
+    print("--data-dir + a --config elsewhere: ser2netweb names the folder it uses  OK")
 
 
 def test_windows_shared_folder_left_alone():
     """A folder other accounts may use (here: Users may read) and that holds other files
     keeps its entries; the config file loses the inherited ones (also after a save); a
-    folder of ser2net's own is locked as before."""
+    folder of ser2netweb's own is locked as before."""
     users = winservice.USERS_SID
     base = tempfile.mkdtemp(prefix="s2n_perm_")
     try:
@@ -394,7 +394,7 @@ def test_windows_shared_folder_left_alone():
         icacls(base, "/reset", "/T", "/C", "/Q")
         shutil.rmtree(base, ignore_errors=True)
     print("Windows: a shared folder keeps its entries, the config file is made private; "
-          "ser2net's own folder is locked  OK")
+          "ser2netweb's own folder is locked  OK")
 
 
 def main():

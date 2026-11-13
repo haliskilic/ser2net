@@ -32,8 +32,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from _fds import Skip, high_fds, open_fds
 
-from app.config import MappingConfig, SerialSettings
-from app.engine import serial_io
+from ser2netweb.config import MappingConfig, SerialSettings
+from ser2netweb.engine import serial_io
 
 DISCONNECTED = "device reports readiness to read but returned no data"
 
@@ -74,7 +74,7 @@ class Pty:
 
 
 def test_one_descriptor_per_port():
-    from app.engine.serial_compat import PosixSerial, serial_class
+    from ser2netweb.engine.serial_compat import PosixSerial, serial_class
 
     assert serial_class() is PosixSerial
     pty = Pty()
@@ -104,7 +104,7 @@ def test_one_descriptor_per_port():
 
 
 def test_hangup_and_blocking_use():
-    from app.engine.serial_compat import PosixSerial
+    from ser2netweb.engine.serial_compat import PosixSerial
 
     pty = Pty()
     ser = PosixSerial(pty.path, 9600, timeout=0, write_timeout=0)
@@ -139,7 +139,7 @@ def test_write_to_a_port_that_takes_nothing():
     raised as BlockingIOError at once (the transport keeps the data), it does not spin."""
     import signal
 
-    from app.engine.serial_compat import PosixSerial
+    from ser2netweb.engine.serial_compat import PosixSerial
 
     def stuck(*_args):
         raise AssertionError("a write to a port that takes nothing did not return")
@@ -206,7 +206,7 @@ def test_stream_above_fd_setsize():
 
 
 async def _bridge_above_fd_setsize():
-    from app.engine.bridge import MappingRunner
+    from ser2netweb.engine.bridge import MappingRunner
 
     s = socket.socket()
     s.bind(("127.0.0.1", 0))

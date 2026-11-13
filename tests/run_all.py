@@ -84,6 +84,8 @@ PORTABLE = [
     "test_standalone.py",     # binary part needs a build; CI 'standalone' workflow runs it
     "test_vendor_wheels.py",
     "test_lib_refresh.py",    # ./lib follows the pins after an upgrade (real pip, vendor/wheels)
+    "test_old_names.py",      # ser2net.py and the SER2NET_* variables of 2.9.x keep working
+    "test_kept_names.py",     # wire, metric, cookie and default names that stay ser2net
     "test_bootstrap_offline.py",  # offline first run without psutil's wheel, pip/Python checks
     "test_build_lock.py",     # requirements-lock/-build.txt (hashes) match the pins
     "test_vendor_assets.py",  # htmx / xterm.js recorded (vendor/npm), cached by content hash
@@ -103,7 +105,7 @@ PORTABLE = [
     "test_healthcheck.py",
     "test_upgrade_from_2_7.py",
     "test_upgrade_from_2_8.py",  # a 2.8.0 config.json (tests/make_config_fixture.py) and data/
-    "test_windows_service.py",  # real service part: Windows + SER2NET_SERVICE_TESTS=1 (CI)
+    "test_windows_service.py",  # real service part: Windows + SER2NETWEB_SERVICE_TESTS=1 (CI)
     "test_systemd_units.py",    # systemd/*.service (also ser2net@.service): paths, sandbox, verify
     "test_install_script.py",   # systemd/ser2net-install.sh, staged under a scratch root
     "test_single_instance.py",
@@ -162,12 +164,12 @@ PORTABLE = [
     "test_node_name.py",       # Settings -> Admin interface -> Name of this instance
     "test_console_port_picker.py",  # the console picker tries the admin UI port it offers
     "test_save_start_result.py",  # a mapping save says when the mapping didn't start
-    "test_activity_log.py",    # SER2NET_LOG_STDOUT, admin_ui.request_log
+    "test_activity_log.py",    # SER2NETWEB_LOG_STDOUT, admin_ui.request_log
     "test_login_notice.py",    # Settings -> Web UI access -> Sign-in notice
     "test_backup_erasure.py",  # deleting backups, a deleted account out of every backup
     "test_privacy_doc.py",     # docs/PRIVACY.md's numbers and settings match the code
     "test_docs.py",            # the READMEs name every CLI option and link every guide; links resolve
-    "test_licenses_page.py",   # footer: licence + source link (SER2NET_SOURCE_URL); /licenses
+    "test_licenses_page.py",   # footer: licence + source link (SER2NETWEB_SOURCE_URL); /licenses
     "test_clock_ages.py",     # ages and client order by the monotonic clock (no wall clock)
     "test_time_stamps.py",    # log/audit times with their UTC offset; old lines still read
     "test_clock_check.py",    # a clock that reads earlier than it can: start-up log, Settings

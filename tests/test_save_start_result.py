@@ -1,7 +1,7 @@
 """Saving or starting a mapping that then doesn't start says so.
 
 The save answered as if all was well even when the mapping could not start (its port held
-by another program - another ser2net instance on the machine - or its TLS files missing):
+by another program - another ser2netweb instance on the machine - or its TLS files missing):
 only the dashboard row showed it. Checks:
   * a mapping saved on a port another socket listens on: kept in config.json, the form
     closes (empty answer, the table refreshed) and the answer's notice (X-Notice, the
@@ -21,8 +21,8 @@ import urllib.parse
 
 from _asgi import App, cookies, header
 
-from app.web import auth
-from app.web.routes.mappings import _port_taken
+from ser2netweb.web import auth
+from ser2netweb.web.routes.mappings import _port_taken
 
 PW = "save-start-pass-1"
 CSRF = "save-start-csrf"

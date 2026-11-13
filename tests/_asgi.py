@@ -21,9 +21,9 @@ import urllib.parse
 
 import _server  # noqa: F401  (puts the repo root and lib/ on sys.path)
 
-from app.config import AppConfig, ConfigStore
-from app.state import AppState
-from app.web.server import build_app
+from ser2netweb.config import AppConfig, ConfigStore
+from ser2netweb.state import AppState
+from ser2netweb.web.server import build_app
 
 
 def _close_loggers() -> None:

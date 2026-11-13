@@ -17,7 +17,7 @@ decide who qualifies.
 The workflow (`standalone.yml`, at its top level) and the jobs that call it in `ci.yml` and
 `release.yml` already grant `actions: read` — the SignPath action hands `GITHUB_TOKEN` to its connector
 to download the build artifact, which needs that scope even on a public repo. The exe
-carries a version resource and the ser2net icon, so Explorer's *Details* tab shows the
+carries a version resource and the ser2netweb icon, so Explorer's *Details* tab shows the
 product, publisher and version (SmartScreen and UAC still say "Unknown publisher" until it
 is signed). You can rehearse the signing *plumbing* (version resource + the
 verify/copy steps) without an account by running the workflow by hand: **Actions →
@@ -92,10 +92,10 @@ setting `WINDOWS_SIGNING` = `azure`, or keep the secret short-lived.
 - Checksums: `sha256sum -c SHA256SUMS --ignore-missing` (Linux) or
   `Get-FileHash .\ser2net-windows-x64.exe` (compare with `SHA256SUMS`)
 - Build provenance (the three executables, needs the GitHub CLI):
-  `gh attestation verify ser2net-windows-x64.exe -R haliskilic/ser2net`; add
-  `--signer-workflow haliskilic/ser2net/.github/workflows/release.yml` to also require
+  `gh attestation verify ser2net-windows-x64.exe -R haliskilic/ser2netweb`; add
+  `--signer-workflow haliskilic/ser2netweb/.github/workflows/release.yml` to also require
   that the release workflow made it (only its tag runs attest anything)
-- The Docker image: `gh attestation verify oci://ghcr.io/haliskilic/ser2net:X.Y.Z -R haliskilic/ser2net`.
+- The Docker image: `gh attestation verify oci://ghcr.io/haliskilic/ser2net:X.Y.Z -R haliskilic/ser2netweb`.
   `:X.Y` and `:latest` may point at a weekly rebuild of the latest release on a newer base
   image (docs/DOCKER.md), attested by `.github/workflows/image-refresh.yml` instead of
   `release.yml`

@@ -26,9 +26,9 @@ import urllib.request
 
 from _server import Browser, Server, ui_cookie
 
-from app.config import AppConfig, new_pwd_version
-from app.web import auth
-from app.web.auth import hash_password
+from ser2netweb.config import AppConfig, new_pwd_version
+from ser2netweb.web import auth
+from ser2netweb.web.auth import hash_password
 
 PW = "revoke-pass-1"
 LDAP_ON = {"enabled": True, "server_uri": "ldap://127.0.0.1:9", "user_dn_template": "uid={username}"}
@@ -209,13 +209,14 @@ def test_revoke_all(srv, admin):
 
 
 def test_key_saved_at_start():
-    from app import runtime
+    from ser2netweb import runtime
 
     d = tempfile.mkdtemp(prefix="s2n_key_")
     path = os.path.join(d, "config.json")
     with open(path, "w") as fh:
         json.dump({"users": [user("admin", "admin")]}, fh)  # no secret_key / instance_id
-    env = os.environ.pop("SER2NET_BIND_IP", None)
+    env = {k: os.environ.pop(k) for k in ("SER2NETWEB_BIND_IP", "SER2NET_BIND_IP")
+           if k in os.environ}
     try:
         runtime.prepare_config(path)
         with open(path) as fh:
@@ -224,8 +225,7 @@ def test_key_saved_at_start():
         with open(path) as fh:
             second = json.load(fh)
     finally:
-        if env is not None:
-            os.environ["SER2NET_BIND_IP"] = env
+        os.environ.update(env)
         shutil.rmtree(d, ignore_errors=True)
     assert first["secret_key"] and first["instance_id"], first
     assert (second["secret_key"], second["instance_id"]) == (first["secret_key"], first["instance_id"])
