@@ -613,8 +613,8 @@ or on 32-bit ARM the Docker image (arm/v7).
 Windows 11 on ARM also runs the x64 exe (emulated).
 
 Every release also publishes `SHA256SUMS`, a CycloneDX SBOM per binary (`*.cdx.json`), the
-license texts, `ser2net-standalone.service`, the systemd unit for the Linux binaries, and
-`ser2net-install.sh`, which installs a binary with it (see *Run as a service*), and the
+license texts, `ser2netweb-standalone.service`, the systemd unit for the Linux binaries, and
+`ser2netweb-install.sh`, which installs a binary with it (see *Run as a service*), and the
 binaries carry GitHub build provenance:
 `sha256sum -c SHA256SUMS --ignore-missing`,
 `gh attestation verify ser2netweb-linux-x64 -R haliskilic/ser2netweb`. The Windows exe is **not
@@ -633,7 +633,7 @@ containers, including a serial port at a rate without a termios constant (250000
 Linux notes: `chmod +x ser2netweb-linux-x64`; serial ports need the devices' group
 (`dialout`; `uucp` on Arch, see Requirements). The binary unpacks itself to `$TMPDIR`
 (default `/tmp`) on start — if `/tmp` is mounted `noexec`, point `TMPDIR` at a directory
-that isn't (`ser2net-install.sh` does that for the service). While it runs it keeps that
+that isn't (`ser2netweb-install.sh` does that for the service). While it runs it keeps that
 copy locked and its access times fresh, so tmp cleaners (systemd-tmpfiles, tmpreaper)
 don't delete it under a long-running instance; a copy left behind by a killed process
 still ages out as usual. For certificate checks (MQTT over TLS, OIDC, LDAPS / StartTLS,
@@ -793,8 +793,8 @@ import**: the preview shows each connection as the mapping it becomes, which com
 disabled and why, and what works differently. Before you apply it (that starts the enabled
 mappings):
 - stop and disable the classic daemon (`sudo systemctl disable --now ser2net`), which holds
-  the same ports and devices; its unit has the same name, `ser2net.service`, so remove its
-  package or run this one as an instance of `ser2net@.service`;
+  the same ports and devices (its unit is `ser2net.service`, ser2netweb's
+  `ser2netweb.service`: both can stay installed);
 - give the service `CAP_NET_BIND_SERVICE` for ports below 1024, or move them up (the classic
   daemon usually ran as root; *Ports below 1024* under Run as a service);
 - check the TLS / client certificate rows and the ones that came in disabled.
@@ -1543,6 +1543,18 @@ is no account at all; later starts ignore it.
     unchanged too). Leave the classic ser2net daemon's `ser2net.service` alone (its package
     lives in `/usr/lib/systemd/system`), and remove only what an old install of this
     project put in `/etc/systemd/system`.
+    - *The binary installed with `ser2net-install.sh`*: download the new release's files
+      (as above) and run `sudo sh ser2netweb-install.sh`. It recognises 2.9.x's
+      `ser2net.service` by its content (never by its name: the classic daemon's has it too),
+      stops and disables it, moves `/var/lib/ser2net` to `/var/lib/ser2netweb` for the new
+      `ser2netweb` user, keeps the `--listen` address and moves your drop-ins of the old unit
+      along (check them for the old names), and once the new service answers removes the old
+      unit and `/usr/local/bin/ser2net` (only when it says it is 2.9.x's binary). It changes
+      nothing when `/var/lib/ser2netweb` already holds data too, and a `ser2net.service` it
+      doesn't recognise is left alone. The user `ser2net` stays unless you add
+      `--remove-old-user`, which keeps it anyway while the classic daemon is installed or
+      anything runs as it. If the new service doesn't come up, the script says how to go
+      back to 2.9.x.
     - *A source checkout in `/opt/ser2net` with `ser2net.service`*: either keep it as it is
       (`ser2net.py` still starts 3.x, so `sudo git -C /opt/ser2net pull` and
       `sudo systemctl restart ser2net` upgrade it under the old names), or move it over:

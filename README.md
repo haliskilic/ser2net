@@ -634,8 +634,8 @@ Diğer platformlar — 32-bit ARM (32-bit Raspberry Pi OS, armv7 gateway'ler), m
 *Offline kurulum*). 32-bit ARM'da Docker imajı (arm/v7) da kullanılabilir. ARM üzerindeki Windows 11 x64 exe'yi de (emülasyonla) çalıştırır.
 
 Her sürümde ayrıca `SHA256SUMS`, her binary için CycloneDX SBOM (`*.cdx.json`), lisans
-metinleri, Linux binary'leri için systemd unit'i `ser2net-standalone.service` ve bir binary'yi
-onunla kuran `ser2net-install.sh` (bkz. *Servis olarak çalıştırma*) yayımlanır; binary'ler GitHub'ın derleme kaynağı imzasıyla (build provenance)
+metinleri, Linux binary'leri için systemd unit'i `ser2netweb-standalone.service` ve bir binary'yi
+onunla kuran `ser2netweb-install.sh` (bkz. *Servis olarak çalıştırma*) yayımlanır; binary'ler GitHub'ın derleme kaynağı imzasıyla (build provenance)
 doğrulanabilir: `sha256sum -c SHA256SUMS --ignore-missing`,
 `gh attestation verify ser2netweb-linux-x64 -R haliskilic/ser2netweb`. Windows exe'si **henüz
 imzalanmıyor** (bir imzalama servisi tanımlanınca imzalanacak —
@@ -655,7 +655,7 @@ Linux notları:
 - `chmod +x ser2netweb-linux-x64`; seri portlar cihazların grubunu gerektirir (`dialout`;
   Arch'ta `uucp`, bkz. Gereklilikler).
 - Binary açılışta kendini `$TMPDIR`'e (varsayılan `/tmp`) açar. `/tmp` `noexec` ile
-  bağlıysa `TMPDIR`'i öyle olmayan bir klasöre yönlendirin (`ser2net-install.sh` bunu servis
+  bağlıysa `TMPDIR`'i öyle olmayan bir klasöre yönlendirin (`ser2netweb-install.sh` bunu servis
   için yapar). Çalıştığı sürece bu kopyayı
   kilitli tutar ve erişim zamanlarını tazeler; böylece systemd-tmpfiles, tmpreaper gibi
   geçici dosya temizleyicileri uzun süre çalışan bir binary'nin dosyalarını silmez.
@@ -819,8 +819,8 @@ dışa / içe aktar** bölümünden içe aktarın: önizleme her bağlantıyı d
 hangilerinin devre dışı geldiğini ve nedenini, neyin farklı çalıştığını gösterir. Uygulamadan
 önce (uygulamak etkin eşlemeleri başlatır):
 - aynı portları ve cihazları tutan klasik servisi durdurup devre dışı bırakın
-  (`sudo systemctl disable --now ser2net`); onun unit'inin adı da `ser2net.service`, bu
-  yüzden paketini kaldırın ya da bunu `ser2net@.service` örneği olarak çalıştırın;
+  (`sudo systemctl disable --now ser2net`; onun unit'i `ser2net.service`, ser2netweb'inki
+  `ser2netweb.service`: ikisi birlikte kurulu kalabilir);
 - 1024 altındaki portlar için servise `CAP_NET_BIND_SERVICE` yetkisini verin ya da portları
   yukarı taşıyın (klasik servis çoğunlukla root olarak çalışırdı; Servis olarak çalıştırma
   altında *1024 altı portlar*);
@@ -1602,6 +1602,17 @@ içeren bir dosyaya (Docker secret) yönlendirin; ad için `SER2NETWEB_ADMIN_USE
     Klasik ser2net daemon'unun `ser2net.service`'ine dokunmayın (paketi
     `/usr/lib/systemd/system` altındadır); yalnızca bu projenin eski bir kurulumunun
     `/etc/systemd/system`'e koyduklarını kaldırın.
+    - *`ser2net-install.sh` ile kurulan binary*: yeni sürümün dosyalarını (yukarıdaki gibi)
+      indirip `sudo sh ser2netweb-install.sh` çalıştırın. 2.9.x'in `ser2net.service`'ini
+      içeriğinden tanır (asla yalnızca adından değil: klasik daemon'unkinin adı da bu),
+      durdurup devre dışı bırakır, `/var/lib/ser2net`'i yeni `ser2netweb` kullanıcısı için
+      `/var/lib/ser2netweb`'e taşır, `--listen` adresini korur ve eski unit'e ait drop-in'lerinizi
+      de taşır (eski adlar için kontrol edin); yeni servis yanıt verince eski unit'i ve
+      `/usr/local/bin/ser2net`'i (yalnızca 2.9.x'in binary'si olduğunu söylüyorsa) kaldırır.
+      `/var/lib/ser2netweb`'de de veri varsa hiçbir şeyi değiştirmez; tanımadığı bir
+      `ser2net.service`'e dokunmaz. `ser2net` kullanıcısı kalır; `--remove-old-user` onu
+      kaldırır, ama klasik daemon kuruluyken ya da onunla çalışan bir şey varken yine de
+      bırakır. Yeni servis açılmazsa script 2.9.x'e nasıl dönüleceğini yazar.
     - *`/opt/ser2net`'te `ser2net.service` ile çalışan kaynak kurulum*: ya olduğu gibi bırakın
       (`ser2net.py` 3.x'i de başlatır; `sudo git -C /opt/ser2net pull` ve
       `sudo systemctl restart ser2net` onu eski adlarla yükseltir), ya da taşıyın:

@@ -38,18 +38,17 @@ switch.
    ```bash
    sudo systemctl disable --now ser2net
    ```
-   Its package's unit is also called `ser2net.service`. `systemd/ser2net.service` copied to
-   `/etc/systemd/system/` takes that name over (systemd uses the copy in `/etc`), and
-   `ser2net-install.sh` refuses to do that unless you pass `--replace-unit`. Removing the
-   package (`sudo apt remove ser2net`, `sudo dnf remove ser2net`) avoids the clash; `apt
-   remove` keeps `/etc/ser2net/ser2net.yaml`, `purge` deletes it. To keep both installed,
-   run this one as an instance of `ser2net@.service` (README → *Several instances on one
-   machine*).
+   Its package's unit is `ser2net.service`; ser2netweb's units are `ser2netweb.service`,
+   `ser2netweb@.service` and the binary's (installed as `ser2netweb.service`), with their own
+   user `ser2netweb`, so both can stay installed side by side, and `ser2netweb-install.sh`
+   never touches the daemon's unit (up to 2.9.x ser2netweb's units had the daemon's name).
+   Removing the package (`sudo apt remove ser2net`, `sudo dnf remove ser2net`) frees the
+   ports for good; `apt remove` keeps `/etc/ser2net/ser2net.yaml`, `purge` deletes it.
 5. **Ports below 1024.** The classic daemon usually ran as root; ser2netweb's systemd
-   units run as the unprivileged `ser2net` user, which can't listen on a port below 1024
+   units run as the unprivileged `ser2netweb` user, which can't listen on a port below 1024
    (the preview names such ports). Give the service the `CAP_NET_BIND_SERVICE` capability
    (README → *Ports below 1024*) or move the mapping to port 1024 or above.
-6. **Serial devices.** The `ser2net` user needs the devices' group (`dialout`, or `uucp` on
+6. **Serial devices.** The `ser2netweb` user needs the devices' group (`dialout`, or `uucp` on
    Arch); see [`LINUX-SERIAL.md`](LINUX-SERIAL.md) when a port doesn't open.
 7. Apply the import, enable the mappings you fixed and check the dashboard.
 
