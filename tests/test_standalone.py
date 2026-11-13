@@ -689,7 +689,7 @@ def check_version_resource(exe):
                    getattr(e, "id", None) == 14  # RT_GROUP_ICON
                    for e in pe.DIRECTORY_ENTRY_RESOURCE.entries)
     pe.close()
-    assert strings.get("ProductName") == "ser2net", strings
+    assert strings.get("ProductName") == "ser2netweb", strings
     assert strings.get("OriginalFilename") == "ser2net.exe", strings
     assert strings.get("ProductVersion") == __version__, strings
     assert strings.get("FileVersion", "").startswith(__version__), strings

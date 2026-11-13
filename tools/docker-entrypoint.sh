@@ -19,7 +19,7 @@
 # The group of each serial device passed in (--device, compose `devices:`) is added
 # too: the node keeps the host's numeric group, which need not be the image's
 # dialout (20) — Fedora/RHEL use 18 — so --group-add dialout alone can miss it.
-# SER2NETWEB_LOW_PORTS=1 (or SER2NETWEB_LOW_PORTS=1, its name up to 2.9.x; the new name wins
+# SER2NETWEB_LOW_PORTS=1 (or SER2NET_LOW_PORTS=1, its name up to 2.9.x; the new name wins
 # when both are set) keeps the CAP_NET_BIND_SERVICE capability for the server, so it may
 # listen on ports below 1024 where Docker doesn't allow that to everyone: the host network
 # (in its own network Docker allows them anyway). Only when the container has it to give
@@ -124,8 +124,8 @@ for dev in $SERIAL; do
 done
 caps=""
 low_ports=SER2NETWEB_LOW_PORTS
-[ -n "${SER2NETWEB_LOW_PORTS+set}" ] || low_ports=SER2NETWEB_LOW_PORTS
-if [ "${SER2NETWEB_LOW_PORTS-${SER2NETWEB_LOW_PORTS:-}}" = 1 ]; then
+[ -n "${SER2NETWEB_LOW_PORTS+set}" ] || low_ports=SER2NET_LOW_PORTS
+if [ "${SER2NETWEB_LOW_PORTS-${SER2NET_LOW_PORTS:-}}" = 1 ]; then
     # CAP_NET_BIND_SERVICE is bit 10 of the capability sets
     prm=$(awk '$1 == "CapPrm:" { print $2 }' /proc/self/status 2>/dev/null) || prm=""
     if [ -n "$prm" ] && [ $(( 0x$prm >> 10 & 1 )) = 1 ]; then
