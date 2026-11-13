@@ -111,6 +111,7 @@ PORTABLE = [
     "test_install_layout.py",   # default data folder per installation (source, binary, package, pip)
     "test_windows_channels.py",  # winget / Scoop / Chocolatey packages and their workflows
     "test_packages.py",         # .deb / .rpm: packaging/, the unit, the scripts (CI installs them)
+    "test_package_repo.py",     # APT / DNF repositories on Pages: releases, files, docs, workflow
     "test_pyproject.py",        # the PyPI package: ranges hold the pins, package data, build tools
     "test_single_instance.py",
     "test_notifications.py",

@@ -12,7 +12,8 @@ name: Release
 # passed publish: the release assets (the executables, the packages) with SHA256SUMS,
 # SBOMs, license texts and build provenance, then the tags of the tested image (X.Y.Z, X.Y
 # and latest; a pre-release, vX.Y.Z-rc.N, only its own and marked as a pre-release) and the
-# PyPI package CI built and tested (trusted publishing, the environment pypi). The
+# PyPI package CI built and tested (trusted publishing, the environment pypi), and (not
+# for a pre-release) the release channels are started: package-repo.yml. The
 # image is ghcr.io/<owner>/ser2netweb; the 3.x line also gets the same digest and tags
 # under the image's name up to 2.9.x, ghcr.io/<owner>/ser2net, so composes and
 # auto-updaters on that path keep getting releases. The write permissions belong to the
@@ -423,3 +424,26 @@ jobs:
           name: pypi-dist
           path: dist
       - uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086  # v1.14.3
+
+  # GitHub starts no workflow for the events of GITHUB_TOKEN but workflow_dispatch, so the
+  # release the publish job created doesn't start the workflows that follow releases: they
+  # are started here, on main, once it is out (not for a pre-release). package-repo.yml:
+  # the APT / DNF repositories on GitHub Pages (docs/PACKAGES.md). Nothing waits for this
+  # job, and it runs no action and no repository code.
+  channels:
+    name: start the release channels
+    needs: [verify, publish]
+    if: github.event_name == 'push' && needs.verify.outputs.prerelease != 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write         # gh workflow run
+    steps:
+      - name: Run the channel workflows on main
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          for workflow in package-repo.yml; do
+            gh workflow run "$workflow" --ref main
+            echo "started $workflow"
+          done
