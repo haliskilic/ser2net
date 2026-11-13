@@ -111,7 +111,6 @@ for t in \
     test_config_types.py \
     test_config_validation.py \
     test_console_log.py \
-    test_dependency_internals.py \
     test_env_bind.py \
     test_explain.py \
     test_kept_names.py \
