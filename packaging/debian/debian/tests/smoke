@@ -14,6 +14,8 @@ ser2netweb --version | grep -qx 'ser2netweb [0-9][0-9.a-z~+-]*'
 ser2netweb --about
 ser2netweb --about | grep -q '^ *pyserial-asyncio-fast'
 
+# (its own folder, made by the user it runs as: root may not make one for another account)
+mkdir -m 0700 "$data"
 echo 'autopkgtest-password-1' | ser2netweb --data-dir "$data" --set-password admin
 test -s "$data/config.json"
 

@@ -191,7 +191,7 @@ build_fedora() {
     useradd --create-home builder
     recipe fedora "$WORK/recipe"
     pkg_install() { dnf -y install "$@" | tail -25; }
-    pkg_builddep() { dnf -y -q builddep "$@"; }
+    pkg_builddep() { dnf -y builddep "$@" | tail -40; }
     rpm_build "$WORK/recipe"
     say "install"
     dnf -y -q install "$OUT"/ser2netweb-"$VERSION"-*.noarch.rpm
@@ -213,6 +213,12 @@ build_opensuse() {
     (. /etc/os-release && echo "$PRETTY_NAME")
     useradd --create-home builder
     recipe opensuse "$WORK/recipe"
+    # the build service appends ser2netweb.changes to the spec as its %changelog
+    awk '/^-{60,}$/ { head = 1; next }
+         head && NF { who = $0; sub(/^.* - /, "", who)
+                      printf "* %s %s %s %s %s\n", $1, $2, $3, $6, who; head = 0; next }
+         NF { print }' "$WORK/recipe/ser2netweb.changes" >>"$WORK/recipe/ser2netweb.spec"
+    sed -n '/^%changelog/,$p' "$WORK/recipe/ser2netweb.spec"
     pkg_install() { zypper -n -q install --no-recommends "$@"; }
     pkg_builddep() { fail "no dynamic BuildRequires expected: $*"; }
     rpm_build "$WORK/recipe"
