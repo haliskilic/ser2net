@@ -12,7 +12,8 @@ name: Image refresh
 #    rebuilds the latest release from its tag (same Dockerfile, same hash-locked pins, the
 #    platforms :latest has), pushes it by digest, smoke-tests that digest on each of them
 #    with the tag's tests/docker_smoke.sh (arm/v7 under QEMU), attests it and moves the X.Y
-#    and latest tags to it, under both names as the release did. X.Y.Z stays the image its
+#    and latest tags to it, under both names as the release did, and copies it with those
+#    tags to Docker Hub (docker-hub.yml, when its secrets are set). X.Y.Z stays the image its
 #    release tested and published.
 # Auto-updaters (Watchtower and the like) restart the container after such a refresh.
 # GitHub turns scheduled workflows off after 60 days without repository activity:
@@ -303,3 +304,20 @@ jobs:
             done
             echo "refreshed: $image $TAGS -> $DIGEST" >> "$GITHUB_STEP_SUMMARY"
           done
+
+  # The refreshed digest and its tags (X.Y, latest) on Docker Hub too, as release.yml copies
+  # a release's (the 3.x image, ser2netweb, only); skipped with a notice without the secrets
+  docker-hub:
+    name: copy the refreshed image to Docker Hub
+    needs: [check, build, tag]
+    if: needs.check.outputs.title == 'ser2netweb'
+    permissions:
+      contents: read
+      packages: read         # read the tagged image on GHCR
+    uses: ./.github/workflows/docker-hub.yml
+    with:
+      digest: ${{ needs.build.outputs.digest }}
+      tags: ${{ needs.check.outputs.image-tags }}
+    secrets:
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+      DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}

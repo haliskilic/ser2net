@@ -10,7 +10,8 @@
   which an older tag can't build), pushes it by digest, smoke-tests that digest on each of
   them (arm/v7 under QEMU), and only then attests it and moves X.Y and latest (never X.Y.Z)
   to it — under every name the release has: ghcr.io/<owner>/ser2netweb, and for the 3.x
-  line also ghcr.io/<owner>/ser2net (2.9.x and older: that one only).
+  line also ghcr.io/<owner>/ser2net (2.9.x and older: that one only), and then copies it
+  with those tags to Docker Hub (tests/test_release_pipeline.py: docker-hub.yml).
 
 Run: python3 tests/test_image_refresh.py   (stdlib only)
 """
