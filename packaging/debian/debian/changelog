@@ -1,3 +1,9 @@
+ser2netweb (3.0.1+ds-1) unstable; urgency=medium
+
+  * New upstream release.
+
+ -- Halis KILIÇ <mail@haliskilic.com.tr>  Fri, 13 Nov 2026 21:25:59 +0000
+
 ser2netweb (3.0.0+ds-1) unstable; urgency=medium
 
   * Initial release.
