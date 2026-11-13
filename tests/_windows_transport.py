@@ -35,13 +35,28 @@ import serial  # with the real os.name: it picks its backend by it
 
 import ser2netweb.engine  # noqa: F401
 from _fake_win32 import FakeWin32
+from ser2netweb import envvars
+
+# tests/test_serial_compat.py's run as if pyserial-asyncio-fast weren't installed: the
+# transport is then serial_compat's built-in copy of it
+if envvars.get("SER2NETWEB_TEST_WITHOUT_SAF") == "1":
+    sys.modules["serial_asyncio_fast"] = None  # (importing it fails)
+
+
+def _import_saf():
+    try:
+        import serial_asyncio_fast as module
+    except ImportError:
+        from ser2netweb.engine import serial_transport as module
+    return module
+
 
 SIMULATED = os.name != "nt"
 if SIMULATED:
     real_name, real_platform = os.name, sys.platform
     os.name = "nt"
     try:
-        import serial_asyncio_fast as saf
+        saf = _import_saf()
     finally:
         os.name = real_name
     sys.platform = "win32"
@@ -50,11 +65,12 @@ if SIMULATED:
     finally:
         sys.platform = real_platform
 else:
-    import serial_asyncio_fast as saf
+    saf = _import_saf()
 
     from ser2netweb.engine import serial_compat
 
 assert hasattr(serial_compat.Transport, "_poll_write"), "not the Windows branch"
+assert serial_compat._saf is saf, (serial_compat._saf, saf)
 HIGH_WATER = 64 * 1024  # the transport's default
 
 
