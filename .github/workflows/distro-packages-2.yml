@@ -222,7 +222,8 @@ jobs:
       - name: The stage3 with the pinned portage snapshot
         run: |
           docker create --name portage "$PORTAGE" /bin/true
-          docker run -d --name gentoo --volumes-from portage \
+          # (--init: something has to reap the stopped service, as init does)
+          docker run -d --init --name gentoo --volumes-from portage \
             -v "$PWD/packaging/gentoo:/src:ro" "$STAGE3" sleep infinity
       - name: The recipes as an overlay (GURU's layout), binary packages for the rest
         run: |
@@ -346,7 +347,7 @@ jobs:
               psutil pyserial pyserial-asyncio-fast python-multipart starlette uvicorn \
               websockets ldap3 paho-mqtt authlib cryptography; do echo "$flavor-$p"; done)
             echo DEVELOPER=yes >> /etc/make.conf
-            git -C /usr/ports add -f net/ser2netweb   # (portlint -C: the port is in the tree)
+            git -C /usr/ports add --sparse -f net/ser2netweb   # (portlint -C: the port is in the tree)
             portlint -AC
             make DEVELOPER=yes BATCH=yes package
             make DEVELOPER=yes check-plist
