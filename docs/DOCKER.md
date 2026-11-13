@@ -3,8 +3,8 @@
 ser2netweb ships an official `Dockerfile`, an example `docker-compose.yml` and a published
 image for amd64, arm64 and arm/v7 (32-bit ARM: 32-bit Raspberry Pi OS, armv7 gateways;
 since 2.9.0) with every release: `ghcr.io/haliskilic/ser2netweb` (`:latest` or a release
-tag). Up to 2.9.x it was `ghcr.io/haliskilic/ser2net`; the 3.x releases are published there
-too, as the same image (*Upgrading from 2.9.x* below). The same image is also on Docker Hub,
+tag). Up to 2.9.x it was `ghcr.io/haliskilic/ser2net`: that name stops at 3.0.0, so change the
+image to `ghcr.io/haliskilic/ser2netweb` (*Upgrading from 2.9.x* below). The same image is also on Docker Hub,
 `docker.io/haliskilic/ser2netweb` (*Docker Hub* below).
 The published image is the very build the release smoke-tested on each architecture (same
 digest; arm/v7 under emulation, as no runner has that CPU); its tags `:X.Y.Z`, `:X.Y` and
@@ -26,8 +26,7 @@ tag, so a refresh never switches to a new Debian major release; only a ser2netwe
 Each image records its base:
 `docker inspect -f '{{ index .Config.Labels "org.opencontainers.image.base.digest" }}' ghcr.io/haliskilic/ser2netweb:latest`.
 Build provenance: `gh attestation verify oci://ghcr.io/haliskilic/ser2netweb:latest -R haliskilic/ser2netweb`
-(a release's image is attested by `release.yml`, a refreshed one by `image-refresh.yml`,
-under both names).
+(a release's image is attested by `release.yml`, a refreshed one by `image-refresh.yml`).
 
 ## Docker Hub
 
@@ -53,10 +52,13 @@ that image.
 
 The project was called ser2net up to 2.9.x. For Docker that changes names, not the data:
 
-- **The image** is `ghcr.io/haliskilic/ser2netweb`. Every 3.x release (and each weekly
-  refresh) is also published as `ghcr.io/haliskilic/ser2net`, the very same image by
-  digest with the same tags, so a compose file or an auto-updater on the old path keeps
-  getting releases; switch to the new path when it suits you.
+- **The image** is `ghcr.io/haliskilic/ser2netweb`, and you have to change it: the old
+  path `ghcr.io/haliskilic/ser2net` stops at 3.0.0. The images already there (2.x and
+  3.0.0) stay pullable, but no later release and no weekly refresh is published under that
+  name, so its `:latest` stays 3.0.0 for good and a compose file or an auto-updater
+  (Watchtower and the like) left on it gets no more updates or base-image fixes. Put
+  `image: ghcr.io/haliskilic/ser2netweb:latest` (or the tag you pin) in your compose file
+  or `docker run` command; the data is used as it is (next point).
 - **The data** stays as it is: `/data`, the same account uid/gid 10001 (now called
   `ser2netweb` instead of `ser2net`), the same files. Nothing to move.
 - **Environment variables** are `SER2NETWEB_*`; the `SER2NET_*` names still work (a
@@ -68,7 +70,7 @@ The project was called ser2net up to 2.9.x. For Docker that changes names, not t
   docker compose up -d --remove-orphans
   ```
   which removes the old `ser2net` container (it holds the ports) and starts `ser2netweb`
-  on the same volume. A compose file of your own needs no change (the image path at most).
+  on the same volume. In a compose file of your own, change the image path (above); nothing else has to change.
   Commands that name the container (`docker exec ser2net …`) then take the new name.
 - The image's `HEALTHCHECK` runs `ser2netweb.py`; an override that names
   `/app/ser2net.py` still works.
