@@ -46,6 +46,8 @@ PORTABLE = [
     "test_open_access.py",
     "test_form_validation.py",
     "test_form_uploads.py",    # form posts refuse file parts (400, not 500)
+    "test_starlette_compat.py",  # body limits: Starlette's, or the stand-ins for one before 1.6
+    "test_dependency_internals.py",  # the undocumented parts of dependencies ser2netweb builds on
     "test_rest_api.py",
     "test_api_token_role.py",
     "test_rest_patch.py",     # PATCH /api/v1/mappings/{id} (JSON merge patch)

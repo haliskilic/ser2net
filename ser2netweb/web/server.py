@@ -21,7 +21,6 @@ from markupsafe import Markup, escape
 from starlette.applications import Starlette
 from starlette.middleware import Middleware
 from starlette.middleware.base import BaseHTTPMiddleware
-from starlette.middleware.body_limit import RequestBodyLimitMiddleware
 from starlette.responses import JSONResponse, PlainTextResponse
 from starlette.templating import Jinja2Templates
 
@@ -34,6 +33,7 @@ from . import auth, proxy
 from .routes import build_routes
 from .routes.common import bytesize, client_ip, domid, duration, since
 from .routes.forms import in_text_box
+from .starlette_compat import RequestBodyLimitMiddleware
 
 if TYPE_CHECKING:
     from ..state import AppState

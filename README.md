@@ -63,7 +63,8 @@ düzenlemeye gerek yok.
 [LDAP / AD ve OIDC ile giriş](docs/SSO.md) ·
 [klasik ser2net'ten geçiş](docs/MIGRATING-FROM-SER2NET.md) ·
 [istemcide sanal COM port](docs/VIRTUAL-COM.md) · [gizlilik](docs/PRIVACY.md) ·
-[kod imzalama](docs/SIGNING.md).
+[kod imzalama](docs/SIGNING.md) ·
+[bir dağıtım için paketleme](docs/PACKAGING.md).
 
 ---
 
