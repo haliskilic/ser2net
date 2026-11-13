@@ -291,8 +291,9 @@ def test_capture_survives_restart():
         assert time.time() >= now + 3.5, "not before its time"
         wait(lambda: stored(srv, A)["trace_until"] == 0, "the other one too")
         assert os.path.isfile(b_file)
+        if open_files(srv) is not None:  # (closed right after config.json keeps the end)
+            wait(lambda: b_file not in open_files(srv), "its file is closed")
         fds = open_files(srv)
-        assert fds is None or b_file not in fds, "its file is closed"
         assert fds is None or a_file in fds, "a trace that is on for good stays on"
         assert stored(srv, A)["trace_both"] == "a.log"
         view = json.loads(api(srv, "GET", f"/mappings/{A}/traces")[2])
