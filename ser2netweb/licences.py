@@ -5,8 +5,8 @@ a modified version that users reach over a network to offer them its source: the
 of every page links source_url(), which SER2NETWEB_SOURCE_URL changes for such a copy (an
 internal mirror of an air-gapped site, a fork). texts() are the licence texts this copy
 carries — LICENSE, NOTICE, COMMERCIAL_LICENSE.md and the third-party notices from a
-source tree or the Docker image, the generated THIRD-PARTY-LICENSES.txt in a standalone
-executable — which the /licenses page shows to signed-in users (they name the versions of
+source tree, the Docker image or a pip install (its .dist-info has them), the generated
+THIRD-PARTY-LICENSES.txt in a standalone executable — which the /licenses page shows to signed-in users (they name the versions of
 the bundled components, so they are not shown before a sign-in).
 """
 from __future__ import annotations
@@ -16,7 +16,7 @@ import os
 import re
 import sys
 
-from . import SOURCE_URL, envvars
+from . import SOURCE_URL, envvars, layout
 
 SOURCE_URL_ENV = "SER2NETWEB_SOURCE_URL"  # (or SER2NET_SOURCE_URL, its 2.9.x name)
 # an http(s) address without spaces, quotes or angle brackets (it goes into an href)
@@ -24,6 +24,15 @@ _URL = re.compile(r"https?://[^\s\"'<>`]{1,2000}", re.I)
 # the folder that holds ser2netweb/ (a source tree, the Docker image's /app; a standalone
 # executable's unpack folder)
 _ROOT = getattr(sys, "_MEIPASS", None) or os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+def _root() -> str:
+    """Where this copy's licence texts are: _ROOT, or for a pip install (whose _ROOT is
+    the site-packages folder) the licence files of its .dist-info, kept there with the
+    paths they have in the source tree (tools/licenses/npm/*.txt too)."""
+    if not getattr(sys, "_MEIPASS", None) and layout.kind() == layout.PIP:
+        return layout.licence_dir() or _ROOT
+    return _ROOT
 
 
 def source_url(env=None) -> str:
@@ -53,7 +62,7 @@ def _read(path: str) -> str | None:
 
 def texts(root: str | None = None) -> list[tuple[str, str, str]]:
     """(anchor, title, text) of each licence text this copy of ser2netweb carries."""
-    root = _ROOT if root is None else root
+    root = _root() if root is None else root
     out = []
     for anchor, title, name in (
             ("license", "ser2netweb — GNU Affero General Public License v3.0 (LICENSE)", "LICENSE"),

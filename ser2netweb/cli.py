@@ -2,8 +2,10 @@
 runs once the Python version is known to be new enough.
 
 Responsibilities kept deliberately thin:
-  1. Make bundled dependencies importable (offline bootstrap into ./lib).
-  2. Parse CLI args and locate the config/data directory.
+  1. Make bundled dependencies importable (offline bootstrap into ./lib; a standalone
+     executable and a pip install have theirs already).
+  2. Parse CLI args and locate the config/data directory (ser2netweb/layout.py: where it
+     is by default for each kind of installation).
   3. Hand off to ser2netweb.runtime, which owns the event loop and orchestration.
 
 The start scripts stay outside the package (a script and a package of the same name side by
@@ -15,19 +17,26 @@ import contextlib
 import os
 import sys
 
-from ser2netweb import __version__, envvars
+from ser2netweb import __version__, envvars, layout
 from ser2netweb.optional import LIB_OVERRIDE_ENV
 
 # the source tree (the folder that holds ser2netweb/, bootstrap.py and ./lib), or a frozen
-# build's unpacked files
+# build's unpacked files (a pip install's site-packages folder: nothing of ours but the
+# package, layout.kind() == layout.PIP)
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 FROZEN = getattr(sys, "frozen", False)  # True inside a PyInstaller build
 
 
 def _app_dir() -> str:
     """Where config/logs live: next to the executable in a frozen build (so they
-    survive and aren't written into the temp extraction dir), else the source tree."""
+    survive and aren't written into the temp extraction dir), else the source tree
+    (layout.default_data_dir: not for the package's executable or a pip install)."""
     return os.path.dirname(sys.executable) if FROZEN else ROOT
+
+
+def default_data_dir() -> str:
+    """The data directory when neither --data-dir nor --config is given."""
+    return layout.default_data_dir(_app_dir())
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -39,10 +48,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument(
         "--data-dir",
         default=None,  # see below: whether it was given matters to --install-service
-        help="Directory for config.json, its backups, the logs and traces (default: ./data; "
-             "for --install-service: the data directory the service already uses, or for a "
-             "new service from the standalone exe %%ProgramData%%\\ser2netweb). Give ser2netweb "
-             "a folder of its own: it makes it private to the account it runs as.",
+        help="Directory for config.json, its backups, the logs and traces (default: data/ "
+             "next to ser2netweb.py or the executable; /var/lib/ser2netweb for the .deb / .rpm "
+             "package's; the user's application data folder for a pip / pipx install; here: "
+             f"{default_data_dir().replace('%', '%%')}. For --install-service: the data "
+             "directory the service already uses, or for a new service from the standalone "
+             "exe %%ProgramData%%\\ser2netweb). Give ser2netweb a folder of its own: it makes "
+             "it private to the account it runs as.",
     )
     p.add_argument(
         "--config",
@@ -118,7 +130,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         p.error("--reload can't be combined with --set-password or --sign-out-all")
     args.data_dir_given = args.data_dir is not None
     if args.data_dir is None:
-        args.data_dir = os.path.join(_app_dir(), "data")
+        args.data_dir = default_data_dir()
     return args
 
 
@@ -149,9 +161,16 @@ def print_licenses() -> int:
             _write_utf8(fh.read())
         return 0
     # an executable built without the license file has no THIRD-PARTY-NOTICES.md next to
-    # it either (ROOT is its temporary unpack folder): name this version's copy online
-    notices = (f"https://github.com/haliskilic/ser2netweb/blob/v{__version__}/THIRD-PARTY-NOTICES.md"
-               if FROZEN else os.path.join(ROOT, "THIRD-PARTY-NOTICES.md"))
+    # it either (ROOT is its temporary unpack folder): name this version's copy online; a
+    # pip install has it with the licence files of its .dist-info
+    online = f"https://github.com/haliskilic/ser2netweb/blob/v{__version__}/THIRD-PARTY-NOTICES.md"
+    if FROZEN:
+        notices = online
+    elif layout.kind() == layout.PIP:
+        folder = layout.licence_dir()
+        notices = os.path.join(folder, "THIRD-PARTY-NOTICES.md") if folder else online
+    else:
+        notices = os.path.join(ROOT, "THIRD-PARTY-NOTICES.md")
     _write_utf8(
         f"ser2netweb {__version__} is licensed under the GNU AGPL-3.0-only (LICENSE) or a "
         f"commercial license (COMMERCIAL_LICENSE.md).\nThird-party components: {notices}\n")
@@ -167,9 +186,12 @@ _ROOT_LABELS = {"<override>": LIB_OVERRIDE_ENV, "<bundle>": "the executable's fi
 
 def _known_roots(env=None) -> list[tuple[str, str]]:
     """(label, folder) of the folders --about writes as a short label (_ROOT_LABELS)."""
+    # (a pip install's ROOT is the site-packages folder every package is in: there, only
+    # the package's own folder is ser2netweb's)
+    own = layout.PACKAGE_DIR if layout.kind() == layout.PIP else ROOT
     roots = [("<override>", envvars.text(LIB_OVERRIDE_ENV, env)),
              ("<bundle>", getattr(sys, "_MEIPASS", "") or ""),
-             ("<ser2netweb>", ROOT), ("<python>", sys.prefix),
+             ("<ser2netweb>", own), ("<python>", sys.prefix),
              ("~", os.path.expanduser("~"))]
     out = []
     for label, folder in roots:
@@ -210,7 +232,7 @@ def print_about() -> int:
              f"Python {platform.python_version()} ({platform.python_implementation()}), "
              f"{ssl.OPENSSL_VERSION}",
              f"Platform: {platform.platform()} ({platform.machine()})",
-             f"Build: {'standalone executable' if FROZEN else 'source'}"]
+             f"Build: {layout.LABELS[layout.kind()]}"]
     components = (("pyserial", "serial"), ("pyserial-asyncio-fast", "serial_asyncio_fast"),
                   ("starlette", "starlette"), ("uvicorn", "uvicorn"), ("anyio", "anyio"),
                   ("psutil", "psutil"), ("paho-mqtt", "paho.mqtt"), ("ldap3", "ldap3"), ("pyasn1", "pyasn1"),
@@ -297,6 +319,13 @@ def main(argv: list[str] | None = None, started_as: str = "") -> int:
     if args.install_service:
         if _service_call(lambda ws: ws.require_windows()):
             return 1
+        if layout.kind() == layout.PIP:
+            # the service would run a Python and a package any later pip command can
+            # change (a pipx venv is the user's own), as LocalSystem
+            print("ser2netweb: --install-service needs the standalone exe "
+                  "(ser2netweb-windows-x64.exe) or a source checkout; a pip / pipx install "
+                  "can't be a Windows service (docs/WINDOWS.md)", file=sys.stderr)
+            return 1
         def prepare(service_config: str):
             # runs once an existing service is stopped (the data directory then has no
             # running instance). First run: asks for the UI address; warnings (e.g. a
@@ -338,8 +367,9 @@ def split_layout_note(args: argparse.Namespace) -> str:
 def load_dependencies(args: argparse.Namespace, refresh: bool) -> None:
     """Make the bundled dependencies importable: the offline bootstrap into ./lib (a
     frozen build has everything inside). With ``refresh``, a ./lib installed for other
-    pins (an upgrade) is brought up to date too. Its warnings go to the start-up log."""
-    if FROZEN:
+    pins (an upgrade) is brought up to date too. Its warnings go to the start-up log. A pip
+    install's dependencies are pip's (and there is no bootstrap.py)."""
+    if FROZEN or layout.kind() == layout.PIP:
         return
     sys.path.insert(0, ROOT)  # ensure local packages (ser2netweb/, bootstrap) import first
     if not args.no_bootstrap:
