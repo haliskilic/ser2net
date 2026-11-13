@@ -55,7 +55,8 @@ NS = {"n": "http://schemas.microsoft.com/packaging/2015/06/nuspec.xsd"}
 
 
 def text(path: str) -> str:
-    with open(path, encoding="utf-8", newline="") as fh:
+    # (universal newlines: a Windows checkout with core.autocrlf has CRLF line ends)
+    with open(path, encoding="utf-8") as fh:
         return fh.read()
 
 
@@ -256,6 +257,17 @@ def test_chocolatey_package():
         wc.update_chocolatey("v9.8.7", other, copy)
         assert text(os.path.join(copy, "ser2netweb.nuspec")) == new_nuspec
         assert text(os.path.join(copy, "tools", "chocolateyinstall.ps1")) == new_install
+        # a Windows checkout's CRLF line ends (chocolatey.yml runs there) are kept
+        for name in ("ser2netweb.nuspec", os.path.join("tools", "chocolateyinstall.ps1")):
+            with open(os.path.join(CHOCO, name), encoding="utf-8") as src, \
+                    open(os.path.join(copy, name), "w", encoding="utf-8", newline="\r\n") as dst:
+                dst.write(src.read())
+        wc.update_chocolatey("v9.8.7", other, copy)
+        with open(os.path.join(copy, "tools", "chocolateyinstall.ps1"), "rb") as fh:
+            raw = fh.read()
+        assert raw == new_install.replace("\n", "\r\n").encode("utf-8"), raw[:400]
+        with open(os.path.join(copy, "ser2netweb.nuspec"), "rb") as fh:
+            assert fh.read() == new_nuspec.replace("\n", "\r\n").encode("utf-8")
     try:
         wc.chocolatey_files(tag, sha, nuspec_text.replace("<version>", "<v>"), install)
     except ValueError as e:

@@ -172,9 +172,10 @@ def chocolatey_files(tag: str, sha256: str, nuspec: str, install: str) -> tuple[
                            NUSPEC)
     nuspec = _replace_once(nuspec, r"<releaseNotes>[^<]*</releaseNotes>",
                            f"<releaseNotes>{HOMEPAGE}/releases/tag/{tag}</releaseNotes>", NUSPEC)
-    install = _replace_once(install, r"^\$url64 = '[^']*'$", f"$url64 = '{release_url(tag)}'",
-                            INSTALL_SCRIPT)
-    install = _replace_once(install, r"^\$checksum64 = '[^']*'$",
+    # (the line's end, also a CRLF one: a Windows checkout with core.autocrlf, kept as it is)
+    install = _replace_once(install, r"^\$url64 = '[^']*'(?=\r?$)",
+                            f"$url64 = '{release_url(tag)}'", INSTALL_SCRIPT)
+    install = _replace_once(install, r"^\$checksum64 = '[^']*'(?=\r?$)",
                             f"$checksum64 = '{sha256.lower()}'", INSTALL_SCRIPT)
     return nuspec, install
 
