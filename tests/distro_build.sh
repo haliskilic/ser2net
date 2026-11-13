@@ -83,8 +83,8 @@ build_debian() {
     apt-get update -qq
     apt-get install -y -qq --no-install-recommends build-essential ca-certificates devscripts \
         equivs lintian autopkgtest python3 xz-utils >/dev/null
-    . /etc/os-release
-    echo "$PRETTY_NAME; $(dpkg-query -W -f='${Package} ${Version}\n' debhelper dh-python lintian)"
+    (. /etc/os-release && echo "$PRETTY_NAME")
+    dpkg-query -W -f='${Package} ${Version}\n' debhelper dh-python lintian
     useradd --create-home builder
     recipe debian "$WORK/recipe"
     cd "$WORK"
@@ -129,8 +129,8 @@ build_debian() {
 
 rpm_tools_dnf() {
     say "build tools"
-    dnf -y -q install rpm-build rpmlint python3-devel systemd-rpm-macros \
-        'dnf-command(builddep)' >/dev/null
+    dnf -y -q install rpm-build rpmlint python3-devel systemd-rpm-macros util-linux \
+        shadow-utils 'dnf-command(builddep)' >/dev/null
 }
 
 # rpm_build SPECDIR: rpmbuild of SPECDIR/ser2netweb.spec as the user builder; the dynamic
@@ -187,8 +187,7 @@ rpm_build() {
 
 build_fedora() {
     rpm_tools_dnf
-    . /etc/os-release
-    echo "$PRETTY_NAME"
+    (. /etc/os-release && echo "$PRETTY_NAME")
     useradd --create-home builder
     recipe fedora "$WORK/recipe"
     pkg_install() { dnf -y -q install "$@"; }
@@ -211,8 +210,7 @@ build_opensuse() {
     zypper -n -q refresh
     zypper -n -q install --no-recommends rpm-build rpmlint python-rpm-macros sysuser-tools \
         systemd-rpm-macros fdupes shadow util-linux curl python3 >/dev/null
-    . /etc/os-release
-    echo "$PRETTY_NAME"
+    (. /etc/os-release && echo "$PRETTY_NAME")
     useradd --create-home builder
     recipe opensuse "$WORK/recipe"
     pkg_install() { zypper -n -q install --no-recommends "$@"; }
@@ -256,15 +254,15 @@ build_arch() {
 build_alpine() {
     say "build tools"
     apk add --no-cache -q alpine-sdk atools python3 openrc
-    . /etc/os-release
-    echo "$PRETTY_NAME; $(apk info -e -v abuild atools)"
+    (. /etc/os-release && echo "$PRETTY_NAME")
+    apk info -e -v abuild atools
     adduser -D builder
     addgroup builder abuild
     mkdir -p /var/cache/distfiles
     chgrp abuild /var/cache/distfiles
     chmod g+w /var/cache/distfiles
     cp "$TARBALL" "/var/cache/distfiles/ser2netweb-$VERSION.tar.gz"
-    su builder -c 'abuild-keygen -a -n' 2>&1 | tail -1
+    su -l builder -c 'abuild-keygen -a -n'
     cp /home/builder/.abuild/*.rsa.pub /etc/apk/keys/
     dir=/home/builder/aports/testing/ser2netweb
     recipe alpine/ser2netweb "$dir"
@@ -276,7 +274,7 @@ build_alpine() {
     cat "$OUT/apkbuild-lint.txt"
     [ "$code" -eq 0 ] || fail "apkbuild-lint: exit $code"
     say "abuild -r (as a user)"
-    su builder -c 'abuild -r'
+    su -l builder -c "cd '$dir' && abuild -r"
     repo=/home/builder/packages/testing
     cp "$repo"/*/ser2netweb-*.apk "$OUT/"
     say "install"
