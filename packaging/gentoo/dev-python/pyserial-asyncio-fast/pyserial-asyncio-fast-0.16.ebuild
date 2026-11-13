@@ -26,4 +26,5 @@ PATCHES=(
 	"${FILESDIR}/${P}-py314-event-loop.patch"
 )
 
+EPYTEST_PLUGINS=()
 distutils_enable_tests pytest

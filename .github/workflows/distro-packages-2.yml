@@ -345,6 +345,8 @@ jobs:
             pkg install -y $(for p in setuptools wheel build installer h11 Jinja2 markupsafe \
               psutil pyserial pyserial-asyncio-fast python-multipart starlette uvicorn \
               websockets ldap3 paho-mqtt authlib cryptography; do echo "$flavor-$p"; done)
+            echo DEVELOPER=yes >> /etc/make.conf
+            git -C /usr/ports add -f net/ser2netweb   # (portlint -C: the port is in the tree)
             portlint -AC
             make DEVELOPER=yes BATCH=yes package
             make DEVELOPER=yes check-plist
