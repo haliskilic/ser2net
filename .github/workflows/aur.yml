@@ -68,8 +68,10 @@ jobs:
             echo "::error::$tag is not a release tag (vX.Y.Z)"; exit 1
           fi
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
+      # (the whole system first: Arch doesn't support partial upgrades, and a newer package
+      # can need files an older one in the image still holds)
       - name: Python for the script
-        run: pacman -Sy --noconfirm --needed python >/dev/null
+        run: pacman -Syu --noconfirm --needed python >/dev/null
       - name: Make the package's files for ${{ steps.tag.outputs.tag }}
         env:
           TAG: ${{ steps.tag.outputs.tag }}
