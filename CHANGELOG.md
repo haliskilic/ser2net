@@ -6,6 +6,175 @@ versions follow [Semantic Versioning](https://semver.org/). Detailed notes for e
 
 ## [Unreleased]
 
+## [3.0.0] — 2026-11-13
+**ser2net is now ser2netweb.** The project was renamed to tell it apart from Corey Minyard's
+ser2net, the C program that Debian, Ubuntu and Fedora package under that name: ser2netweb is an
+independent Python project, not affiliated with or derived from it, that can import its
+configuration files. The new name makes `.deb` / `.rpm` packages and a PyPI package possible.
+Apart from the names, 3.0.0 works as 2.9.0 did: `config.json`, the data folder, the REST API
+and the cluster protocol are unchanged. **Upgrading from 2.9.x:** what to do depends on how
+ser2net is installed:
+- **Docker:** nothing has to change: `ghcr.io/haliskilic/ser2net` gets the 3.x releases too, as
+  the very same image and tags. The new path is `ghcr.io/haliskilic/ser2netweb`. The shipped
+  `docker-compose.yml` now calls the service and the container `ser2netweb` and keeps the
+  volume `ser2net-data`, which holds the data (a renamed volume would start an empty install);
+  with it, `docker compose pull && docker compose up -d --remove-orphans` replaces the old
+  `ser2net` container. Commands then name the new container
+  (`docker exec -it ser2netweb python /app/ser2netweb.py --no-bootstrap --data-dir /data --set-password admin`).
+  The image's account is `ser2netweb` with the same uid 10001, so volumes are used as they are
+  (`docs/DOCKER.md` → *Upgrading from 2.9.x*) (#104, #106).
+- **Standalone binary installed with 2.9.x's `ser2net-install.sh`:** put `ser2netweb-linux-x64`
+  (or `-arm64`), `ser2netweb-standalone.service`, `ser2netweb-install.sh` and `SHA256SUMS` of
+  this release in one folder and run `sudo sh ser2netweb-install.sh`. It recognises the
+  `ser2net.service` that 2.9.x installed by its content, never by its name, stops and disables
+  it, moves `/var/lib/ser2net` to `/var/lib/ser2netweb` for the new user `ser2netweb`, keeps
+  the `--listen` address and your drop-ins, and removes the old unit and binary once
+  `ser2netweb.service` answers; if a step fails, it prints how to go back. It never touches
+  another `ser2net.service` (the classic daemon's) or a `/usr/local/bin/ser2net` that isn't
+  2.x's, and it refuses, changing nothing, when `/var/lib/ser2netweb` already holds data or
+  `/var/lib/ser2net` is a mount point. The user `ser2net` stays unless you add
+  `--remove-old-user`, and even then while something else uses it. To use the `.deb` / `.rpm`
+  package afterwards, run `sudo sh ser2netweb-install.sh --uninstall` (the data stays) and
+  install the package: it never moves a 2.9.x install itself (#104, #106, #107).
+- **Source checkout under systemd** (`/opt/ser2net`, `ser2net.service`, user `ser2net`): either
+  keep the old names, `sudo git -C /opt/ser2net pull && sudo systemctl restart ser2net` (the
+  old unit runs `ser2net.py`, which starts ser2netweb and says so once in its log), or move it
+  over:
+  ```sh
+  sudo systemctl disable --now ser2net
+  sudo useradd --system --user-group --home-dir /opt/ser2netweb -M -s /usr/sbin/nologin ser2netweb
+  sudo mv /opt/ser2net /opt/ser2netweb && sudo git -C /opt/ser2netweb pull
+  sudo chown -R ser2netweb:ser2netweb /opt/ser2netweb/data /opt/ser2netweb/lib
+  sudo mv /etc/systemd/system/ser2net.service.d /etc/systemd/system/ser2netweb.service.d  # only if you have drop-ins
+  sudo rm /etc/systemd/system/ser2net.service
+  sudo cp /opt/ser2netweb/systemd/ser2netweb.service /etc/systemd/system/
+  sudo systemctl daemon-reload && sudo systemctl enable --now ser2netweb
+  ```
+  Then the service is `ser2netweb` (`systemctl status ser2netweb`, `journalctl -u ser2netweb`),
+  also for monitoring that checks the unit (#104, #106).
+- **Template instances** (`ser2net@NAME`): once the checkout is in `/opt/ser2netweb` and owned
+  by `ser2netweb` (the `useradd`, `mv` and `chown` lines above), run
+  `sudo -u ser2netweb python3 /opt/ser2netweb/bootstrap.py` once, then for each instance:
+  ```sh
+  sudo systemctl disable --now ser2net@NAME
+  sudo mkdir -p /var/lib/ser2netweb /etc/ser2netweb
+  sudo mv /var/lib/ser2net/NAME /var/lib/ser2netweb/NAME
+  sudo mv /etc/ser2net/NAME.env /etc/ser2netweb/NAME.env  # if there is one
+  sudo cp /opt/ser2netweb/systemd/ser2netweb@.service /etc/systemd/system/
+  sudo systemctl daemon-reload && sudo systemctl enable --now ser2netweb@NAME
+  ```
+  Move only the `.env` files, as `/etc/ser2net` is the classic daemon's folder too; systemd
+  hands each moved data folder to `ser2netweb`. After the last instance,
+  `sudo rm /etc/systemd/system/ser2net@.service` (#104, #106).
+- **Windows service:** from an elevated prompt run
+  `ser2netweb-windows-x64.exe --install-service`, without `--service-name` or `--data-dir`. It
+  takes over 2.x's `ser2net` service when it recognises it by the program it runs: it stops it,
+  moves its data from `C:\ProgramData\ser2net\` to `C:\ProgramData\ser2netweb\` when it was in
+  that default place and the new folder doesn't exist yet (a custom data directory stays where
+  it is), installs and starts `ser2netweb` from `C:\Program Files\ser2netweb\`, and only then
+  deletes the old service and its exe; if that fails, it deletes the new service, puts the exe
+  and the data back and starts the old one. A `ser2net` service it doesn't recognise is left
+  alone, with a note. Named services: run `--install-service --service-name NAME` for each
+  first, then the default one (named services keep their names and move to the new folders).
+  Check absolute paths in `config.json` that point into the old data folder (TLS files in its
+  `tls\` folder are found again). Re-add the firewall rule:
+  `netsh advfirewall firewall add rule name="ser2netweb" dir=in action=allow program="C:\Program Files\ser2netweb\ser2netweb.exe" enable=yes`,
+  then `netsh advfirewall firewall delete rule name="ser2net"` (a named service:
+  `ser2net (NAME)`, `…\ser2netweb\NAME.exe`). The service, its display name and the Event Log
+  source are `ser2netweb` (`sc stop ser2netweb`) (#104, #106).
+- **Environment variables** have the prefix `SER2NETWEB_` (`SER2NETWEB_BIND_IP`,
+  `SER2NETWEB_PORT`, …), and the `SER2NET_*` names still work. When both are set, the
+  `SER2NETWEB_*` one wins, also when it is empty. The Docker image's defaults stay
+  `SER2NET_BIND_IP` / `SER2NET_PORT`, and the template unit's `SER2NET_NODE_NAME=%i`, so that
+  your setting under either name wins over them (#104, #105).
+- **Release files have new names** (`ser2netweb-linux-x64`, `ser2netweb-linux-arm64`,
+  `ser2netweb-windows-x64.exe`, `ser2netweb-install.sh`, …), and there are no files under the
+  old names: a script that downloads `ser2net-linux-x64` must change (#104, #106).
+- **`--version` prints `ser2netweb 3.0.0`** and `--help` shows `usage: ser2netweb`: scripts
+  that match `ser2net ` must accept the new name (#104, #105).
+- **User-Agent:** webhooks send `User-Agent: ser2netweb/<version>` (was `ser2net/…`), and OIDC
+  and cluster peer requests now send it too (they sent Python's default): a receiver, proxy or
+  WAF that filters on it needs the new value (#104, #105).
+- **Python code** that imports `app.*` must import `ser2netweb.*`; the command line's functions
+  are in `ser2netweb.cli` (#104, #105).
+- **Unchanged:** the cluster protocol (2.9.x and 3.0 nodes work together), the Prometheus
+  metric names `ser2net_*` (dashboards and alerts keep working), the MQTT and Sparkplug B
+  defaults (Sparkplug group ID `ser2net`), the RFC 2217 signature `ser2net`, the `config.json`
+  keys and the data folder's files, the REST API paths, the cookie names (nobody is signed out)
+  and the default e-mail sender address `ser2net@<host>` (#104, #105).
+
+### Added
+- **`.deb` and `.rpm` packages** for x86_64 and arm64 with every release
+  (`ser2netweb_X.Y.Z_amd64.deb`, `ser2netweb_X.Y.Z_arm64.deb`, `ser2netweb-X.Y.Z-1.x86_64.rpm`,
+  `ser2netweb-X.Y.Z-1.aarch64.rpm`): `sudo apt install ./ser2netweb_X.Y.Z_amd64.deb` or
+  `sudo dnf install ./ser2netweb-X.Y.Z-1.x86_64.rpm`. They install the standalone binary as
+  `/usr/bin/ser2netweb`, its hardened unit `ser2netweb.service`, the account `ser2netweb` and
+  `/var/lib/ser2netweb` (0700). Installing doesn't enable or start the service:
+  `sudo systemctl enable --now ser2netweb`, then
+  `sudo -u ser2netweb ser2netweb --set-password admin`. An upgrade restarts a running service;
+  removing stops it and keeps the data and the account. The packages don't replace or conflict
+  with the classic daemon's `ser2net` package (#104, #107).
+- **PyPI package `ser2netweb`:** `pipx install ser2netweb` on any OS and CPU with Python 3.10
+  or newer, or `pipx install "ser2netweb[all]"` for MQTT, LDAP, OIDC and in-process
+  certificates (the extras `mqtt`, `ldap`, `oidc`, `tls`). A pip / pipx install keeps its data
+  in the user's data folder, never next to the package, and can't be installed as a Windows
+  service (#104, #107).
+- **The default data folder follows the kind of installation:** a pip / pipx install uses
+  `$XDG_DATA_HOME/ser2netweb` (else `~/.local/share/ser2netweb`),
+  `~/Library/Application Support/ser2netweb` on macOS or `%LOCALAPPDATA%\ser2netweb` on
+  Windows; the packaged `/usr/bin/ser2netweb` uses `/var/lib/ser2netweb`; a source checkout,
+  the standalone binaries and Docker keep theirs (`data/` next to the checkout or the
+  executable, `/data`). `--data-dir` and `--config` still choose another; `--help` shows this
+  installation's default, and `--about` names the kind of installation (#104, #107).
+- `python -m ser2netweb` runs the command line too (#104, #107).
+- The READMEs, `NOTICE` and `COMMERCIAL_LICENSE.md` say that ser2netweb is an independent
+  project, not affiliated with or derived from Corey Minyard's GPL-2.0 ser2net, and that the
+  commercial licence covers only this project (#104, #105).
+- **Release checks:** the release files must be exactly this version's `ser2netweb-*` files and
+  four packages, each listed in `SHA256SUMS` and covered by the build provenance attestation,
+  and every platform's SBOM must describe the same version; the PyPI files are uploaded by
+  trusted publishing with PyPI's attestations (#104, #106, #107).
+
+### Changed
+- **The project is called ser2netweb** (it was ser2net up to 2.9.x): the web UI, `--version`,
+  `--about`, `--help`, the logs, notifications, the OpenAPI title and the docs use the new
+  name, and the repository is github.com/haliskilic/ser2netweb (the old links redirect) (#104,
+  #105).
+- **Start script `ser2netweb.py`:** a source install starts with `python3 ser2netweb.py`, as
+  `start.sh` / `start.bat` and the Docker image do. `ser2net.py` keeps working and runs the
+  same, so existing units, Windows services and scripts need no change; a server started with
+  it says so once in its start-up log (#104, #105).
+- **Environment variables `SER2NETWEB_*`**, with the old names still read; the READMEs have a
+  table of them (#104, #105).
+- The Python package is `ser2netweb` instead of `app` (the command line is
+  `ser2netweb/cli.py`), and the PyInstaller spec is `ser2netweb.spec` (#104, #105).
+- Notifications start with `ser2netweb <name>:` and e-mails come from `ser2netweb <name>`,
+  signed `ser2netweb <version> on <host>`; filters that match `ser2net` still match, and the
+  default sender address stays `ser2net@<host>` (#104, #105).
+- New self-signed certificates have the CN `ser2netweb`, new two-factor enrolments the issuer
+  `ser2netweb`, and exports download as `ser2netweb-mappings.json` / `ser2netweb-audit.csv`;
+  existing certificates and authenticator entries are unchanged (#104, #105).
+- **Release files `ser2netweb-*`:** `ser2netweb-linux-x64`, `ser2netweb-linux-arm64` and
+  `ser2netweb-windows-x64.exe` with their `.cdx.json` and `.THIRD-PARTY-LICENSES.txt`,
+  `ser2netweb-install.sh` and `ser2netweb-standalone.service` (#104, #106).
+- **systemd units `ser2netweb.service`, `ser2netweb@.service`,
+  `ser2netweb-standalone.service`** and `ser2netweb.service.d/notify.conf`: they run as the
+  user `ser2netweb`, from `/opt/ser2netweb` (source) or as `/usr/local/bin/ser2netweb` with
+  `/var/lib/ser2netweb` (binary); instances keep their data in `/var/lib/ser2netweb/<name>` and
+  read `/etc/ser2netweb/<name>.env`. They no longer share the unit name and account of the
+  classic ser2net daemon (#104, #106).
+- **`ser2netweb-install.sh`** installs as above, moves a 2.9.x binary install over, and refuses
+  to hide a packaged `ser2netweb.service` unless `--replace-unit` (#104, #106, #107).
+- **Windows service `ser2netweb`**, installed in `C:\Program Files\ser2netweb\` with its data
+  in `C:\ProgramData\ser2netweb\`; `--install-service` moves 2.x's `ser2net` service over, and
+  `--uninstall-service` also finds it (#104, #106).
+- **Docker image `ghcr.io/haliskilic/ser2netweb`**, also published as the same image and tags
+  under `ghcr.io/haliskilic/ser2net`; the account in the image is `ser2netweb` (uid 10001), and
+  the example compose service and container are `ser2netweb` (#104, #106).
+- Messages, the Settings page and the docs name the new units, service, folders and image
+  (`systemctl reload ser2netweb`, `sc stop ser2netweb`, `journalctl -u ser2netweb`,
+  `docker exec ser2netweb …`) (#104, #106).
+
 ## [2.9.0] — 2026-11-12
 The fixes for 2.8.0 that 2.8.1 left for this release, with the features they brought:
 two-factor sign-in, named API tokens, reloading `config.json` without a restart, settings for
@@ -817,7 +986,8 @@ Hardening and operations.
 ## [1.0] — 2026-06-06
 First release: serial↔TCP (raw, telnet, RFC 2217), web UI, access control, logs.
 
-[Unreleased]: https://github.com/haliskilic/ser2netweb/compare/v2.9.0...HEAD
+[Unreleased]: https://github.com/haliskilic/ser2netweb/compare/v3.0.0...HEAD
+[3.0.0]: https://github.com/haliskilic/ser2netweb/releases/tag/v3.0.0
 [2.9.0]: https://github.com/haliskilic/ser2netweb/releases/tag/v2.9.0
 [2.8.1]: https://github.com/haliskilic/ser2netweb/releases/tag/v2.8.1
 [2.8.0]: https://github.com/haliskilic/ser2netweb/releases/tag/v2.8.0
