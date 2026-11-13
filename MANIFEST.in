@@ -1,0 +1,5 @@
+# The PyPI sdist (pyproject.toml): the ser2netweb package, packaging/README.pypi.md, the
+# licence files and pyproject.toml. setuptools would add the tests (tests/test*.py) and
+# README.md by itself; neither belongs in it.
+prune tests
+exclude README.md
