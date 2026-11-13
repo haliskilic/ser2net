@@ -3,8 +3,11 @@
 Checks:
   * a step is how much further the wall clock went than the steady clock between two
     looks: forward and back are found with their size, one under STEP_MIN_S (NTP's
-    slewing) is not, and a resume from suspend - both clocks went on - is not a step; on
-    Linux the steady clock is CLOCK_BOOTTIME;
+    slewing) is not, and a resume from suspend - both clocks went on - is not a step; the
+    steady clock is one that counts the time suspended: CLOCK_BOOTTIME on Linux,
+    CLOCK_MONOTONIC on macOS, GetTickCount64 on Windows (checked on the Windows CI legs;
+    time.monotonic stops while suspended there since Python 3.13), never time.monotonic
+    where GetTickCount64 can be had;
   * every step is counted, noted with a "!!" line in each running trace and offered to
     the notifier as clock_step; the log line and the audit record are written at most
     once a minute, the next one saying how many steps were held back;
@@ -81,6 +84,32 @@ def test_look():
     if sys.platform.startswith("linux"):
         assert abs(clockwatch.steady() - time.clock_gettime(time.CLOCK_BOOTTIME)) < 1.0, \
             "Linux: CLOCK_BOOTTIME, which counts the time suspended"
+    # the clock each system compares with: one that counts the time suspended
+    platform = "linux" if sys.platform.startswith("linux") else sys.platform
+    want = {"linux": "CLOCK_BOOTTIME", "darwin": "CLOCK_MONOTONIC", "win32": "GetTickCount64"}
+    if platform in want:
+        assert clockwatch.REFERENCE == want[platform], (sys.platform, clockwatch.REFERENCE)
+    if sys.platform == "win32":  # (the Windows CI legs)
+        import ctypes
+        ticks = ctypes.windll.kernel32.GetTickCount64
+        ticks.restype = ctypes.c_uint64
+        assert abs(clockwatch.steady() - ticks() / 1000) < 1.0, \
+            "Windows: GetTickCount64 (time.monotonic stops while suspended since Python 3.13)"
+    # without clock_gettime (Windows) GetTickCount64 comes before time.monotonic
+    saved = clockwatch._tick_count, getattr(time, "clock_gettime", None)
+    try:
+        if saved[1] is not None:
+            del time.clock_gettime
+        clockwatch._tick_count = lambda: (lambda: 42.0)
+        name, read = clockwatch._reference()
+        assert (name, read()) == ("GetTickCount64", 42.0), name
+        clockwatch._tick_count = lambda: None
+        assert clockwatch._reference()[0] == "monotonic"
+    finally:
+        clockwatch._tick_count = saved[0]
+        if saved[1] is not None:
+            time.clock_gettime = saved[1]
+    assert clockwatch._tick_count() is None or sys.platform == "win32"
     print("look: forward and back steps with their size; slewing, a resume and a held-up "
           "event loop are no steps  OK")
 

@@ -1979,10 +1979,10 @@ jump of 1 second or more is written to `all.log` with its direction and size, re
 the audit log (`clock_step`; at most one line a minute, which says how many more there
 were), marked in every running trace with a `!!` line where its times jump, counted in
 `/metrics` (`ser2net_clock_steps_total`; `clock_steps` in `/api/v1/status`) and sent as the
-optional **System clock stepped** notification. NTP's gradual slewing is not a step. On
-Linux a resume from suspend is not one either (the comparison clock, `CLOCK_BOOTTIME`,
-counts the time asleep), nor on macOS; on Windows a resume may be reported as a step
-forward.
+optional **System clock stepped** notification. NTP's gradual slewing is not a step, and
+neither is a resume from suspend or hibernation: the comparison clock counts the time
+asleep (`CLOCK_BOOTTIME` on Linux, `CLOCK_MONOTONIC` on macOS, `GetTickCount64` on
+Windows).
 
 - **Linux:** keep `systemd-timesyncd` or `chrony` running, pointed at an NTP server the
   machine can reach; on an offline plant network a local one (a router, a domain

@@ -9,9 +9,11 @@ breaks - but whoever reads those files later should know where the jump is.
 Every CHECK_S seconds the wall clock is compared with a clock no step changes: how much
 further (or less far) the wall clock went than that one since the last look is the step.
 On Linux that clock is CLOCK_BOOTTIME, which counts the time a suspended machine sleeps,
-so a resume is not a step; macOS and the BSDs have a CLOCK_MONOTONIC that does the same;
-on Windows it is Python's monotonic clock. NTP's slewing changes both clocks alike (or by
-far less than STEP_MIN_S) and is never reported.
+so a resume is not a step; macOS and the BSDs have a CLOCK_MONOTONIC that does the same.
+On Windows it is GetTickCount64, which counts sleep and hibernation too: Python's
+monotonic clock is QueryPerformanceCounter there since 3.13, which stops while the machine
+is suspended, so every resume would look like a step forward. NTP's slewing changes both
+clocks alike (or by far less than STEP_MIN_S) and is never reported.
 
 A step of STEP_MIN_S or more
   - is counted (ser2net_clock_steps_total in /metrics, clock_steps in /api/v1/status);
@@ -24,6 +26,8 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import functools
+import sys
 import time
 from typing import Callable, Optional
 
@@ -34,18 +38,44 @@ STEP_MIN_S = 1.0       # a smaller difference is not reported (the files' times 
 REPORT_EVERY_S = 60.0  # the log line and the audit record: at most this often
 
 
-def steady() -> float:
-    """A clock that no step of the system clock changes and that, where the system has
-    one, goes on while the machine is suspended (see the module docstring)."""
+def _tick_count() -> Optional[Callable[[], float]]:
+    """Windows: GetTickCount64 in seconds (the milliseconds since the start, sleep and
+    hibernation included); None elsewhere or when it can't be had."""
+    if sys.platform != "win32":
+        return None
+    import ctypes
+    try:
+        get = ctypes.windll.kernel32.GetTickCount64
+    except (AttributeError, OSError):
+        return None
+    get.restype, get.argtypes = ctypes.c_uint64, []
+    return lambda: get() / 1000.0
+
+
+def _reference() -> tuple[str, Callable[[], float]]:
+    """(its name, its reader) of the clock steady() reads (see the module docstring)."""
     get = getattr(time, "clock_gettime", None)
     for name in ("CLOCK_BOOTTIME", "CLOCK_MONOTONIC"):
         clock_id = getattr(time, name, None)
         if get is not None and clock_id is not None:
             try:
-                return float(get(clock_id))
+                get(clock_id)
             except OSError:  # a kernel without it
                 continue
-    return time.monotonic()
+            return name, functools.partial(get, clock_id)
+    ticks = _tick_count()
+    if ticks is not None:
+        return "GetTickCount64", ticks
+    return "monotonic", time.monotonic
+
+
+REFERENCE, _read_reference = _reference()
+
+
+def steady() -> float:
+    """A clock that no step of the system clock changes and that, where the system has
+    one, goes on while the machine is suspended (REFERENCE names it)."""
+    return float(_read_reference())
 
 
 def describe(step: float, now: float) -> str:

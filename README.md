@@ -2054,9 +2054,9 @@ büyüklüğüyle `all.log`'a yazılır, denetim kaydına işlenir (`clock_step`
 bir satır, kaç tane daha olduğunu da söyler), çalışan her trace'te zamanların sıçradığı yere
 bir `!!` satırıyla işaretlenir, `/metrics`'te sayılır (`ser2net_clock_steps_total`;
 `/api/v1/status` içinde `clock_steps`) ve isteğe bağlı **Sistem saati değiştirildi**
-bildirimi olarak gönderilir. NTP'nin saati yavaşça kaydırması atlama sayılmaz. Linux'ta
-uykudan uyanma da sayılmaz (karşılaştırma saati `CLOCK_BOOTTIME`, uykuda geçen süreyi de
-sayar), macOS'te de; Windows'ta uyanma ileri doğru bir atlama olarak bildirilebilir.
+bildirimi olarak gönderilir. NTP'nin saati yavaşça kaydırması atlama sayılmaz, uykudan ya
+da hazırda bekletmeden uyanma da: karşılaştırma saati uykuda geçen süreyi de sayar (Linux'ta
+`CLOCK_BOOTTIME`, macOS'te `CLOCK_MONOTONIC`, Windows'ta `GetTickCount64`).
 
 - **Linux:** `systemd-timesyncd` ya da `chrony` çalışsın ve makinenin ulaşabildiği bir NTP
   sunucusuna baksın; internete kapalı bir tesis ağında yerel bir sunucuya (bir router, bir
