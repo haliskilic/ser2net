@@ -40,6 +40,11 @@ in Turkish, whose texts are longer:
     search finds Turkish names in any letter case ('istanbul', 'ıstanbul' find
     'İSTANBUL'), names sort with numbers as numbers (Hat 2 before Hat 10), and the
     filter comes back as it was typed;
+  * the console (console_checks; xterm.js 6 and its fit addon): the columns end where its
+    scrollbar begins, at every width and in both languages; the wheel, the scrollbar and
+    a finger scroll the lines kept above, and a finger at the first line scrolls the
+    page; the hex view's heading takes one line in a wide window; the console adds no
+    script error and no Content-Security-Policy violation;
   * Settings → Single sign-on: when the request reached the server with another address
     than the browser's (a reverse proxy's X-Forwarded-Host), the redirect URI for the
     browser's address is shown too, and not otherwise;
@@ -599,6 +604,144 @@ CLASSIC = ("connection: &" + LONG_NAME.lower() + "\n"
            "  connections: [ roundtrip ]\n")
 
 
+# The console's parts (xterm.js 6): the columns FitAddon chose end where the scrollbar
+# begins (the addon leaves room for one as wide as xterm.js draws it), all inside #term.
+CONSOLE_JS = r"""() => {
+  const el = document.getElementById('term'), term = el._term, bad = [];
+  const box = sel => { const n = el.querySelector(sel); return n && n.getBoundingClientRect(); };
+  const outer = el.getBoundingClientRect(), screen = box('.xterm-screen');
+  const bar = box('.xterm-scrollable-element > .scrollbar.vertical');
+  if (!bar) return ['no scrollbar of xterm.js (.xterm-scrollable-element > .scrollbar.vertical)'];
+  if (Math.round(bar.width) !== 14) bad.push(`the scrollbar is ${bar.width}px wide, FitAddon leaves 14`);
+  if (screen.right > bar.left + 1) bad.push(`the last column is under the scrollbar (${screen.right} > ${bar.left})`);
+  if (bar.right > outer.right + 1 || screen.left < outer.left - 1 || screen.bottom > outer.bottom + 1)
+    bad.push('the console sticks out of its box');
+  const cell = screen.width / term.cols, free = bar.left - screen.right;
+  if (free >= cell + 1) bad.push(`room for ${Math.floor(free / cell)} more column(s) left of the scrollbar`);
+  if (term.rows < 10) bad.push(`${term.rows} rows`);
+  return bad;
+}"""
+
+
+def console_checks(browser, base, problems):
+    """Scrolling in the console (xterm.js draws its scrollbar itself since 6.0), with a
+    mouse and with a finger, and the hex view's heading. The lines are written into the
+    terminal here: no device has to send them."""
+    def bad(what):
+        problems.append(f"console: {what}")
+
+    back = ("() => { const b = document.getElementById('term')._term.buffer.active; "
+            "return b.baseY - b.viewportY; }")
+    fill = ("() => new Promise(done => document.getElementById('term')._term.write("
+            "Array.from({length: 300}, (_, i) => 'line ' + i).join('\\r\\n'), done))")
+    rect = ("() => { const b = document.getElementById('term').getBoundingClientRect(); "
+            "return [b.left, b.top, b.width, b.height]; }")
+    errors = []
+
+    def open_console(ctx):
+        page = ctx.new_page()
+        page.on("console", lambda m: m.type == "error" and errors.append(m.text))
+        page.on("pageerror", lambda e: errors.append(str(e)))
+        page.goto(f"{base}/login")
+        page.fill("input[name=username]", USER)
+        page.fill("input[name=password]", PASSWORD)
+        page.click("button[type=submit]")
+        page.wait_for_url(f"{base}/")
+        page.wait_for_selector("#mappings table")
+        row = page.locator("#mappings tr", has_text="short").first
+        button = row.locator("button[id$='-monitor']").first.get_attribute("id")
+        page.wait_for_function(
+            "id => { const b = document.getElementById(id);"
+            " if (!b || b.closest('.htmx-added, .htmx-settling')) return false;"
+            " b.click(); return true; }", arg=button)
+        page.wait_for_selector("#term .xterm-screen")
+        page.wait_for_timeout(500)
+        return page
+
+    def scrolled(page, least, most, what):
+        page.wait_for_timeout(700)   # a wheel scrolls smoothly
+        n = page.evaluate(back)
+        if not least <= n <= most:
+            bad(f"{what} scrolled {n} lines back, not {least}..{most}")
+        page.evaluate("() => document.getElementById('term')._term.scrollToBottom()")
+        page.wait_for_timeout(200)
+
+    # a mouse: the wheel, the scrollbar's slider, the keyboard
+    ctx = browser.new_context(viewport={"width": 1280, "height": 900})
+    page = open_console(ctx)
+    page.evaluate(fill)
+    left, top, width, height = page.evaluate(rect)
+    page.mouse.move(left + width / 2, top + height / 2)
+    for _ in range(4):
+        page.mouse.wheel(0, -100)
+        page.wait_for_timeout(80)
+    scrolled(page, 6, 40, "four wheel steps")
+    slider = page.evaluate(
+        "() => { const s = document.querySelector('#term .scrollbar.vertical'), "
+        "r = s.querySelector('.slider').getBoundingClientRect(); return [s.className, "
+        "getComputedStyle(s).opacity, r.left + r.width / 2, r.top + r.height / 2, r.height]; }")
+    if "invisible" in slider[0] or slider[1] != "1":
+        bad(f"the scrollbar isn't shown under the pointer: {slider[:2]}")
+    page.mouse.move(slider[2], slider[3])
+    page.mouse.down()
+    page.mouse.move(slider[2], slider[3] - 60, steps=4)
+    page.mouse.up()
+    scrolled(page, 20, 275, "dragging the scrollbar")
+    page.evaluate("() => document.getElementById('term')._term.focus()")
+    page.keyboard.press("Shift+PageUp")
+    scrolled(page, 10, 40, "Shift+PageUp")
+    # the hex view: the note and the heading, each on a line of its own
+    page.click("#form-panel [data-term-mode]")
+    page.wait_for_function("() => document.getElementById('term')._term.buffer.active"
+                           ".getLine(1).translateToString(true).includes('text')", timeout=5000)
+    lines = page.evaluate(
+        "() => { const b = document.getElementById('term')._term.buffer.active; "
+        "return [0, 1, 2].map(i => b.getLine(i).translateToString(true)); }")
+    if not ("time zone" in lines[0] and lines[1].lstrip().startswith("time")
+            and lines[1].rstrip().endswith("text") and not lines[2].strip()):
+        bad(f"the hex view's heading at 1280 px: {lines}")
+    page.click("#console-close")
+    ctx.close()
+
+    # a finger (a phone): a drag scrolls the lines by its length, not the page; at the
+    # first line the same drag scrolls the page
+    ctx = browser.new_context(viewport={"width": 390, "height": 844}, has_touch=True,
+                              is_mobile=True)
+    page = open_console(ctx)
+    page.evaluate(fill)
+    page.evaluate("() => document.getElementById('term').scrollIntoView({block: 'center'})")
+    page.wait_for_timeout(300)
+    cdp = ctx.new_cdp_session(page)
+
+    def drag(x, y, dy):
+        cdp.send("Input.dispatchTouchEvent", {"type": "touchStart", "touchPoints": [{"x": x, "y": y}]})
+        for i in range(1, 11):
+            cdp.send("Input.dispatchTouchEvent",
+                     {"type": "touchMove", "touchPoints": [{"x": x, "y": y + dy * i / 10}]})
+            page.wait_for_timeout(30)
+        cdp.send("Input.dispatchTouchEvent", {"type": "touchEnd", "touchPoints": []})
+        page.wait_for_timeout(500)
+
+    left, top, width, height = page.evaluate(rect)
+    cell = page.evaluate("() => { const t = document.getElementById('term'); return "
+                         "t.querySelector('.xterm-screen').clientHeight / t._term.rows; }")
+    at = page.evaluate("scrollY")
+    drag(left + width / 2, top + 100, 200)
+    n, moved = page.evaluate(back), page.evaluate("scrollY") - at
+    # (Chromium leaves out the first pixels of a drag: its touch slop)
+    if not 0.6 * 200 / cell <= n <= 200 / cell + 1 or moved:
+        bad(f"a 200 px drag scrolled {n} lines (a line is {cell} px) and the page {moved} px")
+    page.evaluate("() => document.getElementById('term')._term.scrollToTop()")
+    page.wait_for_timeout(200)
+    at = page.evaluate("scrollY")
+    drag(left + width / 2, top + 100, 150)
+    if page.evaluate("scrollY") >= at:
+        bad("a drag down at the console's first line did not scroll the page")
+    problems.extend(f"console @390: {b}" for b in page.evaluate(CONSOLE_JS))
+    ctx.close()
+    problems.extend(f"console: browser error: {e}" for e in errors)
+
+
 def preview_import(page, base, text, mode="merge"):
     """Upload a mappings file through the Settings import form; the preview is shown."""
     page.goto(f"{base}/settings#import")
@@ -881,6 +1024,8 @@ def main():
                             cols = page.evaluate("() => document.getElementById('term')._term.cols")
                             if not cols or cols < 20:
                                 problems.append(f"{lang} console @{w}: {cols} columns")
+                            problems.extend(f"{lang} console @{w}: {b}"
+                                            for b in page.evaluate(CONSOLE_JS))
                         check(f"{lang} {view.lower()} view @{w}")
                     dashboard()  # the points editor's fields, and a test read's answer
                     open_view(TR["Edit"] if lang == "tr" else "Edit", MODBUS_NAME)
@@ -1026,6 +1171,11 @@ def main():
             n = len(problems)
             feedback_checks(browser, base, problems)
             print(f"dashboard feedback, focus, unsaved changes, console: "
+                  f"{'OK' if len(problems) == n else f'{len(problems) - n} problem(s)'}")
+            n = len(problems)
+            console_checks(browser, base, problems)
+            print(f"console: columns up to its scrollbar; wheel, scrollbar, keyboard and a "
+                  f"finger scroll it; the hex view's heading: "
                   f"{'OK' if len(problems) == n else f'{len(problems) - n} problem(s)'}")
             n = len(problems)
             settings_checks(browser, base, problems, os.path.join(nodes[0][1], "config.json"))
