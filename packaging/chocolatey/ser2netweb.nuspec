@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Chocolatey's package of the release's ser2netweb-windows-x64.exe: tools\chocolateyinstall.ps1
+     downloads it (checked against its SHA-256) into the package's tools folder, and Chocolatey
+     puts a shim for it on PATH. For a release, `python tools/windows_channels.py chocolatey vX.Y.Z`
+     sets <version>, <releaseNotes> and the download from the release's SHA256SUMS;
+     .github/workflows/chocolatey.yml packs, installs and pushes it. -->
+<package xmlns="http://schemas.microsoft.com/packaging/2015/06/nuspec.xsd">
+  <metadata>
+    <id>ser2netweb</id>
+    <version>3.0.0</version>
+    <packageSourceUrl>https://github.com/haliskilic/ser2netweb/tree/main/packaging/chocolatey</packageSourceUrl>
+    <owners>haliskilic</owners>
+    <title>ser2netweb</title>
+    <authors>Halis KILIÇ</authors>
+    <projectUrl>https://github.com/haliskilic/ser2netweb</projectUrl>
+    <copyright>Copyright (C) 2026 Halis KILIÇ</copyright>
+    <licenseUrl>https://github.com/haliskilic/ser2netweb/blob/main/LICENSE</licenseUrl>
+    <requireLicenseAcceptance>false</requireLicenseAcceptance>
+    <projectSourceUrl>https://github.com/haliskilic/ser2netweb</projectSourceUrl>
+    <docsUrl>https://github.com/haliskilic/ser2netweb/blob/main/docs/WINDOWS.md</docsUrl>
+    <bugTrackerUrl>https://github.com/haliskilic/ser2netweb/issues</bugTrackerUrl>
+    <tags>ser2netweb serial serial-port com-port rs232 rs485 usb-serial tcp telnet rfc2217 udp modbus mqtt sparkplug iot serial-to-ethernet portable</tags>
+    <summary>Serial-to-network bridge with a web UI: raw TCP, telnet, RFC 2217, UDP, Modbus gateway, MQTT</summary>
+    <description><![CDATA[ser2netweb shares local serial ports (RS-232 / RS-485, USB adapters) over the network as raw TCP, telnet, RFC 2217 or UDP, runs a Modbus RTU/TCP gateway and publishes serial data and Modbus points to MQTT and Sparkplug B, all set up and watched in a browser, with accounts, roles, an audit log, TLS and LDAP / OpenID Connect sign-in.
+
+ser2netweb is an independent project, unrelated to Corey Minyard's ser2net.
+
+## Usage
+
+* `ser2netweb` starts it in the console window; the first run asks for the web UI's address. Its data (config.json, backups, logs) is in the user's data folder, `%LOCALAPPDATA%\ser2netweb`.
+* As a Windows service: `ser2netweb --install-service` from an elevated prompt. The service runs its own copy, in `C:\Program Files\ser2netweb`, with its data in `C:\ProgramData\ser2netweb`: after `choco upgrade ser2netweb`, run `ser2netweb --install-service` again to upgrade it; before `choco uninstall ser2netweb`, `ser2netweb --uninstall-service` removes it.
+
+The package installs the release's own `ser2netweb-windows-x64.exe` (checked against its SHA-256), a single executable with everything inside (Python, OpenSSL, the VC++ runtime). Licence: AGPL-3.0-only, or a commercial licence (COMMERCIAL_LICENSE.md). Windows guide: https://github.com/haliskilic/ser2netweb/blob/main/docs/WINDOWS.md
+]]></description>
+    <releaseNotes>https://github.com/haliskilic/ser2netweb/releases/tag/v3.0.0</releaseNotes>
+  </metadata>
+  <files>
+    <file src="tools\**" target="tools" />
+  </files>
+</package>

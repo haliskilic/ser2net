@@ -1,0 +1,106 @@
+name: winget
+
+# The Windows Package Manager's community repository, microsoft/winget-pkgs. For a release
+# (or a release tag given by hand), packaging/winget/make_manifests.py makes the manifests of
+# haliskilic.ser2netweb from the release's SHA256SUMS (the portable
+# ser2netweb-windows-x64.exe, nothing rebuilt), they are checked against winget's schemas,
+# and komac opens the pull request in winget-pkgs from the maintainer's fork with the
+# WINGET_TOKEN secret (a classic personal access token with the public_repo scope). Without
+# that secret the submission is skipped with a notice. A pull request that changes the
+# manifests (winget's or Scoop's) or what makes them gets the checks only.
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: The release to submit (vX.Y.Z)
+        required: true
+        type: string
+  pull_request:
+    paths:
+      - packaging/winget/**
+      - packaging/scoop/**
+      - tools/windows_channels.py
+      - tests/test_windows_channels.py
+      - .github/workflows/winget.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: winget-${{ github.event.pull_request.number || inputs.tag || github.event.release.tag_name }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  manifests:
+    name: manifests (winget and Scoop schemas)
+    # (winget has no pre-release track)
+    if: github.event_name != 'release' || !github.event.release.prerelease
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7.1.0
+        with:
+          python-version: "3.12"
+      - run: pip install jsonschema==4.26.0 pyyaml==6.0.3
+      - name: The committed manifests are generated, consistent and conform to the schemas
+        env:
+          SER2NETWEB_SCHEMA_TESTS: "1"
+        run: python tests/test_windows_channels.py
+      - name: The release's manifests
+        if: github.event_name != 'pull_request'
+        env:
+          TAG: ${{ inputs.tag || github.event.release.tag_name }}
+        run: |
+          python packaging/winget/make_manifests.py "$TAG" --out out
+          python tools/windows_channels.py validate out
+          cat out/*.yaml
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
+        if: github.event_name != 'pull_request'
+        with:
+          name: winget-manifests
+          path: out/
+          if-no-files-found: error
+
+  # Apart from the job above, which runs pip's packages: here only the pinned komac (its
+  # release file, checked against its SHA-256) sees the token.
+  submit:
+    name: submit to winget-pkgs
+    needs: manifests
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    # (where the maintainer can keep WINGET_TOKEN, and limit it to release tags and main)
+    environment: winget
+    steps:
+      - name: Without the WINGET_TOKEN secret, skip
+        id: token
+        env:
+          WINGET_TOKEN: ${{ secrets.WINGET_TOKEN }}
+        run: |
+          if [ -z "$WINGET_TOKEN" ]; then
+            echo "::notice title=winget::The WINGET_TOKEN secret is not set, so nothing is submitted to microsoft/winget-pkgs (the manifests are this run's winget-manifests artifact)."
+            echo "set=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "set=true" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8.0.2
+        if: steps.token.outputs.set == 'true'
+        with:
+          name: winget-manifests
+          path: manifests
+      - name: komac 2.17.2
+        if: steps.token.outputs.set == 'true'
+        run: |
+          curl -fsSL -o komac.tar.gz https://github.com/russellbanks/Komac/releases/download/v2.17.2/komac-2.17.2-x86_64-unknown-linux-gnu.tar.gz
+          echo "b03b020eec98acfb0b53e284a6e21815b884be33de6785b97e7a120f0e748966  komac.tar.gz" | sha256sum -c -
+          mkdir komac
+          tar -xzf komac.tar.gz -C komac komac
+          ./komac/komac --version
+      - name: Open the pull request in microsoft/winget-pkgs
+        if: steps.token.outputs.set == 'true'
+        env:
+          GITHUB_TOKEN: ${{ secrets.WINGET_TOKEN }}
+        run: ./komac/komac submit manifests --yes

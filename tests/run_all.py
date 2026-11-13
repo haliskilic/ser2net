@@ -109,6 +109,7 @@ PORTABLE = [
     "test_systemd_units.py",    # systemd/*.service (also ser2netweb@.service): paths, sandbox, verify
     "test_install_script.py",   # systemd/ser2netweb-install.sh, staged under a scratch root
     "test_install_layout.py",   # default data folder per installation (source, binary, package, pip)
+    "test_windows_channels.py",  # winget / Scoop / Chocolatey packages and their workflows
     "test_packages.py",         # .deb / .rpm: packaging/, the unit, the scripts (CI installs them)
     "test_pyproject.py",        # the PyPI package: ranges hold the pins, package data, build tools
     "test_single_instance.py",
