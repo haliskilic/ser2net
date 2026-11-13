@@ -427,9 +427,10 @@ jobs:
 
   # GitHub starts no workflow for the events of GITHUB_TOKEN but workflow_dispatch, so the
   # release the publish job created doesn't start the workflows that follow releases: they
-  # are started here, on main, once it is out (not for a pre-release). package-repo.yml:
-  # the APT / DNF repositories on GitHub Pages (docs/PACKAGES.md). Nothing waits for this
-  # job, and it runs no action and no repository code.
+  # are started here, on main, once it is out (not for a pre-release), each with this tag:
+  # package-repo.yml (the APT / DNF repositories on GitHub Pages, docs/PACKAGES.md),
+  # winget.yml and chocolatey.yml (docs/WINDOWS.md). Nothing waits for this job, and it
+  # runs no action and no repository code.
   channels:
     name: start the release channels
     needs: [verify, publish]
@@ -443,7 +444,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: |
-          for workflow in package-repo.yml; do
-            gh workflow run "$workflow" --ref main
-            echo "started $workflow"
+          for workflow in package-repo.yml winget.yml chocolatey.yml; do
+            gh workflow run "$workflow" --ref main -f tag="$GITHUB_REF_NAME"
+            echo "started $workflow for $GITHUB_REF_NAME"
           done
