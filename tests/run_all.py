@@ -115,6 +115,9 @@ PORTABLE = [
     "test_packages.py",         # .deb / .rpm: packaging/, the unit, the scripts (CI installs them)
     "test_package_repo.py",     # APT / DNF repositories on Pages: releases, files, docs, workflow
     "test_pyproject.py",        # the PyPI package: ranges hold the pins, package data, build tools
+    "test_homebrew_formula.py",  # the Homebrew formula's generator (PyPI stand-ins, no network)
+    "test_aur_package.py",      # the AUR package ser2netweb-bin: generator, PKGBUILD, aur.yml
+    "test_snap_package.py",     # the snap: snapcraft.yaml, its service and hook, snap.yml
     "test_single_instance.py",
     "test_notifications.py",
     "test_ports_usb_identity.py",

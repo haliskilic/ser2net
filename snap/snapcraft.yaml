@@ -1,0 +1,79 @@
+# The snap ser2netweb (https://snapcraft.io/ser2netweb): the release's standalone Linux
+# executable (ser2netweb-linux-x64 / -arm64, checked against its SHA256SUMS), strictly
+# confined, with a service that is off until enabled. .github/workflows/snap.yml puts the
+# executable, its THIRD-PARTY-LICENSES.txt and ser2netweb's licence texts into build/snap/
+# and runs snapcraft on a runner of each architecture; nothing is rebuilt.
+#
+#   sudo snap install ser2netweb
+#   sudo snap connect ser2netweb:raw-usb            # USB serial ports: /dev/ttyUSB*, /dev/ttyACM*
+#   sudo snap connect ser2netweb:hardware-observe   # (the port list's details)
+#   sudo snap start --enable ser2netweb.daemon      # the web UI on 127.0.0.1:8080
+#   sudo snap set ser2netweb bind-ip=0.0.0.0 port=8080   # or on the network
+#
+# A strictly confined snap reaches a serial device only through an interface: raw-usb
+# (connected by hand) covers USB serial adapters on any Ubuntu; serial-port needs a slot of a
+# gadget snap (Ubuntu Core) or of snapd's experimental hotplug; built-in UARTs (/dev/ttyS*,
+# /dev/ttyAMA*) stay out of reach on a classic system (README: Snap).
+name: ser2netweb
+title: ser2netweb
+summary: Serial-to-network bridge with a web UI (TCP, telnet, RFC 2217, Modbus, MQTT)
+description: |
+  ser2netweb shares local serial ports over the network (raw TCP, telnet, RFC 2217, UDP),
+  is a Modbus RTU/TCP gateway and publishes to MQTT and Sparkplug B, all set up in a web UI.
+  It is an independent project (named ser2net up to 2.9.x), not related to the classic
+  ser2net daemon, whose configuration files it can import.
+
+  USB serial adapters (/dev/ttyUSB*, /dev/ttyACM*, also by /dev/serial/by-id) need the
+  raw-usb interface: sudo snap connect ser2netweb:raw-usb
+  The service is off after installing: sudo snap start --enable ser2netweb.daemon
+  Its web UI then listens on 127.0.0.1:8080; for the network:
+  sudo snap set ser2netweb bind-ip=0.0.0.0 port=8080
+  Its data is in /var/snap/ser2netweb/common/data. The first admin password:
+  sudo ser2netweb --data-dir /var/snap/ser2netweb/common/data --set-password admin
+license: AGPL-3.0-only
+website: https://github.com/haliskilic/ser2netweb
+source-code: https://github.com/haliskilic/ser2netweb
+issues: https://github.com/haliskilic/ser2netweb/issues
+contact: https://github.com/haliskilic/ser2netweb/issues
+base: core24
+grade: stable
+confinement: strict
+adopt-info: ser2netweb
+
+platforms:
+  amd64:
+  arm64:
+
+apps:
+  ser2netweb:
+    command: bin/ser2netweb
+    plugs: &plugs
+      - network
+      - network-bind
+      - network-observe     # the network interfaces of the address picker
+      - raw-usb             # USB serial adapters (/dev/ttyUSB*, /dev/ttyACM*)
+      - hardware-observe    # the serial port list's details (/sys/class/tty, udev)
+      - serial-port         # Ubuntu Core: one port of the gadget's (no slot on a classic system)
+  daemon:
+    command: bin/daemon
+    daemon: simple
+    install-mode: disable   # sudo snap start --enable ser2netweb.daemon
+    restart-condition: on-failure
+    restart-delay: 3s
+    stop-timeout: 30s
+    plugs: *plugs
+
+parts:
+  ser2netweb:
+    plugin: nil
+    source: build/snap
+    override-build: |
+      install -Dm755 ser2netweb "$CRAFT_PART_INSTALL/bin/ser2netweb"
+      install -Dm644 -t "$CRAFT_PART_INSTALL/usr/share/doc/ser2netweb" LICENSE NOTICE \
+        COMMERCIAL_LICENSE.md THIRD-PARTY-NOTICES.md THIRD-PARTY-LICENSES.txt
+      craftctl set version="$("$CRAFT_PART_INSTALL/bin/ser2netweb" --version | cut -d' ' -f2)"
+  daemon:
+    plugin: dump
+    source: snap/local
+    organize:
+      daemon: bin/daemon
