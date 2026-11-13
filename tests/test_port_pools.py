@@ -12,6 +12,7 @@
     passed over; when every member is in use the client reads "Busy: ..." and is
     disconnected, counted and logged; a freed member is used again; a pool whose port is
     taken keeps trying; a changed pool moves while the clients handed over stay connected;
+    a pool stopped while it binds its port leaves no listener behind;
   - REST: GET / PUT /api/v1/pools, pools in /status, the errors; the Settings form.
 
 Run: python3 tests/test_port_pools.py
@@ -37,7 +38,7 @@ from ser2netweb.config import (
     AppConfig, ConfigError, MappingConfig, PortPool, pool_member, pools_from_json,
     pools_from_text, pools_text,
 )
-from ser2netweb.engine import serial_io, serial_link
+from ser2netweb.engine import netguard, serial_io, serial_link
 from ser2netweb.engine.supervisor import Supervisor
 from ser2netweb.web.auth import hash_password, hash_token
 
@@ -307,6 +308,48 @@ async def _rotate():
                 await devices.close()
 
 
+async def _stop_while_binding():
+    """A pool stopped while its retry is binding its port: the listener that attempt opens
+    is closed as well (it is not cancelled half-way), so nothing listens afterwards."""
+    logs, opened = [], []
+    holder = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    holder.bind(("127.0.0.1", 0))
+    holder.listen(1)
+    port = holder.getsockname()[1]
+    real = netguard.start_server
+    binding = asyncio.Event()
+
+    async def slow_start_server(*args, **kwargs):
+        listener = await real(*args, **kwargs)
+        opened.append(listener)
+        binding.set()
+        await asyncio.sleep(0.3)  # (as asyncio's start_serving() awaits, only longer)
+        return listener
+
+    sup = Supervisor(logger=logs.append)
+    with mock.patch.object(serial_link.Backoff, "pause", _fast_pause), \
+            mock.patch.object(netguard, "start_server", slow_start_server):
+        try:
+            await sup.apply_pools([PortPool("lab", "127.0.0.1", port)])
+            assert sup.pools.status()["lab"]["state"] == "error"
+            holder.close()
+            await asyncio.wait_for(binding.wait(), 10)
+            await sup.apply_pools([])
+            assert sup.pools.status() == {}
+            try:
+                _r, w = await asyncio.open_connection("127.0.0.1", port)
+            except OSError:
+                pass
+            else:
+                w.close()
+                raise AssertionError("the attempt's listener was left listening")
+        finally:
+            holder.close()
+            for listener in opened:
+                listener.close()
+            await sup.stop_all()
+
+
 def test_engine():
     asyncio.run(_rotate())
     print("engine: rotate begins after the mapping that got the last client; without it "
@@ -317,6 +360,8 @@ def test_engine():
           "clients  OK")
     asyncio.run(_bind_retry())
     print("engine: a pool whose port is taken says why and listens once it is free  OK")
+    asyncio.run(_stop_while_binding())
+    print("engine: a pool stopped while it binds leaves no listener behind  OK")
 
 
 def call(base, method, path, body=None, token=TOKEN):

@@ -94,9 +94,9 @@ class PoolListener:
         """Stop listening. The clients handed over stay with their mappings."""
         self._stop.set()
         if self._task is not None:
-            self._task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await self._task
+            # not cancelled: an attempt under way ends first (a listener it opens is closed
+            # below), and the retry's pause ends at once
+            await asyncio.wait((self._task,))
             self._task = None
         if self._server is not None:
             # close() frees the address at once; wait_closed() would wait for every client
