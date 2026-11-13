@@ -132,8 +132,9 @@ def free_port() -> int:
 
 
 def run(cmd: list[str], env: dict, stdin: str = "", cwd: str | None = None) -> str:
+    # (errors="replace": a Windows console writes its own code page, cp1252 for "—")
     p = subprocess.run(cmd, env=env, input=stdin, capture_output=True, text=True,
-                       encoding="utf-8", timeout=300, cwd=cwd)
+                       encoding="utf-8", errors="replace", timeout=300, cwd=cwd)
     if p.returncode != 0:
         fail(f"{' '.join(cmd)} exited {p.returncode}:\n{p.stdout}\n{p.stderr}")
     return p.stdout
@@ -204,6 +205,11 @@ def install_and_run(wheel: str, v: str, pip_args: list[str]) -> None:
                 log.seek(0)
                 fail(f"/healthz didn't answer ok (exit {proc.poll()}):\n{log.read()[-4000:]}")
         finally:
+            if os.name == "nt":
+                # the console-script launcher (ser2netweb.exe) runs python.exe as its child:
+                # end the whole tree, or that child keeps data/all.log open
+                subprocess.run(["taskkill", "/PID", str(proc.pid), "/T", "/F"],
+                               capture_output=True, timeout=60)
             proc.terminate()
             try:
                 proc.wait(timeout=30)
