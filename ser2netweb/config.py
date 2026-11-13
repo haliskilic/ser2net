@@ -984,6 +984,8 @@ class NetworkSettings:
     # the serial source is dropped once this fills. A chunk is one serial read, at most
     # 4 KB (8 KB with telnet / RFC 2217, which double 0xFF bytes), so the worst case per
     # client is ~client_queue_max * 4 KB (8 KB); raise for bursty high-throughput links.
+    # With packing (options.pack_*) a chunk is one frame, at most pack_max_bytes: lower
+    # this with a large frame size on a small machine.
     client_queue_max: int = 2048
     # Dead-peer detection for TCP (server + client mode): after keepalive_idle_s of
     # silence the OS probes the peer every keepalive_interval_s and drops the link
