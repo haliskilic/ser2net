@@ -21,7 +21,7 @@ import shlex
 import socket
 import sys
 
-from . import envvars
+from . import envvars, layout
 from .config import AdminUI, host_port, shown_host
 from .engine import bindhint, netinfo
 
@@ -85,6 +85,8 @@ def reconfigure_hint(data_dir: str, service_name: str = "", environ=None) -> tup
         return "env", ""
     if getattr(sys, "frozen", False):
         prog = _quoted(sys.executable)
+    elif layout.kind() == layout.PIP:
+        prog = "ser2netweb"  # the command pip / pipx installed
     else:
         script = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                               "ser2netweb.py")
