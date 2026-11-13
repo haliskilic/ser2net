@@ -388,9 +388,9 @@ _api = None
 def require_windows() -> None:
     if os.name != "nt":
         raise ServiceError("Windows services exist only on Windows (on Linux, use systemd: "
-                           "systemd/ser2net.service for a source checkout, "
-                           "ser2net-standalone.service for the binary, which "
-                           "ser2net-install.sh installs, both attached to every release; "
+                           "systemd/ser2netweb.service for a source checkout, "
+                           "ser2netweb-standalone.service for the binary, which "
+                           "ser2netweb-install.sh installs, both attached to every release; "
                            "README: Run as a service).")
 
 

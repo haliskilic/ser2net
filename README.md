@@ -932,7 +932,7 @@ açılan port da orada sayılır).
   `sudo systemctl mask --now serial-getty@ttyS0.service`.
 - **ModemManager** (masaüstü Ubuntu / Fedora; Arduino gibi USB CDC `ttyACM*` cihazlar):
   cihazı rahat bırakmasını bir udev kuralıyla söyle, örneğin
-  `/etc/udev/rules.d/99-ser2net.rules` dosyasına
+  `/etc/udev/rules.d/99-ser2netweb.rules` dosyasına
   `ATTRS{idVendor}=="2341", ENV{ID_MM_DEVICE_IGNORE}="1"` yazıp
   `sudo udevadm control --reload && sudo udevadm trigger` çalıştır.
 - **Permission denied:** pano cihazın ait olduğu grubu ve neyin eksik olduğunu söyler (bkz.
@@ -1520,87 +1520,126 @@ içeren bir dosyaya (Docker secret) yönlendirin; ad için `SER2NETWEB_ADMIN_USE
   kapanır), `/data` volume. Düz `docker run` ile çalıştırıyorsanız
   `--restart unless-stopped --init --stop-timeout 30` ekleyin (var olan bir container için:
   `docker update --restart unless-stopped ser2net`).
-- **Linux (systemd):** üç unit var — `ser2net.service` (kaynak kurulum),
-  `ser2net-standalone.service` (Linux binary) ve şablon `ser2net@.service` (birden çok
-  kurulum). Hepsi ser2netweb'i ayrı, yetkisiz bir kullanıcıyla (`ser2net`; seri portlar için
-  `dialout` grubunda) çalıştırır, hata durumunda 3 sn sonra yeniden başlatır ve sandbox
+- **Linux (systemd):** üç unit var — `ser2netweb.service` (kaynak kurulum),
+  `ser2netweb-standalone.service` (Linux binary) ve şablon `ser2netweb@.service` (birden çok
+  kurulum). Hepsi ser2netweb'i ayrı, yetkisiz bir kullanıcıyla (`ser2netweb`; seri portlar
+  için `dialout` grubunda) çalıştırır, hata durumunda 3 sn sonra yeniden başlatır ve sandbox
   içinde tutar (salt okunur sistem, kendine ait `/tmp`, sistem çağrısı filtresi). **root ile
-  çalıştırmayın.** `systemctl reload ser2net` (ya da `ser2net@<ad>`) `config.json`'u yeniden
-  okur (bkz. Yapılandırma & durum dosyaları). Arch, Manjaro ve EndeavourOS'ta seri grup
-  `uucp`'dir ve `dialout` grubu yoktur (unit `status=216/GROUP` ile başlamaz): grubu
-  `systemctl edit ser2net` ile ayarla (`[Service]`, `SupplementaryGroups=`, ardından
-  `SupplementaryGroups=uucp`; `ser2net.service`'in yorumunda yazıyor). `ser2net-install.sh`
-  böyle bir sistemde durur (`dialout` grubu ister): orada binary'yi elle kurun. Port
-  açılmıyorsa: [`docs/LINUX-SERIAL.md`](docs/LINUX-SERIAL.md).
-  - `/opt/ser2net` altında *kaynak kurulum*: `systemd/ser2net.service`.
+  çalıştırmayın.** `systemctl reload ser2netweb` (ya da `ser2netweb@<ad>`) `config.json`'u
+  yeniden okur (bkz. Yapılandırma & durum dosyaları). 2.9.x'e kadar unit'lerin, kullanıcının
+  ve klasörlerin adı `ser2net` idi (`ser2net.service`, `/opt/ser2net`, `/var/lib/ser2net`);
+  klasik ser2net daemon'unun paketi de kendininkilere bu adları verir. Böyle bir kurulumu
+  aşağıdaki *2.9.x'ten yükseltme* taşır. Arch, Manjaro ve EndeavourOS'ta seri grup `uucp`'dir
+  ve `dialout` grubu yoktur (unit `status=216/GROUP` ile başlamaz): grubu
+  `systemctl edit ser2netweb` ile ayarla (`[Service]`, `SupplementaryGroups=`, ardından
+  `SupplementaryGroups=uucp`; `ser2netweb.service`'in yorumunda yazıyor).
+  `ser2netweb-install.sh` böyle bir sistemde durur (`dialout` grubu ister): orada binary'yi
+  elle kurun. Port açılmıyorsa: [`docs/LINUX-SERIAL.md`](docs/LINUX-SERIAL.md).
+  - `/opt/ser2netweb` altında *kaynak kurulum*: `systemd/ser2netweb.service`.
     ```bash
-    sudo useradd --system --user-group --home-dir /opt/ser2net -M -s /usr/sbin/nologin ser2net
-    sudo git clone https://github.com/haliskilic/ser2netweb.git /opt/ser2net
-    sudo cp /opt/ser2net/systemd/ser2net.service /etc/systemd/system/
-    sudo systemctl daemon-reload && sudo systemctl enable --now ser2net
+    sudo useradd --system --user-group --home-dir /opt/ser2netweb -M -s /usr/sbin/nologin ser2netweb
+    sudo git clone https://github.com/haliskilic/ser2netweb.git /opt/ser2netweb
+    sudo cp /opt/ser2netweb/systemd/ser2netweb.service /etc/systemd/system/
+    sudo systemctl daemon-reload && sudo systemctl enable --now ser2netweb
     ```
-    İlk açılış `data/` ve `lib/` dizinlerini `ser2net` kullanıcısı için oluşturur ve
+    İlk açılış `data/` ve `lib/` dizinlerini `ser2netweb` kullanıcısı için oluşturur ve
     paketlenmiş bağımlılıkları `lib/` içine kurar (çevrimdışı). `/usr/bin/python3` olarak
     Python 3.10 ya da daha yenisi gerekir: RHEL / AlmaLinux / Rocky 8 ve 9 ile Debian 11'de
     `ExecStart=` satırını daha yeni bir yorumlayıcıya yönlendirin (RHEL: `dnf install
     python3.11`, ardından `/usr/bin/python3.11`) ya da binary'yi kullanın.
-  - *Standalone binary*: `ser2net-standalone.service` (her release'e eklenir, `systemd/`
-    altında da var), `ser2net.service` adıyla kurulur; verisi systemd'nin oluşturduğu
-    `/var/lib/ser2net` içindedir. Hepsini `ser2net-install.sh` (o da her release'e eklenir)
-    yapar: `ser2netweb-linux-x64` (ya da `-arm64`), `ser2net-standalone.service`,
-    `ser2net-install.sh` ve `SHA256SUMS` dosyalarını bir klasöre indirin, sonra
+  - *Standalone binary*: `ser2netweb-standalone.service` (her release'e eklenir, `systemd/`
+    altında da var), `ser2netweb.service` adıyla kurulur; verisi systemd'nin oluşturduğu
+    `/var/lib/ser2netweb` içindedir. Hepsini `ser2netweb-install.sh` (o da her release'e
+    eklenir) yapar: `ser2netweb-linux-x64` (ya da `-arm64`), `ser2netweb-standalone.service`,
+    `ser2netweb-install.sh` ve `SHA256SUMS` dosyalarını bir klasöre indirin, sonra
     ```bash
-    sudo sh ser2net-install.sh                         # web arayüzü 127.0.0.1:8080'de
-    sudo sh ser2net-install.sh --listen 0.0.0.0:8080   # ya da ağda (orada TLS kullanın)
+    sudo sh ser2netweb-install.sh                         # web arayüzü 127.0.0.1:8080'de
+    sudo sh ser2netweb-install.sh --listen 0.0.0.0:8080   # ya da ağda (orada TLS kullanın)
     ```
-    Dosyaları `SHA256SUMS`'a karşı ve binary'nin bu makinede çalıştığını denetler, `ser2net`
-    kullanıcısını ve `/var/lib/ser2net`'i oluşturur, binary'yi `/usr/local/bin/ser2net`,
-    unit'i `/etc/systemd/system/ser2net.service` olarak kurar, servisi etkinleştirip başlatır
-    ve yanıt verene kadar bekler. Yükseltmek için yeni sürümle yeniden çalıştırın (veri
-    kalır); `--uninstall` servisi ve binary'yi kaldırır (veri ve kullanıcı kalır). Başka bir
-    `ser2net.service`'i (klasik ser2net daemon'unun paketi, `/opt/ser2net`'teki bir kaynak
-    kurulumu) siz onu durdurup `--replace-unit` vermedikçe gizlemez; `/tmp`'nin `noexec` ile
-    bağlı olduğu yerde binary'nin kendini `/var/cache/ser2net`'e açmasını sağlar (bir
-    drop-in). `--root DIR` dosyaları yalnızca DIR altına hazırlar. Elle aynısı:
+    Dosyaları `SHA256SUMS`'a karşı ve binary'nin bu makinede çalıştığını denetler,
+    `ser2netweb` kullanıcısını ve `/var/lib/ser2netweb`'i oluşturur, binary'yi
+    `/usr/local/bin/ser2netweb`, unit'i `/etc/systemd/system/ser2netweb.service` olarak kurar,
+    servisi etkinleştirip başlatır ve yanıt verene kadar bekler. Yükseltmek için yeni sürümle
+    yeniden çalıştırın (veri kalır); `--uninstall` servisi ve binary'yi kaldırır (veri ve
+    kullanıcı kalır). Başka bir `ser2netweb.service`'i (bir paketinkini, `/opt/ser2netweb`'teki
+    bir kaynak kurulumunkini) siz onu durdurup `--replace-unit` vermedikçe gizlemez; `/tmp`'nin
+    `noexec` ile bağlı olduğu yerde binary'nin kendini `/var/cache/ser2netweb`'e açmasını
+    sağlar (bir drop-in). `--root DIR` dosyaları yalnızca DIR altına hazırlar. Elle aynısı:
     ```bash
-    sudo install -m 0755 ser2netweb-linux-x64 /usr/local/bin/ser2net
-    sudo useradd --system --user-group --home-dir /var/lib/ser2net -M -s /usr/sbin/nologin ser2net
-    sudo cp ser2net-standalone.service /etc/systemd/system/ser2net.service
-    sudo systemctl daemon-reload && sudo systemctl enable --now ser2net
+    sudo install -m 0755 ser2netweb-linux-x64 /usr/local/bin/ser2netweb
+    sudo useradd --system --user-group --home-dir /var/lib/ser2netweb -M -s /usr/sbin/nologin ser2netweb
+    sudo cp ser2netweb-standalone.service /etc/systemd/system/ser2netweb.service
+    sudo systemctl daemon-reload && sudo systemctl enable --now ser2netweb
     ```
   - Web arayüzü, aksi söylenmedikçe `127.0.0.1:8080`'de dinler. Ağdan erişmek için
-    `sudo systemctl edit ser2net` çalıştırıp aşağıdaki satırları ekleyin (ağ adresinde TLS
-    kullanın, bkz. Güvenlik) ve `sudo systemctl restart ser2net` yapın:
+    `sudo systemctl edit ser2netweb` çalıştırıp aşağıdaki satırları ekleyin (ağ adresinde TLS
+    kullanın, bkz. Güvenlik) ve `sudo systemctl restart ser2netweb` yapın:
     ```ini
     [Service]
     Environment=SER2NETWEB_BIND_IP=0.0.0.0 SER2NETWEB_PORT=8080
     ```
     İlk parolayı tarayıcıda ya da `--set-password` ile belirleyin (Güvenlik altındaki
-    tablo). Bu tür komutları `ser2net` kullanıcısıyla çalıştırın (`sudo -u ser2net …`): hesap
-    komutları (`--set-password`, `--sign-out-all`, `--reload`) root ile çalıştırılınca
+    tablo). Bu tür komutları `ser2netweb` kullanıcısıyla çalıştırın (`sudo -u ser2netweb …`):
+    hesap komutları (`--set-password`, `--sign-out-all`, `--reload`) root ile çalıştırılınca
     kendiliğinden veri dizininin sahibine geçer, ama root ile bir açılış ya da
     `--reconfigure` servisin okuyamayacağı dosyalar bırakır. Log'lar:
-    `journalctl -u ser2net` ve veri dizinindeki `all.log`.
-  - Birden çok kurulum için: `systemd/ser2net@.service` şablonu (aşağıda).
-  - İsteğe bağlı: `systemd/ser2net.service.d/notify.conf` drop-in'i (`Type=notify`,
+    `journalctl -u ser2netweb` ve veri dizinindeki `all.log`.
+  - Birden çok kurulum için: `systemd/ser2netweb@.service` şablonu (aşağıda).
+  - İsteğe bağlı: `systemd/ser2netweb.service.d/notify.conf` drop-in'i (`Type=notify`,
     `WatchdogSec=120`) systemd'nin ser2netweb'i ancak eşlemeleri çalışıp arayüzü dinlemeye
     başladığında (ya da yeniden denemeye geçtiğinde) başlamış saymasını ve event loop'u yanıt
-    vermeyi bırakınca yeniden başlatmasını sağlar. Ne unit'ler ne `ser2net-install.sh` onu
+    vermeyi bırakınca yeniden başlatmasını sağlar. Ne unit'ler ne `ser2netweb-install.sh` onu
     kurar, release dosyası da değildir (kaynak ağacından alın):
     ```bash
-    sudo mkdir -p /etc/systemd/system/ser2net.service.d
-    sudo cp systemd/ser2net.service.d/notify.conf /etc/systemd/system/ser2net.service.d/
-    sudo systemctl daemon-reload && sudo systemctl restart ser2net
+    sudo mkdir -p /etc/systemd/system/ser2netweb.service.d
+    sudo cp systemd/ser2netweb.service.d/notify.conf /etc/systemd/system/ser2netweb.service.d/
+    sudo systemctl daemon-reload && sudo systemctl restart ser2netweb
     ```
-    (bir örnek için: `ser2net@.service.d`). 2.9.0'dan eski bir sürüme dönmeden önce kaldırın:
-    eski sürümler hazır olduğunu bildirmez.
+    (bir örnek için: `ser2netweb@.service.d`). 2.9.0'dan eski bir sürüme dönmeden önce
+    kaldırın: eski sürümler hazır olduğunu bildirmez.
+  - *2.9.x'ten yükseltme*: unit'lerin, kullanıcının ve klasörlerin adı değişti; veri olduğu
+    gibi kalır (Prometheus metrik adları, `config.json` ve cluster protokolü de değişmedi).
+    Klasik ser2net daemon'unun `ser2net.service`'ine dokunmayın (paketi
+    `/usr/lib/systemd/system` altındadır); yalnızca bu projenin eski bir kurulumunun
+    `/etc/systemd/system`'e koyduklarını kaldırın.
+    - *`/opt/ser2net`'te `ser2net.service` ile çalışan kaynak kurulum*: ya olduğu gibi bırakın
+      (`ser2net.py` 3.x'i de başlatır; `sudo git -C /opt/ser2net pull` ve
+      `sudo systemctl restart ser2net` onu eski adlarla yükseltir), ya da taşıyın:
+      ```bash
+      sudo systemctl disable --now ser2net
+      sudo useradd --system --user-group --home-dir /opt/ser2netweb -M -s /usr/sbin/nologin ser2netweb
+      sudo mv /opt/ser2net /opt/ser2netweb && sudo git -C /opt/ser2netweb pull
+      sudo chown -R ser2netweb:ser2netweb /opt/ser2netweb/data /opt/ser2netweb/lib
+      sudo rm /etc/systemd/system/ser2net.service      # yalnızca bu kurulumun unit'i
+      sudo cp /opt/ser2netweb/systemd/ser2netweb.service /etc/systemd/system/
+      sudo systemctl daemon-reload && sudo systemctl enable --now ser2netweb
+      ```
+      `systemctl edit ser2net` ile yapılmış drop-in'ler (dinleme adresi, `uucp`, 1024 altı
+      portlar) `/etc/systemd/system/ser2net.service.d/` altındadır: önce onları taşıyın
+      (`sudo mv /etc/systemd/system/ser2net.service.d /etc/systemd/system/ser2netweb.service.d`).
+    - *`ser2net@.service` kurulumları*, her biri için (burada `line1`):
+      ```bash
+      sudo systemctl disable --now ser2net@line1
+      sudo mkdir -p /var/lib/ser2netweb /etc/ser2netweb
+      sudo mv /var/lib/ser2net/line1 /var/lib/ser2netweb/line1
+      sudo mv /etc/ser2net/line1.env /etc/ser2netweb/line1.env    # varsa
+      sudo cp /opt/ser2netweb/systemd/ser2netweb@.service /etc/systemd/system/
+      sudo systemctl daemon-reload && sudo systemctl enable --now ser2netweb@line1
+      ```
+      systemd taşınan klasörü ilk açılışta `ser2netweb` kullanıcısına verir
+      (`StateDirectory=`). `/etc/ser2net/` klasik daemon'un da klasörüdür: yalnızca
+      `<ad>.env` dosyalarını taşıyın. Hiç kurulum kalmayınca `sudo rm
+      /etc/systemd/system/ser2net@.service`.
+    - Eski `ser2net` kullanıcısı, artık onunla çalışan bir şey kalmayınca silinebilir
+      (`sudo userdel ser2net`); klasik ser2net daemon'u kuruluysa silmeyin: paketi de bu adda
+      bir hesap kullanıyor olabilir.
 - **1024 altı portlar** (Modbus/TCP'nin 502'si, 80 ya da 443'te web arayüzü): Linux bu
   portlarda yalnızca root'un ya da `CAP_NET_BIND_SERVICE` yetkisi olan bir sürecin
   dinlemesine izin verir; iki unit de ser2netweb'i yetkisiz bir kullanıcıyla çalıştırır. Böyle
   bir porttaki eşleme panoda bir ipucuyla başarısız olur, 1024 altındaki bir admin arayüzü
   portu için açılışta uyarı çıkar (web arayüzü başlayamaz). İzin vermek için servise
-  yalnızca bu yetkiyi `sudo systemctl edit ser2net` ile verin, ardından
-  `sudo systemctl restart ser2net`:
+  yalnızca bu yetkiyi `sudo systemctl edit ser2netweb` ile verin, ardından
+  `sudo systemctl restart ser2netweb`:
   ```ini
   [Service]
   AmbientCapabilities=CAP_NET_BIND_SERVICE
@@ -1712,18 +1751,20 @@ farklı host adlarıyla (IP adresi ve ad) ya da ayrı tarayıcı profilleriyle g
 - **Windows:** `ser2netweb-windows-x64.exe --install-service --service-name ser2net-line2
   --data-dir C:\ProgramData\ser2net-line2` (ve her servis için bir güvenlik duvarı
   kuralı: [docs/WINDOWS.md](docs/WINDOWS.md)).
-- **Linux (systemd):** `systemd/ser2net@.service` şablonu her ad için bir kurulum çalıştırır;
-  verisi `/var/lib/ser2net/<ad>` altında, adresi `/etc/ser2net/<ad>.env` içinde durur
-  (`SER2NETWEB_BIND_IP=0.0.0.0`, `SER2NETWEB_PORT=8081`); kurulum adı bildirimlerdeki adı olur.
-  Unit'i ve paketlenmiş bağımlılıkları bir kez, bağımlılıkları her yükseltmeden sonra da
-  yeniden kurun (kurulumlar `--no-bootstrap` ile başlar ve `lib/` güncel değilken açılış
-  log'ları uyarır):
+- **Linux (systemd):** `systemd/ser2netweb@.service` şablonu her ad için bir kurulum
+  çalıştırır; verisi `/var/lib/ser2netweb/<ad>` altında, adresi `/etc/ser2netweb/<ad>.env`
+  içinde durur (`SER2NETWEB_BIND_IP=0.0.0.0`, `SER2NETWEB_PORT=8081`); kurulum adı
+  bildirimlerdeki adı olur. Unit'i ve paketlenmiş bağımlılıkları bir kez, bağımlılıkları her
+  yükseltmeden sonra da yeniden kurun (kurulumlar `--no-bootstrap` ile başlar ve `lib/`
+  güncel değilken açılış log'ları uyarır):
   ```bash
-  sudo cp /opt/ser2net/systemd/ser2net@.service /etc/systemd/system/ && sudo systemctl daemon-reload
-  sudo install -d -o ser2net -g ser2net /opt/ser2net/lib
-  sudo -u ser2net python3 /opt/ser2net/bootstrap.py        # her yükseltmeden sonra yeniden
-  sudo systemctl enable --now ser2net@line1 ser2net@line2
+  sudo cp /opt/ser2netweb/systemd/ser2netweb@.service /etc/systemd/system/ && sudo systemctl daemon-reload
+  sudo install -d -o ser2netweb -g ser2netweb /opt/ser2netweb/lib
+  sudo -u ser2netweb python3 /opt/ser2netweb/bootstrap.py        # her yükseltmeden sonra yeniden
+  sudo systemctl enable --now ser2netweb@line1 ser2netweb@line2
   ```
+  (2.9.x'in `ser2net@.service` kurulumları: Servis olarak çalıştırma altında *2.9.x'ten
+  yükseltme*.)
 - **Docker:** her kurulum için ayrı bir container; her birinin kendi volume'ü,
   `container_name`'i ve yayınlanan portları (`8081:8080`), adı için de `SER2NETWEB_NODE_NAME`
   (ya da `hostname:`) ([docs/DOCKER.md](docs/DOCKER.md)).
@@ -1757,7 +1798,7 @@ saat atlamasından etkilenmeyen bir saatle ölçülür.
   ayrıdır: `TZ`, bkz. [`docs/DOCKER.md`](docs/DOCKER.md).)
 - **Açılışta saati beklemek:** systemd unit'i ağı bekler, saat senkronunu beklemez; NTP
   sunucusu olmayan bir ağda ser2netweb aksi hâlde hiç başlamazdı. Yine de beklemek için
-  `systemd-time-wait-sync.service`'i etkinleştirin ve `systemctl edit ser2net` ile
+  `systemd-time-wait-sync.service`'i etkinleştirin ve `systemctl edit ser2netweb` ile
   `After=time-sync.target` ve `Wants=time-sync.target` ekleyin.
 - **ser2netweb neyi kontrol eder:** saat en yeni yapılandırma yedeğinden, `config.json`'un son
   değişikliğinden ya da bu sürümün yapıldığı tarihten gerideyse açılış log'una bir WARNING

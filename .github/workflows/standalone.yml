@@ -78,8 +78,8 @@ jobs:
             build/ser2netweb.cdx.json
           if-no-files-found: error
 
-  # The binary under systemd/ser2net-standalone.service on a real systemd (the runner's
-  # PID 1): installed as the README says, data in /var/lib/ser2net (tests/systemd_smoke.sh)
+  # The binary under systemd/ser2netweb-standalone.service on a real systemd (the runner's
+  # PID 1): installed as the README says, data in /var/lib/ser2netweb (tests/systemd_smoke.sh)
   linux-systemd:
     name: systemd unit (binary)
     needs: linux
@@ -92,11 +92,11 @@ jobs:
         with:
           name: ser2netweb-linux-x64
           path: dist
-      - name: Install and run systemd/ser2net-standalone.service
+      - name: Install and run systemd/ser2netweb-standalone.service
         timeout-minutes: 10
         run: tests/systemd_smoke.sh dist/ser2netweb
 
-  # The binary installed by systemd/ser2net-install.sh from files laid out as a release has
+  # The binary installed by systemd/ser2netweb-install.sh from files laid out as a release has
   # them: fresh, again (an upgrade), a changed file, --uninstall, a noexec /tmp
   # (tests/install_smoke.sh)
   linux-install:
@@ -111,7 +111,7 @@ jobs:
         with:
           name: ser2netweb-linux-x64
           path: dist
-      - name: sudo sh ser2net-install.sh, as the README says
+      - name: sudo sh ser2netweb-install.sh, as the README says
         timeout-minutes: 10
         run: tests/install_smoke.sh dist/ser2netweb
 

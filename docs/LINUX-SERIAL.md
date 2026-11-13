@@ -38,10 +38,10 @@ stat -L -c '%G (gid %g)' /dev/ttyUSB0      # dialout (gid 20) on Debian/Ubuntu, 
 sudo usermod -aG "$(stat -L -c %G /dev/ttyUSB0)" "$USER"     # then sign out and in again
 ```
 
-- **systemd** (`systemd/ser2net.service`, `ser2net@.service`, `ser2net-standalone.service`):
+- **systemd** (`systemd/ser2netweb.service`, `ser2netweb@.service`, `ser2netweb-standalone.service`):
   the unit gives the account the group with `SupplementaryGroups=dialout`. On a
   distribution whose serial group has another name (Arch, Manjaro, EndeavourOS: `uucp`) the
-  unit fails with `status=216/GROUP`: set it with `sudo systemctl edit ser2net`:
+  unit fails with `status=216/GROUP`: set it with `sudo systemctl edit ser2netweb`:
   ```ini
   [Service]
   SupplementaryGroups=
@@ -124,7 +124,7 @@ mainly USB CDC `ttyACM*` devices; it leaves ordinary USB-serial adapters (FTDI, 
 `ttyUSB*`) alone by default. Tell it to ignore a device with a udev rule:
 
 ```text
-# /etc/udev/rules.d/99-ser2net-mm.rules (VID/PID from `udevadm info -a -n /dev/ttyACM0`)
+# /etc/udev/rules.d/99-ser2netweb-mm.rules (VID/PID from `udevadm info -a -n /dev/ttyACM0`)
 ATTRS{idVendor}=="2341", ENV{ID_MM_DEVICE_IGNORE}="1"
 ```
 
@@ -162,5 +162,5 @@ re-plug the adapter. `journalctl -k` shows `usbfs: interface 0 claimed by ch341 
 
 Open an issue with the mapping's state and hint from the dashboard, the lines of the
 mapping's log around the error, `ser2netweb --about`, and the output of
-`ls -l /dev/serial/by-id/ /dev/ttyUSB* /dev/ttyACM* 2>/dev/null` and `id ser2net` (mask
-serial numbers you don't want to publish).
+`ls -l /dev/serial/by-id/ /dev/ttyUSB* /dev/ttyACM* 2>/dev/null` and `id ser2netweb` (the
+service user; `ser2net` up to 2.9.x) (mask serial numbers you don't want to publish).

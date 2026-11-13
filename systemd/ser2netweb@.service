@@ -1,7 +1,7 @@
 [Unit]
-# One ser2net per instance name: systemctl enable --now ser2net@line1 ser2net@line2
-# Each keeps its data (config.json, logs) in /var/lib/ser2net/<name>, made by systemd.
-# Give each its own web UI address in /etc/ser2net/<name>.env, for example:
+# One ser2netweb per instance name: systemctl enable --now ser2netweb@line1 ser2netweb@line2
+# Each keeps its data (config.json, logs) in /var/lib/ser2netweb/<name>, made by systemd.
+# Give each its own web UI address in /etc/ser2netweb/<name>.env, for example:
 #   SER2NETWEB_BIND_IP=0.0.0.0
 #   SER2NETWEB_PORT=8081
 # (without it a first start binds 127.0.0.1:8080, which the next instance then can't
@@ -9,13 +9,15 @@
 # tab and the cluster's fleet view give it; an empty SER2NETWEB_NODE_NAME= in that file
 # leaves the name to Settings -> Admin interface. (The SER2NET_* names of 2.9.x and older
 # still work in it; a SER2NETWEB_* one wins.)
-# Several instances on one machine: README.en.md, "Run as a service".
-Description=ser2net (%i) — serial-to-network bridge with web config UI
+# Several instances on one machine: README.en.md, "Run as a service". Up to 2.9.x this was
+# ser2net@.service with /var/lib/ser2net/<name> and /etc/ser2net/<name>.env: README,
+# "Upgrading from 2.9.x".
+Description=ser2netweb (%i) — serial-to-network bridge with web config UI
 After=network-online.target
 Wants=network-online.target
 # Not After=time-sync.target: on a network without an NTP server the start would wait for
 # good. To wait for the clock, enable systemd-time-wait-sync.service and add
-# After=/Wants=time-sync.target with `systemctl edit ser2net@.service` (README: Time
+# After=/Wants=time-sync.target with `systemctl edit ser2netweb@.service` (README: Time
 # synchronisation).
 
 [Service]
@@ -25,42 +27,42 @@ Type=simple
 # Ubuntu, Raspberry Pi OS, Fedora, RHEL and openSUSE; uucp on Arch, Manjaro and
 # EndeavourOS, which have no dialout group (the unit then fails with status=216/GROUP).
 # A device says which: stat -L -c %G /dev/ttyUSB0. To set another one for every instance
-# without editing this file, run "systemctl edit ser2net@.service" and add:
+# without editing this file, run "systemctl edit ser2netweb@.service" and add:
 #   [Service]
 #   SupplementaryGroups=
 #   SupplementaryGroups=uucp
-User=ser2net
+User=ser2netweb
 SupplementaryGroups=dialout
-WorkingDirectory=/opt/ser2net
+WorkingDirectory=/opt/ser2netweb
 # The instances share one code tree and its ./lib: install the bundled dependencies there
-# at deploy time and after each upgrade (sudo -u ser2net python3 /opt/ser2net/bootstrap.py,
-# or as root followed by chown -R ser2net /opt/ser2net/lib), so no instance writes to it
+# at deploy time and after each upgrade (sudo -u ser2netweb python3 /opt/ser2netweb/bootstrap.py,
+# or as root followed by chown -R ser2netweb /opt/ser2netweb/lib), so no instance writes to it
 # (the start-up log warns while ./lib is out of date).
 # (the old name on purpose: SER2NETWEB_NODE_NAME, or SER2NET_NODE_NAME, in the .env file wins)
 Environment=SER2NET_NODE_NAME=%i
-EnvironmentFile=-/etc/ser2net/%i.env
-StateDirectory=ser2net/%i
+EnvironmentFile=-/etc/ser2netweb/%i.env
+StateDirectory=ser2netweb/%i
 StateDirectoryMode=0700
-ExecStart=/usr/bin/python3 /opt/ser2net/ser2net.py --no-bootstrap --data-dir /var/lib/ser2net/%i
+ExecStart=/usr/bin/python3 /opt/ser2netweb/ser2netweb.py --no-bootstrap --data-dir /var/lib/ser2netweb/%i
 # Every log line goes to the instance's all.log (rotated) and to stdout, which the journal
-# keeps too (journalctl -u ser2net@<name>). To keep the lines only in all.log, uncomment
-# (or set it in /etc/ser2net/<name>.env):
+# keeps too (journalctl -u ser2netweb@<name>). To keep the lines only in all.log, uncomment
+# (or set it in /etc/ser2netweb/<name>.env):
 # Environment=SER2NETWEB_LOG_STDOUT=off
-# `systemctl reload ser2net@<name>`: read the instance's config.json again without a
-# restart (SIGHUP; see ser2net.service)
+# `systemctl reload ser2netweb@<name>`: read the instance's config.json again without a
+# restart (SIGHUP; see ser2netweb.service)
 ExecReload=/bin/kill -HUP $MAINPID
 Restart=on-failure
 RestartSec=3
 # Open files: each running mapping holds about three (serial port, listener, log) plus
-# one per client (see ser2net.service).
+# one per client (see ser2netweb.service).
 LimitNOFILE=65536
 
-# --- Hardening (as ser2net.service; StateDirectory is writable without ReadWritePaths) ---
+# --- Hardening (as ser2netweb.service; StateDirectory is writable without ReadWritePaths) ---
 NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true
 PrivateTmp=true
-# (these two also hide other programs' port locks and flock holders: see ser2net.service)
+# (these two also hide other programs' port locks and flock holders: see ser2netweb.service)
 ProtectProc=invisible
 ProcSubset=pid
 ProtectControlGroups=true
@@ -73,15 +75,15 @@ RestrictNamespaces=true
 RestrictRealtime=true
 RestrictSUIDSGID=true
 LockPersonality=true
-# AF_NETLINK: the list of network interfaces (see ser2net.service)
+# AF_NETLINK: the list of network interfaces (see ser2netweb.service)
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
 SystemCallArchitectures=native
 SystemCallFilter=@system-service
 SystemCallFilter=~@privileged @resources
-# denied calls fail with EPERM instead of killing the process (see ser2net.service)
+# denied calls fail with EPERM instead of killing the process (see ser2netweb.service)
 SystemCallErrorNumber=EPERM
-# Ports below 1024: uncomment both lines, or add them with "systemctl edit ser2net@.service"
-# (README: "Ports below 1024"; see ser2net.service)
+# Ports below 1024: uncomment both lines, or add them with "systemctl edit ser2netweb@.service"
+# (README: "Ports below 1024"; see ser2netweb.service)
 #AmbientCapabilities=CAP_NET_BIND_SERVICE
 #CapabilityBoundingSet=CAP_NET_BIND_SERVICE
 # MemoryDenyWriteExecute=true   # enable only after verifying ctypes/Python startup
