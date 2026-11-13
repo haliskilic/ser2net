@@ -1,0 +1,4 @@
+# The account the ser2netweb package's service runs as (systemd-sysusers). The unit adds
+# the group of the serial ports (SupplementaryGroups=). As packaging/sysusers.conf of
+# ser2netweb (its own .deb / .rpm).
+u ser2netweb - "ser2netweb serial-to-network bridge" /var/lib/ser2netweb

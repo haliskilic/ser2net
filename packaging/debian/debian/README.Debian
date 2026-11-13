@@ -1,0 +1,31 @@
+ser2netweb for Debian
+=====================
+
+The package installs the service ser2netweb.service but neither enables nor
+starts it. It runs as the system account ser2netweb (made by systemd-sysusers),
+in the group dialout for the serial ports, with its data (config.json, logs,
+backups) in /var/lib/ser2netweb.
+
+Set the first admin password, then start it now and at every boot:
+
+  sudo -u ser2netweb ser2netweb --data-dir /var/lib/ser2netweb --set-password admin
+  sudo systemctl enable --now ser2netweb
+
+The web UI listens on 127.0.0.1:8080 until you choose otherwise. To reach it
+from the network, add a drop-in with "sudo systemctl edit ser2netweb":
+
+  [Service]
+  Environment=SER2NETWEB_BIND_IP=0.0.0.0 SER2NETWEB_PORT=8080
+
+Changes go into such drop-ins (/etc/systemd/system/ser2netweb.service.d/),
+which an upgrade keeps. Run commands on the data directory as the account
+ser2netweb, never as root (the service could not read what root writes).
+
+pyserial-asyncio-fast is not packaged in Debian: ser2netweb then uses its
+built-in copy of that library's serial transport (the start-up log and
+"ser2netweb --about" say so). The recommended packages add MQTT publishing
+(python3-paho-mqtt), LDAP sign-in (python3-ldap3), OpenID Connect sign-in
+(python3-authlib) and self-signed certificates (python3-cryptography); each
+feature says in the UI what is missing without its package.
+
+ -- Halis KILIÇ <mail@haliskilic.com.tr>  Fri, 13 Nov 2026 12:00:00 +0000

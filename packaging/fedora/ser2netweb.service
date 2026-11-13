@@ -1,0 +1,74 @@
+[Unit]
+# The ser2netweb package's service (Fedora, EPEL): /usr/bin/ser2netweb on the
+# distribution's Python and its Python packages, with its data in /var/lib/ser2netweb, as
+# the account ser2netweb the package created (sysusers.d). Installing the package doesn't
+# start it; to run it now and at boot:
+#   sudo systemctl enable --now ser2netweb
+# An upgrade of the package replaces this file: put changes into a drop-in
+# (sudo systemctl edit ser2netweb), which stays. The unit of ser2netweb's own .deb / .rpm
+# (systemd/ser2netweb-standalone.service with /usr/bin/ser2netweb), unchanged but for
+# these comments.
+Description=ser2netweb — serial-to-network bridge with web config UI
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Run as a dedicated unprivileged user that is a member of the 'dialout' group
+# so it can open serial devices (NEVER run this as root).
+User=ser2netweb
+SupplementaryGroups=dialout
+StateDirectory=ser2netweb
+StateDirectoryMode=0700
+# On a headless first boot the console picker is non-interactive and defaults the
+# admin UI to 127.0.0.1:8080 (loopback, never network-exposed without an explicit
+# choice). To expose it on the LAN, run "systemctl edit ser2netweb" and add
+#   [Service]
+#   Environment=SER2NETWEB_BIND_IP=0.0.0.0 SER2NETWEB_PORT=8080
+# Commands run by hand on this data directory go as the service user, never as root
+# (root would own what they write, and the service could no longer read it):
+#   sudo -u ser2netweb /usr/bin/ser2netweb --data-dir /var/lib/ser2netweb --set-password admin
+ExecStart=/usr/bin/ser2netweb --data-dir /var/lib/ser2netweb
+# `systemctl reload ser2netweb`: read config.json again without a restart (SIGHUP; see
+# ser2netweb.service)
+ExecReload=/bin/kill -HUP $MAINPID
+Restart=on-failure
+RestartSec=3
+# Open files: each running mapping holds about three (serial port, listener, log) plus
+# one per client (see ser2netweb.service).
+LimitNOFILE=65536
+
+# --- Hardening (as ser2netweb.service; StateDirectory is writable without ReadWritePaths) ---
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+# (a /tmp of the service's own)
+PrivateTmp=true
+ProtectProc=invisible
+ProcSubset=pid
+ProtectControlGroups=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectClock=true
+ProtectHostname=true
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+# AF_NETLINK: the list of network interfaces (see ser2netweb.service)
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+# denied calls fail with EPERM instead of killing the process (see ser2netweb.service)
+SystemCallErrorNumber=EPERM
+# Ports below 1024: uncomment both lines, or add them with "systemctl edit ser2netweb"
+# (README: "Ports below 1024"; see ser2netweb.service)
+#AmbientCapabilities=CAP_NET_BIND_SERVICE
+#CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+# MemoryDenyWriteExecute=true   # enable only after verifying ctypes/Python startup
+# UMask=0077
+
+[Install]
+WantedBy=multi-user.target

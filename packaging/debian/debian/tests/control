@@ -1,0 +1,5 @@
+# The installed package: --version, --about, --set-password, a start on 127.0.0.1 that
+# answers /healthz, --healthcheck, a clean stop
+Tests: smoke
+Depends: @
+Restrictions: allow-stderr

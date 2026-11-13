@@ -1,0 +1,68 @@
+#!/usr/bin/make -f
+
+export PYBUILD_NAME = ser2netweb
+# pyserial-asyncio-fast (in the upstream dependencies) is not in Debian: ser2netweb runs on
+# its built-in copy of that library's serial transport, so dh_python3's note that no
+# package provides it is expected and the dependency is left out.
+
+# ser2netweb's tests that start no server and open no network socket, each a script
+# (python3 tests/test_x.py); debian/tests/smoke starts the installed package
+CHECK_TESTS = \
+	test_access_policy.py \
+	test_clock_check.py \
+	test_cluster_peer_save.py \
+	test_config_types.py \
+	test_config_validation.py \
+	test_console_log.py \
+	test_dependency_internals.py \
+	test_env_bind.py \
+	test_explain.py \
+	test_kept_names.py \
+	test_live_table.py \
+	test_log_maintenance.py \
+	test_log_read.py \
+	test_log_rotation.py \
+	test_login_throttle.py \
+	test_mapping_form_roundtrip.py \
+	test_mixed_version_edit.py \
+	test_modbus_frame.py \
+	test_modbus_write.py \
+	test_password_hashing.py \
+	test_protocol_commands.py \
+	test_public_url.py \
+	test_retention.py \
+	test_rfc2217_readonly.py \
+	test_rfc2217_settings.py \
+	test_secure_cookies.py \
+	test_ser2net_import.py \
+	test_serial_compat.py \
+	test_serial_mqtt.py \
+	test_sparkplug.py \
+	test_sparkplug_node.py \
+	test_starlette_compat.py \
+	test_text_fold.py \
+	test_time_stamps.py \
+	test_traffic_counters.py \
+	test_trusted_proxies.py \
+	test_ui_contrast.py \
+	test_ui_markup.py
+
+%:
+	dh $@ --buildsystem=pybuild
+
+override_dh_auto_test:
+ifeq (,$(filter nocheck,$(DEB_BUILD_OPTIONS)))
+	set -e; for py in $(shell py3versions -s); do \
+	  for t in $(CHECK_TESTS); do \
+	    echo "$$py tests/$$t"; PYTHONDONTWRITEBYTECODE=1 $$py tests/$$t; \
+	  done; \
+	done
+endif
+
+# installed, but neither enabled nor started: the administrator sets a password and
+# turns it on (README.Debian); an upgrade restarts it when it runs
+override_dh_installsystemd:
+	dh_installsystemd --no-enable
+
+override_dh_installchangelogs:
+	dh_installchangelogs CHANGELOG.md
