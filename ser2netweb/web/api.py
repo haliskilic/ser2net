@@ -17,12 +17,12 @@ from typing import TYPE_CHECKING, Optional
 from starlette.exceptions import HTTPException
 from starlette.requests import Request
 from starlette.responses import JSONResponse, PlainTextResponse
-from starlette.routing import Route
 
 from .. import __version__, config, importer
 from ..config import (REDACTED, ROLE_RANK, ConfigError, ConfigWriteError, MappingConfig,
                       mapping_revision, valid_mapping_id)
 from . import proxy
+from .starlette_compat import Route
 from .routes import ops
 from .routes.common import client_ip as _client_ip
 from .routes.system import METRICS_TYPE, metrics_text

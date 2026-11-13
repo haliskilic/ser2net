@@ -17,7 +17,6 @@ import unicodedata
 from urllib.parse import urlencode
 
 from starlette.responses import PlainTextResponse, Response
-from starlette.routing import Route
 
 from ... import clock, console, envvars, i18n, importer, optional, reload, storage, tlsreload
 from ...config import (
@@ -37,6 +36,7 @@ from ...explain import explain
 from ...i18n import _, ngettext
 from ...textfold import search_key
 from .. import auth, certinfo, ldap_auth, oidc_auth, proxy, selfsigned
+from ..starlette_compat import Route
 from . import ops
 from .common import Ctx, client_ip, csrf_failed, read_form
 from .forms import (
