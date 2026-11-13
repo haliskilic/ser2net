@@ -982,7 +982,7 @@ komutunu kullanın (hazır imaj, `--restart unless-stopped`, `--init`, eşleme p
 `/dev/serial/by-id` cihaz yolu, log sınırı).
 Hazır imaj (her sürümde; amd64, arm64 ve 32-bit Raspberry Pi OS gibi 32-bit ARM için
 arm/v7): `docker pull ghcr.io/haliskilic/ser2netweb:latest`
-(ya da `:3.0`, `:3.0.0`); `docker-compose.yml` bunu kullanır. 2.9.x'e kadar imaj
+(ya da `:3.0`, `:3.0.1`); `docker-compose.yml` bunu kullanır. 2.9.x'e kadar imaj
 `ghcr.io/haliskilic/ser2net` idi: o imaj artık yok (2026-11-13'ten beri `docker pull`
 başarısız olur, 2.x imajları da GHCR'da değildir); imajı `ghcr.io/haliskilic/ser2netweb`
 olarak değiştirin.

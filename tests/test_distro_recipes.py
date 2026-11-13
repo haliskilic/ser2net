@@ -161,8 +161,12 @@ def spec_tags(text, tag):
 
 
 def test_versions():
-    version = br.current_version()
-    assert br.debian_version(read("debian", "debian", "changelog")) == version
+    # the recipes name one release, at or before the checkout's version: a release commit
+    # raises the version before its tag (and the tarball the recipes hash) exists, and
+    # tools/bump_recipes.py moves them once it is out
+    version = br.debian_version(read("debian", "debian", "changelog"))
+    assert tuple(map(int, version.split("."))) <= tuple(map(int, br.current_version().split("."))), \
+        version
     for name in ("fedora", "opensuse"):
         assert br.spec_field(read(name, "ser2netweb.spec"), "Version") == version, name
     fedora = read("fedora", "ser2netweb.spec")
@@ -398,7 +402,8 @@ def test_check_steps():
 
 def test_bump_check():
     now = dt.datetime(2026, 11, 13, tzinfo=dt.timezone.utc)
-    stale = [rel for rel, text in br.planned(br.current_version(), None, now).items()
+    recipes = br.debian_version(read("debian", "debian", "changelog"))  # (the recipes' release)
+    stale = [rel for rel, text in br.planned(recipes, None, now).items()
              if text != br.read(rel)]
     assert not stale, f"python3 tools/bump_recipes.py --check: out of date: {stale}"
     # and a release moves every recipe (on copies: nothing is written)

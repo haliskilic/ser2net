@@ -1,6 +1,6 @@
 # ser2netweb — Roadmap
 
-> Current release: **v3.0.0**. CI is green across Linux + Windows × Python 3.10–3.14.
+> Current release: **v3.0.1**. CI is green across Linux + Windows × Python 3.10–3.14.
 
 ## Shipped
 

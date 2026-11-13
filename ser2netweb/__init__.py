@@ -1,7 +1,7 @@
 """ser2netweb — serial-to-network bridge with a web config UI."""
 
 # Single source of truth for the version (ser2netweb.py and the web layer import this).
-__version__ = "3.0.0"
+__version__ = "3.0.1"
 
 # The product's name: up to 2.9.x it was ser2net (no relation to the C ser2net it can
 # import the configuration of; NOTICE)
