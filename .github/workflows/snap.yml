@@ -1,0 +1,150 @@
+name: Snap
+
+# The snap ser2netweb (snap/snapcraft.yaml): for each architecture the release's standalone
+# executable (checked against its SHA256SUMS; nothing is rebuilt) with its licence texts goes
+# into build/snap/, snapcraft packs it on a runner of that architecture
+# (snapcore/action-build), and the snap is installed on the runner and tested
+# (tests/snap_smoke.sh: the command, the service off until enabled, the interfaces, /healthz,
+# snap set). Then it is uploaded to the Snap Store and released to a channel with the secret
+# SNAPCRAFT_STORE_CREDENTIALS (snapcraft export-login, README: Snap); without it the upload
+# is skipped with a notice. To set it up: register the name once (snapcraft login, snapcraft
+# register ser2netweb, on an account of https://snapcraft.io), then
+#   snapcraft export-login --snaps=ser2netweb \
+#     --acls package_access,package_push,package_update,package_release creds.txt
+# and creds.txt's content as the repository secret SNAPCRAFT_STORE_CREDENTIALS.
+# Runs: for a release (release.yml starts it with the tag: a release created with the
+# GITHUB_TOKEN starts no workflow by itself; one published by hand does, pre-releases are
+# left out), to the stable channel; by hand for a release (Actions -> Snap -> Run workflow:
+# its tag and the channel, e.g. edge to try a build first); and on pull requests that change
+# the snap (build and test the latest release's, no upload).
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: The release to package (vX.Y.Z)
+        required: true
+        type: string
+      channel:
+        description: The Snap Store channel to release it to
+        required: false
+        type: choice
+        options: [stable, candidate, beta, edge]
+        default: stable
+  pull_request:
+    paths:
+      - snap/**
+      - tests/snap_smoke.sh
+      - .github/workflows/snap.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.event_name == 'pull_request' && format('snap-{0}', github.ref) || 'snap' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  build:
+    name: build and test the snap (${{ matrix.arch }})
+    if: ${{ !github.event.release.prerelease }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { arch: amd64, runner: ubuntu-latest, exe: ser2netweb-linux-x64 }
+          - { arch: arm64, runner: ubuntu-24.04-arm, exe: ser2netweb-linux-arm64 }
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - id: tag
+        name: The release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          tag=${RELEASE_TAG:-$INPUT_TAG}
+          if [ -z "$tag" ]; then  # a pull request: the latest release (never a pre-release)
+            tag=$(gh release view -R "$GITHUB_REPOSITORY" --json tagName --jq .tagName)
+          fi
+          if ! printf '%s' "$tag" | grep -Eqx 'v[0-9]+\.[0-9]+\.[0-9]+'; then
+            echo "::error::$tag is not a release tag (vX.Y.Z)"; exit 1
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+      - name: The release's executable (SHA256SUMS) and licence texts into build/snap
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.tag.outputs.tag }}
+          EXE: ${{ matrix.exe }}
+        run: |
+          mkdir -p build/snap
+          cd build/snap
+          gh release download "$TAG" -R "$GITHUB_REPOSITORY" -p SHA256SUMS -p "$EXE" \
+            -p "$EXE.THIRD-PARTY-LICENSES.txt"
+          grep -E "^[0-9a-f]{64}  ($EXE|$EXE\.THIRD-PARTY-LICENSES\.txt)\$" SHA256SUMS > sums
+          [ "$(wc -l < sums)" -eq 2 ] || { echo "::error::SHA256SUMS lacks $EXE"; exit 1; }
+          sha256sum -c sums
+          mv "$EXE" ser2netweb
+          mv "$EXE.THIRD-PARTY-LICENSES.txt" THIRD-PARTY-LICENSES.txt
+          chmod 0755 ser2netweb
+          rm sums SHA256SUMS
+          for f in LICENSE NOTICE COMMERCIAL_LICENSE.md THIRD-PARTY-NOTICES.md; do
+            curl -fsSL --retry 3 -o "$f" "https://raw.githubusercontent.com/$GITHUB_REPOSITORY/$TAG/$f"
+          done
+          ls -l
+      - id: snap
+        uses: snapcore/action-build@3bdaa03e1ba6bf59a65f84a751d943d549a54e79  # v1.3.0
+      - name: Install it, the interfaces, the service, snap set (tests/snap_smoke.sh)
+        env:
+          SNAP_FILE: ${{ steps.snap.outputs.snap }}
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: sh tests/snap_smoke.sh "$SNAP_FILE" "${TAG#v}"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
+        with:
+          name: snap-${{ matrix.arch }}
+          path: ${{ steps.snap.outputs.snap }}
+          if-no-files-found: error
+
+  publish:
+    name: upload the snap to the Snap Store (${{ matrix.arch }})
+    needs: build
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions: {}
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [amd64, arm64]
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8.0.2
+        with:
+          name: snap-${{ matrix.arch }}
+          path: snap-file
+      - id: store
+        name: Are the Snap Store credentials there?
+        env:
+          CREDENTIALS: ${{ secrets.SNAPCRAFT_STORE_CREDENTIALS }}
+        run: |
+          if [ -z "$CREDENTIALS" ]; then
+            echo "::notice::Snap Store upload skipped: no secret SNAPCRAFT_STORE_CREDENTIALS (see the top of .github/workflows/snap.yml)"
+            echo "upload=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "upload=true" >> "$GITHUB_OUTPUT"
+          fi
+          set -- snap-file/*.snap
+          [ "$#" -eq 1 ] && [ -f "$1" ] || { echo "::error::not one snap: $*"; exit 1; }
+          echo "path=$1" >> "$GITHUB_OUTPUT"
+      - if: steps.store.outputs.upload == 'true'
+        uses: snapcore/action-publish@214b86e5ca036ead1668c79afb81e550e6c54d40  # v1.2.0
+        env:
+          SNAPCRAFT_STORE_CREDENTIALS: ${{ secrets.SNAPCRAFT_STORE_CREDENTIALS }}
+        with:
+          snap: ${{ steps.store.outputs.path }}
+          # a release: stable; by hand: the channel chosen
+          release: ${{ github.event_name == 'release' && 'stable' || inputs.channel || 'stable' }}
