@@ -206,3 +206,184 @@ Against the floors above (for the recipes of a package: `packaging/`):
   old 0.6, which ser2netweb doesn't use).
 
 No distribution here runs Python 3.10, so none needs exceptiongroup or taskgroup.
+
+## Recipes: nixpkgs, Void Linux, Gentoo (GURU), FreeBSD ports, MacPorts
+
+Five recipes in this repository build ser2netweb the way each of these distributions does,
+ready to submit there: `packaging/nix`, `packaging/void`, `packaging/gentoo`,
+`packaging/freebsd` and `packaging/macports`. Each builds the release's git tag tarball
+(`https://github.com/haliskilic/ser2netweb/archive/refs/tags/vX.Y.Z.tar.gz`, which has the
+tests; the PyPI sdist doesn't) with the distribution's own Python packages, installs the
+command `ser2netweb` and a service for the distribution's init system, and runs it as an
+account of its own with the data in the distribution's place for it. None of them provides,
+replaces or conflicts with `ser2net` (Corey Minyard's C program, unrelated): both can be
+installed side by side.
+
+- **CI:** `.github/workflows/distro-packages-2.yml` builds each recipe in that
+  distribution's own tree (pinned by commit or image digest), installs the result and runs
+  it: `ser2netweb --version` and `--about`, then its service under systemd (a NixOS VM),
+  runit, OpenRC, rc.d or launchd until `ser2netweb --healthcheck` answers. Its first job
+  checks every checksum against the tag's real tarball. It runs for pull requests that touch
+  the recipes, by hand (Actions → Distribution packages → Run workflow, optionally with
+  another release's tag, which it moves the recipes to first) and every Wednesday; it is not
+  a merge condition.
+- **A new release:** once its tag is out, `python3 tools/bump_recipes_2.py X.Y.Z` writes the
+  version and the checksums into every recipe (fetchFromGitHub's NAR hash, Void's SHA-256,
+  Gentoo's Manifest and ebuild name, FreeBSD's distinfo, MacPorts' checksums) and starts
+  the revisions again; `--check` only compares. `tests/test_distro_recipes_2.py` (in the
+  suite) checks that the recipes name one release, at or before `ser2netweb/__init__.py`'s
+  version, pyproject.toml's dependencies, one SHA-256 and size, and nothing of `ser2net`.
+- **3.0.0 and the floors:** the recipes build 3.0.0, whose `pyproject.toml` still had the
+  ranges from before the floors above (Starlette 1.10, uvicorn 0.54, websockets 17.4,
+  python-multipart 0.0.33, pyserial-asyncio-fast required). nixpkgs' recipe relaxes those
+  four (`pythonRelaxDeps`); the other distributions don't check the ranges when they build.
+  3.0.0 has no built-in serial transport yet, so where a distribution lacks
+  pyserial-asyncio-fast, its recipe comes along (Void, Gentoo, MacPorts). From the first
+  release with the floors on, `pythonRelaxDeps` can go.
+
+The versions of the three distributions the table above doesn't have (2026-11-13; ✗: below
+the floor):
+
+| | Python | pyserial | pyserial-asyncio-fast | starlette | uvicorn | h11 | websockets | python-multipart | jinja2 | markupsafe | psutil | setuptools |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| Void Linux | 3.14 | 3.5 | **missing** | 1.10.0 | 0.52.4 | 0.16.0 | 17.2 | 0.0.9 ✗ | 3.1.6 | 3.0.4 | 5.9.8 | 80.10.2 |
+| Gentoo | 3.14 | 3.5 | **missing** (GURU too) | 1.10.0 (~arch) | 0.54.0 | 0.16.0 | 17.4 (~arch) | 0.0.33 (~arch) | 3.1.6 | 3.0.4 | 7.2.2 | 84.2.1 |
+| MacPorts | 3.14 | 3.5 (py-serial) | **missing** | 1.10.0 | 0.54.0 | 0.16.0 | 17.2 | 0.0.33 | 3.1.6 | 3.0.4 | 7.2.2 | 84.2.1 |
+
+The extras there: Void has paho-mqtt 2.1.0 (`python3-paho_mqtt`), ldap3 2.8.1 ✗ and
+cryptography 48.0.0, no Authlib; Gentoo has paho-mqtt 2.2.0, ldap3 2.9.1, authlib 1.9.5 and
+cryptography 50.0.2; MacPorts has ldap3 2.9.1 and cryptography 48.0.0 for Python 3.14,
+paho-mqtt 2.1.0 only up to Python 3.13, and no Authlib. FreeBSD's `devel/py-setuptools` is
+63.1.0, older than PEP 639's licence fields (setuptools 77): its port takes them out of
+`pyproject.toml` before the build and installs the licence texts itself.
+
+### nixpkgs
+
+- **Files:** `package.nix` is `pkgs/by-name/se/ser2netweb/package.nix`
+  (`buildPythonApplication`, `pyproject = true`, nixpkgs' `python3Packages`, an import check,
+  `versionCheckHook`); `module.nix` is the NixOS module `services.ser2netweb`
+  (`nixos/modules/services/networking/ser2netweb.nix`: a system user `ser2netweb` in
+  `dialout`, `/var/lib/ser2netweb`, the release unit's hardening, `listenAddress` / `port` /
+  `openFirewall` / `extraArgs`); `test.nix` is its VM test (`nixos/tests/ser2netweb.nix`:
+  the service answers on `/healthz`, `--set-password` as the service user, `systemctl
+  reload`). `ci.nix` only ties them to a pinned nixpkgs for CI.
+- **Status:** builds and passes its checks against nixos-unstable (2026-11-11); the NixOS
+  test passes. Every dependency is in nixpkgs.
+- **Build it:**
+  `nix-build -I nixpkgs=https://github.com/NixOS/nixpkgs/archive/<commit>.tar.gz -E 'with import <nixpkgs> {}; callPackage ./packaging/nix/package.nix {}'`;
+  the VM test: `nix-build -I nixpkgs=… packaging/nix/ci.nix -A test` (needs KVM).
+- **Submit** (a pull request to NixOS/nixpkgs from a fork, `master`):
+  1. `maintainers: add haliskilic`: in `maintainers/maintainer-list.nix`, in alphabetical
+     order, `haliskilic = { name = "Halis KILIÇ"; github = "haliskilic"; githubId = 16972550; };`
+     (no e-mail is needed);
+  2. `ser2netweb: init at 3.0.0`: `package.nix` as `pkgs/by-name/se/ser2netweb/package.nix`
+     with `maintainers = with lib.maintainers; [ haliskilic ];`;
+  3. `nixos/ser2netweb: init`: `module.nix` and `test.nix` at the paths above (their
+     `meta.maintainers` likewise), the module in `nixos/modules/module-list.nix`, the test in
+     `nixos/tests/all-tests.nix` (`ser2netweb = runTest ./ser2netweb.nix;`) and a line in the
+     current release notes (`nixos/doc/manual/release-notes/rl-*.section.md`, "New
+     Modules");
+  4. before opening it: `nixfmt` on the files, `nix-build -A ser2netweb -A nixosTests.ser2netweb`,
+     and `nixpkgs-review pr <number>` once it is open. The pull request's template asks what
+     was tested; the text is in the report of this work.
+  Later releases: r-ryantm (nixpkgs' update bot) opens the version bump itself.
+
+### Void Linux
+
+- **Files:** `srcpkgs/ser2netweb/template` (`build_style=python3-pep517`, the system
+  account `_ser2netweb` in `dialout`, `/var/lib/ser2netweb` 0700, a `do_check` running three
+  of the tests), its runit service `files/ser2netweb/run` (`conf` there may export
+  `SER2NETWEB_BIND_IP` / `SER2NETWEB_PORT` or set `OPTS`) and `INSTALL.msg`;
+  `srcpkgs/python3-pyserial-asyncio-fast` (new, with a patch that lets its test run on
+  Python 3.14) and `srcpkgs/python3-python-multipart` (an update from 0.0.9).
+- **Status:** builds with `xbps-src -Q` (checks included) at void-packages' master of
+  2026-11-13, xlint clean, installs and runs under runit. **Missing in Void:**
+  `python3-pyserial-asyncio-fast` (in this pull request) and python-multipart newer than
+  0.0.9 (updated in it); Authlib (the OIDC extra) isn't packaged, ldap3 is 2.8.1.
+- **Build it:** `git clone https://github.com/void-linux/void-packages`, copy
+  `packaging/void/srcpkgs/*` into its `srcpkgs/`, then `./xbps-src binary-bootstrap`,
+  `./xbps-src -Q pkg ser2netweb`, `sudo xbps-install -R hostdir/binpkgs ser2netweb` and
+  `sudo ln -s /etc/sv/ser2netweb /var/service/`.
+- **Submit** (a pull request to void-linux/void-packages from a fork): one commit per
+  package, in this order, with Void's subjects: `python3-python-multipart: update to
+  0.0.33.`, `New package: python3-pyserial-asyncio-fast-0.16`, `New package:
+  ser2netweb-3.0.0`. Void asks that new packages be runtime tested (state how) and prefers
+  them submitted by someone other than the software's author: the pull request should say
+  why ser2netweb fits ("System": a system service), and a Void user may be the better
+  maintainer. The `maintainer=` lines name the maintainer of this project; change them if
+  someone else adopts the package.
+
+### Gentoo (GURU)
+
+- **Files:** `net-misc/ser2netweb` (EAPI 8, `distutils-r1` with
+  `DISTUTILS_USE_PEP517=setuptools`, an OpenRC init script and conf.d, a systemd unit,
+  `optfeature` for the extras, `metadata.xml`, `Manifest` with the DIST line),
+  `acct-user/ser2netweb` (home `/var/lib/ser2netweb` 0700, groups `dialout` and `uucp`, the
+  serial ports' groups under systemd's and other udev rules) and `acct-group/ser2netweb`
+  (dynamic ids, as GURU's accounts have), and `dev-python/pyserial-asyncio-fast` (neither
+  ::gentoo nor GURU has it).
+- **Status:** `emerge --oneshot net-misc/ser2netweb` (USE=-test) from the overlay in
+  `gentoo/stage3` with the portage snapshot of 2026-11-12; `pkgcheck scan` clean; the OpenRC
+  service starts, reloads and stops. GURU is `~amd64` only; so are Gentoo's Starlette,
+  websockets and python-multipart.
+- **Build it:** make `packaging/gentoo` an overlay (`profiles/repo_name`,
+  `metadata/layout.conf` with `masters = gentoo`, `thin-manifests = true`), add it in
+  `/etc/portage/repos.conf`, accept `~amd64` for it, then `emerge --ask net-misc/ser2netweb`
+  and `pkgcheck scan` in the overlay.
+- **Submit:** GURU takes commits from its contributors on its `dev` branch
+  (`git.gentoo.org/repo/proj/guru.git`); its trusted contributors move reviewed work to
+  `master`. What the maintainer does: read [GURU's information for
+  contributors](https://wiki.gentoo.org/wiki/Project:GURU/Information_for_Contributors),
+  ask for access in `#gentoo-guru` (Libera.Chat) or on the gentoo-guru mailing list with an
+  SSH key, sign commits with an OpenPGP key and a `Signed-off-by:` line under the real name
+  (GLEP 76), then commit the four packages to `dev` (`acct-group/ser2netweb: new package,
+  add 0`, `acct-user/ser2netweb: new package, add 0`, `dev-python/pyserial-asyncio-fast: new
+  package, add 0.16`, `net-misc/ser2netweb: new package, add 3.0.0`) after `pkgcheck scan
+  --commits` and `pkgdev manifest`. The metadata names the maintainer of this project.
+
+### FreeBSD ports
+
+- **Files:** `net/ser2netweb` (`Makefile`: `USES=python`, `USE_PYTHON=autoplist noflavors
+  pep517`, `USE_GITHUB`, the dependencies from the ports tree, the extras as options, all on;
+  `distinfo`, `pkg-descr`, the rc.d script `files/ser2netweb.in` (daemon(8), `reload` sends
+  SIGHUP to ser2netweb, `ser2netweb_env` for the web UI's address), `files/pkg-message.in`),
+  and the lines the port needs in the ports tree's `UIDs` and `GIDs` (`packaging/freebsd/UIDs`,
+  `GIDs`): the user and group `ser2netweb`, 407 (free on 2026-11-13), home
+  `/var/db/ser2netweb`, and `ser2netweb` added to `dialer` (the group of `/dev/cua*`).
+- **Status:** `make package`, `check-plist`, `make test` and `portlint -AC` on FreeBSD 14.5
+  with the ports tree of 2026-11-13; the package installs, `service ser2netweb start` /
+  `reload` / `stop` work. Every dependency is in the ports tree. poudriere testport was not
+  run in CI (it builds every dependency from source); run it before submitting.
+- **Build it** (as root on FreeBSD 14): a ports tree (`git clone --depth 1
+  https://git.FreeBSD.org/ports.git /usr/ports`), the lines of `packaging/freebsd/UIDs` and
+  `GIDs` in `/usr/ports/UIDs` and `GIDs` (sorted by id; append `,ser2netweb` to `dialer`'s),
+  `cp -R packaging/freebsd/net/ser2netweb /usr/ports/net/`, then in it `portlint -AC`, `make
+  DEVELOPER=yes package` (or `poudriere testport -j <jail> -o net/ser2netweb`) and `pkg add
+  work/pkg/ser2netweb-*.pkg`.
+- **Submit:** with an account on bugs.freebsd.org (the maintainer opens it), a new bug in
+  Ports & Packages → Individual Port(s), titled `[NEW PORT] net/ser2netweb: Serial-to-network
+  bridge with a web UI`, with one `git format-patch` against the ports tree's `main` adding
+  `net/ser2netweb`, `SUBDIR += ser2netweb` in `net/Makefile`, and the `UIDs` / `GIDs` lines;
+  attach the poudriere testport log (amd64, a 14.x and a 15.x jail). A committer may give the
+  account another free id. `MAINTAINER=` is the address bug reports for the port go to.
+
+### MacPorts
+
+- **Files:** `net/ser2netweb/Portfile` (the github and python PortGroups,
+  `python.default_version 314`, `depends_lib` on the py314 ports, the user `_ser2netweb`,
+  `/opt/local/var/db/ser2netweb` 0700, a launchd startup item running as that user, the
+  `ldap` and `tls` variants) and `python/py-pyserial-asyncio-fast/Portfile`.
+- **Status:** `port lint --nitpick` clean (both), `port install` on macOS 26 (arm64) with
+  MacPorts 2.12.7, `port load` starts it under launchd. **Missing in MacPorts:**
+  `py-pyserial-asyncio-fast` (its Portfile is here, submitted with it); `py-authlib` (no OIDC
+  variant); `py314-paho-mqtt` (`py-paho-mqtt` has Python 3.10 to 3.13 only: no MQTT
+  variant until it gets 3.14).
+- **Build it:** install MacPorts, put `file:///path/to/packaging/macports` above the
+  `rsync://…` line in `/opt/local/etc/macports/sources.conf`, run `portindex` in that
+  folder, then `port lint --nitpick ser2netweb`, `sudo port install ser2netweb` and `sudo
+  port load ser2netweb`.
+- **Submit** (a pull request to macports/macports-ports from a fork): two commits,
+  `py-pyserial-asyncio-fast: new port, version 0.16` and `ser2netweb: new port, version
+  3.0.0`, with the Portfiles at the same paths; the pull request's template asks for the
+  macOS and Xcode versions tested on and `port lint --nitpick` / `sudo port -vst install`.
+  The maintainer is given by GitHub handle (`@haliskilic`) with `openmaintainer`.
