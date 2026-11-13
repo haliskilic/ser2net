@@ -145,7 +145,7 @@ def main():
                      "  options:\n"
                      "    kickolduser: \"yes\\nFORGED log line\"\n"
                      "rotator: &r\n"
-                     "  accepter: tcp,4999\n"
+                     f"  accepter: tcp,127.0.0.1,{free_port()}\n"
                      "  connections: [ lab ]\n").encode()
         st, _, page = tr.post("/settings/config/import", {"step": "preview", "mode": "merge"},
                               files={"file": ("ser2net.yaml", open_file)})
@@ -176,7 +176,10 @@ def main():
         warned = last.split(" AUDIT ", 1)[0].count("import warning: ")
         assert warned >= 4 and detail.startswith(
             f"2 mappings (ser2net.yaml (ser2net 4.x)); {warned} warnings: "), (warned, detail)
-        assert "rotator r: not imported" in detail and len(detail) <= 500
+        assert "rotator r: imported as the port pool r" in detail and len(detail) <= 500
+        assert [p["name"] for p in srv.saved_config()["pools"]] == ["r"]
+        assert {m["name"]: m["network"]["pool"] for m in srv.saved_config()["mappings"]
+                if m["name"] in ("lab", "bench")} == {"lab": "r", "bench": ""}
         print("preview: each mapping as it will be, its warnings in its row (protection first); "
               "applied from a Turkish page: warnings in all.log and the audit log in English  OK")
 

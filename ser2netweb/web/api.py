@@ -345,6 +345,8 @@ def build_api_routes(state: AppState) -> list[Route]:
             return JSONResponse({"error": "invalid_import", "detail": str(e)}, status_code=400)
         answer = {"mode": mode, "dry_run": _BOOLEANS[dry], "source": plan.source,
                   "count": len(plan.mappings), "warnings": plan.warnings}
+        if plan.pools:  # a classic ser2net file's rotators (added unless the name exists)
+            answer["pools"] = [dataclasses.asdict(p) for p in plan.pools]
         if _BOOLEANS[dry]:
             rows, problem = ops.import_preview(state, plan, mode)
             return JSONResponse({**answer, "rows": rows, "summary": ops.import_counts(rows),
@@ -693,6 +695,10 @@ def openapi_spec(admin, base: str = "") -> dict:
             "source": {"type": "string", "description": "what the body was"},
             "count": {"type": "integer", "description": "mappings in the body"},
             "warnings": {"type": "array", "items": {"type": "string"}},
+            "pools": {"type": "array", "items": {"$ref": "#/components/schemas/PortPool"},
+                      "description": "the port pools a classic ser2net file's rotators "
+                                     "become (only when it has some): added unless a pool "
+                                     "of that name exists"},
             "rows": {"type": "array", "items": {"type": "object", "properties": {
                 "name": {"type": "string"}, "kind": {"type": "string"},
                 "action": {"type": "string", "enum": ["add", "update", "same", "remove"]},

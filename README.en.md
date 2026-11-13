@@ -593,6 +593,11 @@ everything from a **password-protected web UI** — no CLI or hand-edited config
   interfaces (IPv4 + IPv6)**. An RFC 2217 connection's signature (4.x `signature`, 3.x
   `SIGNATURE`) becomes its **RFC 2217 signature**; `hangup-when-done` and `nobreak` are kept
   but have no effect here (the port stays open between connections), and the import says so.
+  A UDP connection's fixed remote addresses (4.x `remaddr: !addr,port` and `connback`, 3.x
+  `remaddr` with a port) become its UDP targets; `chardelay`, where the file sets it
+  (`chardelay: true`, `chardelay-scale` / `-min` / `-max`, `sendon`) on a raw connection,
+  becomes packing; a rotator becomes a port pool that rotates, with its TCP connections
+  as members. Each of them has a note in the preview.
   Merging such a file again later takes only what the file says and keeps what was set on
   its mappings here (USB identity, RS-485, MQTT, Modbus points, a disabled mapping stays
   disabled; the RFC 2217 signature comes only with the first import); the bind IP, the

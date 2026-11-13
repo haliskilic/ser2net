@@ -325,11 +325,22 @@ def import_preview(state, plan, mode: str) -> tuple[list[dict], str | None]:
                               absent=plan.absent)
     candidate, touched = importer.apply_import(current, plan.mappings, mode,
                                                classic=plan.classic, absent=plan.absent)
+    result = dataclasses.replace(state.config, mappings=candidate)
     try:
-        dataclasses.replace(state.config, mappings=candidate).validate_for_save()
+        result.validate_for_save()
     except ConfigError as e:
         return rows, str(e)
-    return rows, import_conflict(state.config, touched, candidate) or None
+    return rows, (import_conflict(state.config, touched, candidate)
+                  or _pools_conflict(result, plan) or None)
+
+
+def _pools_conflict(result, plan) -> str:
+    """Why the port pools an import brings (a classic ser2net file's rotators) can't be
+    added to ``result``, the configuration with the import's mappings ("" when they can,
+    or it brings none)."""
+    if not plan.pools:
+        return ""
+    return result.pools_problem(importer.merged_pools(result.pools, plan.pools))
 
 
 async def import_mappings(state, plan, mode: str) -> tuple[list[dict], list[MappingConfig], bool]:
@@ -348,13 +359,17 @@ async def import_mappings(state, plan, mode: str) -> tuple[list[dict], list[Mapp
         if conflict := import_conflict(state.config, touched, new_maps):  # the UI's port, ...
             raise ConfigError(conflict)
         state.config.mappings = new_maps
+        if conflict := _pools_conflict(state.config, plan):
+            raise ConfigError(conflict)
+        state.config.pools[:] = importer.merged_pools(state.config.pools, plan.pools)
     if mode == "replace":
         await state.supervisor.stop_all()
         await state.forget_mappings(before - {m.id for m in new_maps})
-        await state.supervisor.start_all(state.config)
+        await state.supervisor.start_all(state.config)  # (the pools too)
     else:
         for m in touched:
             await state.supervisor.apply_mapping(m)
+        await state.supervisor.apply_pools(state.config.pools)
     return rows, new_maps, edit.backed_up
 
 

@@ -9,9 +9,18 @@ carries a small reader for the YAML subset ser2net configs use plus a 3.x line
 parser, and turns every ser2net connection into a dict for MappingConfig.from_dict
 (each warning about one is a Note that knows its mapping: the preview shows it there).
 
-What has no equivalent here (LEDs, rotators, mDNS, ...) is reported as a warning that
-names the connection; chardelay (how ser2net batches what it reads) is dropped without
-one: data is forwarded as it arrives here. A connection that would be more open here than in
+What has no equivalent here (LEDs, mDNS, ...) is reported as a warning that names the
+connection. Three things map onto opt-in features of a mapping, each with a note:
+  - a UDP connection's fixed remote addresses (4.x remaddr "!addr,port" and connback, 3.x
+    remaddr with a port) become its udp_targets: the device's output always goes there;
+  - chardelay, when the file sets it (chardelay: true, chardelay-scale / -min / -max, or
+    sendon) on a raw connection, becomes packing: pack_gap_ms from ser2net's own
+    formula, pack_max_bytes from its buffer size, sendon as pack_delimiter. A file that
+    says nothing about it (ser2net's chardelay is on by default) gets no packing: data is
+    forwarded as it arrives here;
+  - a rotator becomes a port pool (parse_ser2net's third value) that rotates as ser2net's
+    did, with its TCP connections as members (network.pool).
+A connection that would be more open here than in
 ser2net is imported disabled, with a warning that says why: its gtlssh login
 (certauth) cannot be carried over, its TLS client certificates (ssl clientauth) only with
 the CA file they are checked against (CA=) on this host, its TLS certificate is not on
@@ -40,11 +49,12 @@ import socket
 import sys
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any, Optional
+from typing import Any, NamedTuple, Optional
 
 from .config import (
-    MAX_TIMER_S, RFC2217_SIGNATURE_MAX, ConfigError, MappingConfig, _ip_overlaps,
-    bind_ip_problem, canonical_device, canonical_ip, trace_file_name, url_port,
+    MAX_TIMER_S, PACK_DELIMITER_MAX, PACK_GAP_MAX_MS, PACK_MAX_BYTES_MAX, POOL_NAME_MAX,
+    RFC2217_SIGNATURE_MAX, UDP_TARGETS_MAX, ConfigError, MappingConfig, _ip_overlaps,
+    bind_ip_problem, canonical_device, canonical_ip, host_port, trace_file_name, url_port,
 )
 from .engine import bindhint
 from .i18n import _
@@ -592,6 +602,13 @@ class _Conn:
     flock: bool = True       # gensio serialdev flock (flock + TIOCEXCL), on by default
     uucplock: bool = True    # gensio serialdev uucplock (UUCP lock files), on by default
     devname: str = ""                # 3.x: the device as the port line names it (\o)
+    chardelay: Optional[bool] = None  # chardelay as the file sets it (None: it does not)
+    chardelay_opts: dict[str, int] = field(default_factory=dict)  # scale / min / max given
+    bufsize: Optional[int] = None    # dev-to-net-bufsize, when given
+    sendon: Optional[str] = None     # 4.x sendon (raw)
+    # what a rotator names it by: the YAML node of its body (a version 1 alias), its name
+    # (version 2) or its port field (3.x)
+    key: Any = None
     dropped: dict[str, None] = field(default_factory=dict)       # options with no equivalent
     notes: list[str] = field(default_factory=list)
     skipped: list[str] = field(default_factory=list)             # why it is not imported
@@ -1121,8 +1138,25 @@ def _option(c: _Conn, key: str, value: str) -> None:
     elif k == "telnet-brk-on-sync":  # only matters on telnet ports
         if _bool(value) and c.network["protocol"] != "raw":
             c.drop(key)
-    elif k == "chardelay":
-        pass  # batching of serial reads; data is forwarded as it arrives here
+    elif k == "chardelay":  # resolved in _packing()
+        b = _flag(c, key, value)
+        if b is not None:
+            c.chardelay = b
+    elif k in ("chardelay-scale", "chardelay-min", "chardelay-max", "dev-to-net-bufsize"):
+        n = value.strip()
+        c.drop(k)  # (in the file's order; _packing takes it out again when it is imported)
+        if n.isdigit() and len(n) <= 9:
+            if k == "dev-to-net-bufsize":
+                c.bufsize = int(n)
+            else:
+                c.chardelay_opts[k[10:]] = int(n)
+    elif k == "sendon":
+        c.drop(k)
+        c.sendon = value
+    elif k == "connback" and c.network["mode"] == "udp":
+        for entry in re.split(r"[;\s]+", value.strip()):
+            if entry:
+                _udp_target(c, _("connback {0}").format(entry), *_address(entry))
     else:
         c.drop(key)
 
@@ -1150,29 +1184,126 @@ def _remaddr(c: _Conn, value: str) -> None:
     """remaddr=<addr>[;<addr>...] (allowed clients) -> allowed_client_ips. Only IP
     addresses and subnets can be represented; source ports are not checked here. An
     address that can't be imported still limits the clients in ser2net (access_given):
-    without any other the mapping comes in disabled. No address = no limit, as there."""
+    without any other the mapping comes in disabled. No address = no limit, as there.
+
+    On a UDP connection a fixed remote address also becomes a UDP target (_udp_target):
+    4.x "!addr,port" (ser2net.yaml(5): "If you set a remote address (remaddr) with a
+    non-zero port and a connect back port ... ser2net will take one of the connections and
+    assign it to that port permanently. This is called a fixed remote address. All the
+    traffic from the device will go to that port."), 3.x any remaddr with a non-zero port
+    (ser2net(8) 3.5: the same without the connect back mark). On TCP a connect-back
+    address is not imported, as before."""
     allowed = c.network.setdefault("allowed_client_ips", [])
+    udp = c.network["mode"] == "udp"
     for entry in re.split(r"[;\s]+", value.strip()):
         if not entry:
             continue
         c.access_given = True
-        if entry.startswith("!"):
+        back = entry.startswith("!")
+        if back and not udp:
             c.note(_("remaddr {0}: connect-back addresses are not imported").format(entry))
             continue
-        fields = [f.strip() for f in entry.split(",") if f.strip()]
-        while fields and fields[0].lower() in ("ipv4", "ipv6", "ipv6n4", "tcp", "udp", "sctp"):
-            fields.pop(0)
-        host = fields[0] if fields else ""
+        host, port = _address(entry.lstrip("!"))
         try:
             ipaddress.ip_network(host, strict=False)
         except ValueError:
             c.note(_("remaddr {0}: only IP addresses and subnets can be imported").format(entry))
             continue
-        if len(fields) > 1 and fields[1] != "0":
+        if port not in ("", "0"):
             c.note(_("remaddr {0}: only the client address is checked here, not its port")
                    .format(entry), security=True)
+        if udp and (back or (c.v3 and port not in ("", "0"))):
+            _udp_target(c, _("remaddr {0}").format(entry), host, port)
         if host not in allowed:
             allowed.append(host)
+
+
+def _address(entry: str) -> tuple[str, str]:
+    """[ipv4|ipv6|ipv6n4,][tcp|udp|sctp,]<host>[,<port>] -> (host, port text)."""
+    fields = [f.strip() for f in entry.split(",") if f.strip()]
+    while fields and fields[0].lower() in ("ipv4", "ipv6", "ipv6n4", "tcp", "udp", "sctp"):
+        fields.pop(0)
+    return (fields[0] if fields else ""), (fields[1] if len(fields) > 1 else "")
+
+
+def _udp_target(c: _Conn, what: str, host: str, port: str) -> None:
+    """A UDP connection's fixed remote address -> network.udp_targets ("IP:port": the
+    device's output always goes there too), with a note; or a note on why not."""
+    try:
+        ip = ipaddress.ip_address(host.strip("[]"))
+    except ValueError:
+        c.note(_("{0}: not imported as a UDP target: only an IP address can be one here")
+               .format(what))
+        return
+    number = _port_number(port)
+    if number is None:
+        c.note(_("{0}: not imported as a UDP target: it has no port").format(what))
+        return
+    targets = c.network.setdefault("udp_targets", [])
+    text = host_port(str(ip), number)
+    if text in targets:
+        return
+    if len(targets) >= UDP_TARGETS_MAX:
+        c.note(_("{0}: not imported as a UDP target: a mapping has at most {1}")
+               .format(what, UDP_TARGETS_MAX))
+        return
+    targets.append(text)
+    if str(ip) == "255.255.255.255":
+        c.network["udp_broadcast"] = True
+    c.note(_("{0}: the device's output is always sent to {1} (a UDP target), as ser2net "
+             "sent it to this fixed remote address").format(what, text))
+
+
+def _packing(c: _Conn) -> None:
+    """chardelay -> packing, for a raw connection whose file sets it: chardelay: true, one
+    of chardelay-scale / -min / -max, or sendon (not when it says chardelay: false, and
+    not for ser2net's default alone: see the module docstring).
+
+    ser2net (dataxfer.c, recalc_port_chardelay) waits after each byte from the device
+    (bits per character * 100000 * chardelay-scale) / baud rate microseconds, at least
+    chardelay-min (defaults 20 and 1000: ser2net.yaml(5), "Normally ser2net will wait the
+    time it takes to receive 2 serial port characters, or at least 1000us, before
+    sending"), and sends at the latest chardelay-max (20000) after a frame's first byte,
+    or once its buffer (dev-to-net-bufsize, 64 bytes) is full. Here: pack_gap_ms is that
+    wait, never longer than chardelay-max, in whole milliseconds (at least 1);
+    pack_max_bytes the buffer size, which bounds how long a byte waits in a steady stream
+    (there is no time limit of its own); sendon ("sends buffered data up to and including
+    the string") the pack_delimiter."""
+    opts = c.chardelay_opts
+    given = [f"chardelay-{k}" for k in ("scale", "min", "max") if k in opts]
+    extra = given + (["dev-to-net-bufsize"] if c.bufsize is not None else []) \
+        + (["sendon"] if c.sendon is not None else [])
+    wanted = c.chardelay is True or (c.chardelay is None and (given or c.sendon is not None))
+    if not wanted or c.network["protocol"] != "raw":
+        return  # (what the file set stays listed as not imported)
+    for name in extra:
+        c.dropped.pop(name, None)
+    scale, low, high = opts.get("scale", 20), opts.get("min", 1000), opts.get("max", 20000)
+    s = c.serial
+    bits = 1 + s.get("bytesize", 8) + (0 if s.get("parity", "N") == "N" else 1) \
+        + s.get("stopbits", 1)
+    wait_us = max(int(bits * 100000 * scale / max(1, int(s.get("baudrate", 9600)))), low)
+    if high:
+        wait_us = min(wait_us, high)
+    gap = min(PACK_GAP_MAX_MS, max(1, -(-wait_us // 1000)))
+    size = min(max(c.bufsize if c.bufsize is not None else 64, 2), PACK_MAX_BYTES_MAX)
+    c.options["pack_gap_ms"], c.options["pack_max_bytes"] = gap, size
+    c.note(_("chardelay is imported as packing: the device's output is sent as a frame "
+             "after {0} ms without a byte or at {1} bytes (ser2net waited {2} µs after a "
+             "byte and at most {3} µs for a frame; here the frame size bounds the wait in a "
+             "steady stream)").format(gap, size, wait_us, high))
+    if c.sendon is not None:
+        raw = _convert(c, c.sendon, "bytes", "sendon")
+        data = b"".join(bytes([ord(ch)]) if ord(ch) < 256 else ch.encode("utf-8") for ch in raw)
+        if not data or len(data) > PACK_DELIMITER_MAX:
+            c.note(_("sendon is not imported: a packing delimiter is 1 to {0} bytes here")
+                   .format(PACK_DELIMITER_MAX))
+        else:
+            names = {0x0D: "\\r", 0x0A: "\\n", 0x09: "\\t", 0x5C: "\\\\"}
+            c.options["pack_delimiter"] = "".join(
+                names.get(b) or (chr(b) if 0x20 <= b < 0x7F else f"\\x{b:02x}") for b in data)
+            c.note(_("sendon is imported as the packing delimiter {0}: a frame also ends "
+                     "with it").format(c.options["pack_delimiter"]))
 
 
 def _default_remaddr(c: _Conn, value: str) -> None:
@@ -1265,6 +1396,16 @@ def _finish(c: _Conn) -> None:
             if b is not None:
                 c.options[f"trace_{mod}"] = b
     _tls(c)
+    _packing(c)
+    if net.get("udp_targets"):  # (edits refuse a target of another family than the listener)
+        v4 = ipaddress.ip_address(net["bind_ip"]).version == 4
+        both = bool(net.get("dual_stack")) and net["bind_ip"] in ("0.0.0.0", "::")
+        fits = [t for t in net["udp_targets"] if both or t.startswith("[") != v4]
+        for t in net["udp_targets"]:
+            if t not in fits:
+                c.note(_("UDP target {0} is not imported: the mapping listens on {1}, an "
+                         "address of the other family").format(t, net["bind_ip"]))
+        net["udp_targets"] = fits
     if c.access_given and not net.get("allowed_client_ips"):
         c.hold(_("remaddr could not be imported: the mapping is imported disabled rather "
                  "than open to every client"))
@@ -1354,7 +1495,8 @@ _TOP_KEY = re.compile(r"^(?:connections?|defines?|defaults?|delete_defaults?|rot
 _SERIAL_DEFAULTS = {"speed", "nobreak", "rtscts", "xonxoff", "local", "hangup-when-done",
                     "dtr", "rts", "custspeed", "rs485", "uucplock", "flock", "wronly"}
 _OPTION_DEFAULTS = {"kickolduser", "max-connections", "remaddr", "telnet-brk-on-sync",
-                    "chardelay", "trace-hexdump", "trace-timestamp", "trace-both-hexdump",
+                    "chardelay", "chardelay-scale", "chardelay-min", "chardelay-max",
+                    "trace-hexdump", "trace-timestamp", "trace-both-hexdump",
                     "trace-both-timestamp", "signature", "banner", "openstr", "closestr",
                     "closeon"}
 # (sent as they are: their spaces and line breaks too; the RFC 2217 signature is stripped)
@@ -1440,6 +1582,7 @@ class _Yaml:
         self.aliases: dict[str, str] = {}
         self.warnings: list[str] = []
         self.conns: list[_Conn] = []
+        self.rotators: list[_Rotator] = []
         self.connections = 0                 # connection entries read (MAX_CONNECTIONS)
         self.defaults: dict[tuple[str, str], str] = {}  # (name, class) -> value, so far
         # what each gensio class gets from them for the connections from here on
@@ -1497,12 +1640,11 @@ class _Yaml:
             for name, classes, _a in value.entries:  # <name>: [<class>, ...]
                 for cls in classes if isinstance(classes, list) else [classes]:
                     self.delete_default(name, self.gtext(cls, f"delete_defaults {name}"))
-        elif k in ("rotator", "rotators"):
-            names = ([anchor] if k == "rotator" else
-                     [n for n, _v, _a in value.entries] if isinstance(value, _YMap) else [])
-            for name in names or ["(unnamed)"]:
-                self.warnings.append(_("rotator {0}: not imported (rotators are not supported "
-                                       "here)").format(name))
+        elif k == "rotator":
+            self.rotator(anchor, value)
+        elif k == "rotators":
+            for name, body, _a in value.entries if isinstance(value, _YMap) else []:
+                self.rotator(name, body)
         elif k in ("admin", "admins"):
             self.warnings.append(_("the ser2net admin interface is not imported (the web UI "
                                    "and REST API take its place)"))
@@ -1512,6 +1654,26 @@ class _Yaml:
         elif k not in ("led", "leds", "defines", "connections", "defaults", "delete_default",
                        "delete_defaults", "default"):
             self.warnings.append(_("unknown top-level entry '{0}' ignored").format(key))
+
+    def rotator(self, name: str, body: Any) -> None:
+        """A rotator, kept for _rotator_pools (its connections are known by then)."""
+        label = _("rotator {0}").format(name or _("(unnamed)"))
+        if len(self.rotators) >= MAX_CONNECTIONS:
+            raise _too_many_connections()
+        accepter = self.gtext(body.get("accepter", ""), label).strip() \
+            if isinstance(body, _YMap) else ""
+        members = body.get("connections") if isinstance(body, _YMap) else None
+        if not accepter or not isinstance(members, list):
+            self.budget.spend(len(label))
+            self.warnings.append(_("{0}: not imported: it needs an accepter and a list of "
+                                   "connections").format(label))
+            return
+        options = body.get("options")
+        self.rotators.append(_Rotator(
+            name=name, label=label, accepter=accepter,
+            # a version 1 alias is the connection's own node, a version 2 name its name
+            members=[m if isinstance(m, _YMap) else str(m).strip() for m in members],
+            options=[k for k, _v, _a in options.entries] if isinstance(options, _YMap) else []))
 
     def default(self, name: str, value: str, cls: str) -> None:
         """A default, for the connections after it (ser2net sets each connection up as it
@@ -1569,7 +1731,8 @@ class _Yaml:
             raise _too_many_connections()
         if name:
             self.aliases[name] = name  # ser2net: *(con0) is the connection's name
-        c = _Conn(name=name, label=name or _("a connection without a name"), budget=self.budget)
+        c = _Conn(name=name, label=name or _("a connection without a name"), budget=self.budget,
+                  key=body if isinstance(body, _YMap) else None)
         if not isinstance(body, _YMap):
             c.skip(_("not a mapping"))
         else:
@@ -1616,7 +1779,8 @@ class _Yaml:
         _default_remaddr(c, self.option_defaults.get("remaddr", ""))
 
 
-def _from_yaml(text: str, label: str, budget: _Budget) -> tuple[list[_Conn], list[str]]:
+def _from_yaml(text: str, label: str,
+               budget: _Budget) -> tuple[list[_Conn], list[str], list[_Rotator]]:
     try:
         docs = _YamlReader(text).documents()
     except _YamlError as e:
@@ -1634,7 +1798,7 @@ def _from_yaml(text: str, label: str, budget: _Budget) -> tuple[list[_Conn], lis
         y.warnings.append(_("the file mixes ser2net version 1 and version 2 YAML entries"))
     for key, value, anchor in entries:
         y.entry(key, value, anchor)
-    return y.conns, y.warnings
+    return y.conns, y.warnings, y.rotators
 
 
 # ---------------------------------------------------------------------------
@@ -1684,6 +1848,7 @@ class _V3:
         self.defaults: dict[str, str] = {}
         self.warnings: list[str] = []
         self.conns: list[_Conn] = []
+        self.rotators: list[_Rotator] = []
 
     def directive(self, n: int, kind: str, rest: str) -> None:
         name, _sep, value = rest.partition(":")
@@ -1702,10 +1867,16 @@ class _V3:
             self.devices[name] = value.strip()
         elif kind == "TRACEFILE":
             self.tracefiles[name] = value.strip()
-        elif kind in ("LED", "ROTATOR"):
-            what = {"LED": _("LEDs"), "ROTATOR": _("rotators")}
+        elif kind == "ROTATOR":  # ROTATOR:<TCP port>:<port list>
+            if len(self.rotators) >= MAX_CONNECTIONS:
+                raise _too_many_connections()
+            self.rotators.append(_Rotator(
+                name="", label=_("line {0}: ROTATOR {1}").format(n, name.strip()),
+                accepter=name.strip(), members=value.split(), v3=True))
+            self.strings[name] = (kind, value)
+        elif kind == "LED":
             self.warnings.append(_("line {0}: {1} {2} is not imported ({3} are not supported "
-                                   "here)").format(n, kind, name, what[kind]))
+                                   "here)").format(n, kind, name, _("LEDs")))
             self.strings[name] = (kind, value)
         else:  # BANNER OPENSTR CLOSESTR CLOSEON SIGNATURE RS485CONF
             self.strings[name] = (kind, value)
@@ -1721,7 +1892,7 @@ class _V3:
         device = self.devices.get(written, written)
         self.budget.spend(len(device))  # a DEVICE: name repeats its path
         c = _Conn(name="", label=_("line {0}").format(n), budget=self.budget, v3=True,
-                  devname=written)
+                  devname=written, key=line[: m.start()].strip())
         fields = []
         for f in line[: m.start()].split(","):
             if f.strip().lower() == "udp":
@@ -1837,7 +2008,9 @@ class _V3:
             elif base == "telnet_brk_on_sync":
                 if on:
                     _option(c, "telnet-brk-on-sync", "true")
-            elif base != "chardelay":
+            elif base == "chardelay":
+                c.chardelay = on
+            else:
                 return False
             return True
         if name in _V3_TRACE:
@@ -1853,15 +2026,19 @@ class _V3:
         elif name == "remaddr":
             c.remaddr_set = True
             _remaddr(c, value)
-        elif name in ("chardelay-scale", "chardelay-min", "chardelay-max", "dev-to-net-bufsize",
-                      "net-to-dev-bufsize", "dev-to-tcp-bufsize", "tcp-to-dev-bufsize"):
+        elif name in ("chardelay-scale", "chardelay-min", "chardelay-max"):
+            _option(c, name, value)  # (-> packing, see _packing)
+        elif name in ("dev-to-net-bufsize", "dev-to-tcp-bufsize"):
+            _option(c, "dev-to-net-bufsize", value)
+        elif name in ("net-to-dev-bufsize", "tcp-to-dev-bufsize"):
             c.drop(name)
         elif name not in ("led-rx", "led-tx"):  # LEDs: reported where they are defined
             return False
         return True
 
 
-def _from_v3(lines: list[tuple[int, str]], budget: _Budget) -> tuple[list[_Conn], list[str]]:
+def _from_v3(lines: list[tuple[int, str]],
+             budget: _Budget) -> tuple[list[_Conn], list[str], list[_Rotator]]:
     p = _V3(budget)
     for n, line in lines:
         d = _V3_DIRECTIVE.match(line)
@@ -1872,7 +2049,135 @@ def _from_v3(lines: list[tuple[int, str]], budget: _Budget) -> tuple[list[_Conn]
             p.port(n, line, m)
         else:
             p.warnings.append(_("line {0}: not a ser2net.conf line, ignored").format(n))
-    return p.conns, p.warnings
+    return p.conns, p.warnings, p.rotators
+
+
+# ---------------------------------------------------------------------------
+# Rotators -> port pools
+# ---------------------------------------------------------------------------
+@dataclass
+class _Rotator:
+    name: str                # its alias ("" in a 3.x file: named after its port)
+    label: str               # how warnings name it
+    accepter: str            # 4.x accepter / 3.x <TCP port> field
+    members: list[Any]       # what it names its connections by (_Conn.key, or a name)
+    options: list[str] = field(default_factory=list)
+    v3: bool = False
+
+
+def _pool_name(text: str, taken: set[str]) -> str:
+    """A port pool's name (config.pool_name_problem) from a rotator's, not one of `taken`."""
+    base = re.sub(r"[^A-Za-z0-9_.-]", "-", text).lstrip("-_.")[:POOL_NAME_MAX - 6] or "rotator"
+    name, k = base, 1
+    while name in taken:
+        k += 1
+        name = f"{base}-{k}"
+    taken.add(name)
+    return name
+
+
+def _rotator_pools(rotators: list[_Rotator], kept: list[_Conn], warnings: list[str],
+                   budget: _Budget) -> list[dict[str, Any]]:
+    """The port pools the file's rotators become (dicts for config.PortPool), with the
+    imported connections they hand clients to named as members (network.pool).
+
+    ser2net.yaml(5), ROTATOR: "A rotator allows a single network connection to connect to
+    one of a number of connections. ... Connections to the accepter will go through the
+    set of connections and find the first unused one and use that. The next connection
+    will start after the last connection used." A pool with rotate does that; it tries its
+    mappings in their own order (a note says so when the rotator's differs). ser2net 3.x
+    (ser2net(8)): "ROTATOR will only choose a port if there are no connections at all on
+    the port"; here a member with max-connections above 1 takes a client while it has a
+    connection left. What can't be carried over is said: a rotator whose accepter is not
+    plain TCP is not imported, nor a member that is not a TCP mapping without TLS."""
+    pools: list[dict[str, Any]] = []
+    names: set[str] = set()
+    # the imported connections by what a rotator names them by (see _Conn.key), and their
+    # place among the mappings: a rotator can name many, and a file can have many rotators
+    place = {id(c): i for i, c in enumerate(kept)}
+    by_node = {id(c.key): c for c in kept if isinstance(c.key, _YMap)}
+    by_name: dict[str, _Conn] = {}
+    by_spec: dict[str, _Conn] = {}
+    for c in kept:
+        by_name.setdefault(c.label, c)
+        if isinstance(c.key, str):
+            by_spec.setdefault(c.key, c)
+    for r in rotators:
+        def warn(msg: str, label: str = r.label) -> None:
+            budget.spend(len(label) + len(msg))
+            warnings.append(f"{label}: {msg}")
+        at = _Conn(name=r.name, label=r.label, budget=budget, v3=r.v3)
+        if r.v3:
+            fields = [f for f in r.accepter.split(",") if f.strip().lower() != "tcp"]
+            ok = "udp" not in [f.strip().lower() for f in fields] and _listen_address(at, fields)
+        else:
+            ok = _accepter(at, r.accepter)
+        net = at.network
+        if not ok or net["mode"] != "server":
+            warn(_("not imported: a port pool listens on a TCP port, and its accepter '{0}' "
+                   "is not one").format(r.accepter))
+            continue
+        if at.ssl is not None or at.holds:
+            warn(_("not imported: a port pool's port is plain TCP on an address of this "
+                   "host, and its accepter '{0}' asks for more (encryption, a login, a host "
+                   "name)").format(r.accepter))
+            continue
+        clash = next((c.name for c in kept if c.network["mode"] == "server"
+                      and c.network["port"] == net["port"]
+                      and _ip_overlaps(c.network["bind_ip"], net["bind_ip"])), None) or next(
+            (p["name"] for p in pools if p["port"] == net["port"]
+             and _ip_overlaps(p["bind_ip"], net["bind_ip"])), None)
+        if clash is not None:
+            warn(_("not imported: TCP port {0} is already used by '{1}'")
+                 .format(net["port"], clash))
+            continue
+        members: list[_Conn] = []
+        seen: set[int] = set()
+        for key in r.members:
+            conn = (by_node.get(id(key)) if not isinstance(key, str)
+                    else (by_spec if r.v3 else by_name).get(key))
+            shown = conn.name if conn is not None else key if isinstance(key, str) else "?"
+            if conn is None:
+                warn(_("its connection {0} is not imported, so it is not in the pool")
+                     .format(shown))
+            elif conn.network["mode"] != "server" or conn.network.get("tls"):
+                warn(_("{0} is not in the pool: only a TCP mapping without TLS can be")
+                     .format(shown))
+            elif conn.network.get("pool"):
+                warn(_("{0} is already in the pool {1}: a mapping is in one pool here")
+                     .format(shown, conn.network["pool"]))
+            elif id(conn) not in seen:
+                seen.add(id(conn))
+                members.append(conn)
+        if not members:
+            warn(_("not imported: none of its connections can be in a port pool here"))
+            continue
+        name = _pool_name(r.name or f"rotator-{net['port']}", names)
+        for c in members:
+            c.network["pool"] = name
+        pools.append({"name": name, "bind_ip": net["bind_ip"], "port": net["port"],
+                      "enabled": True, "rotate": True})
+        order = sorted(members, key=lambda c: place[id(c)])
+        warn(_("imported as the port pool {0} on TCP port {1} for {2}").format(
+            name, host_port(net["bind_ip"], net["port"]), ", ".join(c.name for c in order))
+            + ("" if order == members else " " + _("(clients are handed to them in this "
+                                                    "order, the mappings', not the "
+                                                    "rotator's)")))
+        other = [c.name for c in members if c.network["protocol"] != net["protocol"]]
+        if other:
+            warn(_("its accepter is {0}, but a client of the pool gets its mapping's "
+                   "protocol: {1}").format(net["protocol"], ", ".join(
+                f"{c.name} {c.network['protocol']}" for c in members if c.name in other)))
+        off = [c.name for c in members if not c.enabled]
+        if off:
+            warn(_("a mapping that is disabled gets no clients from a pool (ser2net's "
+                   "rotator also used connections that were turned off): {0}")
+                 .format(", ".join(off)))
+        if r.options:
+            warn(_("not imported (no equivalent here): {0}").format(", ".join(r.options)))
+        for note in at.notes:
+            warn(note)
+    return pools
 
 
 # ---------------------------------------------------------------------------
@@ -1941,8 +2246,23 @@ def looks_yaml(text: str) -> bool:
     return bool(_TOP_KEY.search(text))
 
 
+class Parsed(NamedTuple):
+    """What a classic ser2net configuration becomes (parse_ser2net)."""
+    mappings: list[dict]   # dicts for MappingConfig.from_dict
+    warnings: list[str]    # human-readable (Note: about one mapping)
+    pools: list[dict]      # dicts for config.PortPool: the file's rotators
+
+
 def parse_ser2net_config(text: str, filename: str = "") -> tuple[list[dict], list[str]]:
-    """Mappings (dicts for MappingConfig.from_dict) + human-readable warnings.
+    """parse_ser2net's mappings and warnings (without the port pools its rotators become;
+    the mappings still name them)."""
+    parsed = parse_ser2net(text, filename)
+    return parsed.mappings, parsed.warnings
+
+
+def parse_ser2net(text: str, filename: str = "") -> Parsed:
+    """Mappings (dicts for MappingConfig.from_dict), human-readable warnings and the port
+    pools the file's rotators become.
 
     `text` is a ser2net 4.x ser2net.yaml or a 3.x ser2net.conf (detected from the
     content; `filename` only names the file in messages). Raises ConfigError when it
@@ -1957,15 +2277,16 @@ def parse_ser2net_config(text: str, filename: str = "") -> tuple[list[dict], lis
     if not text.strip():
         raise ConfigError(_("The file is empty."))
     if looks_yaml(text):
-        conns, warnings = _from_yaml(text, label or "ser2net.yaml", budget)
+        conns, warnings, rotators = _from_yaml(text, label or "ser2net.yaml", budget)
     else:
         lines = _v3_lines(text)
         if not any(_V3_DIRECTIVE.match(ln) or _V3_STATE.search(ln) for _n, ln in lines):
             raise ConfigError(_("{0} is not a ser2net configuration: expected a ser2net.yaml "
                                 "(ser2net 4.x) or ser2net.conf (ser2net 3.x) file.").format(
                                     label or _("The file")))
-        conns, warnings = _from_v3(lines, budget)
+        conns, warnings, rotators = _from_v3(lines, budget)
     kept = _assemble(conns, warnings, budget)
+    pools = _rotator_pools(rotators, kept, warnings, budget)
     mappings = [c.to_dict() for c in kept]
     _point_notes(warnings, kept)
     if len(warnings) > _MAX_WARNINGS:
@@ -1977,9 +2298,11 @@ def parse_ser2net_config(text: str, filename: str = "") -> tuple[list[dict], lis
                         _("The file has no ser2net connections to import."))
     if mappings:
         warnings.append(_("A mapping here opens its serial port when it starts and keeps it "
-                          "open (ser2net opened it only while a client was connected), and "
-                          "makes no UUCP lock files: programs that look for them, such as "
-                          "minicom, don't see the port as in use"))
+                          "open (ser2net opened it only while a client was connected; a TCP "
+                          "server mapping does that too once “Open the serial port only while "
+                          "a client is connected” is ticked), and makes no UUCP lock files: "
+                          "programs that look for them, such as minicom, don't see the port "
+                          "as in use"))
     wide = [c.name for c in kept if c.any_family]
     if wide:
         warnings.append(_("ser2net listened on IPv4 and IPv6 for an accepter that names no "
@@ -1991,7 +2314,7 @@ def parse_ser2net_config(text: str, filename: str = "") -> tuple[list[dict], lis
         warnings.append(_("ser2net may also have limited its clients with TCP wrappers "
                           "(/etc/hosts.allow, /etc/hosts.deny); those rules are not imported: a "
                           "mapping without allowed client IPs accepts any client"))
-    return mappings, warnings
+    return Parsed(mappings, warnings, pools)
 
 
 def _open_to_all(m: dict) -> bool:

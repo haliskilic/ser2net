@@ -1081,7 +1081,11 @@ hangilerinin devre dışı geldiğini ve nedenini, neyin farklı çalıştığı
 Bir eşleme seri cihazını açık tutar: açılış dizgesi (openstr) her istemci için değil, port
 açıldığında bir kez gönderilir ve oturumlar arasında başka programlar cihazı kullanamaz;
 klasik ser2net'in yaptığı gibi olsun isterseniz bir TCP sunucu eşlemesinde **Seri portu
-yalnızca bir istemci bağlıyken aç**'ı işaretleyin.
+yalnızca bir istemci bağlıyken aç**'ı işaretleyin. Bir UDP bağlantısının sabit uzak
+adresleri (4.x `remaddr: !adres,port` ve `connback`, 3.x portlu `remaddr`) UDP hedefleri,
+dosyanın ayarladığı `chardelay` (`chardelay: true`, `chardelay-scale` / `-min` / `-max`,
+`sendon`; raw bağlantıda) paketleme, bir rotator da TCP bağlantıları üye olan, sırayla
+dağıtan bir port havuzu olur; her biri önizlemede bir notla gösterilir.
 Adımlar, farklar ve seçenek tablosu (İngilizce):
 [`docs/MIGRATING-FROM-SER2NET.md`](docs/MIGRATING-FROM-SER2NET.md).
 

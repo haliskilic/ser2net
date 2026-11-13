@@ -29,11 +29,11 @@ from typing import Optional
 
 from . import i18n
 from .config import (
-    AppConfig, ConfigError, MappingConfig, ModbusPoint, _new_id, check_mqtt_clashes, host_port,
+    AppConfig, ConfigError, MappingConfig, ModbusPoint, PortPool, _new_id, check_mqtt_clashes, host_port,
     normalize_cidr,
 )
 from .i18n import _
-from .ser2net_import import Note, looks_yaml, parse_ser2net_config
+from .ser2net_import import Note, looks_yaml, parse_ser2net
 
 MODES = ("merge", "replace")
 # An import file is read whole and its mappings are previewed and validated at once:
@@ -59,6 +59,9 @@ class ImportPlan:
     # per mapping, the settings the file doesn't have (see absent_settings); a merge keeps
     # their current values. Empty for a classic ser2net configuration.
     absent: list[list[str]] = field(default_factory=list)
+    # the port pools a classic ser2net file's rotators become (its mappings name them);
+    # an import adds those whose name no pool has yet (merged_pools)
+    pools: list[PortPool] = field(default_factory=list)
 
     def split_warnings(self) -> tuple[list[str], list[list[str]]]:
         """The warnings about the file as a whole, and those about each mapping (by its
@@ -229,7 +232,7 @@ def _keep_absent(m: MappingConfig, target: MappingConfig, absent: list[str]) -> 
 def _classic_ser2net(text: str, filename: str) -> ImportPlan:
     """A configuration file of the classic C ser2net, converted (ser2netweb/ser2net_import).
     Nothing importable is an error, so a replace import cannot empty the mappings."""
-    dicts, warnings = parse_ser2net_config(text, filename)
+    dicts, warnings, pools = parse_ser2net(text, filename)
     if not dicts:
         raise ConfigError(" ".join(warnings) or _("The file has no ser2net connections to import."))
     source = _("ser2net.yaml (ser2net 4.x)") if looks_yaml(text) else _("ser2net.conf (ser2net 3.x)")
@@ -240,7 +243,16 @@ def _classic_ser2net(text: str, filename: str) -> ImportPlan:
             note = Note(w)
             note.mapping = i - 1   # (shown in its row of the preview)
             warnings.append(note)
-    return ImportPlan(source=source, mappings=mappings, warnings=warnings, classic=True)
+    return ImportPlan(source=source, mappings=mappings, warnings=warnings, classic=True,
+                      pools=[PortPool(**p) for p in pools])
+
+
+def merged_pools(current: list[PortPool], incoming: list[PortPool]) -> list[PortPool]:
+    """The port pools after an import: the current ones as they are, then the file's whose
+    name none of them has (a pool that exists keeps its port and address; the imported
+    mappings that name it become its members)."""
+    names = {p.name for p in current}
+    return list(current) + [p for p in incoming if p.name not in names]
 
 
 def _tls_warning(i: int, m: MappingConfig) -> list[str]:
@@ -328,11 +340,16 @@ def _overlay(old: MappingConfig, new: MappingConfig) -> MappingConfig:
         n.tls, n.tls_cert, n.tls_key = True, nn.tls_cert, nn.tls_key
         if nn.tls_client_ca:   # (clientauth with its CA file here; a CA the mapping has stays)
             n.tls_client_ca = nn.tls_client_ca
-    given(n, nn, plain.network, "kick_old_user", "max_connections")
+    given(n, nn, plain.network, "kick_old_user", "max_connections", "pool")
+    if nn.udp_targets:  # a UDP connection's fixed remote addresses
+        n.udp_targets, n.udp_broadcast = list(nn.udp_targets), n.udp_broadcast or nn.udp_broadcast
     if n.protocol == "rfc2217":
         n.max_connections = 1  # (RFC 2217 takes a single client here: the file's is 1 too)
     o, no = r.options, new.options
     given(o, no, plain.options, "idle_timeout_s", "banner", "openstr", "closestr", "closeon")
+    if no.pack_gap_ms:  # chardelay, as the file sets it
+        o.pack_gap_ms, o.pack_delimiter, o.pack_max_bytes = (
+            no.pack_gap_ms, no.pack_delimiter, no.pack_max_bytes)
     if no.trace_both:
         o.trace_both, o.trace_hexdump, o.trace_timestamp = (
             no.trace_both, no.trace_hexdump, no.trace_timestamp)
