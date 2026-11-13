@@ -11,8 +11,11 @@ name: Release
 # of it
 # passed publish: the release assets with SHA256SUMS, SBOMs, license texts and build
 # provenance, then the tags of the tested image (X.Y.Z, X.Y and latest; a pre-release,
-# vX.Y.Z-rc.N, only its own and marked as a pre-release). The write permissions belong
-# to the publish jobs alone (and the untagged push).
+# vX.Y.Z-rc.N, only its own and marked as a pre-release). The image is
+# ghcr.io/<owner>/ser2netweb; the 3.x line also gets the same digest and tags under the
+# image's name up to 2.9.x, ghcr.io/<owner>/ser2net, so composes and auto-updaters on that
+# path keep getting releases. The write permissions belong to the publish jobs alone (and
+# the untagged push).
 #
 # Actions -> Release -> Run workflow is a dry run on any branch: the same jobs check the
 # tag the current version gets, run CI, build, push and test the image, and assemble the
@@ -44,6 +47,7 @@ jobs:
       prerelease: ${{ steps.tag.outputs.prerelease }}
       image-tags: ${{ steps.tag.outputs.image-tags }}
       image: ${{ steps.tag.outputs.image }}
+      old-image: ${{ steps.tag.outputs.old-image }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
@@ -57,7 +61,11 @@ jobs:
           else  # a dry run: the tag the current version gets
             python3 tools/release_guard.py tag
           fi
-          echo "image=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/ser2net" >> "$GITHUB_OUTPUT"
+          # the image, and its name up to 2.9.x, which the 3.x line is published under too
+          # (the same digest; image-refresh.yml refreshes both): drop old-image here and there
+          # once that path is retired
+          owner=${GITHUB_REPOSITORY_OWNER,,}
+          { echo "image=ghcr.io/$owner/ser2netweb"; echo "old-image=ghcr.io/$owner/ser2net"; } >> "$GITHUB_OUTPUT"
       - name: The tagged commit is on main
         run: |
           if git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
@@ -99,6 +107,7 @@ jobs:
       packages: write        # the untagged push
     outputs:
       image: ${{ needs.verify.outputs.image }}
+      old-image: ${{ needs.verify.outputs.old-image }}
       digest: ${{ steps.push.outputs.digest }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -129,9 +138,10 @@ jobs:
           # for the version label only: the tags are added once the digest passed its tests
           tags: type=semver,pattern={{version}}
           labels: |
-            org.opencontainers.image.title=ser2net
+            org.opencontainers.image.title=ser2netweb
             org.opencontainers.image.description=Serial-to-network bridge with a web UI
             org.opencontainers.image.licenses=AGPL-3.0-only
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
             org.opencontainers.image.base.name=${{ steps.base.outputs.name }}
             org.opencontainers.image.base.digest=${{ steps.base.outputs.digest }}
       - id: push
@@ -140,20 +150,24 @@ jobs:
           context: .
           platforms: linux/amd64,linux/arm64,linux/arm/v7
           build-args: BASE_IMAGE=${{ steps.base.outputs.image }}@${{ steps.base.outputs.digest }}
-          outputs: type=image,name=${{ needs.verify.outputs.image }},push-by-digest=true,name-canonical=true,push=true
+          # both names, by digest only (the same index under each)
+          outputs: type=image,"name=${{ needs.verify.outputs.image }},${{ needs.verify.outputs.old-image }}",push-by-digest=true,name-canonical=true,push=true
           labels: ${{ steps.meta.outputs.labels }}
           provenance: mode=max
           sbom: true
       # What the tag job will push, worked out now, before anything is published: with one
       # image index as its source, imagetools copies it byte for byte (the same digest).
-      - name: Tagging keeps this digest (imagetools create --dry-run)
+      - name: Tagging keeps this digest under both names (imagetools create --dry-run)
         env:
           IMAGE: ${{ needs.verify.outputs.image }}
+          OLD_IMAGE: ${{ needs.verify.outputs.old-image }}
           DIGEST: ${{ steps.push.outputs.digest }}
         run: |
-          docker buildx imagetools create --dry-run "$IMAGE@$DIGEST" > index.json
-          got="sha256:$(head -c -1 index.json | sha256sum | cut -d' ' -f1)"   # minus its newline
-          [ "$got" = "$DIGEST" ] || { echo "::error::tagging would push $got, not $DIGEST"; exit 1; }
+          for image in "$IMAGE" "$OLD_IMAGE"; do
+            docker buildx imagetools create --dry-run "$image@$DIGEST" > index.json
+            got="sha256:$(head -c -1 index.json | sha256sum | cut -d' ' -f1)"   # minus its newline
+            [ "$got" = "$DIGEST" ] || { echo "::error::tagging $image would push $got, not $DIGEST"; exit 1; }
+          done
 
   # The image exactly as pushed, on each architecture (amd64 and arm64 natively, arm/v7
   # under QEMU), with the smoke test CI runs on its local build (non-root, HEALTHCHECK,
@@ -175,6 +189,7 @@ jobs:
           - { arch: arm/v7, runner: ubuntu-latest, platform: linux/arm/v7 }
     env:
       REF: ${{ needs.image-build.outputs.image }}@${{ needs.image-build.outputs.digest }}
+      OLD_REF: ${{ needs.image-build.outputs.old-image }}@${{ needs.image-build.outputs.digest }}
       DOCKER_DEFAULT_PLATFORM: ${{ matrix.platform }}   # (the emulated leg's pull and runs)
       DOCKER_SMOKE_WAIT: ${{ matrix.platform && '300' || '60' }}
     steps:
@@ -209,7 +224,8 @@ jobs:
           fi
           echo "pulled image: $got"
           test "$got" = "$want" || { echo "::error::the pulled image is $got, not $want"; exit 1; }
-      - run: tests/docker_smoke.sh "$REF"
+      # (the old name: the very same image, pulled by the same digest)
+      - run: tests/docker_smoke.sh "$REF" "$OLD_REF"
 
   # Names and checks the release files, attests them and hands them on as one artifact.
   # It can mint attestations, so only GitHub's own actions run here, and it can't write
@@ -231,60 +247,63 @@ jobs:
       # the executables and their license texts / SBOMs (not CI's reports)
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8.0.2
         with:
-          pattern: ser2net-*
+          pattern: ser2netweb-*
           path: artifacts
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8.0.2
         with:
           pattern: meta-*
           path: artifacts
+      # (ser2net-* up to 2.9.x; a release has no file under the old names)
       - name: Name the release assets, SHA256SUMS
         run: |
           set -e
           mkdir out
           for arch in x64 arm64; do
-            cp "artifacts/ser2net-linux-$arch/ser2net" "out/ser2net-linux-$arch"
-            chmod +x "out/ser2net-linux-$arch"
-            cp "artifacts/meta-linux-$arch/THIRD-PARTY-LICENSES.txt" "out/ser2net-linux-$arch.THIRD-PARTY-LICENSES.txt"
-            cp "artifacts/meta-linux-$arch/ser2net.cdx.json" "out/ser2net-linux-$arch.cdx.json"
+            cp "artifacts/ser2netweb-linux-$arch/ser2netweb" "out/ser2netweb-linux-$arch"
+            chmod +x "out/ser2netweb-linux-$arch"
+            cp "artifacts/meta-linux-$arch/THIRD-PARTY-LICENSES.txt" "out/ser2netweb-linux-$arch.THIRD-PARTY-LICENSES.txt"
+            cp "artifacts/meta-linux-$arch/ser2netweb.cdx.json" "out/ser2netweb-linux-$arch.cdx.json"
           done
-          cp artifacts/ser2net-windows-x64/ser2net.exe out/ser2net-windows-x64.exe
-          cp artifacts/meta-windows-x64/THIRD-PARTY-LICENSES.txt out/ser2net-windows-x64.THIRD-PARTY-LICENSES.txt
-          cp artifacts/meta-windows-x64/ser2net.cdx.json out/ser2net-windows-x64.cdx.json
+          cp artifacts/ser2netweb-windows-x64/ser2netweb.exe out/ser2netweb-windows-x64.exe
+          cp artifacts/meta-windows-x64/THIRD-PARTY-LICENSES.txt out/ser2netweb-windows-x64.THIRD-PARTY-LICENSES.txt
+          cp artifacts/meta-windows-x64/ser2netweb.cdx.json out/ser2netweb-windows-x64.cdx.json
           # the systemd unit for the Linux binaries and the script that installs one with it
           # (README: Run as a service)
-          cp systemd/ser2net-standalone.service out/ser2net-standalone.service
-          cp systemd/ser2net-install.sh out/ser2net-install.sh
+          cp systemd/ser2netweb-standalone.service out/ser2netweb-standalone.service
+          cp systemd/ser2netweb-install.sh out/ser2netweb-install.sh
           cd out
           sha256sum * > SHA256SUMS
           cat SHA256SUMS
-      - name: Every platform ships the same supported CPython/OpenSSL
-        run: python3 tools/release_guard.py sboms out/*.cdx.json --min-openssl 3.5
+      - name: Exactly the release files, each in SHA256SUMS
+        run: python3 tools/release_guard.py assets out
+      - name: Every platform ships the same ser2netweb and supported CPython/OpenSSL
+        run: python3 tools/release_guard.py sboms out/ser2netweb-*.cdx.json --min-openssl 3.5
       - name: Build provenance attestation (gh attestation verify <file> -R ${{ github.repository }})
         if: github.event_name == 'push'
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8  # v4.2.2
         with:
           subject-path: |
-            out/ser2net-linux-x64
-            out/ser2net-linux-arm64
-            out/ser2net-windows-x64.exe
+            out/ser2netweb-linux-x64
+            out/ser2netweb-linux-arm64
+            out/ser2netweb-windows-x64.exe
       - name: SBOM attestation (Linux x64)
         if: github.event_name == 'push'
         uses: actions/attest-sbom@c604332985a26aa8cf1bdc465b92731239ec6b9e  # v4.1.0
         with:
-          subject-path: out/ser2net-linux-x64
-          sbom-path: out/ser2net-linux-x64.cdx.json
+          subject-path: out/ser2netweb-linux-x64
+          sbom-path: out/ser2netweb-linux-x64.cdx.json
       - name: SBOM attestation (Linux arm64)
         if: github.event_name == 'push'
         uses: actions/attest-sbom@c604332985a26aa8cf1bdc465b92731239ec6b9e  # v4.1.0
         with:
-          subject-path: out/ser2net-linux-arm64
-          sbom-path: out/ser2net-linux-arm64.cdx.json
+          subject-path: out/ser2netweb-linux-arm64
+          sbom-path: out/ser2netweb-linux-arm64.cdx.json
       - name: SBOM attestation (Windows x64)
         if: github.event_name == 'push'
         uses: actions/attest-sbom@c604332985a26aa8cf1bdc465b92731239ec6b9e  # v4.1.0
         with:
-          subject-path: out/ser2net-windows-x64.exe
-          sbom-path: out/ser2net-windows-x64.cdx.json
+          subject-path: out/ser2netweb-windows-x64.exe
+          sbom-path: out/ser2netweb-windows-x64.cdx.json
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
         with:
           name: release-files
@@ -337,6 +356,7 @@ jobs:
       attestations: write    # (both)
     env:
       IMAGE: ${{ needs.image-build.outputs.image }}
+      OLD_IMAGE: ${{ needs.image-build.outputs.old-image }}
       DIGEST: ${{ needs.image-build.outputs.digest }}
     steps:
       - name: Sign in to GHCR
@@ -348,15 +368,22 @@ jobs:
           subject-name: ${{ needs.image-build.outputs.image }}
           subject-digest: ${{ needs.image-build.outputs.digest }}
           push-to-registry: true
-      - name: Tag it ${{ needs.verify.outputs.image-tags }}
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8  # v4.2.2
+        with:
+          subject-name: ${{ needs.image-build.outputs.old-image }}
+          subject-digest: ${{ needs.image-build.outputs.digest }}
+          push-to-registry: true
+      - name: Tag it ${{ needs.verify.outputs.image-tags }} (under both names)
         env:
           TAGS: ${{ needs.verify.outputs.image-tags }}
         run: |
-          refs=()
-          for tag in $TAGS; do refs+=(--tag "$IMAGE:$tag"); done
-          docker buildx imagetools create "${refs[@]}" "$IMAGE@$DIGEST"
-          for tag in $TAGS; do
-            got=$(docker buildx imagetools inspect "$IMAGE:$tag" | awk '$1 == "Digest:" {print $2; exit}')
-            echo "$IMAGE:$tag -> $got"
-            [ "$got" = "$DIGEST" ] || { echo "::error::$IMAGE:$tag is $got, not the tested $DIGEST"; exit 1; }
+          for image in "$IMAGE" "$OLD_IMAGE"; do
+            refs=()
+            for tag in $TAGS; do refs+=(--tag "$image:$tag"); done
+            docker buildx imagetools create "${refs[@]}" "$image@$DIGEST"
+            for tag in $TAGS; do
+              got=$(docker buildx imagetools inspect "$image:$tag" | awk '$1 == "Digest:" {print $2; exit}')
+              echo "$image:$tag -> $got"
+              [ "$got" = "$DIGEST" ] || { echo "::error::$image:$tag is $got, not the tested $DIGEST"; exit 1; }
+            done
           done

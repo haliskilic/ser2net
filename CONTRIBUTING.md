@@ -47,12 +47,12 @@ and `tests/test_release_pipeline.py` fail on a tag reference.
 `tests/test_dead_peer.py` blackholes a loopback flow with iptables; run it with
 `SER2NETWEB_BLACKHOLE_TESTS=1` only in a throwaway network namespace or VM, never on a
 machine whose firewall matters. The standalone executable checks need a build
-(`SER2NETWEB_STANDALONE_BIN=dist/ser2net python tests/test_standalone.py`).
+(`SER2NETWEB_STANDALONE_BIN=dist/ser2netweb python tests/test_standalone.py`).
 `tests/systemd_smoke.sh` (CI jobs `systemd unit` and `systemd unit (binary)`) installs the
-systemd units as the README says and runs them on the runner's systemd: it adds a `ser2net`
-user, `/opt/ser2net` and the service, so run it only on a throwaway VM. A change to a unit in
+systemd units as the README says and runs them on the runner's systemd: it adds a `ser2netweb`
+user, `/opt/ser2netweb` and the service, so run it only on a throwaway VM. A change to a unit in
 `systemd/` goes into every unit there (`tests/test_systemd_units.py` checks them all).
-`systemd/ser2net-install.sh` is tested staged under a scratch folder (`--root`,
+`systemd/ser2netweb-install.sh` is tested staged under a scratch folder (`--root`,
 `tests/test_install_script.py`) and for real by `tests/install_smoke.sh <binary>` (CI job
 `install script (binary)`), which installs the binary system-wide and remounts `/tmp`: a
 throwaway VM only, too.
@@ -187,10 +187,13 @@ pre-release) on the merge commit starts `.github/workflows/release.yml`:
 2. the whole CI runs on the tagged commit (`ci.yml`, the checks `ci-ok` gates merges on);
    its standalone build is what gets released;
 3. the image is built for amd64, arm64 and arm/v7, pushed to GHCR by digest only (no tag)
-   and that digest is smoke-tested on each (amd64 and arm64 natively, arm/v7 under QEMU);
+   as `ghcr.io/haliskilic/ser2netweb` and, for the 3.x line, as `ghcr.io/haliskilic/ser2net`
+   (its name up to 2.9.x), and that digest is smoke-tested on each (amd64 and arm64
+   natively, arm/v7 under QEMU);
 4. only then are the files attested and the GitHub release created with them (by `gh`; the
-   jobs that can write releases or attestations run GitHub's own actions only), and the
-   tested image gets its tags `X.Y.Z`, `X.Y` and `latest`. A pre-release gets only its own
+   jobs that can write releases or attestations run GitHub's own actions only; the files are
+   the `ser2netweb-*` ones `tools/release_guard.py assets` lists), and the tested image gets
+   its tags `X.Y.Z`, `X.Y` and `latest` under both names. A pre-release gets only its own
    image tag, is marked as a pre-release and never becomes "Latest".
 
 One release runs at a time. A job that failed for a passing reason is re-run (*Re-run
@@ -254,12 +257,12 @@ Dependabot günceller, tag ile verilen bir referansta zizmor ve
 `tests/test_dead_peer.py` iptables ile loopback trafiği kestiği için
 `SER2NETWEB_BLACKHOLE_TESTS=1` ile yalnızca silinebilir bir ağ ad alanında (network namespace)
 ya da sanal makinede çalıştırın. Standalone binary denetimleri bir derleme ister
-(`SER2NETWEB_STANDALONE_BIN=dist/ser2net python tests/test_standalone.py`). `tests/systemd_smoke.sh` (CI'daki `systemd unit` ve
+(`SER2NETWEB_STANDALONE_BIN=dist/ser2netweb python tests/test_standalone.py`). `tests/systemd_smoke.sh` (CI'daki `systemd unit` ve
 `systemd unit (binary)` işleri) systemd unit'lerini README'deki gibi kurar ve runner'ın
-systemd'sinde çalıştırır: bir `ser2net` kullanıcısı, `/opt/ser2net` ve servisi ekler; bu
+systemd'sinde çalıştırır: bir `ser2netweb` kullanıcısı, `/opt/ser2netweb` ve servisi ekler; bu
 yüzden yalnızca silinebilir bir sanal makinede çalıştırın. `systemd/` altındaki bir unit'te
 yapılan değişiklik oradaki her unit'e uygulanır (`tests/test_systemd_units.py` hepsini denetler).
-`systemd/ser2net-install.sh` geçici bir klasör altında hazırlanarak (`--root`,
+`systemd/ser2netweb-install.sh` geçici bir klasör altında hazırlanarak (`--root`,
 `tests/test_install_script.py`) ve gerçekten `tests/install_smoke.sh <binary>` ile (CI'daki
 `install script (binary)` işi) test edilir; o, binary'yi sisteme kurar ve `/tmp`'yi yeniden
 bağlar: onu da yalnızca silinebilir bir sanal makinede çalıştırın.
@@ -394,11 +397,14 @@ yazılır; bu birleştirilince merge commit'ine atılan açıklamalı bir `vX.Y.
 2. tag'lenen commit'te CI'ın tamamı çalışır (`ci.yml`, birleştirmede `ci-ok`'un beklediği
    kontroller); yayımlanan, onun standalone derlemesidir;
 3. imaj amd64, arm64 ve arm/v7 için derlenir, GHCR'a yalnızca digest ile (tag'siz)
-   gönderilir ve bu digest her mimaride smoke test'ten geçer (amd64 ve arm64 emülasyonsuz,
-   arm/v7 QEMU altında);
+   `ghcr.io/haliskilic/ser2netweb` ve 3.x serisi için 2.9.x'e kadarki adıyla
+   `ghcr.io/haliskilic/ser2net` olarak gönderilir ve bu digest her mimaride smoke test'ten
+   geçer (amd64 ve arm64 emülasyonsuz, arm/v7 QEMU altında);
 4. ancak bundan sonra dosyalar attest edilir ve GitHub release'i onlarla oluşturulur
    (`gh` ile; release ya da attestation yazabilen işlerde yalnızca GitHub'ın kendi
-   action'ları çalışır), test edilen imaj da `X.Y.Z`, `X.Y` ve `latest` tag'lerini alır.
+   action'ları çalışır; dosyalar `tools/release_guard.py assets`'in listelediği
+   `ser2netweb-*` dosyalarıdır), test edilen imaj da iki adı altında `X.Y.Z`, `X.Y` ve
+   `latest` tag'lerini alır.
    Ön sürüm yalnızca kendi imaj tag'ini alır, ön sürüm olarak işaretlenir ve hiçbir zaman
    "Latest" olmaz.
 

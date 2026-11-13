@@ -6,9 +6,9 @@ components are not covered by ser2netweb's license.
 
 **Full license texts:** every standalone executable carries the texts of everything it
 contains — run `ser2netweb --licenses` — and each release attaches the same file as
-`ser2net-<platform>.THIRD-PARTY-LICENSES.txt`. It is generated at build time from the
+`ser2netweb-<platform>.THIRD-PARTY-LICENSES.txt`. It is generated at build time from the
 build environment (`tools/third_party.py`), so it always matches the bundled versions. The
-release's SBOMs (`ser2net-<platform>.cdx.json`, CycloneDX) list the same components with SPDX
+release's SBOMs (`ser2netweb-<platform>.cdx.json`, CycloneDX) list the same components with SPDX
 license ids, the interpreter's native libraries (OpenSSL, zlib, expat, mpdecimal, SQLite as
 bundled) with their versions and CPEs, the OpenSSL that cryptography links in, and the
 browser libraries below.

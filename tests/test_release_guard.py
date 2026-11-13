@@ -1,14 +1,20 @@
-"""tools/release_guard.py tag: a release tag must match the version and the CHANGELOG.
+"""tools/release_guard.py: a release tag must match the version and the CHANGELOG, and the
+release files must be exactly the ones a release has.
 
-release.yml runs it before anything is built, so a tag that is not vX.Y.Z / vX.Y.Z-rc.N,
-differs from ser2netweb.__version__ or has no dated CHANGELOG section fails the release instead
-of shipping binaries, an SBOM and an image with the wrong version. It also decides the
-image tags: a pre-release gets only its own, never X.Y or latest.
+`tag`: release.yml runs it before anything is built, so a tag that is not vX.Y.Z /
+vX.Y.Z-rc.N, differs from ser2netweb.__version__ or has no dated CHANGELOG section fails the
+release instead of shipping binaries, an SBOM and an image with the wrong version. It also
+decides the image tags: a pre-release gets only its own, never X.Y or latest.
+`assets`: the folder release.yml uploads holds the ser2netweb-* files (each executable with
+its SBOM and license texts, the install script, the unit) and SHA256SUMS over all of them,
+nothing missing, nothing else (no ser2net-* file of the names up to 2.9.x).
+`sboms`: every platform's SBOM describes the same ser2netweb version, CPython and OpenSSL.
 
 Run: python3 tests/test_release_guard.py   (stdlib only)
 """
 import contextlib
 import io
+import json
 import os
 import subprocess
 import sys
@@ -118,10 +124,92 @@ def test_command_line():
     print("release_guard.py tag: exit status and $GITHUB_OUTPUT  OK")
 
 
+def _release_folder(tmp: str, names) -> str:
+    out = os.path.join(tmp, "out")
+    os.makedirs(out)
+    for name in names:
+        with open(os.path.join(out, name), "w", encoding="utf-8") as fh:
+            fh.write(name)
+    with open(os.path.join(out, "SHA256SUMS"), "w", encoding="utf-8") as fh:
+        fh.write("".join(f"{'0' * 64}  {n}\n" for n in sorted(names)))
+    return out
+
+
+def _assets(folder):
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out), contextlib.redirect_stderr(out):
+        rc = release_guard.check_assets(folder)
+    return rc, out.getvalue()
+
+
+def test_release_assets():
+    want = release_guard.release_assets()
+    assert "SHA256SUMS" in want and len(want) == 12, want
+    for name in ("ser2netweb-linux-x64", "ser2netweb-linux-arm64.cdx.json",
+                 "ser2netweb-windows-x64.exe", "ser2netweb-windows-x64.THIRD-PARTY-LICENSES.txt",
+                 "ser2netweb-install.sh", "ser2netweb-standalone.service"):
+        assert name in want, name
+    files = [n for n in want if n != "SHA256SUMS"]
+    with tempfile.TemporaryDirectory() as tmp:
+        rc, text = _assets(_release_folder(tmp, files))
+        assert rc == 0 and "12 release files" in text, text
+    for change, words in (
+            (lambda f: f[1:], ("missing: ",)),
+            (lambda f: f + ["ser2net-linux-x64"], ("not a release file: ser2net-linux-x64",)),
+            (lambda f: [n.replace("ser2netweb-install", "ser2net-install") for n in f],
+             ("missing: ser2netweb-install.sh", "not a release file: ser2net-install.sh"))):
+        with tempfile.TemporaryDirectory() as tmp:
+            rc, text = _assets(_release_folder(tmp, change(list(files))))
+            assert rc == 1 and all(w in text for w in words), (words, text)
+    with tempfile.TemporaryDirectory() as tmp:  # SHA256SUMS that leaves a file out
+        out = _release_folder(tmp, files)
+        with open(os.path.join(out, "SHA256SUMS"), "w", encoding="utf-8") as fh:
+            fh.write("".join(f"{'0' * 64} *{n}\n" for n in files[1:]))
+        rc, text = _assets(out)
+        assert rc == 1 and "SHA256SUMS lists" in text, text
+    print("release_guard.py assets: exactly the ser2netweb-* files, each in SHA256SUMS; a "
+          "missing one, an old ser2net-* name or an incomplete SHA256SUMS fails  OK")
+
+
+def _sbom(tmp: str, name: str, product: str, version: str, cpython="3.12.16",
+          openssl="3.5.4") -> str:
+    path = os.path.join(tmp, name)
+    with open(path, "w", encoding="utf-8") as fh:
+        json.dump({"metadata": {"component": {"name": product, "version": version}},
+                   "components": [{"name": "cpython", "version": cpython},
+                                  {"name": "openssl", "version": openssl}]}, fh)
+    return path
+
+
+def test_sboms():
+    def check(*paths):
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(out):
+            rc = release_guard.check_sboms(list(paths), "3.5")
+        return rc, out.getvalue()
+    with tempfile.TemporaryDirectory() as tmp:
+        a = _sbom(tmp, "a.cdx.json", "ser2netweb", "3.0.0")
+        b = _sbom(tmp, "b.cdx.json", "ser2netweb", "3.0.0")
+        rc, text = check(a, b)
+        assert rc == 0 and "ser2netweb 3.0.0 with CPython 3.12.16, OpenSSL 3.5.4" in text, text
+        for bad in (_sbom(tmp, "c.cdx.json", "ser2netweb", "2.9.0"),
+                    _sbom(tmp, "d.cdx.json", "ser2net", "3.0.0")):
+            rc, text = check(a, bad)
+            assert rc == 1 and "same ser2netweb version" in text, text
+        rc, text = check(a, _sbom(tmp, "e.cdx.json", "ser2netweb", "3.0.0", openssl="3.0.18"))
+        assert rc == 1 and "same CPython and OpenSSL" in text, text
+        rc, text = check(_sbom(tmp, "f.cdx.json", "ser2netweb", "3.0.0", openssl="3.0.18"))
+        assert rc == 1 and "older than the minimum" in text, text
+    print("release_guard.py sboms: the same ser2netweb version, CPython and a supported "
+          "OpenSSL on every platform  OK")
+
+
 if __name__ == "__main__":
     test_release_and_pre_release()
     test_refused_tags()
     test_changelog_section_needed()
     test_dry_run_and_this_tree()
     test_command_line()
-    print("\nPASS: release guard (tag)")
+    test_release_assets()
+    test_sboms()
+    print("\nPASS: release guard")

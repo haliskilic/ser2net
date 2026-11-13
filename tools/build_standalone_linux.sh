@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build the standalone Linux executable dist/ser2net so it runs on any x86_64 or
+# Build the standalone Linux executable dist/ser2netweb so it runs on any x86_64 or
 # aarch64 (arm64) distribution with glibc >= 2.28 (RHEL/Alma/Rocky 8+, Debian 11+,
 # Ubuntu 20.04+, Fedora, openSUSE Leap 15.x, Raspberry Pi OS 11+ 64-bit ...) with
 # nothing else installed. Run it INSIDE an AlmaLinux 8 container (glibc 2.28) of the
@@ -56,5 +56,5 @@ done
 "$PY" tools/release_guard.py interpreter --min-openssl 3.5
 "$PY" -m PyInstaller --clean --noconfirm ser2netweb.spec
 # after the build: the spec lists the binaries the executable carries
-"$PY" tools/third_party.py sbom build/ser2net.cdx.json --strict --binaries build/bundled-binaries.txt
-dist/ser2net --version
+"$PY" tools/third_party.py sbom build/ser2netweb.cdx.json --strict --binaries build/bundled-binaries.txt
+dist/ser2netweb --version

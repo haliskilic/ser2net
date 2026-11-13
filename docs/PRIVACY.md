@@ -12,9 +12,9 @@ the organisation running it to decide. Nothing here is legal advice.
 ### What is stored, and for how long
 
 Everything ser2netweb writes is in its data directory (default `data/`; Docker: `/data`;
-systemd: `/opt/ser2net/data` for a source checkout, `/var/lib/ser2net` for the binary,
-`/var/lib/ser2net/<name>` for an instance; Windows service: `C:\ProgramData\ser2net`, a
-named one `C:\ProgramData\ser2net\<name>`), but for an entry in the Windows Application
+systemd: `/opt/ser2netweb/data` for a source checkout, `/var/lib/ser2netweb` for the binary,
+`/var/lib/ser2netweb/<name>` for an instance; Windows service: `C:\ProgramData\ser2netweb`, a
+named one `C:\ProgramData\ser2netweb\<name>`; the same with `ser2net` up to 2.9.x), but for an entry in the Windows Application
 event log when the service stops on an error. The directory is readable only by the account
 ser2netweb runs as (POSIX `0700`, files `0600`; Windows: owner, SYSTEM and Administrators). Nothing in
 it is encrypted: use full-disk encryption where the host needs it.
@@ -37,7 +37,7 @@ wrong field); 2.8.1 records `(unknown user)` instead, but older records are not 
 see *Erasing* below.
 
 **Copies outside the data directory.** Every `all.log` line is also written to stdout:
-under systemd the journal keeps it (`journalctl -u ser2net`, readable by root and the
+under systemd the journal keeps it (`journalctl -u ser2netweb`, readable by root and the
 `systemd-journal` and `adm` groups, under the journal's own retention), under Docker the
 container log (until the container is removed; cap it with `logging:` in compose). A
 Windows service writes nothing to stdout.
@@ -86,7 +86,7 @@ Only what you set up; nothing is on by default but the web UI itself.
 | Setting | Effect | Default |
 |---|---|---|
 | Settings → *Audit log* → *Web UI requests in all.log* | only changes and refused requests, or none | every page and change |
-| `SER2NETWEB_LOG_STDOUT=off` (systemd: a commented line in `ser2net.service` and `ser2net@.service`; add it to `ser2net-standalone.service` with `systemctl edit`) | the log lines only in `all.log`, no journal / Docker copy | on |
+| `SER2NETWEB_LOG_STDOUT=off` (systemd: a commented line in `ser2netweb.service` and `ser2netweb@.service`; add it to `ser2netweb-standalone.service` with `systemctl edit`) | the log lines only in `all.log`, no journal / Docker copy | on |
 | Settings → *Notifications* → *Leave out personal data* | addresses as their network, no account names | off |
 | Settings → *Notifications* → *Send each recipient a message of their own* | one e-mail per recipient | off |
 | Settings → *Retention* | no log record, backup or trace older than that many days | off |
@@ -97,7 +97,7 @@ Only what you set up; nothing is on by default but the web UI itself.
 
 To show someone what is recorded about them: Settings → *Audit log*, filter by their
 account (and search for their IP address), then *CSV*. On the host, search `all.log*` and
-`logs/*.log` for the name and the address, and the journal (`journalctl -u ser2net | grep …`)
+`logs/*.log` for the name and the address, and the journal (`journalctl -u ser2netweb | grep …`)
 or `docker logs`.
 
 ### Erasing
@@ -148,9 +148,9 @@ hukuki tavsiye değildir.
 ### Neler, ne kadar süre saklanır
 
 ser2netweb'in yazdığı her şey veri dizinindedir (varsayılan `data/`; Docker: `/data`; systemd:
-kaynak kurulumda `/opt/ser2net/data`, binary'de `/var/lib/ser2net`, bir örnekte
-`/var/lib/ser2net/<ad>`; Windows servisi: `C:\ProgramData\ser2net`, adlandırılmış bir servis
-`C:\ProgramData\ser2net\<ad>`); tek istisna, servis bir hatayla durduğunda Windows
+kaynak kurulumda `/opt/ser2netweb/data`, binary'de `/var/lib/ser2netweb`, bir örnekte
+`/var/lib/ser2netweb/<ad>`; Windows servisi: `C:\ProgramData\ser2netweb`, adlandırılmış bir servis
+`C:\ProgramData\ser2netweb\<ad>`; 2.9.x'e kadar aynıları `ser2net` ile); tek istisna, servis bir hatayla durduğunda Windows
 Application olay günlüğüne yazılan kayıttır. Dizini yalnızca ser2netweb'in çalıştığı hesap okuyabilir
 (POSIX `0700`, dosyalar `0600`; Windows: sahip, SYSTEM ve Administrators). İçindeki hiçbir
 şey şifrelenmez: gereken makinelerde tam disk şifrelemesi kullanın.
@@ -173,7 +173,7 @@ olabilir); 2.8.1 bunun yerine `(unknown user)` yazar, ama eski kayıtlar yeniden
 aşağıda *Silme*'ye bakın.
 
 **Veri dizini dışındaki kopyalar.** `all.log`'un her satırı stdout'a da yazılır: systemd
-altında journal tutar (`journalctl -u ser2net`; root ile `systemd-journal` ve `adm` grupları
+altında journal tutar (`journalctl -u ser2netweb`; root ile `systemd-journal` ve `adm` grupları
 okuyabilir, journal'ın kendi saklama süresiyle), Docker altında container log'u (container
 silinene kadar; compose'da `logging:` ile sınırlayın). Windows servisi stdout'a bir şey
 yazmaz.
@@ -222,7 +222,7 @@ açık değildir.
 | Ayar | Etkisi | Varsayılan |
 |---|---|---|
 | Ayarlar → *Denetim kaydı* → *all.log'daki web arayüzü istekleri* | yalnızca değişiklikler ve reddedilen istekler, ya da hiçbiri | her sayfa ve değişiklik |
-| `SER2NETWEB_LOG_STDOUT=off` (systemd: `ser2net.service` ve `ser2net@.service`'te yorum satırı olarak; `ser2net-standalone.service`'e `systemctl edit` ile ekleyin) | log satırları yalnızca `all.log`'da, journal / Docker kopyası yok | açık |
+| `SER2NETWEB_LOG_STDOUT=off` (systemd: `ser2netweb.service` ve `ser2netweb@.service`'te yorum satırı olarak; `ser2netweb-standalone.service`'e `systemctl edit` ile ekleyin) | log satırları yalnızca `all.log`'da, journal / Docker kopyası yok | açık |
 | Ayarlar → *Bildirimler* → *Kişisel verileri gönderme* | adresler ağlarıyla, hesap adları yok | kapalı |
 | Ayarlar → *Bildirimler* → *Her alıcıya ayrı bir mesaj gönder* | her alıcıya ayrı e-posta | kapalı |
 | Ayarlar → *Saklama süresi* | o kadar günden eski log kaydı, yedek ya da trace kalmaz | kapalı |
@@ -233,7 +233,7 @@ açık değildir.
 
 Birine hakkında neyin kaydedildiğini göstermek için: Ayarlar → *Denetim kaydı*, hesabına göre
 filtreleyin (ve IP adresini arayın), sonra *CSV*. Makinede `all.log*` ve `logs/*.log`
-dosyalarında adı ve adresi, journal'da (`journalctl -u ser2net | grep …`) ya da
+dosyalarında adı ve adresi, journal'da (`journalctl -u ser2netweb | grep …`) ya da
 `docker logs`'ta arayın.
 
 ### Silme

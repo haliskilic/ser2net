@@ -41,7 +41,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=None,  # see below: whether it was given matters to --install-service
         help="Directory for config.json, its backups, the logs and traces (default: ./data; "
              "for --install-service: the data directory the service already uses, or for a "
-             "new service from the standalone exe %%ProgramData%%\\ser2net). Give ser2netweb "
+             "new service from the standalone exe %%ProgramData%%\\ser2netweb). Give ser2netweb "
              "a folder of its own: it makes it private to the account it runs as.",
     )
     p.add_argument(
@@ -83,9 +83,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                      help="Stop and remove the Windows service. Its data directory is kept "
                           "(config.json, backups, logs, the audit log, traces): delete it to "
                           "remove those too.")
-    svc.add_argument("--service-name", default="ser2net",
-                     help="Name of the Windows service (default: ser2net); lets several "
-                          "instances with different data directories run side by side.")
+    svc.add_argument("--service-name", default="ser2netweb",
+                     help="Name of the Windows service (default: ser2netweb, which takes over "
+                          "a 2.x service named ser2net); lets several instances with "
+                          "different data directories run side by side.")
     svc.add_argument("--allow-unsafe-location", action="store_true",
                      help="Install the service from a source checkout even if a "
                           "non-administrator can modify it (the standalone exe never needs "
@@ -111,7 +112,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                      help="Have the ser2netweb running with this data directory read config.json "
                           "again and apply it without a restart (mappings that didn't change "
                           "keep running with their clients), then exit. On Linux/macOS "
-                          "SIGHUP does the same (systemctl reload ser2net).")
+                          "SIGHUP does the same (systemctl reload ser2netweb).")
     args = p.parse_args(argv)
     if args.reload and (args.set_password is not None or args.sign_out_all):
         p.error("--reload can't be combined with --set-password or --sign-out-all")

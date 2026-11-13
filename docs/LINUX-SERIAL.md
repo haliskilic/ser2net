@@ -12,8 +12,8 @@ the mapping's log) say what went wrong; `last_error` is pyserial's own text.
 
 | Shown | Cause | Fix |
 |---|---|---|
-| `[Errno 13] Permission denied`, with *… belongs to group dialout (gid 20), and user ser2net is not in it* | the account ser2netweb runs as is not in the device's group | [Groups](#groups) |
-| … *was added to group … after ser2netweb started* | the group was given while ser2netweb ran | restart ser2netweb (`sudo systemctl restart ser2net`) |
+| `[Errno 13] Permission denied`, with *… belongs to group dialout (gid 20), and user ser2netweb is not in it* | the account ser2netweb runs as is not in the device's group | [Groups](#groups) |
+| … *was added to group … after ser2netweb started* | the group was given while ser2netweb ran | restart ser2netweb (`sudo systemctl restart ser2netweb`) |
 | … *only root may open …* | the device belongs to root's group | a udev rule that gives it the serial group ([udev](#udev-rules)) |
 | `[Errno 16] Device or resource busy`, or *another program keeps other programs out of this port (TIOCEXCL)* | another program opened it exclusively: ModemManager, the classic ser2net, brltty | [Who has the port](#who-has-the-port) |
 | `Could not exclusively lock port …`, *another program has locked this port (flock)* | another ser2netweb mapping or instance, picocom, tio, miniterm | stop that program; *mapping '…' has this port open* names this ser2netweb's own |
@@ -38,10 +38,10 @@ stat -L -c '%G (gid %g)' /dev/ttyUSB0      # dialout (gid 20) on Debian/Ubuntu, 
 sudo usermod -aG "$(stat -L -c %G /dev/ttyUSB0)" "$USER"     # then sign out and in again
 ```
 
-- **systemd** (`systemd/ser2net.service`, `ser2net@.service`, `ser2net-standalone.service`):
+- **systemd** (`systemd/ser2netweb.service`, `ser2netweb@.service`, `ser2netweb-standalone.service`):
   the unit gives the account the group with `SupplementaryGroups=dialout`. On a
   distribution whose serial group has another name (Arch, Manjaro, EndeavourOS: `uucp`) the
-  unit fails with `status=216/GROUP`: set it with `sudo systemctl edit ser2net`:
+  unit fails with `status=216/GROUP`: set it with `sudo systemctl edit ser2netweb`:
   ```ini
   [Service]
   SupplementaryGroups=
@@ -124,7 +124,7 @@ mainly USB CDC `ttyACM*` devices; it leaves ordinary USB-serial adapters (FTDI, 
 `ttyUSB*`) alone by default. Tell it to ignore a device with a udev rule:
 
 ```text
-# /etc/udev/rules.d/99-ser2net-mm.rules (VID/PID from `udevadm info -a -n /dev/ttyACM0`)
+# /etc/udev/rules.d/99-ser2netweb-mm.rules (VID/PID from `udevadm info -a -n /dev/ttyACM0`)
 ATTRS{idVendor}=="2341", ENV{ID_MM_DEVICE_IGNORE}="1"
 ```
 
@@ -155,12 +155,12 @@ re-plug the adapter. `journalctl -k` shows `usbfs: interface 0 claimed by ch341 
 - The Pi 5 has a PL011 on the GPIO header and a separate debug UART connector
   (`ttyAMA10`), with no Bluetooth swap; check `ls -l /dev/serial0` there too.
 - Turn the serial console off first ([above](#console-and-login-prompt)).
-- The standalone `ser2net-linux-arm64` needs a 64-bit OS; 32-bit Raspberry Pi OS runs from
+- The standalone `ser2netweb-linux-arm64` needs a 64-bit OS; 32-bit Raspberry Pi OS runs from
   source or with the Docker image (`linux/arm/v7`).
 
 ## Still stuck
 
 Open an issue with the mapping's state and hint from the dashboard, the lines of the
 mapping's log around the error, `ser2netweb --about`, and the output of
-`ls -l /dev/serial/by-id/ /dev/ttyUSB* /dev/ttyACM* 2>/dev/null` and `id ser2net` (mask
-serial numbers you don't want to publish).
+`ls -l /dev/serial/by-id/ /dev/ttyUSB* /dev/ttyACM* 2>/dev/null` and `id ser2netweb` (the
+service user; `ser2net` up to 2.9.x) (mask serial numbers you don't want to publish).

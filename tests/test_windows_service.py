@@ -12,6 +12,11 @@ Portable part (any OS):
     checkpoints until then), so --install-service reports a start that fails;
   * the service's stderr goes to service.log, and a service that stops on an error says
     why in all.log and the Application event log (the entry itself on Windows only).
+Moving 2.x's service over (any OS, a stand-in Service Control Manager): the default
+--install-service stops 2.x's 'ser2net' service (recognised by its registered command line),
+moves its data from 2.x's default folder, starts 'ser2netweb' and only then deletes the old
+one and its exe; a failure puts it all back; a custom data directory, and a 'ser2net' service
+of another program, are left alone; --uninstall-service finds 2.x's service too.
 Windows part (SER2NETWEB_SERVICE_TESTS=1, as Administrator; CI runs it): install a
 service on a throwaway data directory, wait until the UI answers, set the admin's
 password with --set-password while it runs (the service applies it; the request folder
@@ -19,7 +24,9 @@ leaves SYSTEM read and delete, and no other account an entry), kill the process
 and see the SCM restart it, stop it (clean shutdown in the log), set the password again
 while it is stopped (the data directory stays SYSTEM's and Administrators' only), start
 it with that password, remove it. Uses SER2NETWEB_STANDALONE_BIN when set (the frozen exe),
-else python + ser2netweb.py.
+else python + ser2netweb.py. With the exe it also registers a service as 2.x left it
+('ser2net' from %ProgramFiles%\\ser2net, data in %ProgramData%\\ser2net) and moves it over
+with --install-service.
 
 Run: python3 tests/test_windows_service.py
 """
@@ -45,10 +52,10 @@ WINDOWS = os.name == "nt"
 
 
 def test_command_line():
-    cmd = winservice.service_command("ser2net", r"C:\Program Files\ser2net\data", frozen=True,
-                                     executable=r"C:\Program Files\ser2net\ser2net.exe")
-    assert cmd == ('"C:\\Program Files\\ser2net\\ser2net.exe" --service --service-name ser2net '
-                   '--data-dir "C:\\Program Files\\ser2net\\data"'), cmd
+    cmd = winservice.service_command("ser2netweb", r"C:\Program Files\ser2netweb\data", frozen=True,
+                                     executable=r"C:\Program Files\ser2netweb\ser2netweb.exe")
+    assert cmd == ('"C:\\Program Files\\ser2netweb\\ser2netweb.exe" --service --service-name '
+                   'ser2netweb --data-dir "C:\\Program Files\\ser2netweb\\data"'), cmd
     cmd = winservice.service_command("plant-2", "D:\\s2n\\", config="D:\\cfg dir\\c.json",
                                      frozen=False, executable="C:\\Python312\\python.exe",
                                      script="C:\\src\\ser2netweb.py")
@@ -62,8 +69,12 @@ def test_command_line():
             pass
         else:
             raise AssertionError(f"service name {bad!r} accepted")
-    assert winservice.display_name("ser2net") == "ser2net"
-    assert winservice.display_name("plant-2") == "ser2net (plant-2)"
+    assert winservice.DEFAULT_NAME == "ser2netweb"
+    assert winservice.display_name("ser2netweb") == "ser2netweb"
+    assert winservice.display_name("plant-2") == "ser2netweb (plant-2)"
+    # what 2.x called them (its firewall rules have these names)
+    assert winservice.old_display_name("ser2net") == "ser2net"
+    assert winservice.old_display_name("plant-2") == "ser2net (plant-2)"
     print("SCM command line quoted for exe / source; names validated  OK")
 
 
@@ -309,18 +320,25 @@ def test_install_locations():
     old = {k: os.environ.get(k) for k in ("ProgramFiles", "ProgramData")}
     os.environ["ProgramFiles"], os.environ["ProgramData"] = r"C:\PF", r"C:\PD"
     try:
-        assert w.installed_exe_path("ser2net") == os.path.join(r"C:\PF", "ser2net", "ser2net.exe")
-        assert w.installed_exe_path("plant-2") == os.path.join(r"C:\PF", "ser2net", "plant-2.exe")
-        assert w.default_service_data_dir("ser2net") == os.path.join(r"C:\PD", "ser2net")
-        assert w.default_service_data_dir("plant-2") == os.path.join(r"C:\PD", "ser2net", "plant-2")
+        assert w.installed_exe_path("ser2netweb") == os.path.join(r"C:\PF", "ser2netweb",
+                                                                  "ser2netweb.exe")
+        assert w.installed_exe_path("plant-2") == os.path.join(r"C:\PF", "ser2netweb", "plant-2.exe")
+        assert w.default_service_data_dir("ser2netweb") == os.path.join(r"C:\PD", "ser2netweb")
+        assert w.default_service_data_dir("plant-2") == os.path.join(r"C:\PD", "ser2netweb",
+                                                                     "plant-2")
+        # 2.x's places, which an install moves away from
+        assert w.old_installed_exe_path("ser2net") == os.path.join(r"C:\PF", "ser2net", "ser2net.exe")
+        assert w.old_installed_exe_path("plant-2") == os.path.join(r"C:\PF", "ser2net", "plant-2.exe")
+        assert w.old_default_data_dir("ser2net") == os.path.join(r"C:\PD", "ser2net")
+        assert w.old_default_data_dir("plant-2") == os.path.join(r"C:\PD", "ser2net", "plant-2")
         # the SCM command points at the admin-only copy for a frozen install
-        cmd = w.service_command("ser2net", r"C:\PD\ser2net", frozen=True,
-                                executable=w.installed_exe_path("ser2net"))
-        assert w.installed_exe_path("ser2net") in cmd and "--service" in cmd
+        cmd = w.service_command("ser2netweb", r"C:\PD\ser2netweb", frozen=True,
+                                executable=w.installed_exe_path("ser2netweb"))
+        assert w.installed_exe_path("ser2netweb") in cmd and "--service" in cmd
         # the firewall hint is a program-scoped netsh rule named after the service
-        fw = w.firewall_command("plant-2", exe=r"C:\PF\ser2net\plant-2.exe")
-        assert fw.startswith("netsh advfirewall firewall add rule") and "ser2net (plant-2)" in fw
-        assert r'program="C:\PF\ser2net\plant-2.exe"' in fw and "dir=in action=allow" in fw
+        fw = w.firewall_command("plant-2", exe=r"C:\PF\ser2netweb\plant-2.exe")
+        assert fw.startswith("netsh advfirewall firewall add rule") and "ser2netweb (plant-2)" in fw
+        assert r'program="C:\PF\ser2netweb\plant-2.exe"' in fw and "dir=in action=allow" in fw
     finally:
         for k, v in old.items():
             os.environ.pop(k, None) if v is None else os.environ.__setitem__(k, v)
@@ -328,33 +346,60 @@ def test_install_locations():
 
 
 class FakeSCM:
-    """Just enough of advapi32 for install(): one service, its command line, and a start
-    that can be made to fail once; every call is recorded in order."""
+    """Just enough of advapi32 for install() and uninstall(): services by name (their
+    command lines, display names, whether they run) and a start that can be made to fail
+    once; every call is recorded in order. `existing_cmd` registers the service `name`,
+    which `cmd` / `running` then describe."""
 
-    def __init__(self, calls, existing_cmd=None, fail_start_once=False):
-        self.calls, self.cmd, self.fail_start = calls, existing_cmd, fail_start_once
-        self.running = existing_cmd is not None
+    def __init__(self, calls, existing_cmd=None, fail_start_once=False, name="plant-2",
+                 services=None):
+        self.calls, self.fail_start, self.name = calls, fail_start_once, name
+        self.services = {n: dict(v) for n, v in (services or {}).items()}
+        if existing_cmd is not None:
+            self.services[name] = {"cmd": existing_cmd, "running": True, "display": "ser2net"}
+        self.handles, self._next = {}, 10
+
+    @property
+    def cmd(self):
+        return self.services.get(self.name, {}).get("cmd")
+
+    @property
+    def running(self):
+        return self.services.get(self.name, {}).get("running", False)
+
+    def state(self, svc):
+        return self.services[self.handles[svc]]
+
+    def _handle(self, name):
+        self._next += 1
+        self.handles[self._next] = name
+        return self._next
 
     def OpenSCManagerW(self, *a):  # Win32 names
         return 1
 
     def OpenServiceW(self, scm, name, access):
-        return 2 if self.cmd is not None else 0
+        return self._handle(name) if name in self.services else 0
 
     def CreateServiceW(self, scm, name, display, access, kind, start, err, cmd, *rest):
         self.calls.append(("create", cmd))
-        self.cmd = cmd
-        return 3
+        self.services[name] = {"cmd": cmd, "running": False, "display": display}
+        return self._handle(name)
 
     def ChangeServiceConfigW(self, svc, kind, start, err, cmd, *rest):
         self.calls.append(("change", cmd))
-        self.cmd = cmd
+        self.state(svc).update(cmd=cmd, display=rest[-1])
         return 1
 
     def StartServiceW(self, svc, *a):
-        self.calls.append(("start", self.cmd))
-        self.running = not self.fail_start  # the new build exits right away
+        self.calls.append(("start", self.state(svc)["cmd"]))
+        self.state(svc)["running"] = not self.fail_start  # the new build exits right away
         self.fail_start = False
+        return 1
+
+    def DeleteService(self, svc):
+        self.calls.append(("delete", self.handles[svc]))
+        self.services.pop(self.handles[svc], None)
         return 1
 
     def CloseServiceHandle(self, h):
@@ -362,26 +407,31 @@ class FakeSCM:
 
 
 def fake_windows(scm, previous_cmd, calls):
-    """Patch winservice so install() runs against FakeSCM; returns an undo function. The
-    Windows-only steps (ACLs, the lock test, stopping) only record that they ran."""
+    """Patch winservice so install() / uninstall() run against FakeSCM; returns an undo
+    function. The Windows-only steps (ACLs, the lock test, stopping) only record that they
+    ran. (previous_cmd: what FakeSCM registered; kept for the callers.)"""
     w = winservice
     saved = {n: getattr(w, n) for n in (
         "_advapi", "_win", "_query_registration", "_stop_and_wait", "_wait_lock_free",
         "_mkdir_admin_only", "_harden", "_require_protected", "_check_adoptable",
         "_exposed_ancestors", "_service_extras", "_wait_state", "_wait_started",
-        "_unsafe_locations")}
+        "_unsafe_locations", "_parent_trusted")}
 
     def stop(api, svc, name, log):
-        calls.append(("stop",))
-        was, scm.running = scm.running, False
+        calls.append(("stop", scm.handles[svc]))
+        state = scm.state(svc)
+        was, state["running"] = state["running"], False
         return was
+
+    def running(svc):
+        return scm.handles.get(svc) in scm.services and scm.state(svc)["running"]
 
     w._advapi = lambda: SimpleNamespace(dll=scm, kernel=None)
     w._win = SimpleNamespace(get_last_error=lambda: w.ERROR_SERVICE_DOES_NOT_EXIST,
                              FormatError=lambda e: f"error {e}")
     w._query_registration = lambda api, svc: SimpleNamespace(
-        service_type=0x10, start_type=2, error_control=1, binary_path=previous_cmd,
-        display_name="ser2net")
+        service_type=0x10, start_type=2, error_control=1, binary_path=scm.state(svc)["cmd"],
+        display_name=scm.state(svc)["display"])
     w._stop_and_wait = stop
     w._wait_lock_free = lambda d, timeout: calls.append(("lock-free", d))
     w._mkdir_admin_only = lambda d: os.makedirs(d, exist_ok=True)
@@ -391,10 +441,11 @@ def fake_windows(scm, previous_cmd, calls):
     w._exposed_ancestors = lambda d: []
     w._service_extras = lambda *a: None
     w._wait_state = lambda api, svc, want, timeout=30.0: (
-        w.SERVICE_RUNNING if scm.running else w.SERVICE_STOPPED)
+        w.SERVICE_RUNNING if running(svc) else w.SERVICE_STOPPED)
     w._wait_started = lambda api, svc, timeout=30.0: (
-        (w.SERVICE_RUNNING, 0) if scm.running else (w.SERVICE_STOPPED, 3))
+        (w.SERVICE_RUNNING, 0) if running(svc) else (w.SERVICE_STOPPED, 3))
     w._unsafe_locations = lambda paths, log: []
+    w._parent_trusted = lambda path: True
 
     def undo():
         for n, v in saved.items():
@@ -405,8 +456,8 @@ def fake_windows(scm, previous_cmd, calls):
 def test_install_flow_with_a_fake_scm():
     """install() against a stand-in Service Control Manager (any OS): re-running it while
     the service runs stops the service before the data directory's lock is tested and the
-    configuration loaded; a 2.8.0 service keeps its data directory; a failure after the
-    stop puts the previous exe and command line back, starts it and is one line."""
+    configuration loaded; a (named) 2.8.0 service keeps its data directory; a failure after
+    the stop puts the previous exe and command line back, starts it and is one line."""
     w = winservice
     work = tempfile.mkdtemp(prefix="s2n_flow_")
     env_saved = {k: os.environ.get(k) for k in ("ProgramFiles", "ProgramData")}
@@ -414,7 +465,7 @@ def test_install_flow_with_a_fake_scm():
     os.environ["ProgramFiles"] = os.path.join(work, "Program Files")
     os.environ["ProgramData"] = os.path.join(work, "ProgramData")
     try:
-        new_build = os.path.join(work, "Downloads", "ser2net-windows-x64.exe")
+        new_build = os.path.join(work, "Downloads", "ser2netweb-windows-x64.exe")
         os.makedirs(os.path.dirname(new_build))
         with open(new_build, "w") as fh:
             fh.write("NEW")
@@ -424,9 +475,9 @@ def test_install_flow_with_a_fake_scm():
         os.makedirs(old_data)
         with open(os.path.join(old_data, "config.json"), "w") as fh:
             json.dump({"users": [{"username": "admin"}], "mappings": [{"name": "PLC"}]}, fh)
-        old_cmd = w.service_command("ser2net", old_data, frozen=True,
+        old_cmd = w.service_command("plant-2", old_data, frozen=True,
                                     executable=os.path.join(old_dir, "ser2net.exe"))
-        dest = w.installed_exe_path("ser2net")
+        dest = w.installed_exe_path("plant-2")
 
         def run(scm, registered_cmd=old_cmd, data_dir=None, prepare=None, lines=None):
             calls = []
@@ -439,7 +490,7 @@ def test_install_flow_with_a_fake_scm():
                 seen.append(path)
                 return SimpleNamespace(path=path)
             try:
-                result = w.install("ser2net", data_dir, None, prepare=prepare or default_prepare,
+                result = w.install("plant-2", data_dir, None, prepare=prepare or default_prepare,
                                    default_data_dir=os.path.join(work, "default-data"),
                                    frozen=True, log=(lines.append if lines is not None
                                                      else (lambda *_: None)))
@@ -468,7 +519,7 @@ def test_install_flow_with_a_fake_scm():
         # 2. the new build doesn't start: the previous exe and command line come back
         with open(dest, "w") as fh:
             fh.write("PREVIOUS")
-        installed_cmd = w.service_command("ser2net", old_data, frozen=True, executable=dest)
+        installed_cmd = w.service_command("plant-2", old_data, frozen=True, executable=dest)
         scm = FakeSCM([], existing_cmd=installed_cmd, fail_start_once=True)
         try:
             run(scm, registered_cmd=installed_cmd)
@@ -519,10 +570,10 @@ def test_install_flow_with_a_fake_scm():
         assert scm.running and [c[0] for c in scm.calls][-1] == "start"
         print("a config that can't be loaded: the running version is started again  OK")
 
-        # 5. a new service from the exe: %ProgramData%\ser2net, checked before it is adopted
+        # 5. a new service from the exe: %ProgramData%\ser2netweb, checked before it is adopted
         scm = FakeSCM([])
         calls, _result = run(scm)
-        new_default = w.default_service_data_dir("ser2net")
+        new_default = w.default_service_data_dir("plant-2")
         assert ("adoptable", new_default) in calls and ("lock-free", new_default) in calls, calls
         assert calls.index(("adoptable", new_default)) < calls.index(
             next(c for c in calls if c[0] == "prepare"))
@@ -540,15 +591,14 @@ def test_uninstall_says_what_is_kept():
     """--uninstall-service (against the stand-in SCM, any OS) names the data directory it
     keeps and what is in it, read from the service's registered command line."""
     calls, logs = [], []
-    cmd = winservice.service_command("ser2net", r"C:\ProgramData\ser2net", frozen=True,
-                                     executable=r"C:\Program Files\ser2net\ser2net.exe")
-    scm = FakeSCM(calls, existing_cmd=cmd)
-    scm.DeleteService = lambda svc: calls.append(("delete",)) or 1
+    cmd = winservice.service_command("ser2netweb", r"C:\ProgramData\ser2netweb", frozen=True,
+                                     executable=r"C:\Program Files\ser2netweb\ser2netweb.exe")
+    scm = FakeSCM(calls, existing_cmd=cmd, name="ser2netweb")
     undo = fake_windows(scm, cmd, calls)
     saved = os.environ.get("ProgramFiles")
     os.environ["ProgramFiles"] = tempfile.mkdtemp(prefix="s2n_pf_")  # no exe copy to remove
     try:
-        winservice.uninstall("ser2net", log=logs.append)
+        winservice.uninstall("ser2netweb", log=logs.append)
     finally:
         undo()
         shutil.rmtree(os.environ["ProgramFiles"], ignore_errors=True)
@@ -556,12 +606,273 @@ def test_uninstall_says_what_is_kept():
             del os.environ["ProgramFiles"]
         else:
             os.environ["ProgramFiles"] = saved
-    assert ("delete",) in calls, calls
-    assert logs[-1] == winservice.kept_data_note("ser2net", r"C:\ProgramData\ser2net"), logs
-    assert (r"Its data directory C:\ProgramData\ser2net is kept, with config.json" in logs[-1]
+    assert ("delete", "ser2netweb") in calls, calls
+    assert logs[-1] == winservice.kept_data_note("ser2netweb", r"C:\ProgramData\ser2netweb"), logs
+    assert (r"Its data directory C:\ProgramData\ser2netweb is kept, with config.json" in logs[-1]
             and "audit.log" in logs[-1] and "traces/" in logs[-1]), logs[-1]
     assert "Its data directory is kept" in winservice.kept_data_note("x", None)
     print("--uninstall-service names the data directory it keeps and what is in it  OK")
+
+
+def test_old_service_recognised():
+    """is_ours() / plan_data_move(), the pure parts of moving a 2.x service over (any OS):
+    what --install-service registered is recognised by its command line, never by the
+    service's name alone; a data directory moves from 2.x's default place to 3.x's only
+    when nothing else is in the way."""
+    w = winservice
+
+    def reg(name, exe, data, script=None, config=None):
+        return {"executable": exe, "script": script, "service_name": name, "data_dir": data,
+                "config": config}
+    pd = r"C:\ProgramData"
+    for ok in (reg("ser2net", r"C:\Program Files\ser2net\ser2net.exe", pd + r"\ser2net"),
+               reg("ser2net", r"C:\Users\a\Downloads\ser2net-windows-x64.exe", r"C:\s2n\data"),
+               reg("ser2net", r"C:\Python312\python.exe", r"C:\src\data", r"C:\src\ser2net.py"),
+               reg("line1", r"C:\Program Files\ser2net\line1.exe", pd + r"\ser2net\line1")):
+        assert w.is_ours(ok, ok["service_name"]), ok
+    for bad in (None, reg("other", r"C:\Program Files\ser2net\ser2net.exe", pd + r"\ser2net"),
+                reg("ser2net", r"C:\Tools\bridge.exe", r"C:\s2n\data"),
+                reg("ser2net", r"C:\Python312\python.exe", r"C:\src\data", r"C:\src\tool.py"),
+                reg("ser2net", r"C:\Program Files\ser2net\ser2net.exe", None)):
+        assert not w.is_ours(bad, "ser2net"), bad
+    assert w.parse_service_command(r'"C:\Program Files\ser2net\ser2net.exe" -c C:\x.yaml') is None
+
+    saved = {k: os.environ.get(k) for k in ("ProgramFiles", "ProgramData")}
+    os.environ["ProgramFiles"], os.environ["ProgramData"] = r"C:\PF", r"C:\PD"
+    try:
+        if os.name != "nt":  # (the decision compares paths of this OS: names only here)
+            os.environ["ProgramFiles"], os.environ["ProgramData"] = "/PF", "/PD"
+        old, new = w.old_default_data_dir("ser2net"), w.default_service_data_dir("ser2netweb")
+        assert (old, new) == (os.path.join(os.environ["ProgramData"], "ser2net"),
+                              os.path.join(os.environ["ProgramData"], "ser2netweb"))
+        r = reg("ser2net", w.old_installed_exe_path("ser2net"), old)
+        nothing, folders = (lambda p: False), (lambda p: ["backups", "logs", "tls"])
+        got = w.plan_data_move(r, "ser2net", "ser2netweb", old, None, True, nothing, folders)
+        assert got == (old, new, None, f"moving the data directory {old} to {new}"), got
+        cfg = os.path.join(old, "config.json")
+        assert w.plan_data_move(r, "ser2net", "ser2netweb", old, cfg, True, nothing,
+                                folders)[2] == os.path.join(new, "config.json")
+        for args, why in (((r, "ser2net", "ser2netweb", old, None, True, lambda p: p == new, folders),
+                           "exists already"),
+                          ((r, "ser2net", "ser2netweb", old, None, True, nothing,
+                            lambda p: ["backups", "line1"]), "also holds line1"),
+                          ((r, "ser2net", "ser2netweb", old, os.path.join("/elsewhere", "c.json"),
+                            True, nothing, folders), "its configuration is")):
+            got = w.plan_data_move(*args)
+            assert got[:3] == (None, None, None) and why in got[3], (why, got)
+        # not a candidate at all: a source install, a custom folder, --data-dir given
+        for args in ((r, "ser2net", "ser2netweb", old, None, False, nothing, folders),
+                     (reg("ser2net", "x.exe", "/srv/data"), "ser2net", "ser2netweb", "/srv/data",
+                      None, True, nothing, folders),
+                     (r, "ser2net", "ser2netweb", "/srv/other", None, True, nothing, folders),
+                     (reg("ser2netweb", "x.exe", new), "ser2netweb", "ser2netweb", new, None, True,
+                      nothing, folders)):
+            assert w.plan_data_move(*args) == (None, None, None, ""), args
+        named_old, named_new = w.old_default_data_dir("line1"), w.default_service_data_dir("line1")
+        got = w.plan_data_move(reg("line1", "line1.exe", named_old), "line1", "line1", named_old,
+                               None, True, nothing, folders)
+        assert got[:2] == (named_old, named_new), got
+    finally:
+        for k, v in saved.items():
+            os.environ.pop(k, None) if v is None else os.environ.__setitem__(k, v)
+    print("2.x's services recognised by their command line (exe or script, name, data "
+          "directory); 2.x's default data directory moves only when nothing is in the way  OK")
+
+
+def test_move_from_2x_with_a_fake_scm():
+    """--install-service of the default service where 2.x's 'ser2net' service is (against
+    the stand-in SCM, any OS): it stops that one, moves its data from %ProgramData%\\ser2net,
+    installs and starts 'ser2netweb' from %ProgramFiles%\\ser2netweb, and only then deletes
+    the old service and its exe copy; a failed start puts everything back and starts the old
+    one again. A custom data directory stays where it is; a 'ser2net' service that isn't
+    ours is never touched. A named service is upgraded in place to the new folders.
+    --uninstall-service finds 2.x's service when there is no new one."""
+    w = winservice
+    work = tempfile.mkdtemp(prefix="s2n_move_")
+    env_saved = {k: os.environ.get(k) for k in ("ProgramFiles", "ProgramData")}
+    exe_saved = sys.executable
+    os.environ["ProgramFiles"] = os.path.join(work, "Program Files")
+    os.environ["ProgramData"] = os.path.join(work, "ProgramData")
+    try:
+        new_build = os.path.join(work, "Downloads", "ser2netweb-windows-x64.exe")
+        os.makedirs(os.path.dirname(new_build))
+        with open(new_build, "w") as fh:
+            fh.write("NEW")
+        sys.executable = new_build
+
+        def old_layout(name="ser2net", data=None):
+            """What 2.8.1 / 2.9's --install-service left: its exe copy and data directory."""
+            exe = w.old_installed_exe_path(name)
+            data = data or w.old_default_data_dir(name)
+            os.makedirs(os.path.dirname(exe), exist_ok=True)
+            with open(exe, "w") as fh:
+                fh.write("OLD")
+            os.makedirs(os.path.join(data, "tls"), exist_ok=True)
+            with open(os.path.join(data, "config.json"), "w") as fh:
+                json.dump({"users": [{"username": "admin"}]}, fh)
+            with open(os.path.join(data, "tls", "cert.pem"), "w") as fh:
+                fh.write("CERT")
+            return exe, data, w.service_command(name, data, frozen=True, executable=exe)
+
+        def run(scm, name="ser2netweb", lines=None, data_dir=None):
+            calls = []
+            scm.calls = calls
+            undo = fake_windows(scm, None, calls)
+            try:
+                w.install(name, data_dir, None, frozen=True,
+                          prepare=lambda path: calls.append(("prepare", path)),
+                          default_data_dir=os.path.join(work, "default-data"),
+                          log=lines.append if lines is not None else (lambda *_: None))
+            finally:
+                undo()
+            return calls
+
+        def reset():
+            for d in ("Program Files", "ProgramData"):
+                shutil.rmtree(os.path.join(work, d), ignore_errors=True)
+
+        pf_new, pd_new = w.installed_exe_path("ser2netweb"), w.default_service_data_dir("ser2netweb")
+        # 1. 2.x's default service, data in its default place
+        exe, data, cmd = old_layout()
+        scm = FakeSCM([], services={"ser2net": {"cmd": cmd, "running": True, "display": "ser2net"}})
+        lines = []
+        calls = run(scm, lines=lines)
+        kinds = [c[0] for c in calls]
+        assert calls[:3] == [("stop", "ser2net"), ("lock-free", data),
+                             ("prepare", os.path.join(pd_new, "config.json"))], calls
+        assert "adoptable" not in kinds, "2.x's own data directory is not checked as a stranger's"
+        created = next(c[1] for c in calls if c[0] == "create")
+        assert w.parse_service_command(created) == {
+            "executable": pf_new, "script": None, "service_name": "ser2netweb",
+            "data_dir": pd_new, "config": None}, created
+        assert kinds.index("start") < kinds.index("delete") and calls[-1] == ("delete", "ser2net")
+        assert list(scm.services) == ["ser2netweb"] and scm.services["ser2netweb"]["running"]
+        assert scm.services["ser2netweb"]["display"] == "ser2netweb"
+        assert not os.path.exists(data) and not os.path.exists(w.old_install_dir())
+        with open(os.path.join(pd_new, "tls", "cert.pem")) as fh:
+            assert fh.read() == "CERT"
+        with open(pf_new) as fh:
+            assert fh.read() == "NEW"
+        text = "\n".join(lines)
+        for said in ("moving the 2.x service 'ser2net' over to 'ser2netweb'",
+                     f"moved the data directory {data} to {pd_new}",
+                     "removed the 2.x service 'ser2net'", f"removed {exe}",
+                     'netsh advfirewall firewall delete rule name="ser2net"'):
+            assert said in text, (said, text)
+        print("2.x's service: stopped, data moved to %ProgramData%\\ser2netweb, ser2netweb "
+              "installed and started, then the old service and its exe removed  OK")
+
+        # 2. the new service doesn't start: all of it is put back, the old one runs again
+        reset()
+        exe, data, cmd = old_layout()
+        scm = FakeSCM([], fail_start_once=True,
+                      services={"ser2net": {"cmd": cmd, "running": True, "display": "ser2net"}})
+        try:
+            run(scm)
+        except w.ServiceError as e:
+            assert "did not reach RUNNING" in str(e) and \
+                "the 2.x service 'ser2net' is running again" in str(e), str(e)
+        else:
+            raise AssertionError("a failed start was not reported")
+        assert ("delete", "ser2netweb") in scm.calls and list(scm.services) == ["ser2net"], scm.calls
+        assert scm.services["ser2net"]["running"] and scm.services["ser2net"]["cmd"] == cmd
+        assert os.path.isfile(os.path.join(data, "config.json")) and not os.path.exists(pd_new)
+        assert not os.path.exists(pf_new)
+        with open(exe) as fh:
+            assert fh.read() == "OLD"
+        print("the new service doesn't start: it is removed, the data moved back, the 2.x "
+              "service started again  OK")
+
+        # 3. a custom data directory stays; 4. the new default place is taken; 5. other
+        # services' folders in 2.x's: the data directory stays where it is
+        for case in ("custom", "taken", "shared"):
+            reset()
+            custom = os.path.join(work, "plant", "data")
+            shutil.rmtree(os.path.dirname(custom), ignore_errors=True)
+            exe, data, cmd = old_layout(data=custom if case == "custom" else None)
+            if case == "taken":
+                os.makedirs(pd_new)
+            if case == "shared":
+                os.makedirs(os.path.join(data, "line1"))
+            scm = FakeSCM([], services={"ser2net": {"cmd": cmd, "running": True,
+                                                    "display": "ser2net"}})
+            lines = []
+            calls = run(scm, lines=lines)
+            assert ("prepare", os.path.join(data, "config.json")) in calls, (case, calls)
+            assert w.parse_service_command(next(c[1] for c in calls if c[0] == "create"))[
+                "data_dir"] == data, case
+            assert list(scm.services) == ["ser2netweb"], case
+            if case != "custom":
+                assert any("keeping the data directory" in ln for ln in lines), (case, lines)
+        print("a custom data directory, a taken %ProgramData%\\ser2netweb, other services' "
+              "folders in 2.x's: the data directory stays where it is  OK")
+
+        # 6. a 'ser2net' service that isn't ours: left alone, ser2netweb is a new service
+        for foreign in (r'"C:\Tools\ser2net\ser2net.exe" -c C:\Tools\ser2net.yaml',
+                        w.service_command("other", r"C:\x", frozen=True,
+                                          executable=r"C:\x\ser2net.exe")):
+            reset()
+            scm = FakeSCM([], services={"ser2net": {"cmd": foreign, "running": True,
+                                                    "display": "ser2net"}})
+            lines = []
+            calls = run(scm, lines=lines)
+            assert not [c for c in calls if c[0] in ("stop", "delete")], calls
+            assert ("adoptable", pd_new) in calls, calls
+            assert scm.services["ser2net"] == {"cmd": foreign, "running": True, "display": "ser2net"}
+            assert any("is not one ser2net(web) --install-service registered" in ln
+                       for ln in lines), lines
+        print("a 'ser2net' service that isn't ours: never stopped or deleted  OK")
+
+        # 7. a named 2.x service: upgraded in place, to the new folders
+        reset()
+        exe, data, cmd = old_layout("line1")
+        scm = FakeSCM([], services={"line1": {"cmd": cmd, "running": True,
+                                              "display": "ser2net (line1)"}})
+        calls = run(scm, name="line1")
+        change = next(c[1] for c in calls if c[0] == "change")
+        assert w.parse_service_command(change)["executable"] == w.installed_exe_path("line1")
+        assert w.parse_service_command(change)["data_dir"] == w.default_service_data_dir("line1")
+        assert scm.services["line1"]["display"] == "ser2netweb (line1)"
+        assert not os.path.exists(exe) and not os.path.exists(w.old_default_data_dir("ser2net"))
+        assert os.path.isfile(os.path.join(w.default_service_data_dir("line1"), "config.json"))
+        print("a named 2.x service: upgraded in place, exe and data moved to the new folders  OK")
+
+        # 8. --uninstall-service: 2.x's service when there is no new one, never another's
+        reset()
+        exe, data, cmd = old_layout()
+        scm = FakeSCM([], services={"ser2net": {"cmd": cmd, "running": True, "display": "ser2net"}})
+        undo = fake_windows(scm, None, scm.calls)
+        lines = []
+        try:
+            w.uninstall("ser2netweb", log=lines.append)
+            try:
+                w.uninstall("ser2netweb", log=lines.append)
+            except w.ServiceError as e:
+                assert "There is no service named 'ser2netweb'" in str(e), str(e)
+            else:
+                raise AssertionError("uninstalled twice")
+            scm.services["ser2net"] = {"cmd": r'"C:\Tools\ser2net.exe" -c x', "running": True,
+                                       "display": "ser2net"}
+            try:
+                w.uninstall("ser2netweb", log=lines.append)
+            except w.ServiceError as e:
+                assert "There is no service named 'ser2netweb'" in str(e), str(e)
+            else:
+                raise AssertionError("another program's service was uninstalled")
+        finally:
+            undo()
+        assert ("delete", "ser2net") in scm.calls and "ser2net" in scm.services
+        assert not os.path.exists(exe) and os.path.isfile(os.path.join(data, "config.json"))
+        assert any("removing 2.x's 'ser2net'" in ln for ln in lines), lines
+        print("--uninstall-service: 2.x's service and its exe copy when there is no new one "
+              "(the data stays); another program's 'ser2net' never  OK")
+    finally:
+        sys.executable = exe_saved
+        for k, v in env_saved.items():
+            os.environ.pop(k, None) if v is None else os.environ.__setitem__(k, v)
+        shutil.rmtree(work, ignore_errors=True)
+
+
 def test_run_reports_running_when_ready():
     """run() against a stand-in dispatcher (any OS): START_PENDING, its checkpoint counted
     up while the server starts, RUNNING only once the server is ready (when_ready), then
@@ -681,9 +992,9 @@ def test_not_windows():
                            text=True, timeout=60, stdin=subprocess.DEVNULL)
         assert p.returncode == 1 and "only on Windows" in p.stderr, (flag, p.stdout, p.stderr)
         # the systemd units: the source checkout's and the binary's
-        assert "systemd/ser2net.service" in p.stderr, p.stderr
-        assert "ser2net-standalone.service" in p.stderr, p.stderr
-        assert "ser2net-install.sh installs" in p.stderr, p.stderr
+        assert "systemd/ser2netweb.service" in p.stderr, p.stderr
+        assert "ser2netweb-standalone.service" in p.stderr, p.stderr
+        assert "ser2netweb-install.sh installs" in p.stderr, p.stderr
     assert not os.path.exists(os.path.join(d, "data")), "nothing may be created on Linux"
     print("Linux: --install-service / --uninstall-service refuse with a systemd hint  OK")
 
@@ -969,6 +1280,98 @@ def test_real_service():
     print("uninstalled; data directory kept  OK")
 
 
+def _create_old_service(cmd: str) -> None:
+    """Register 'ser2net' the way 2.8.1 / 2.9's --install-service did (display name
+    'ser2net', auto start, LocalSystem), through the same Windows API calls."""
+    w = winservice
+    api = w._advapi()
+    scm = api.dll.OpenSCManagerW(None, None, w.SC_MANAGER_CONNECT | w.SC_MANAGER_CREATE_SERVICE)
+    assert scm, "no Service Control Manager"
+    try:
+        h = api.dll.CreateServiceW(scm, "ser2net", "ser2net", w.SERVICE_QUERY_STATUS | w.SERVICE_START,
+                                   w.SERVICE_WIN32_OWN_PROCESS, w.SERVICE_AUTO_START,
+                                   w.SERVICE_ERROR_NORMAL, cmd, None, None, None, None, None)
+        assert h, f"CreateServiceW failed: {w._win.get_last_error()}"
+        try:
+            assert api.dll.StartServiceW(h, 0, None), f"StartServiceW: {w._win.get_last_error()}"
+        finally:
+            api.dll.CloseServiceHandle(h)
+    finally:
+        api.dll.CloseServiceHandle(scm)
+
+
+def test_real_move_from_2x():
+    """Windows, the standalone exe (SER2NETWEB_STANDALONE_BIN, SER2NETWEB_SERVICE_TESTS=1, as
+    Administrator: CI's throwaway runner): a service as 2.8.1 / 2.9 left it — 'ser2net', its
+    exe in %ProgramFiles%\\ser2net, its data in %ProgramData%\\ser2net — is moved over by a
+    plain --install-service: 'ser2net' is gone, 'ser2netweb' runs from
+    %ProgramFiles%\\ser2netweb with the same config.json, now in %ProgramData%\\ser2netweb;
+    --uninstall-service removes it and its exe, the data stays."""
+    exe = envvars.get("SER2NETWEB_STANDALONE_BIN")
+    if not WINDOWS or envvars.get("SER2NETWEB_SERVICE_TESTS") != "1" or not exe:
+        print("SKIP moving a 2.x service over (Windows + the standalone exe + "
+              "SER2NETWEB_SERVICE_TESTS=1)")
+        return
+    w = winservice
+    old_exe, old_data = w.old_installed_exe_path("ser2net"), w.old_default_data_dir("ser2net")
+    new_data = w.default_service_data_dir("ser2netweb")
+    taken = [p for p in (w.old_install_dir(), old_data, w.installed_exe_path("ser2netweb"), new_data)
+             if os.path.lexists(p)]
+    taken += [n for n in ("ser2net", "ser2netweb") if "1060" not in sc("query", n).stdout]
+    if taken:
+        print(f"SKIP moving a 2.x service over: {', '.join(taken)} exists (not a throwaway machine)")
+        return
+    port = free_port()
+    try:
+        os.makedirs(w.old_install_dir())
+        shutil.copyfile(exe, old_exe)
+        os.makedirs(old_data)
+        config = {"admin_ui": {"bind_ip": "127.0.0.1", "port": port},
+                  "users": [{"username": "admin", "password_hash": hash_password("move-pass-1"),
+                             "role": "admin", "pwd_version": 1}]}
+        with open(os.path.join(old_data, "config.json"), "w") as fh:
+            json.dump(config, fh)
+        _create_old_service(w.service_command("ser2net", old_data, frozen=True, executable=old_exe))
+        assert wait_for(lambda: healthy(port), 60), "the 2.x-style service did not answer"
+        print("a service as 2.x left it: 'ser2net' from %ProgramFiles%\\ser2net  OK")
+
+        p = subprocess.run([os.path.abspath(exe), "--install-service"], capture_output=True,
+                           text=True, timeout=180, stdin=subprocess.DEVNULL)
+        print(p.stdout.strip())
+        assert p.returncode == 0, p.stdout + p.stderr
+        for said in ("moving the 2.x service 'ser2net' over", "moved the data directory",
+                     "removed the 2.x service 'ser2net'", "is running"):
+            assert said in p.stdout, (said, p.stdout)
+        assert "1060" in sc("query", "ser2net").stdout, "the 2.x service is still registered"
+        q = sc("qc", "ser2netweb").stdout
+        assert w.installed_exe_path("ser2netweb") in q and new_data in q, q
+        assert wait_for(lambda: healthy(port), 60), "ser2netweb did not answer"
+        Browser(f"http://127.0.0.1:{port}").login("admin", "move-pass-1")
+        assert not os.path.exists(old_data) and not os.path.exists(w.old_install_dir())
+        sec = w.read_security(new_data)
+        assert sec is not None and w.service_folder(*sec), read_security_text(new_data)
+        print("--install-service: 'ser2net' moved over to 'ser2netweb' (exe and data in the new "
+              "folders, same accounts, admin-only data)  OK")
+
+        p = subprocess.run([os.path.abspath(exe), "--uninstall-service"], capture_output=True,
+                           text=True, timeout=120)
+        assert p.returncode == 0, p.stdout + p.stderr
+        assert "1060" in sc("query", "ser2netweb").stdout
+        assert not os.path.exists(w.installed_exe_path("ser2netweb"))
+        assert os.path.isfile(os.path.join(new_data, "config.json")), "uninstall must keep the data"
+        print("--uninstall-service: ser2netweb and its exe removed, the data kept  OK")
+    finally:
+        for n in ("ser2netweb", "ser2net"):
+            if "1060" not in sc("query", n).stdout:
+                sc("stop", n)
+                wait_for(lambda n=n: "STOPPED" in sc("query", n).stdout, 60)
+                sc("delete", n)
+        for folder in (w.old_install_dir(), old_data, w.install_dir(), new_data):
+            if os.path.isdir(folder):
+                icacls(folder, "/reset", "/T", "/C", "/Q")
+                shutil.rmtree(folder, ignore_errors=True)
+
+
 def main():
     test_command_line()
     test_acl_decision_table()
@@ -978,6 +1381,8 @@ def main():
     test_install_locations()
     test_install_flow_with_a_fake_scm()
     test_uninstall_says_what_is_kept()
+    test_old_service_recognised()
+    test_move_from_2x_with_a_fake_scm()
     test_run_reports_running_when_ready()
     test_cli_leaves_the_choice_to_install()
     test_not_windows()
@@ -985,6 +1390,7 @@ def main():
     test_stop_progress()
     test_service_log_and_event()
     test_real_service()
+    test_real_move_from_2x()
     print("\nPASS: Windows service mode")
 
 

@@ -200,7 +200,7 @@ def _icacls_private(path: str, grants: list[str]) -> None:
 
     # by full path: Windows searches an unqualified name in the program's own
     # folder and the current directory before System32, so an icacls.exe planted
-    # next to ser2net.exe (e.g. in Downloads) would otherwise run instead
+    # next to ser2netweb.exe (e.g. in Downloads) would otherwise run instead
     root = os.environ.get("SystemRoot") or os.environ.get("WINDIR") or r"C:\Windows"
     icacls = os.path.join(root, "System32", "icacls.exe")
     cmd = [icacls if os.path.isfile(icacls) else "icacls", path, "/inheritance:r"]
@@ -4052,7 +4052,7 @@ class ConfigStore:
         # config.json holds the password hash + secret_key; keep the dir private on
         # BOTH platforms (POSIX chmod 0700 / Windows icacls owner-only inheritance), when
         # it is ser2netweb's own: just made, or holding only what ser2netweb puts there. Any
-        # other folder (sudo ser2netweb --config /etc/ser2net.json) keeps its permissions:
+        # other folder (sudo ser2netweb --config /etc/ser2netweb.json) keeps its permissions:
         # only the config file is made private (on every save), and the start-up log
         # warns when other accounts can use the folder.
         self.notes: list[str] = []  # for the start-up log, with the config's load_notes

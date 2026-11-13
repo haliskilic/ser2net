@@ -36,7 +36,7 @@ enter instead.
 |---|---|---|
 | **Server URI** | `ldaps://dc1.example.com:636` | `ldaps://ldap.example.com` |
 | **User DN template** (direct bind) | `{username}@example.com` or `EXAMPLE\{username}` | `uid={username},ou=people,dc=example,dc=com` |
-| or **Bind DN** + **Bind password**, **User search base**, **User search filter** (search + bind) | `cn=svc-ser2net,ou=service,dc=example,dc=com`, `dc=example,dc=com`, `(sAMAccountName={username})` | `cn=reader,dc=example,dc=com`, `ou=people,dc=example,dc=com`, `(uid={username})` |
+| or **Bind DN** + **Bind password**, **User search base**, **User search filter** (search + bind) | `cn=svc-ser2netweb,ou=service,dc=example,dc=com`, `dc=example,dc=com`, `(sAMAccountName={username})` | `cn=reader,dc=example,dc=com`, `ou=people,dc=example,dc=com`, `(uid={username})` |
 | **Group attribute** | `memberOf` | `memberOf` (the `memberof` overlay) |
 | **Also count nested groups** | groups through other groups (`LDAP_MATCHING_RULE_IN_CHAIN`) | — |
 

@@ -1328,7 +1328,7 @@ class AppState:
             return
         when = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(changed))
         self.log(f"WARNING: config.json was changed outside ser2netweb ({when}) and is not in "
-                 "use: reload it (systemctl reload ser2net, kill -HUP, ser2netweb --reload or "
+                 "use: reload it (systemctl reload ser2netweb, kill -HUP, ser2netweb --reload or "
                  "Settings → Configuration backups). A change saved here before that "
                  "replaces it (the edited file is then kept in backups/)")
 

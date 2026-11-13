@@ -599,9 +599,13 @@ run; config/logs are written to `data/` next to the binary.
 
 | File | Runs on |
 |---|---|
-| `ser2net-windows-x64.exe` | Windows 10/11, Windows Server 2016 or newer (x64) |
-| `ser2net-linux-x64` | x86_64 Linux with glibc ≥ 2.28: RHEL / AlmaLinux / Rocky 8+, Debian 11+, Ubuntu 20.04+, Fedora, openSUSE Leap 15 (not musl/Alpine — use Docker there) |
-| `ser2net-linux-arm64` | 64-bit ARM Linux with glibc ≥ 2.28: Raspberry Pi 3/4/5 (64-bit Raspberry Pi OS 11+ or Ubuntu), ARM industrial gateways, AWS Graviton, the same distributions |
+| `ser2netweb-windows-x64.exe` | Windows 10/11, Windows Server 2016 or newer (x64) |
+| `ser2netweb-linux-x64` | x86_64 Linux with glibc ≥ 2.28: RHEL / AlmaLinux / Rocky 8+, Debian 11+, Ubuntu 20.04+, Fedora, openSUSE Leap 15 (not musl/Alpine — use Docker there) |
+| `ser2netweb-linux-arm64` | 64-bit ARM Linux with glibc ≥ 2.28: Raspberry Pi 3/4/5 (64-bit Raspberry Pi OS 11+ or Ubuntu), ARM industrial gateways, AWS Graviton, the same distributions |
+
+Up to 2.9.x these files were called `ser2net-*` (`ser2net-linux-x64`, …); from 3.0.0 on a
+release has them under the `ser2netweb-*` names only, so a download script that names the
+old ones needs the new names.
 
 Other platforms — 32-bit ARM (32-bit Raspberry Pi OS, armv7 gateways), macOS, Windows on ARM:
 run from source (`python3 ser2netweb.py`), which works offline there too (see *Offline install*),
@@ -609,11 +613,11 @@ or on 32-bit ARM the Docker image (arm/v7).
 Windows 11 on ARM also runs the x64 exe (emulated).
 
 Every release also publishes `SHA256SUMS`, a CycloneDX SBOM per binary (`*.cdx.json`), the
-license texts, `ser2net-standalone.service`, the systemd unit for the Linux binaries, and
-`ser2net-install.sh`, which installs a binary with it (see *Run as a service*), and the
+license texts, `ser2netweb-standalone.service`, the systemd unit for the Linux binaries, and
+`ser2netweb-install.sh`, which installs a binary with it (see *Run as a service*), and the
 binaries carry GitHub build provenance:
 `sha256sum -c SHA256SUMS --ignore-missing`,
-`gh attestation verify ser2net-linux-x64 -R haliskilic/ser2netweb`. The Windows exe is **not
+`gh attestation verify ser2netweb-linux-x64 -R haliskilic/ser2netweb`. The Windows exe is **not
 code-signed yet** (it will be once a signing service is configured —
 [`docs/SIGNING.md`](docs/SIGNING.md)), so SmartScreen may warn on first run; verify it on
 Windows with `Get-FileHash` against `SHA256SUMS` and `gh attestation verify`, then *More
@@ -626,10 +630,10 @@ work with an empty `PATH` (no Python, no `openssl`), and the Linux one must run 
 AlmaLinux 8/9, Debian 11/12, Ubuntu 20.04/22.04/24.04/26.04, openSUSE Leap 15.6 and Fedora
 containers, including a serial port at a rate without a termios constant (250000 baud).
 
-Linux notes: `chmod +x ser2net-linux-x64`; serial ports need the devices' group
+Linux notes: `chmod +x ser2netweb-linux-x64`; serial ports need the devices' group
 (`dialout`; `uucp` on Arch, see Requirements). The binary unpacks itself to `$TMPDIR`
 (default `/tmp`) on start — if `/tmp` is mounted `noexec`, point `TMPDIR` at a directory
-that isn't (`ser2net-install.sh` does that for the service). While it runs it keeps that
+that isn't (`ser2netweb-install.sh` does that for the service). While it runs it keeps that
 copy locked and its access times fresh, so tmp cleaners (systemd-tmpfiles, tmpreaper)
 don't delete it under a long-running instance; a copy left behind by a killed process
 still ages out as usual. For certificate checks (MQTT over TLS, OIDC, LDAPS / StartTLS,
@@ -668,7 +672,7 @@ python3 ser2netweb.py --reconfigure
 ```
 
 ### Command-line options
-`python3 ser2netweb.py [options]`, `ser2net-linux-x64 [options]`, `ser2net-windows-x64.exe
+`python3 ser2netweb.py [options]`, `ser2netweb-linux-x64 [options]`, `ser2netweb-windows-x64.exe
 [options]` (`--help` lists them). `ser2net.py`, the start script's name up to 2.9.x, still
 works and runs the same, so units and scripts that name it need no change:
 
@@ -747,7 +751,7 @@ with the old `lib/` and
 says why in its log (`WARNING: … ./lib …`); when this version can't run on the old packages
 at all (2.8.1 and newer on 2.7's), the start stops with one line that says so.
 `python3 bootstrap.py` installs the set by hand (stop ser2netweb first, and run it as the
-account ser2netweb runs as, e.g. `sudo -u ser2net python3 /opt/ser2net/bootstrap.py`); with
+account ser2netweb runs as, e.g. `sudo -u ser2netweb python3 /opt/ser2netweb/bootstrap.py`); with
 `--no-bootstrap` that is the way after every upgrade, and the start-up log warns while
 `lib/` is out of date. The one-off commands (`--set-password`, `--sign-out-all`, `--reload`,
 `--about`, `--install-service`), which may run beside a running ser2netweb, leave `lib/` as it is and
@@ -762,8 +766,10 @@ Without compose, use the `docker run` command in
 `--restart unless-stopped`, `--init`, the mapping ports, a `/dev/serial/by-id` device, log
 limits).
 Published image (every release; amd64, arm64, and arm/v7 for 32-bit ARM such as 32-bit
-Raspberry Pi OS): `docker pull ghcr.io/haliskilic/ser2net:latest`
-(or `:2.9`, `:2.9.0`); `docker-compose.yml` uses it. Between releases `:latest` and `:X.Y`
+Raspberry Pi OS): `docker pull ghcr.io/haliskilic/ser2netweb:latest`
+(or `:2.9`, `:2.9.0`); `docker-compose.yml` uses it. Up to 2.9.x the image was
+`ghcr.io/haliskilic/ser2net`, where the 3.x releases are published too (the same image);
+moving a 2.9.x container or compose file over: [`docs/DOCKER.md`](docs/DOCKER.md#upgrading-from-29x). Between releases `:latest` and `:X.Y`
 are rebuilt on a newer Debian/Python base when it changes (weekly check; `:X.Y.Z` stays as
 released) — see [`docs/DOCKER.md`](docs/DOCKER.md).
 Inside the container the UI binds to `0.0.0.0` (set via `SER2NETWEB_BIND_IP` /
@@ -771,7 +777,7 @@ Inside the container the UI binds to `0.0.0.0` (set via `SER2NETWEB_BIND_IP` /
 interface, IPv4 and IPv6). Publish each mapping's port
 too (a new mapping gets 4001), or use the host network. A serial device's group is taken
 from the device itself, so `--group-add` isn't needed for the usual device names. The
-process never runs as root: as the `ser2net` user (uid 10001), or as the owner of a
+process never runs as root: as the `ser2netweb` user (uid 10001), or as the owner of a
 bind-mounted `/data` folder (or the `--user` given); a `/data` volume written by an older (root-running)
 image is taken over on the first start, and in a bind-mounted folder the files an older
 image wrote as root are handed to the folder's owner, so upgrading needs no manual step
@@ -789,8 +795,8 @@ import**: the preview shows each connection as the mapping it becomes, which com
 disabled and why, and what works differently. Before you apply it (that starts the enabled
 mappings):
 - stop and disable the classic daemon (`sudo systemctl disable --now ser2net`), which holds
-  the same ports and devices; its unit has the same name, `ser2net.service`, so remove its
-  package or run this one as an instance of `ser2net@.service`;
+  the same ports and devices (its unit is `ser2net.service`, ser2netweb's
+  `ser2netweb.service`: both can stay installed);
 - give the service `CAP_NET_BIND_SERVICE` for ports below 1024, or move them up (the classic
   daemon usually ran as root; *Ports below 1024* under Run as a service);
 - check the TLS / client certificate rows and the ones that came in disabled.
@@ -896,7 +902,7 @@ is counted there as well).
   `sudo systemctl mask --now serial-getty@ttyS0.service`.
 - **ModemManager** (desktop Ubuntu / Fedora; USB CDC `ttyACM*` devices such as an Arduino):
   tell it to leave the device alone with a udev rule, for example
-  `/etc/udev/rules.d/99-ser2net.rules` with
+  `/etc/udev/rules.d/99-ser2netweb.rules` with
   `ATTRS{idVendor}=="2341", ENV{ID_MM_DEVICE_IGNORE}="1"`, then
   `sudo udevadm control --reload && sudo udevadm trigger`.
 - **Permission denied:** the dashboard names the group the device belongs to and what is
@@ -1113,7 +1119,7 @@ when its broker connection has no TLS or no username. The same holds for a seria
 that writes `<topic>/tx` to the device (**CMD** too). A Mosquitto `acl_file` for the base
 topic `plant/line3`, for example:
 ```
-user ser2net
+user ser2netweb
 topic readwrite plant/line3/#
 user scada
 topic write plant/line3/+/set
@@ -1374,10 +1380,10 @@ directory's owner by itself):
 
 | Install | Command |
 |---|---|
-| source / Linux binary (systemd) | `sudo -u ser2net python3 /opt/ser2net/ser2netweb.py --data-dir /opt/ser2net/data --set-password admin` (binary with `ser2net-standalone.service`: `sudo -u ser2net /usr/local/bin/ser2net --data-dir /var/lib/ser2net --set-password admin`; started by hand: `./ser2net-linux-x64 --set-password admin`) |
-| Windows (elevated prompt, also while the service runs) | `ser2net-windows-x64.exe --data-dir C:\ProgramData\ser2net --set-password admin` (the service's data directory: `sc qc ser2net` shows it) |
-| an instance of `ser2net@.service` | `sudo -u ser2net python3 /opt/ser2net/ser2netweb.py --no-bootstrap --data-dir /var/lib/ser2net/<name> --set-password admin` |
-| Docker | `docker exec -it ser2net python /app/ser2netweb.py --no-bootstrap --data-dir /data --set-password admin` |
+| source / Linux binary (systemd) | `sudo -u ser2netweb python3 /opt/ser2netweb/ser2netweb.py --data-dir /opt/ser2netweb/data --set-password admin` (binary with `ser2netweb-standalone.service`: `sudo -u ser2netweb /usr/local/bin/ser2netweb --data-dir /var/lib/ser2netweb --set-password admin`; started by hand: `./ser2netweb-linux-x64 --set-password admin`; a 2.9.x install not moved over yet: the same with `ser2net`) |
+| Windows (elevated prompt, also while the service runs) | `ser2netweb-windows-x64.exe --data-dir C:\ProgramData\ser2netweb --set-password admin` (the service's data directory: `sc qc ser2netweb` shows it) |
+| an instance of `ser2netweb@.service` | `sudo -u ser2netweb python3 /opt/ser2netweb/ser2netweb.py --no-bootstrap --data-dir /var/lib/ser2netweb/<name> --set-password admin` |
+| Docker | `docker exec -it ser2netweb python /app/ser2netweb.py --no-bootstrap --data-dir /data --set-password admin` (the container's name; 2.9.x's compose file named it `ser2net`) |
 
 **First admin without the browser:** run `ser2netweb --set-password admin` before the first
 start (a source install under systemd: after the service's first start, which makes its
@@ -1455,88 +1461,139 @@ is no account at all; later starts ignore it.
   [`docs/DOCKER.md`](docs/DOCKER.md)) — `restart: unless-stopped`, `init: true` and
   `stop_grace_period: 30s` (a stop reaches ser2netweb, which finishes within that), `/data`
   volume. A plain `docker run` needs `--restart unless-stopped --init --stop-timeout 30` for
-  that (an existing container: `docker update --restart unless-stopped ser2net`).
-- **Linux (systemd):** three units — `ser2net.service` (a source checkout),
-  `ser2net-standalone.service` (the Linux binary) and the template `ser2net@.service`
-  (several instances). All run ser2netweb as a dedicated unprivileged user (`ser2net`, in the
-  `dialout` group for the serial ports), restart it 3 s after a failure and sandbox it
+  that (an existing container: `docker update --restart unless-stopped ser2netweb`).
+- **Linux (systemd):** three units — `ser2netweb.service` (a source checkout),
+  `ser2netweb-standalone.service` (the Linux binary) and the template `ser2netweb@.service`
+  (several instances). All run ser2netweb as a dedicated unprivileged user (`ser2netweb`, in
+  the `dialout` group for the serial ports), restart it 3 s after a failure and sandbox it
   (read-only system, own `/tmp`, a system call filter). **Do not run it as root.**
-  `systemctl reload ser2net` (or `ser2net@<name>`) reads `config.json` again (see
-  Configuration & state files). On Arch, Manjaro and EndeavourOS the serial group is `uucp`
-  and there is no `dialout` group (the unit would fail with `status=216/GROUP`): set it with
-  `systemctl edit ser2net` (`[Service]`, `SupplementaryGroups=`, then
-  `SupplementaryGroups=uucp`; `ser2net.service`'s comment has it). `ser2net-install.sh`
+  `systemctl reload ser2netweb` (or `ser2netweb@<name>`) reads `config.json` again (see
+  Configuration & state files). Up to 2.9.x the units, the user and the folders were called
+  `ser2net` (`ser2net.service`, `/opt/ser2net`, `/var/lib/ser2net`), as the classic ser2net
+  daemon's package names its own: *Upgrading from 2.9.x* below moves such an install over.
+  On Arch, Manjaro and EndeavourOS the serial group is `uucp` and there is no `dialout`
+  group (the unit would fail with `status=216/GROUP`): set it with
+  `systemctl edit ser2netweb` (`[Service]`, `SupplementaryGroups=`, then
+  `SupplementaryGroups=uucp`; `ser2netweb.service`'s comment has it). `ser2netweb-install.sh`
   stops on such a system (it needs a `dialout` group): install the binary by hand there.
   When a port doesn't open: [`docs/LINUX-SERIAL.md`](docs/LINUX-SERIAL.md).
-  - *Source checkout* in `/opt/ser2net`: `systemd/ser2net.service`.
+  - *Source checkout* in `/opt/ser2netweb`: `systemd/ser2netweb.service`.
     ```bash
-    sudo useradd --system --user-group --home-dir /opt/ser2net -M -s /usr/sbin/nologin ser2net
-    sudo git clone https://github.com/haliskilic/ser2netweb.git /opt/ser2net
-    sudo cp /opt/ser2net/systemd/ser2net.service /etc/systemd/system/
-    sudo systemctl daemon-reload && sudo systemctl enable --now ser2net
+    sudo useradd --system --user-group --home-dir /opt/ser2netweb -M -s /usr/sbin/nologin ser2netweb
+    sudo git clone https://github.com/haliskilic/ser2netweb.git /opt/ser2netweb
+    sudo cp /opt/ser2netweb/systemd/ser2netweb.service /etc/systemd/system/
+    sudo systemctl daemon-reload && sudo systemctl enable --now ser2netweb
     ```
-    The first start makes `data/` and `lib/` for the `ser2net` user and installs the
+    The first start makes `data/` and `lib/` for the `ser2netweb` user and installs the
     bundled dependencies into `lib/` (offline). It needs Python 3.10 or newer as
     `/usr/bin/python3`: on RHEL / AlmaLinux / Rocky 8 and 9 and Debian 11 point
     `ExecStart=` at a newer interpreter (RHEL: `dnf install python3.11`, then
     `/usr/bin/python3.11`) or use the binary.
-  - *Standalone binary*: `ser2net-standalone.service` (attached to every release, and in
-    `systemd/`), installed as `ser2net.service`; its data is in `/var/lib/ser2net`, which
-    systemd makes. `ser2net-install.sh` (attached to every release too) does it all:
-    download `ser2net-linux-x64` (or `-arm64`), `ser2net-standalone.service`,
-    `ser2net-install.sh` and `SHA256SUMS` into one folder, then
+  - *Standalone binary*: `ser2netweb-standalone.service` (attached to every release, and in
+    `systemd/`), installed as `ser2netweb.service`; its data is in `/var/lib/ser2netweb`,
+    which systemd makes. `ser2netweb-install.sh` (attached to every release too) does it all:
+    download `ser2netweb-linux-x64` (or `-arm64`), `ser2netweb-standalone.service`,
+    `ser2netweb-install.sh` and `SHA256SUMS` into one folder, then
     ```bash
-    sudo sh ser2net-install.sh                         # the web UI on 127.0.0.1:8080
-    sudo sh ser2net-install.sh --listen 0.0.0.0:8080   # or on the network (use TLS there)
+    sudo sh ser2netweb-install.sh                         # the web UI on 127.0.0.1:8080
+    sudo sh ser2netweb-install.sh --listen 0.0.0.0:8080   # or on the network (use TLS there)
     ```
     It checks the files against `SHA256SUMS` and that the binary runs on this machine,
-    creates the `ser2net` user and `/var/lib/ser2net`, installs the binary as
-    `/usr/local/bin/ser2net` and the unit as `/etc/systemd/system/ser2net.service`, enables
-    and starts the service and waits until it answers. Run it again with a newer release to
-    upgrade (the data stays); `--uninstall` removes the service and the binary (the data
-    and the user stay). It won't hide another `ser2net.service` (the classic ser2net
-    daemon's package, a source install in `/opt/ser2net`) unless you stop that one and pass
+    creates the `ser2netweb` user and `/var/lib/ser2netweb`, installs the binary as
+    `/usr/local/bin/ser2netweb` and the unit as `/etc/systemd/system/ser2netweb.service`,
+    enables and starts the service and waits until it answers. Run it again with a newer
+    release to upgrade (the data stays); `--uninstall` removes the service and the binary
+    (the data and the user stay). It won't hide another `ser2netweb.service` (a package's, a
+    source install in `/opt/ser2netweb`) unless you stop that one and pass
     `--replace-unit`; where `/tmp` is mounted `noexec` it has the binary unpack itself in
-    `/var/cache/ser2net` instead (a drop-in). `--root DIR` only stages the files under DIR.
+    `/var/cache/ser2netweb` instead (a drop-in). `--root DIR` only stages the files under DIR.
     The same by hand:
     ```bash
-    sudo install -m 0755 ser2net-linux-x64 /usr/local/bin/ser2net
-    sudo useradd --system --user-group --home-dir /var/lib/ser2net -M -s /usr/sbin/nologin ser2net
-    sudo cp ser2net-standalone.service /etc/systemd/system/ser2net.service
-    sudo systemctl daemon-reload && sudo systemctl enable --now ser2net
+    sudo install -m 0755 ser2netweb-linux-x64 /usr/local/bin/ser2netweb
+    sudo useradd --system --user-group --home-dir /var/lib/ser2netweb -M -s /usr/sbin/nologin ser2netweb
+    sudo cp ser2netweb-standalone.service /etc/systemd/system/ser2netweb.service
+    sudo systemctl daemon-reload && sudo systemctl enable --now ser2netweb
     ```
   - The web UI listens on `127.0.0.1:8080` until you say otherwise. To reach it from the
-    network, run `sudo systemctl edit ser2net`, add the lines below (use TLS on a network
-    address, see Security) and `sudo systemctl restart ser2net`:
+    network, run `sudo systemctl edit ser2netweb`, add the lines below (use TLS on a network
+    address, see Security) and `sudo systemctl restart ser2netweb`:
     ```ini
     [Service]
     Environment=SER2NETWEB_BIND_IP=0.0.0.0 SER2NETWEB_PORT=8080
     ```
     Set the first password in the browser, or with `--set-password` (the table under
-    Security). Run such commands as the `ser2net` user (`sudo -u ser2net …`): the account
-    commands (`--set-password`, `--sign-out-all`, `--reload`) switch to the data
+    Security). Run such commands as the `ser2netweb` user (`sudo -u ser2netweb …`): the
+    account commands (`--set-password`, `--sign-out-all`, `--reload`) switch to the data
     directory's owner by themselves when run as root, but a start or `--reconfigure` as
     root would leave files the service can't read. Logs:
-    `journalctl -u ser2net` and `all.log` in the data directory.
-  - Several instances: the template `systemd/ser2net@.service` (below).
-  - Optional: the drop-in `systemd/ser2net.service.d/notify.conf` (`Type=notify`,
+    `journalctl -u ser2netweb` and `all.log` in the data directory.
+  - Several instances: the template `systemd/ser2netweb@.service` (below).
+  - Optional: the drop-in `systemd/ser2netweb.service.d/notify.conf` (`Type=notify`,
     `WatchdogSec=120`) makes systemd count ser2netweb as started only once its mappings run
     and its UI listens (or tries again to), and restart it when its event loop stops
-    answering. Neither unit nor `ser2net-install.sh` installs it, and it is not a release
+    answering. Neither unit nor `ser2netweb-install.sh` installs it, and it is not a release
     file (take it from the source tree):
     ```bash
-    sudo mkdir -p /etc/systemd/system/ser2net.service.d
-    sudo cp systemd/ser2net.service.d/notify.conf /etc/systemd/system/ser2net.service.d/
-    sudo systemctl daemon-reload && sudo systemctl restart ser2net
+    sudo mkdir -p /etc/systemd/system/ser2netweb.service.d
+    sudo cp systemd/ser2netweb.service.d/notify.conf /etc/systemd/system/ser2netweb.service.d/
+    sudo systemctl daemon-reload && sudo systemctl restart ser2netweb
     ```
-    (an instance: `ser2net@.service.d`). Remove it before going back to a version before
+    (an instance: `ser2netweb@.service.d`). Remove it before going back to a version before
     2.9.0, which never reports ready.
+  - *Upgrading from 2.9.x*: the units, the user and the folders have new names; the data
+    stays as it is (the Prometheus metric names, `config.json` and the cluster protocol are
+    unchanged too). Leave the classic ser2net daemon's `ser2net.service` alone (its package
+    lives in `/usr/lib/systemd/system`), and remove only what an old install of this
+    project put in `/etc/systemd/system`.
+    - *The binary installed with `ser2net-install.sh`*: download the new release's files
+      (as above) and run `sudo sh ser2netweb-install.sh`. It recognises 2.9.x's
+      `ser2net.service` by its content (never by its name: the classic daemon's has it too),
+      stops and disables it, moves `/var/lib/ser2net` to `/var/lib/ser2netweb` for the new
+      `ser2netweb` user, keeps the `--listen` address and moves your drop-ins of the old unit
+      along (check them for the old names), and once the new service answers removes the old
+      unit and `/usr/local/bin/ser2net` (only when it says it is 2.9.x's binary). It changes
+      nothing when `/var/lib/ser2netweb` already holds data too, and a `ser2net.service` it
+      doesn't recognise is left alone. The user `ser2net` stays unless you add
+      `--remove-old-user`, which keeps it anyway while the classic daemon is installed or
+      anything runs as it. If the new service doesn't come up, the script says how to go
+      back to 2.9.x.
+    - *A source checkout in `/opt/ser2net` with `ser2net.service`*: either keep it as it is
+      (`ser2net.py` still starts 3.x, so `sudo git -C /opt/ser2net pull` and
+      `sudo systemctl restart ser2net` upgrade it under the old names), or move it over:
+      ```bash
+      sudo systemctl disable --now ser2net
+      sudo useradd --system --user-group --home-dir /opt/ser2netweb -M -s /usr/sbin/nologin ser2netweb
+      sudo mv /opt/ser2net /opt/ser2netweb && sudo git -C /opt/ser2netweb pull
+      sudo chown -R ser2netweb:ser2netweb /opt/ser2netweb/data /opt/ser2netweb/lib
+      sudo rm /etc/systemd/system/ser2net.service      # this checkout's unit only
+      sudo cp /opt/ser2netweb/systemd/ser2netweb.service /etc/systemd/system/
+      sudo systemctl daemon-reload && sudo systemctl enable --now ser2netweb
+      ```
+      Drop-ins made with `systemctl edit ser2net` (a listen address, `uucp`, ports below
+      1024) are in `/etc/systemd/system/ser2net.service.d/`: move them first
+      (`sudo mv /etc/systemd/system/ser2net.service.d /etc/systemd/system/ser2netweb.service.d`).
+    - *Instances of `ser2net@.service`*, for each instance (here `line1`):
+      ```bash
+      sudo systemctl disable --now ser2net@line1
+      sudo mkdir -p /var/lib/ser2netweb /etc/ser2netweb
+      sudo mv /var/lib/ser2net/line1 /var/lib/ser2netweb/line1
+      sudo mv /etc/ser2net/line1.env /etc/ser2netweb/line1.env    # if it has one
+      sudo cp /opt/ser2netweb/systemd/ser2netweb@.service /etc/systemd/system/
+      sudo systemctl daemon-reload && sudo systemctl enable --now ser2netweb@line1
+      ```
+      systemd hands the moved folder to the `ser2netweb` user at the first start
+      (`StateDirectory=`). `/etc/ser2net/` is also the classic daemon's folder: move only
+      the `<name>.env` files. Once no instance is left, `sudo rm
+      /etc/systemd/system/ser2net@.service`.
+    - The old `ser2net` user can go once nothing runs as it any more (`sudo userdel
+      ser2net`), unless the classic ser2net daemon is installed: its package may use an
+      account of that name too.
 - **Ports below 1024** (Modbus/TCP's 502, the web UI on 80 or 443): Linux lets only root,
   or a process with the `CAP_NET_BIND_SERVICE` capability, listen on them, and both units
   run ser2netweb as an unprivileged user. A mapping on such a port then fails with a hint on
   the dashboard, and an admin UI port below 1024 gets a start-up warning (the web UI can't
   start). To allow them, give the service that one capability with
-  `sudo systemctl edit ser2net`, then `sudo systemctl restart ser2net`:
+  `sudo systemctl edit ser2netweb`, then `sudo systemctl restart ser2netweb`:
   ```ini
   [Service]
   AmbientCapabilities=CAP_NET_BIND_SERVICE
@@ -1549,19 +1606,24 @@ is no account at all; later starts ignore it.
   `SER2NETWEB_LOW_PORTS=1` ([`docs/DOCKER.md`](docs/DOCKER.md#ports-and-networking)).
 - **Windows:** nothing else needed. From an elevated ("Run as administrator") prompt:
   ```bat
-  ser2net-windows-x64.exe --install-service
+  ser2netweb-windows-x64.exe --install-service
   ```
-  The exe copies itself to `C:\Program Files\ser2net\` (admin-only, so a standard user
+  The exe copies itself to `C:\Program Files\ser2netweb\` (admin-only, so a standard user
   can't replace the file the service runs as SYSTEM) and keeps its data in
-  `C:\ProgramData\ser2net\` (both writable by SYSTEM and Administrators only). The
-  service starts at boot, needs no signed-in user
+  `C:\ProgramData\ser2netweb\` (both writable by SYSTEM and Administrators only). The
+  service, `ser2netweb`, starts at boot, needs no signed-in user
   (LocalSystem) and restarts 5 s after it crashes or exits with an error; the console asks
   once for the UI address. Remove it with `--uninstall-service` (the data folder is kept,
-with the configuration, backups, logs, audit log and traces: delete it to remove those);
-  run several instances via `--service-name`. Stop/start: `sc stop ser2net` /
-  `sc start ser2net` or *Services* (services.msc). Re-running `--install-service` from a
-  newer exe upgrades it in place and keeps the data directory the service uses (a 2.8.0
-  service too). The service is *Running* once its UI listens (*Starting* until then), so
+  with the configuration, backups, logs, audit log and traces: delete it to remove those);
+  run several instances via `--service-name`. Stop/start: `sc stop ser2netweb` /
+  `sc start ser2netweb` or *Services* (services.msc). Re-running `--install-service` from a
+  newer exe upgrades it in place and keeps the data directory the service uses. Over 2.x's
+  service (called `ser2net`, in `C:\Program Files\ser2net\` and `C:\ProgramData\ser2net\`)
+  the same command moves it over: it stops it, installs `ser2netweb` (moving the data to
+  `C:\ProgramData\ser2netweb\` when it was in 2.x's default place), deletes the old service
+  once the new one runs and puts it all back if it doesn't; the old firewall rule then
+  needs replacing (docs/WINDOWS.md, *Upgrading from 2.x*). The service is *Running* once
+  its UI listens (*Starting* until then), so
   `--install-service` reports a service that stops while it starts (with its exit code and
   where to look) instead of success. **[`docs/WINDOWS.md`](docs/WINDOWS.md)** covers the
   firewall rule you need to reach it from other hosts, changing the address, upgrading and
@@ -1641,21 +1703,22 @@ The browser keeps each instance's sign-in apart when they are on different ports
 reach those under different host names (the IP address and the name) or in separate browser
 profiles.
 
-- **Windows:** `ser2net-windows-x64.exe --install-service --service-name ser2net-line2
-  --data-dir C:\ProgramData\ser2net-line2` (and a firewall rule per service:
+- **Windows:** `ser2netweb-windows-x64.exe --install-service --service-name line2`
+  (data in `C:\ProgramData\ser2netweb\line2`) (and a firewall rule per service:
   [docs/WINDOWS.md](docs/WINDOWS.md)).
-- **Linux (systemd):** the template `systemd/ser2net@.service` runs one instance per name,
-  with its data in `/var/lib/ser2net/<name>` and its address in `/etc/ser2net/<name>.env`
-  (`SER2NETWEB_BIND_IP=0.0.0.0`, `SER2NETWEB_PORT=8081`); the instance name is its name in
-  notifications. Install the unit and the bundled dependencies once, and the dependencies
-  again after each upgrade (the instances start with `--no-bootstrap`, and their start-up
-  log warns while `lib/` is out of date):
+- **Linux (systemd):** the template `systemd/ser2netweb@.service` runs one instance per
+  name, with its data in `/var/lib/ser2netweb/<name>` and its address in
+  `/etc/ser2netweb/<name>.env` (`SER2NETWEB_BIND_IP=0.0.0.0`, `SER2NETWEB_PORT=8081`); the
+  instance name is its name in notifications. Install the unit and the bundled
+  dependencies once, and the dependencies again after each upgrade (the instances start
+  with `--no-bootstrap`, and their start-up log warns while `lib/` is out of date):
   ```bash
-  sudo cp /opt/ser2net/systemd/ser2net@.service /etc/systemd/system/ && sudo systemctl daemon-reload
-  sudo install -d -o ser2net -g ser2net /opt/ser2net/lib
-  sudo -u ser2net python3 /opt/ser2net/bootstrap.py        # again after each upgrade
-  sudo systemctl enable --now ser2net@line1 ser2net@line2
+  sudo cp /opt/ser2netweb/systemd/ser2netweb@.service /etc/systemd/system/ && sudo systemctl daemon-reload
+  sudo install -d -o ser2netweb -g ser2netweb /opt/ser2netweb/lib
+  sudo -u ser2netweb python3 /opt/ser2netweb/bootstrap.py        # again after each upgrade
+  sudo systemctl enable --now ser2netweb@line1 ser2netweb@line2
   ```
+  (2.9.x's `ser2net@.service` instances: *Upgrading from 2.9.x* under Run as a service.)
 - **Docker:** one container per instance, each with its own volume, `container_name` and
   published ports (`8081:8080`), and `SER2NETWEB_NODE_NAME` (or `hostname:`) for its name
   ([docs/DOCKER.md](docs/DOCKER.md)).
@@ -1688,7 +1751,7 @@ times, the cluster's peer list) is measured with a clock that no clock step chan
 - **Waiting for the clock at boot:** the systemd unit waits for the network, not for time
   sync, because on a network without an NTP server ser2netweb would then never start. To
   wait anyway, enable `systemd-time-wait-sync.service` and add `After=time-sync.target`
-  and `Wants=time-sync.target` with `systemctl edit ser2net`.
+  and `Wants=time-sync.target` with `systemctl edit ser2netweb`.
 - **What ser2netweb checks:** the start-up log has a WARNING when the clock reads earlier
   than the newest configuration backup, the last change to `config.json` or the making of
   this version. Settings → *Admin interface* shows the server's time (UTC, and local with
@@ -1704,7 +1767,7 @@ config file's folder). The data directory is locked to owner-only (POSIX `0700`;
 `icacls` owner/SYSTEM/Administrators), so the files inside aren't readable by other users,
 and on Linux/macOS the files the server creates are owner-only too. That applies to a folder
 ser2netweb made or one holding only its own files (the ones below): a folder with other files
-in it (`--config /etc/ser2net.json`, a home directory) keeps its permissions, only the
+in it (`--config /etc/ser2netweb.json`, a home directory) keeps its permissions, only the
 config file (and `backups/`, `logs/`, `traces/`) is made private, and the start-up log warns
 when other accounts can use the folder — give ser2netweb a folder of its own:
 - `config.json` — admin IP, password hashes, all mappings (atomic write), and the secrets
@@ -1850,10 +1913,10 @@ preview says so.
 
 **Changing `config.json` while ser2netweb runs:** ser2netweb reads it at start-up and then works
 from its copy in memory. After an edit by hand or by a tool (Ansible, a copied file), have it
-read the file again — no restart: `systemctl reload ser2net` (an instance:
-`systemctl reload ser2net@<name>`; all three units have `ExecReload`) or `kill -HUP <pid>`
-(SIGHUP, Linux/macOS; `docker kill -s HUP ser2net`), `ser2netweb --reload` with the same
-`--data-dir` (`/var/lib/ser2net` for the binary's unit, `/var/lib/ser2net/<name>` for an
+read the file again — no restart: `systemctl reload ser2netweb` (an instance:
+`systemctl reload ser2netweb@<name>`; all three units have `ExecReload`) or `kill -HUP <pid>`
+(SIGHUP, Linux/macOS; `docker kill -s HUP ser2netweb`), `ser2netweb --reload` with the same
+`--data-dir` (`/var/lib/ser2netweb` for the binary's unit, `/var/lib/ser2netweb/<name>` for an
 instance; any platform, also for the Windows service and in a container) or Settings →
 *Configuration backups* → *Reload config.json*. The file is checked as an edit is: when it
 can't be read or doesn't validate (a value of the wrong type in a changed mapping, two
@@ -1866,7 +1929,7 @@ change keeps running with its clients (one that should run but doesn't is starte
 changed one restarts, a removed one stops, a new one starts; the cluster restarts only when
 its settings changed. The admin UI's certificate files and those of unchanged TLS mappings
 are read again for new connections (a renewed certificate: e.g. certbot's
-`--deploy-hook "systemctl reload ser2net"`). The admin UI's address takes effect only at the
+`--deploy-hook "systemctl reload ser2netweb"`). The admin UI's address takes effect only at the
 next start (the log, the reply and Settings say so), as do `--data-dir` / `--config` and the
 environment variables. In a terminal, SIGHUP from the terminal closing still ends ser2netweb
 (cleanly). The log line and the audit record (`config_reload`) say what changed. An edit that
@@ -1885,7 +1948,7 @@ the first-run setup next sees that audit log — the earlier users' names, addre
 failed sign-ins — and those backups, with the earlier accounts and secrets, in Settings.
 Don't do it while ser2netweb runs: its next save writes the configuration it has in memory,
 accounts included, back to `config.json`. Copies outside the data directory stay too: the
-journal (`journalctl -u ser2net`), Docker's container log (`docker compose down -v` removes
+journal (`journalctl -u ser2netweb`), Docker's container log (`docker compose down -v` removes
 it with the `/data` volume, see [docs/DOCKER.md](docs/DOCKER.md)) and messages
 notifications have sent. To get back in after a lost password, use `--set-password`
 instead (see Security): it keeps everything else. `admin-requests/` only holds a
@@ -1963,7 +2026,7 @@ the version and **Licences**, a page with the licence texts this copy carries �
 NOTICE, the commercial licence and the third-party notices, or in an executable its
 `THIRD-PARTY-LICENSES.txt`). A modified version that others use over a network has to offer
 them its source (AGPL-3.0 section 13): point the link at it with `SER2NETWEB_SOURCE_URL`
-(`https://git.example.com/our-ser2net`; a value that is not an http(s) address is not used,
+(`https://git.example.com/our-ser2netweb`; a value that is not an http(s) address is not used,
 with a start-up warning).
 
 Contributions are welcome! On your first pull request you'll be asked to sign a one-time [Contributor License Agreement](https://gist.github.com/haliskilic/7a7fdcd355f54d1db6943959d7b76823); you keep the copyright to your work.

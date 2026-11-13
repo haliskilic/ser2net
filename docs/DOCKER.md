@@ -2,7 +2,9 @@
 
 ser2netweb ships an official `Dockerfile`, an example `docker-compose.yml` and a published
 image for amd64, arm64 and arm/v7 (32-bit ARM: 32-bit Raspberry Pi OS, armv7 gateways;
-since 2.9.0) with every release: `ghcr.io/haliskilic/ser2net` (`:latest` or a release tag).
+since 2.9.0) with every release: `ghcr.io/haliskilic/ser2netweb` (`:latest` or a release
+tag). Up to 2.9.x it was `ghcr.io/haliskilic/ser2net`; the 3.x releases are published there
+too, as the same image (*Upgrading from 2.9.x* below).
 The published image is the very build the release smoke-tested on each architecture (same
 digest; arm/v7 under emulation, as no runner has that CPU); its tags `:X.Y.Z`, `:X.Y` and
 `:latest` are added only after that. On arm/v7 the image builds psutil and cffi from their
@@ -21,9 +23,34 @@ a week; an auto-updater (Watchtower and the like) restarts the container when th
 Use `:X.Y.Z` (or a digest) to change only when you decide to. The base is a Debian codename
 tag, so a refresh never switches to a new Debian major release; only a ser2netweb release does.
 Each image records its base:
-`docker inspect -f '{{ index .Config.Labels "org.opencontainers.image.base.digest" }}' ghcr.io/haliskilic/ser2net:latest`.
-Build provenance: `gh attestation verify oci://ghcr.io/haliskilic/ser2net:latest -R haliskilic/ser2netweb`
-(a release's image is attested by `release.yml`, a refreshed one by `image-refresh.yml`).
+`docker inspect -f '{{ index .Config.Labels "org.opencontainers.image.base.digest" }}' ghcr.io/haliskilic/ser2netweb:latest`.
+Build provenance: `gh attestation verify oci://ghcr.io/haliskilic/ser2netweb:latest -R haliskilic/ser2netweb`
+(a release's image is attested by `release.yml`, a refreshed one by `image-refresh.yml`,
+under both names).
+
+## Upgrading from 2.9.x
+
+The project was called ser2net up to 2.9.x. For Docker that changes names, not the data:
+
+- **The image** is `ghcr.io/haliskilic/ser2netweb`. Every 3.x release (and each weekly
+  refresh) is also published as `ghcr.io/haliskilic/ser2net`, the very same image by
+  digest with the same tags, so a compose file or an auto-updater on the old path keeps
+  getting releases; switch to the new path when it suits you.
+- **The data** stays as it is: `/data`, the same account uid/gid 10001 (now called
+  `ser2netweb` instead of `ser2net`), the same files. Nothing to move.
+- **Environment variables** are `SER2NETWEB_*`; the `SER2NET_*` names still work (a
+  `SER2NETWEB_*` one wins when both are set).
+- **This repository's `docker-compose.yml`** now calls the service and the container
+  `ser2netweb`; its volume keeps the name `ser2net-data`, so it is the same one. When you
+  take the new file, start it once with
+  ```bash
+  docker compose up -d --remove-orphans
+  ```
+  which removes the old `ser2net` container (it holds the ports) and starts `ser2netweb`
+  on the same volume. A compose file of your own needs no change (the image path at most).
+  Commands that name the container (`docker exec ser2net …`) then take the new name.
+- The image's `HEALTHCHECK` runs `ser2netweb.py`; an override that names
+  `/app/ser2net.py` still works.
 
 ## Quick start (compose)
 
@@ -47,7 +74,7 @@ Build provenance: `gh attestation verify oci://ghcr.io/haliskilic/ser2net:latest
    first admin without the browser (next section). Inside the container `<host>` is not the
    machine's own name, so opened by a host name (not an IP address) the setup page asks for
    a one-time code, which keeps other web pages from claiming the new install:
-   `docker exec ser2net cat /data/setup-code.txt`.
+   `docker exec ser2netweb cat /data/setup-code.txt`.
 
 ## First admin and account recovery
 
@@ -57,26 +84,26 @@ Build provenance: `gh attestation verify oci://ghcr.io/haliskilic/ser2net:latest
   never logged:
   ```yaml
   services:
-    ser2net:
+    ser2netweb:
       environment:
         SER2NETWEB_ADMIN_USER: "admin"
-        SER2NETWEB_ADMIN_PASSWORD_FILE: /run/secrets/ser2net_admin
-      secrets: [ser2net_admin]
+        SER2NETWEB_ADMIN_PASSWORD_FILE: /run/secrets/ser2netweb_admin
+      secrets: [ser2netweb_admin]
   secrets:
-    ser2net_admin:
-      file: ./ser2net_admin.txt   # one line: the password (8+ characters)
+    ser2netweb_admin:
+      file: ./ser2netweb_admin.txt   # one line: the password (8+ characters)
   ```
 - **Lost password / locked out:** set a new one on the running container — no restart,
   nothing else changes, and that account is signed out everywhere (a name that doesn't
   exist yet is created as an admin):
   ```bash
-  docker exec -it ser2net python /app/ser2netweb.py --no-bootstrap --data-dir /data --set-password admin
+  docker exec -it ser2netweb python /app/ser2netweb.py --no-bootstrap --data-dir /data --set-password admin
   ```
-  Non-interactive: `docker exec -i ser2net ... --set-password admin < password.txt`.
+  Non-interactive: `docker exec -i ser2netweb ... --set-password admin < password.txt`.
   `... --sign-out-all` ends every web UI session. `docker exec` runs as root; the command
   switches to the owner of `/data` before writing, so file ownership stays right.
-- **`config.json` changed in the volume:** `docker kill -s HUP ser2net` (or
-  `docker exec ser2net python /app/ser2netweb.py --no-bootstrap --data-dir /data --reload`, or
+- **`config.json` changed in the volume:** `docker kill -s HUP ser2netweb` (or
+  `docker exec ser2netweb python /app/ser2netweb.py --no-bootstrap --data-dir /data --reload`, or
   Settings → *Configuration backups* → *Reload config.json*) has ser2netweb read it again
   without a restart: mappings whose settings didn't change keep their clients, a file that
   doesn't validate changes nothing (the log says why). The admin UI address comes from
@@ -85,17 +112,20 @@ Build provenance: `gh attestation verify oci://ghcr.io/haliskilic/ser2net:latest
 ## Plain docker run
 
 ```bash
-docker run -d --name ser2net --restart unless-stopped --init --stop-timeout 30 \
+docker run -d --name ser2netweb --restart unless-stopped --init --stop-timeout 30 \
   -p 8080:8080 -p 4001:4001 \
   --device /dev/serial/by-id/usb-FTDI_...-if00-port0:/dev/ttyUSB0 \
   --log-opt max-size=10m --log-opt max-file=3 \
   -v ser2net-data:/data \
-  ghcr.io/haliskilic/ser2net:latest
+  ghcr.io/haliskilic/ser2netweb:latest
 ```
+
+(The volume keeps the name the 2.9.x command gave it, `ser2net-data`: re-creating a 2.9.x
+container with this command finds its data.)
 
 - `--restart unless-stopped` brings it back after a crash, a Docker restart or a power
   cut. A container started without it stays down until someone starts it by hand; add
-  the policy to an existing one with `docker update --restart unless-stopped ser2net`.
+  the policy to an existing one with `docker update --restart unless-stopped ser2netweb`.
 - `--init` (compose: `init: true`) runs a small init as the container's first process,
   which passes `docker stop` on to ser2netweb; `--stop-timeout 30` (compose:
   `stop_grace_period: 30s`) gives the stop 30 s before Docker kills the container.
@@ -104,8 +134,8 @@ docker run -d --name ser2net --restart unless-stopped --init --stop-timeout 30 \
   at most 15 s, and output a serial device has not taken 2 s after its port closes is
   dropped. (Docker's default is 10 s, after which unsent trace data and the last log
   lines may be lost.)
-- To build the image yourself, run `docker build -t ser2net .` in a checkout and use
-  `ser2net` as the image name.
+- To build the image yourself, run `docker build -t ser2netweb .` in a checkout and use
+  `ser2netweb` as the image name.
 
 ## Ports and networking
 
@@ -243,10 +273,10 @@ and session key. README, *Several instances on one machine*, has the whole check
   lines say so with their offset (`2026-11-06 12:00:00+00:00`), trace lines don't. For the
   local time, set `TZ` (`-e TZ=Europe/Istanbul`, or under `environment:` in compose) or
   mount the host's zone (`-v /etc/localtime:/etc/localtime:ro`).
-- **Runs as a non-root user.** The process runs as `ser2net` (uid/gid 10001), never
-  as root. The entrypoint starts as root only to choose the account: a `/data` owned by
-  root — a volume written by an image before v2.8, which ran as root — is handed to
-  `ser2net` once (logged), so **upgrading needs no manual step** — except on the host
+- **Runs as a non-root user.** The process runs as `ser2netweb` (uid/gid 10001; called
+  `ser2net` up to 2.9.x, the same uid), never as root. The entrypoint starts as root only
+  to choose the account: a `/data` owned by root — a volume written by an image before
+  v2.8, which ran as root — is handed to `ser2netweb` once (logged), so **upgrading needs no manual step** — except on the host
   network with a port below 1024, which root could open: add `SER2NETWEB_LOW_PORTS=1`
   ([Ports and networking](#ports-and-networking)). A bind-mounted folder
   owned by another user is used as that user, so the folder keeps its owner; files in it
@@ -276,7 +306,7 @@ and session key. README, *Several instances on one machine*, has the whole check
   `SER2NETWEB_*` address, an upgrade).
 - **Starting over.** `docker compose down -v` removes the container, its log and the
   `ser2net-data` volume — `config.json`, `backups/`, `all.log*`, `audit.log*`, `logs/`,
-  `traces/` and `tls/` (plain `docker run`: `docker rm -f ser2net` and `docker volume rm`
+  `traces/` and `tls/` (plain `docker run`: `docker rm -f ser2netweb` and `docker volume rm`
   the volume; a bind-mounted folder: stop the container, then empty the folder). Deleting
   only `/data/config.json` resets the accounts, settings and mappings but keeps the rest,
   and whoever completes the first-run setup next sees the earlier audit log and backups in

@@ -2,11 +2,15 @@
 #   docker compose up -d
 # Edit `devices` to match the serial port(s) you are bridging and `ports` to match
 # your mappings. More (plain `docker run`, networking, hot-plug): docs/DOCKER.md
+# Coming from 2.9.x's file (service and container "ser2net", image .../ser2net): the volume
+# keeps its name, so the data is the same; start this one with
+#   docker compose up -d --remove-orphans
+# so the old container, which holds the ports, is removed (docs/DOCKER.md, "Upgrading").
 services:
-  ser2net:
-    image: ghcr.io/haliskilic/ser2net:latest   # published for amd64, arm64, arm/v7 with every release
-    # build: .                                 # or build it from this checkout
-    container_name: ser2net
+  ser2netweb:
+    image: ghcr.io/haliskilic/ser2netweb:latest   # published for amd64, arm64, arm/v7 with every release
+    # build: .                                    # or build it from this checkout
+    container_name: ser2netweb
     # The container's host name, which notifications and the LAN cluster show while the
     # instance has no name of its own (SER2NETWEB_NODE_NAME below); without it, the container
     # id, which changes whenever the container is re-created (e.g. an image upgrade).
@@ -22,7 +26,7 @@ services:
       # (add /udp for a UDP mapping), or use the host network below instead.
       - "4001:4001"   # the port a new mapping gets by default
     volumes:
-      - ser2net-data:/data
+      - ser2net-data:/data   # (the volume's name up to 2.9.x, kept: it holds the data)
     # Pass through the host serial device(s). USB-serial adapters renumber across
     # replug; bind by stable /dev/serial/by-id/... when possible (identical adapters
     # without their own serial number share one by-id name: use their

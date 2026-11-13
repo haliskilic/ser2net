@@ -1,7 +1,8 @@
 # -*- mode: python ; coding: utf-8 -*-
-# PyInstaller spec — build a standalone ser2net executable (no Python install needed).
+# PyInstaller spec — build a standalone ser2netweb executable (no Python install needed).
 #   pip install pyinstaller && pyinstaller ser2netweb.spec
-# Produces dist/ser2net(.exe). Config/logs are written next to the binary (./data).
+# Produces dist/ser2netweb(.exe) (a release attaches it as ser2netweb-<platform>).
+# Config/logs are written next to the binary (./data).
 # Release builds: tools/build_standalone_linux.sh (old-glibc container) and
 # tools/build_standalone_windows.ps1, from .github/workflows/standalone.yml;
 # tests/test_standalone.py checks both.
@@ -14,7 +15,7 @@ from PyInstaller.utils.hooks import collect_all
 # the files the app reads at run time: page templates, static assets, UI translations
 # (tests/test_standalone.py fails when a data file under ser2netweb/ is left out)
 datas = [(d, d) for d in ("ser2netweb/web/templates", "ser2netweb/web/static", "ser2netweb/locale")]
-# every bundled component's license (tools/third_party.py; `ser2net --licenses` prints it).
+# every bundled component's license (tools/third_party.py; `ser2netweb --licenses` prints it).
 # The build scripts write it first; a plain `pyinstaller ser2netweb.spec` gets it written here,
 # from this environment (the interpreter's native libraries' own texts only come with the
 # build scripts' --extra), instead of an executable without it.
@@ -68,14 +69,14 @@ if BUILDING:
         fh.write("".join(f"{b[0]}\n" for b in a.binaries))
 pyz = PYZ(a.pure)
 # Windows: stamp the exe with a version resource (tools/win_version_info.py writes
-# build/win_version.txt from ser2netweb.__version__ at build time) and the ser2net icon, so
+# build/win_version.txt from ser2netweb.__version__ at build time) and the ser2netweb icon, so
 # Explorer's Details tab shows the version/publisher and the exe no longer carries
 # PyInstaller's default console icon. Both are ignored on other platforms.
 version_file = os.path.join("build", "win_version.txt")
-icon_file = os.path.join("tools", "ser2net.ico")
+icon_file = os.path.join("tools", "ser2netweb.ico")
 exe = EXE(
     pyz, a.scripts, a.binaries, a.datas, [],
-    name="ser2net",
+    name="ser2netweb",
     debug=False, strip=False, upx=False, console=True,
     version=version_file if os.path.isfile(version_file) else None,
     icon=icon_file if os.path.isfile(icon_file) else None,
