@@ -450,6 +450,10 @@ jobs:
           GH_REPO: ${{ github.repository }}
         run: |
           for workflow in package-repo.yml winget.yml chocolatey.yml aur.yml snap.yml; do
-            gh workflow run "$workflow" --ref main -f tag="$GITHUB_REF_NAME"
-            echo "started $workflow for $GITHUB_REF_NAME"
+            # (one that can't be started must not keep the ones after it from starting)
+            if gh workflow run "$workflow" --ref main -f tag="$GITHUB_REF_NAME"; then
+              echo "started $workflow for $GITHUB_REF_NAME"
+            else
+              echo "::warning::$workflow could not be started for $GITHUB_REF_NAME: Actions -> its workflow -> Run workflow, with this tag"
+            fi
           done

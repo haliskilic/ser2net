@@ -24,8 +24,11 @@ import gzip
 import hashlib
 import os
 import re
+import shutil
+import subprocess
 import sys
 import tempfile
+import textwrap
 
 from _workflows import ROOT, jobs, key, needs, permissions, read, steps
 
@@ -345,6 +348,36 @@ def test_workflow():
           "deploy job only, after the container tests  OK")
 
 
+def _one_failing_start_keeps_the_rest(channels: str, loop: str) -> None:
+    """The step's script with a stand-in for gh that can't start one workflow: the ones
+    after it are started all the same, and a warning names the one that wasn't."""
+    bash = shutil.which("bash")
+    if not bash or os.name == "nt":
+        print("SKIP (part): the channels step's script needs bash")
+        return
+    script = textwrap.dedent(channels.split("        run: |\n", 1)[1])
+    workflows = re.findall(r"[\w.-]+\.yml", loop)
+    with tempfile.TemporaryDirectory() as tmp:
+        gh = os.path.join(tmp, "gh")
+        with open(gh, "w", encoding="utf-8") as fh:
+            fh.write('#!/bin/sh\necho "$*" >> "$LOG"\n[ "$3" != "$FAILING" ]\n')
+        os.chmod(gh, 0o755)
+        log = os.path.join(tmp, "log")
+        env = dict(os.environ, PATH=tmp + os.pathsep + os.environ["PATH"], LOG=log,
+                   FAILING=workflows[1], GITHUB_REF_NAME="v9.9.9")
+        # (as GitHub runs a step's script)
+        p = subprocess.run([bash, "--noprofile", "--norc", "-eo", "pipefail", "-c", script],
+                           env=env, capture_output=True, text=True, timeout=60)
+        assert p.returncode == 0, (p.returncode, p.stdout, p.stderr)
+        with open(log, encoding="utf-8") as fh:
+            calls = fh.read().splitlines()
+    assert calls == [f"workflow run {w} --ref main -f tag=v9.9.9" for w in workflows], calls
+    out = p.stdout.splitlines()
+    assert [ln for ln in out if ln.startswith("::warning::")] == [
+        ln for ln in out if workflows[1] in ln] and len(out) == len(workflows), out
+    assert sum(ln.startswith("started ") for ln in out) == len(workflows) - 1, out
+
+
 def test_release_starts_it():
     release = jobs(read("release.yml"))
     channels = release["channels"]
@@ -357,6 +390,7 @@ def test_release_starts_it():
     assert "package-repo.yml" in loop.split(), loop
     assert 'gh workflow run "$workflow" --ref main -f tag="$GITHUB_REF_NAME"' in channels
     assert "channels" not in {n for job in release for n in needs(release[job])}
+    _one_failing_start_keeps_the_rest(channels, loop)
     # what it starts: on main, which the github-pages environment allows
     assert "\n  workflow_dispatch:\n" in read("package-repo.yml").split("\npermissions:", 1)[0]
     smoke = text(os.path.join("tests", "package_repo_smoke.sh"))
