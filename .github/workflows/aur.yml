@@ -1,0 +1,154 @@
+name: AUR
+
+# The Arch Linux package ser2netweb-bin (https://aur.archlinux.org/packages/ser2netweb-bin).
+# packaging/aur/make_pkgbuild.py makes its PKGBUILD, .SRCINFO and files for a release from
+# that release's executables and SHA256SUMS, its systemd unit and the tag's licence texts and
+# account files (never rebuilding anything); a clean archlinux container builds the package
+# with makepkg as an unprivileged user, shows what namcap says, installs it with pacman and
+# runs it (tests/aur_smoke.sh). Only then are the files pushed to the AUR's git repository,
+# over SSH with the secret AUR_SSH_PRIVATE_KEY (the AUR account's key) to the host keys pinned
+# below; without that secret the push is skipped with a notice. To set it up: an account on
+# https://aur.archlinux.org (Register), a new SSH key pair just for this (ssh-keygen -t
+# ed25519 -N "" -f aur), its aur.pub under My Account -> SSH Public Key, and the private key
+# aur as the repository secret AUR_SSH_PRIVATE_KEY (Settings -> Secrets and variables ->
+# Actions); the first push creates the package ser2netweb-bin on the AUR.
+# Runs: for a release (release.yml starts it with the tag: a release created with the
+# GITHUB_TOKEN starts no workflow by itself; one published by hand does, and pre-releases are
+# left out), by hand for a release (Actions -> AUR -> Run workflow, its tag), and on pull
+# requests that change the package: build and test only, and the files in
+# packaging/aur/ser2netweb-bin must be what the script makes for their version.
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: The release to package (vX.Y.Z)
+        required: true
+        type: string
+  pull_request:
+    paths:
+      - packaging/aur/**
+      - tools/build_packages.py
+      - tests/aur_smoke.sh
+      - .github/workflows/aur.yml
+
+permissions:
+  contents: read
+
+# one push to the AUR at a time (pull requests: one run per branch)
+concurrency:
+  group: ${{ github.event_name == 'pull_request' && format('aur-{0}', github.ref) || 'aur' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  package:
+    name: build and test ser2netweb-bin (archlinux, x86_64)
+    if: ${{ !github.event.release.prerelease }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    container: archlinux:base-devel
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - id: tag
+        name: The release
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          tag=${RELEASE_TAG:-$INPUT_TAG}
+          if [ -z "$tag" ]; then  # a pull request: the version packaging/aur has
+            tag=v$(sed -n 's/^pkgver=//p' packaging/aur/ser2netweb-bin/PKGBUILD)
+          fi
+          if ! printf '%s' "$tag" | grep -Eqx 'v[0-9]+\.[0-9]+\.[0-9]+'; then
+            echo "::error::$tag is not a release tag (vX.Y.Z)"; exit 1
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+      # (the whole system first: Arch doesn't support partial upgrades, and a newer package
+      # can need files an older one in the image still holds)
+      - name: Python for the script
+        run: pacman -Syu --noconfirm --needed python >/dev/null
+      - name: Make the package's files for ${{ steps.tag.outputs.tag }}
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
+          EVENT: ${{ github.event_name }}
+        run: |
+          python3 -I packaging/aur/make_pkgbuild.py "$TAG" --out build/aur
+          if [ "$EVENT" = pull_request ]; then
+            python3 -I packaging/aur/make_pkgbuild.py "$TAG" --check
+          fi
+      - name: makepkg, namcap, pacman -U, run it
+        run: sh tests/aur_smoke.sh build/aur
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
+        with:
+          name: aur-files
+          path: build/aur/
+          include-hidden-files: true   # .SRCINFO
+          if-no-files-found: error
+
+  publish:
+    name: push ser2netweb-bin to the AUR
+    needs: package
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions: {}
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8.0.2
+        with:
+          name: aur-files
+          path: aur-files
+      - id: key
+        name: Is the AUR key there?
+        env:
+          AUR_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
+        run: |
+          if [ -z "$AUR_KEY" ]; then
+            echo "::notice::AUR push skipped: no secret AUR_SSH_PRIVATE_KEY (an AUR account's SSH key: see the top of .github/workflows/aur.yml)"
+            echo "push=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "push=true" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Push to ssh://aur@aur.archlinux.org/ser2netweb-bin.git
+        if: steps.key.outputs.push == 'true'
+        env:
+          AUR_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
+          TAG: ${{ needs.package.outputs.tag }}
+        run: |
+          set -e
+          umask 077
+          keys="$RUNNER_TEMP/aur-ssh"
+          mkdir -p "$keys"
+          printf '%s\n' "$AUR_KEY" > "$keys/id"
+          trap 'rm -rf "$keys"' EXIT
+          # aur.archlinux.org's host keys, as https://aur.archlinux.org lists their
+          # fingerprints: SHA256:RFzBCUItH9LZS0cKB5UE6ceAYhBD5C8GeOBip8Z11+4 (Ed25519),
+          # SHA256:uTa/0PndEgPZTf76e1DFqXKJEXKsn7m9ivhLQtzGOCI (ECDSA),
+          # SHA256:5s5cIyReIfNNVGRFdDbe3hdYiI5OelHGpw2rOUud3Q8 (RSA)
+          cat > "$keys/known_hosts" <<'EOF'
+          aur.archlinux.org ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEuBKrPzbawxA/k2g6NcyV5jmqwJ2s+zpgZGZ7tpLIcN
+          aur.archlinux.org ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABBBLMiLrP8pVi5BFX2i3vepSUnpedeiewE5XptnUnau+ZoeUOPkpoCgZZuYfpaIQfhhJJI5qgnjJmr4hyJbe/zxow=
+          aur.archlinux.org ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQDKF9vAFWdgm9Bi8uc+tYRBmXASBb5cB5iZsB7LOWWFeBrLp3r14w0/9S2vozjgqY5sJLDPONWoTTaVTbhe3vwO8CBKZTEt1AcWxuXNlRnk9FliR1/eNB9uz/7y1R0+c1Md+P98AJJSJWKN12nqIDIhjl2S1vOUvm7FNY43fU2knIhEbHybhwWeg+0wxpKwcAd/JeL5i92Uv03MYftOToUijd1pqyVFdJvQFhqD4v3M157jxS5FTOBrccAEjT+zYmFyD8WvKUa9vUclRddNllmBJdy4NyLB8SvVZULUPrP3QOlmzemeKracTlVOUG1wsDbxknF1BwSCU7CmU6UFP90kpWIyz66bP0bl67QAvlIc52Yix7pKJPbw85+zykvnfl2mdROsaT8p8R9nwCdFsBc9IiD0NhPEHcyHRwB8fokXTajk2QnGhL+zP5KnkmXnyQYOCUYo3EKMXIlVOVbPDgRYYT/XqvBuzq5S9rrU70KoI/S5lDnFfx/+lPLdtcnnEPk=
+          EOF
+          export GIT_SSH_COMMAND="ssh -i $keys/id -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=$keys/known_hosts"
+          # (a package's first push makes the AUR repository: the clone of a new one is empty)
+          git clone ssh://aur@aur.archlinux.org/ser2netweb-bin.git aur
+          cd aur
+          git symbolic-ref HEAD refs/heads/master
+          files="PKGBUILD .SRCINFO ser2netweb.service ser2netweb.sysusers ser2netweb.tmpfiles ser2netweb-bin.install"
+          for f in $files; do cp "../aur-files/$f" "$f"; done
+          # shellcheck disable=SC2086
+          git add $files
+          if git diff --cached --quiet; then
+            echo "::notice::the AUR has ser2netweb-bin ${TAG#v} already"
+            exit 0
+          fi
+          git -c user.name="ser2netweb release (GitHub Actions)" \
+              -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+              commit -q -m "ser2netweb-bin ${TAG#v}-1"
+          git push origin HEAD:master
+          echo "pushed: https://aur.archlinux.org/packages/ser2netweb-bin (${TAG#v}-1)" >> "$GITHUB_STEP_SUMMARY"

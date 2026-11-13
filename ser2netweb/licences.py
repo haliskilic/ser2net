@@ -30,7 +30,7 @@ def _root() -> str:
     """Where this copy's licence texts are: _ROOT, or for a pip install (whose _ROOT is
     the site-packages folder) the licence files of its .dist-info, kept there with the
     paths they have in the source tree (tools/licenses/npm/*.txt too)."""
-    if not getattr(sys, "_MEIPASS", None) and layout.kind() == layout.PIP:
+    if not getattr(sys, "_MEIPASS", None) and layout.kind() in layout.PIP_KINDS:
         return layout.licence_dir() or _ROOT
     return _ROOT
 
