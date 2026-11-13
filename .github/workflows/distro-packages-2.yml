@@ -364,7 +364,12 @@ jobs:
               if ser2netweb --healthcheck --data-dir /var/db/ser2netweb; then ok=1; break; fi
               sleep 1
             done
-            test -n "$ok"
+            if [ -z "$ok" ]; then
+              tail -n 40 /var/log/messages
+              ps -axww -o user,pid,command | grep '[s]er2netweb' || true
+              ls -la /var/run/ser2netweb /var/db/ser2netweb
+              exit 1
+            fi
             stat -f '%Su:%Lp' /var/db/ser2netweb | grep -Fx ser2netweb:700
             service ser2netweb reload
             sleep 2
