@@ -12,7 +12,7 @@
   priority client's place, and is refused while only priority clients are connected.
   Only clients still connected count: one kicked (or otherwise on its way out) is neither
   counted nor kicked again, so connections that arrive together can't all take the same
-  slot;
+  slot. A client a port pool hands over never kicks anyone (engine/pool.py);
 - ``writer_client_ips`` (the transparent bridge: TCP server and UDP): blank lets every
   admitted client send to the device, otherwise only those from the listed IPs/CIDRs;
   the others only receive (the runner drops and counts what they send). Entries are read
@@ -153,12 +153,13 @@ class AccessPolicy:
         return ip_in_nets(ip, self._priority)
 
     def admit(self, ip: str, label: str, clients: Collection[Client],
-              log: Callable[[str], None]) -> Admission:
+              log: Callable[[str], None], kick: bool = True) -> Admission:
         """Let a new connection from ``ip`` (``label``: ip:port, for the log) in or not,
         given the ``clients`` listed now. Kicks one of them to make room when the policy
-        says so; logs each refusal and kick. The caller closes a refused connection, and
-        adds an admitted one to ``clients`` before it awaits anything (so the next
-        connection is decided with this one counted)."""
+        says so (never with ``kick`` False: a port pool's client); logs each refusal and
+        kick. The caller closes a refused connection, and adds an admitted one to
+        ``clients`` before it awaits anything (so the next connection is decided with this
+        one counted)."""
         if not self.allowed(ip):
             log(f"rejected {label}: not in allowed list")
             return Admission(False)
@@ -167,7 +168,7 @@ class AccessPolicy:
         if len(live) >= self.net.max_connections:
             # A priority client always gets in (kick to make room); a normal client
             # gets in only if kick_old_user is set, and never in a priority client's place.
-            if not (priority or self.net.kick_old_user):
+            if not kick or not (priority or self.net.kick_old_user):
                 log(f"rejected {label}: max connections reached")
                 return Admission(False, priority, at_capacity=True)
             victim = pick_victim(live, priority)

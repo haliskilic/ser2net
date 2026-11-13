@@ -1648,7 +1648,7 @@ class MappingRunner:
             finally:
                 was_open = self._link.is_open
                 # No await since the last check: a client that connects from here on finds
-                # the port not open, waits for it (_on_client) and so has it opened again
+                # the port not open, waits for it (_admit) and so has it opened again
                 # once it is closed, instead of being taken on a port about to close.
                 self._link.ready.clear()
                 run.cancel()
@@ -1740,30 +1740,48 @@ class MappingRunner:
 
     @property
     def full(self) -> bool:
-        """No client would get a connection now: every one is taken, or a session needs
+        """No client would get a connection now: every one is taken (a client waiting for
+        the serial port to open counts: it is taken once it is open), or a session needs
         the serial port and it is neither open nor opened for a client."""
         if self.needs_port and not self.on_demand and not self._link.is_open:
             return True
         live = [c for c in self._clients if not c.closing]
-        return len(live) >= self.mapping.network.max_connections
+        return len(live) + self._pending >= self.mapping.network.max_connections
 
     async def take_client(self, reader: asyncio.StreamReader,
-                          writer: asyncio.StreamWriter) -> None:
-        """A client a port pool hands over (engine/pool.py): served as one that connected
-        to the mapping's own port."""
-        await self._on_client(reader, writer)
+                          writer: asyncio.StreamWriter) -> Optional[_ClientConn]:
+        """A client a port pool hands over (engine/pool.py), admitted as one that connected
+        to the mapping's own port, except that nobody is kicked to make room for it. The
+        client, for serve_client(); or None when the mapping turns it away after all (it
+        stops, its serial port could not be opened in time, another client took the last
+        connection meanwhile): the connection is then left as it is, for the pool's next
+        member."""
+        return await self._admit(reader, writer, handed=True)
+
+    async def serve_client(self, client: _ClientConn) -> None:
+        """Serve a client take_client() admitted, until it is gone."""
+        await self._serve(client)
 
     async def _on_client(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        client = await self._admit(reader, writer)
+        if client is not None:
+            await self._serve(client)
+
+    async def _admit(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter,
+                     handed: bool = False) -> Optional[_ClientConn]:
+        """A new connection: the client, listed in self._clients, or None when it is turned
+        away (closed, unless a port pool ``handed`` it over: take_client)."""
         if self._stop.is_set():  # accepted while the mapping stops
-            writer.close()
-            return
+            if not handed:
+                writer.close()
+            return None
         peer_ip, peer_port = netguard.peer_address(writer)
         peer_label = netguard.client_label(peer_ip, peer_port)
 
         # An RFC2217 session (and any, with disconnect_without_device) needs the open serial
         # port: wait briefly for it (an allowed client) BEFORE admission, so a client
         # waiting here holds no slot and nobody is kicked for a newcomer that is then
-        # turned away.
+        # turned away. (It counts as taking a connection for a port pool: full.)
         ready = self._link.ready
         if self.needs_port and not ready.is_set() and self._access.allowed(peer_ip):
             self._pending += 1  # (open on connect: the port is opened for it)
@@ -1787,20 +1805,29 @@ class MappingRunner:
                                       "(disconnect_without_device)")
                 else:
                     self._refusal_log(f"rejected {peer_label}: serial not ready for RFC2217")
-                writer.close()
-                return
+                if not handed:
+                    writer.close()
+                return None
+            if self._stop.is_set():
+                if not handed:
+                    writer.close()
+                return None
 
-        # allow-list, then max connections (a priority client / kick_old_user makes room);
-        # from here until the client is in self._clients nothing awaits, so connections
-        # accepted together are admitted one after the other, each seeing the one before
-        admission = self._access.admit(peer_ip, peer_label, self._clients, self._refusal_log)
+        # allow-list, then max connections (a priority client / kick_old_user makes room,
+        # never for a pool's client); from here until the client is in self._clients
+        # nothing awaits, so connections accepted together are admitted one after the
+        # other, each seeing the one before
+        admission = self._access.admit(peer_ip, peer_label, self._clients, self._refusal_log,
+                                       kick=not handed)
         if not admission.admitted:
+            if handed:
+                return None
             if admission.at_capacity:
                 with contextlib.suppress(Exception):
                     writer.write(b"Busy: maximum connections reached.\r\n")
                     await writer.drain()
             writer.close()
-            return
+            return None
         is_priority = admission.priority
 
         self._enable_keepalive(writer, peer_label)
@@ -1811,6 +1838,10 @@ class MappingRunner:
         tag = (" [priority]" if is_priority else "") \
             + (" [listen-only]" if client.listen_only else "") + tls.client_certificate(writer)
         self._log(f"client connected: {peer_label}{tag} ({len(self._clients)} total)")
+        return client
+
+    async def _serve(self, client: _ClientConn) -> None:
+        """An admitted client (_admit), until it is gone; then what its leaving does."""
         try:
             await client.run()
         finally:
@@ -1818,7 +1849,7 @@ class MappingRunner:
             self._refresh_clients()
             held = fmt_duration(time.monotonic() - client.connected_at)
             why = f" — {client.close_reason}" if client.close_reason else ""
-            self._log(f"client disconnected: {peer_label} after {held}{why} "
+            self._log(f"client disconnected: {client.peer} after {held}{why} "
                       f"({len(self._clients)} total)")
             self._restore_port_settings()
             # closestr to device when the last client leaves

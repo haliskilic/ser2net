@@ -419,8 +419,12 @@ düzenlemeye gerek yok.
     portuna gelen her istemci, eşlemelerin sırasıyla, boş bağlantısı olan ilk üyeye verilir
     (`rotate` ile, ser2net'teki gibi son istemciyi alan üyeden sonra başlanarak) ve o
     andan sonra o eşlemenin istemcisidir (izin listesi, protokolü, karşılama mesajı,
-    zamanlayıcıları). Havuzun istemcisi için kimse atılmaz; bütün üyeler kullanımdaysa
-    istemci `Busy: every port of the pool is in use.` satırını okur ve bağlantısı kesilir;
+    zamanlayıcıları). Bir üyenin seri portunun açılmasını bekleyen istemci (yalnızca
+    istemci bağlıyken açma, RFC 2217) beklerken o üyenin bağlantısını tutar; böylece aynı
+    anda bağlanan istemciler farklı üyelere gider. Portu zamanında açılamayan üye
+    istemciyi sıradakine bırakır. Havuzun istemcisi için kimse atılmaz; bütün üyeler
+    kullanımdaysa istemci `Busy: every port of the pool is in use.` satırını okur ve
+    bağlantısı kesilir;
     havuz bunu sayar (`refused`) ve loglar. Ayarlar paneli ve `GET /api/v1/pools` her
     havuzun durumunu, üyelerini ve kaçının kullanımda olduğunu gösterir.
   - **Dışarı bağlanmada yedek hedefler:** **Diğer hedefler** (`network.remote_targets`, en

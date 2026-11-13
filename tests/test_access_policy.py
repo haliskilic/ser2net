@@ -134,8 +134,18 @@ def test_admit():
     a = p.admit("10.0.0.9", "10.0.0.9:8", {vip_new, vip_old}, logs.append)
     assert a.admitted and vip_old.kicked and not vip_new.kicked
 
+    # a port pool's client (kick=False) never makes room, priority or kick_old_user
+    p = policy(kick_old_user=True, priority_client_ips=["10.0.0.9"])
+    held = FakeClient("10.0.0.1:1", 1.0)
+    for ip in ("10.0.0.2", "10.0.0.9"):
+        a = p.admit(ip, f"{ip}:6", {held}, logs.append, kick=False)
+        assert (a.admitted, a.at_capacity) == (False, True) and not held.kicked, ip
+        assert logs[-1] == f"rejected {ip}:6: max connections reached", logs
+    assert p.admit("10.0.0.2", "10.0.0.2:6", set(), logs.append, kick=False).admitted
+
     assert access.pick_victim(set()) is None
-    print("admit: room / full / not allowed / kick_old_user / priority victim choice  OK")
+    print("admit: room / full / not allowed / kick_old_user / priority victim choice, a "
+          "pool's client kicks nobody  OK")
 
 
 def test_only_live_clients_count():

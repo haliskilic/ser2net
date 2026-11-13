@@ -3,13 +3,17 @@
 A pool (config.PortPool) listens on its own address and port. Each client that connects is
 handed to the first member mapping that would take it right now, in the order of the
 mappings (a pool with ``rotate`` begins after the member that got the last client, as
-ser2net's rotator does): one that runs, lets the client's address in, has a connection left and (where a
-session needs the serial port) has its port open or opens it for its clients
-(bridge.MappingRunner.free_for). From then on the client is that mapping's, exactly as if
-it had connected to the mapping's own port: its protocol, banner, timers, counters and log.
-Nobody is kicked to make room for a pool's client. When no member is free the client is
-told so in one line ("Busy: ...") and disconnected, and the refusal is counted and logged
-(rate-limited).
+ser2net's rotator does): one that runs, lets the client's address in, has a connection
+left and (where a session needs the serial port) has its port open or opens it for its
+clients (bridge.MappingRunner.free_for). A client that waits for a member's serial port to
+open holds that member's connection meanwhile, so clients that connect together go to
+different members. From then on the client is that mapping's, exactly as if it had
+connected to the mapping's own port: its protocol, banner, timers, counters and log.
+Nobody is kicked to make room for a pool's client; a member that turns it away after all
+(its port could not be opened in time, a client of its own port took the connection
+meanwhile) hands it back, and the next member is tried. When no member is free the client
+is told so in one line ("Busy: ...") and disconnected, and the refusal is counted and
+logged (rate-limited).
 
 The members are the TCP server mappings of the transparent bridge whose network.pool is
 the pool's name (config.pool_member); a mapping with TLS is never one, since the pool's
@@ -112,11 +116,19 @@ class PoolListener:
         label = netguard.client_label(ip, port)
         members = [] if self._stop.is_set() else self._members()
         for runner in self._in_turn(members):
-            if runner.free_for(ip):
+            if not runner.free_for(ip):
+                continue
+            self._last = runner.mapping.id
+            client = await runner.take_client(reader, writer)
+            if client is not None:
                 self.handed += 1
-                self._last = runner.mapping.id
                 self._log(f"{label} -> mapping '{runner.mapping.name}'")
-                await runner.take_client(reader, writer)
+                await runner.serve_client(client)
+                return
+            # handed back (the member's log says why): the next one, if the client is
+            # still there after its wait
+            if reader.at_eof() or writer.transport.is_closing():
+                writer.close()
                 return
         self.refused += 1
         self.last_refused = time.time()

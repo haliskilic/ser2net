@@ -406,10 +406,13 @@ everything from a **password-protected web UI** — no CLI or hand-edited config
     port is handed to the first member with a free connection, in the order of the
     mappings (with `rotate`, starting after the member that got the last client, as
     ser2net does), and is that mapping's client from then on (its allow-list, protocol,
-    banner, timers). Nobody is kicked for a pool's client; when every member is in use the
-    client reads `Busy: every port of the pool is in use.` and is disconnected, which the
-    pool counts (`refused`) and logs. The Settings panel and `GET /api/v1/pools` show each
-    pool's state, its members and how many are in use.
+    banner, timers). A client that waits for a member's serial port to open (open on
+    connect, RFC 2217) holds that member's connection meanwhile, so clients that connect
+    together go to different members; a member whose port can't be opened in time hands
+    its client on to the next one. Nobody is kicked for a pool's client; when every member
+    is in use the client reads `Busy: every port of the pool is in use.` and is
+    disconnected, which the pool counts (`refused`) and logs. The Settings panel and
+    `GET /api/v1/pools` show each pool's state, its members and how many are in use.
   - **Connect-out failover:** **Other targets** (`network.remote_targets`, up to 8
     `host:port` entries) are tried in order when the remote host can't be reached, each
     with the connect timeout; the link stays on the one that answered and goes on through

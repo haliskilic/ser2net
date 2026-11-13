@@ -12,8 +12,10 @@
     passed over; when every member is in use the client reads "Busy: ..." and is
     disconnected, counted and logged; a freed member is used again; a pool whose port is
     taken keeps trying; a changed pool moves while the clients handed over stay connected,
-    one whose rotate changed keeps listening; a pool stopped while it binds its port leaves
-    no listener behind;
+    one whose rotate changed keeps listening; clients that connect at once while members
+    open their ports go to different members, nobody kicked; a member whose port can't be
+    opened hands its client back to the next one; a pool stopped while it binds its port
+    leaves no listener behind;
   - REST: GET / PUT /api/v1/pools, pools in /status, the errors; the Settings form.
 
 Run: python3 tests/test_port_pools.py
@@ -140,12 +142,14 @@ def test_config():
 class Devices:
     """A FakeDevice per serial port name (serial_io.open_serial's stand-in)."""
 
-    def __init__(self):
+    def __init__(self, delay=0.0):
         self.by_port = {}
+        self.delay = delay  # how long an open takes
 
     async def open(self, settings):
         if settings.port not in self.by_port:
             self.by_port[settings.port] = await FakeDevice().start()
+        await asyncio.sleep(self.delay)
         return await self.by_port[settings.port].open(settings)
 
     def heard(self, name):
@@ -321,6 +325,91 @@ async def _rotate():
                 await devices.close()
 
 
+def _ids(cfg):
+    return {m.name: m.id for m in cfg.mappings}
+
+
+async def _concurrent():
+    """Clients that connect at once while the members open their ports (open on connect,
+    an open that takes a while): one that waits for a member's port holds its connection,
+    so each goes to another member, and nobody is kicked (kick_old_user is on) or turned
+    away."""
+    logs, devices = [], Devices(delay=0.3)
+    pool_port = free_port()
+    cfg = AppConfig.from_dict({
+        "pools": [{"name": "lab", "bind_ip": "127.0.0.1", "port": pool_port}],
+        "mappings": [
+            mapping("a", free_port(), open_on_connect=True, kick_old_user=True),
+            mapping("b", free_port(), open_on_connect=True, kick_old_user=True),
+            mapping("c", free_port(), kick_old_user=True)]})
+    sup = Supervisor(logger=logs.append)
+    ids = _ids(cfg)
+
+    def clients(name):
+        return sup.status(ids[name])["client_count"]
+
+    with mock.patch.object(serial_io, "open_serial", devices.open), \
+            mock.patch.object(serial_link.Backoff, "pause", _fast_pause):
+        await sup.start_all(cfg)
+        try:
+            await until(lambda: sup.get_runner(ids["c"])._link.is_open)
+            conns = await asyncio.gather(*(pool_client(pool_port) for _ in range(3)))
+            for i, (_r, w) in enumerate(conns):
+                w.write(b"<%d>" % i)
+            await until(lambda: all(clients(n) == 1 for n in "abc"))
+            await until(lambda: sorted(devices.heard(n) for n in "abc") == [
+                b"<0>", b"<1>", b"<2>"])
+            assert not any("kicking" in ln for ln in logs), logs
+            st = sup.pools.status()["lab"]
+            assert (st["handed"], st["refused"], st["busy"]) == (3, 0, 3), st
+            r4, w4 = await pool_client(pool_port)
+            assert b"".join(await read_for(r4, 5)).startswith(b"Busy: every port"), \
+                "a fourth: every member is in use"
+            w4.close()
+            for r, w in conns:
+                assert await read_for(r, 0.1) == [], "each of the three is still connected"
+                w.close()
+        finally:
+            await sup.stop_all()
+            await devices.close()
+
+
+async def _handed_back():
+    """A member that opens its port for its clients, whose device is missing: the pool's
+    client waits for it (options.rfc2217_net_timeout_s), is handed back and goes to the next
+    member; the member's log says why."""
+    logs, devices = [], Devices()
+    missing = devices.by_port["/dev/ttyFAKE-a"] = await FakeDevice().start()
+    missing.present = False
+    pool_port = free_port()
+    first = mapping("a", free_port(), open_on_connect=True)
+    first["options"] = {"rfc2217_net_timeout_s": 0.4}
+    cfg = AppConfig.from_dict({
+        "pools": [{"name": "lab", "bind_ip": "127.0.0.1", "port": pool_port}],
+        "mappings": [first, mapping("b", free_port())]})
+    sup = Supervisor(logger=logs.append)
+    ids = _ids(cfg)
+    with mock.patch.object(serial_io, "open_serial", devices.open), \
+            mock.patch.object(serial_link.Backoff, "pause", _fast_pause):
+        await sup.start_all(cfg)
+        try:
+            await until(lambda: sup.get_runner(ids["b"])._link.is_open)
+            r, w = await pool_client(pool_port)
+            w.write(b"hello")
+            await until(lambda: devices.heard("b") == b"hello")
+            assert sup.status(ids["b"])["client_count"] == 1
+            assert sup.status(ids["a"])["client_count"] == 0
+            assert any("rejected" in ln and "the serial port could not be opened" in ln
+                       for ln in logs), logs
+            st = sup.pools.status()["lab"]
+            assert (st["handed"], st["refused"]) == (1, 0), st
+            assert await read_for(r, 0.1) == [], "still connected"
+            w.close()
+        finally:
+            await sup.stop_all()
+            await devices.close()
+
+
 async def _stop_while_binding():
     """A pool stopped while its retry is binding its port: the listener that attempt opens
     is closed as well (it is not cancelled half-way), so nothing listens afterwards."""
@@ -373,6 +462,11 @@ def test_engine():
           "clients  OK")
     asyncio.run(_bind_retry())
     print("engine: a pool whose port is taken says why and listens once it is free  OK")
+    asyncio.run(_concurrent())
+    print("engine: clients that connect at once while members open their ports go to "
+          "different members, nobody kicked or refused  OK")
+    asyncio.run(_handed_back())
+    print("engine: a member whose port can't be opened hands the client to the next  OK")
     asyncio.run(_stop_while_binding())
     print("engine: a pool stopped while it binds leaves no listener behind  OK")
 
