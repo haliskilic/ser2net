@@ -217,8 +217,9 @@ def _sums(entries: list[tuple[str, Optional[str]]], folder: str, algo: str,
     out = []
     for i, (name, url) in enumerate(entries):
         if url is None:
+            # (as git holds the file: a Windows checkout may have made its line ends CRLF)
             with open(os.path.join(ROOT, folder, name), "rb") as fh:
-                out.append(hashlib.new(algo, fh.read()).hexdigest())
+                out.append(hashlib.new(algo, fh.read().replace(b"\r\n", b"\n")).hexdigest())
         elif tarball is not None and url.endswith(".tar.gz") and "/archive/refs/tags/v" in url:
             out.append(hashlib.new(algo, tarball).hexdigest())
         elif i < len(old):
