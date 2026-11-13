@@ -1,0 +1,24 @@
+ser2netweb source package
+=========================
+
+The upstream tarball is the release tag's archive from GitHub, repacked by
+uscan without vendor/wheels (Files-Excluded in debian/copyright), hence the
++ds suffix:
+
+  uscan --download-current-version
+
+ser2netweb/web/static/ holds the minified browser libraries the web UI loads
+(htmx, xterm.js and its fit addon), as the npm releases ship them.
+debian/missing-sources/ has their sources: htmx's unminified dist/htmx.js and
+the TypeScript src/ trees of @xterm/xterm and @xterm/addon-fit.
+packaging/debian/missing_sources.py (in the upstream tarball) fetches them from
+the npm registry, checking each tarball against the integrity hash in
+vendor/npm/package.json and the static files against those releases:
+
+  python3 packaging/debian/missing_sources.py .
+
+The recipe is kept upstream in packaging/debian/ of
+https://github.com/haliskilic/ser2netweb, where CI builds it in Debian
+unstable, Debian 13 and Ubuntu 26.04 containers and runs lintian.
+
+ -- Halis KILIÇ <mail@haliskilic.com.tr>  Fri, 13 Nov 2026 12:00:00 +0000

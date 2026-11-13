@@ -1,0 +1,58 @@
+#!/bin/sh
+# The installed ser2netweb: its version and components, an admin password set with
+# --set-password, a start on a free port of 127.0.0.1 that answers /healthz and
+# --healthcheck, and a stop on SIGTERM. Its data in a temporary folder, as the user the
+# test runs as.
+set -eu
+
+tmp=${AUTOPKGTEST_TMP:-$(mktemp -d)}
+data="$tmp/data"
+export HOME="$tmp"
+
+ser2netweb --version
+ser2netweb --version | grep -qx 'ser2netweb [0-9][0-9.a-z~+-]*'
+ser2netweb --about
+ser2netweb --about | grep -q '^ *pyserial-asyncio-fast'
+
+echo 'autopkgtest-password-1' | ser2netweb --data-dir "$data" --set-password admin
+test -s "$data/config.json"
+
+port=$(python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')
+SER2NETWEB_BIND_IP=127.0.0.1 SER2NETWEB_PORT=$port \
+    ser2netweb --data-dir "$data" </dev/null >"$tmp/server.log" 2>&1 &
+pid=$!
+trap 'kill "$pid" 2>/dev/null || true' EXIT
+
+if ! python3 - "$port" "$pid" <<'EOF'
+import os, sys, time, urllib.request
+port, pid = sys.argv[1], int(sys.argv[2])
+deadline = time.monotonic() + 90
+while time.monotonic() < deadline:
+    try:
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}/healthz", timeout=5) as r:
+            if r.read().decode().strip() == "ok":
+                print(f"/healthz on 127.0.0.1:{port}: ok")
+                raise SystemExit(0)
+    except OSError:
+        pass
+    try:
+        os.kill(pid, 0)
+    except OSError:
+        raise SystemExit("ser2netweb exited")
+    time.sleep(0.5)
+raise SystemExit("no answer on /healthz in 90 s")
+EOF
+then
+    cat "$tmp/server.log"
+    exit 1
+fi
+ser2netweb --data-dir "$data" --healthcheck
+
+kill -TERM "$pid"
+code=0
+wait "$pid" || code=$?
+trap - EXIT
+cat "$tmp/server.log"
+# SIGTERM ends it cleanly (0), or with the signal's status where it doesn't catch it first
+[ "$code" -eq 0 ] || [ "$code" -eq 143 ] || { echo "exit status $code after SIGTERM"; exit 1; }
+echo "OK"

@@ -1,0 +1,4 @@
+# The data directory of the ser2netweb package's service, private to its account (the
+# unit's StateDirectory= keeps it so at every start). Removing the package leaves it. As
+# packaging/tmpfiles.conf of ser2netweb (its own .deb / .rpm).
+d /var/lib/ser2netweb 0700 ser2netweb ser2netweb -
