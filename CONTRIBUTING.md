@@ -34,13 +34,15 @@ python ser2netweb.py --no-bootstrap --data-dir /tmp/s2n-dev
 | Workflow lint | `pip install zizmor && zizmor --offline .` (settings in `.github/zizmor.yml`) |
 
 The `ci-ok` job passes only when every other CI job passed (the not-required newest-Python
-leg aside); it is the check a merge waits for, so a new job in `ci.yml` goes into its
+leg and "minimum dependencies" aside); it is the check a merge waits for, so a new job in `ci.yml` goes into its
 `needs` (`tests/test_ci_gate.py` checks that). Between pull requests,
 `.github/workflows/scheduled.yml` re-runs the dependency audit daily, and weekly the Docker
 image build and a soak of the serial data path (`tests/stress_24.py`: 24 bridges, every
 device unplugged and plugged back 20 times, open files and memory checked; the CI test legs
 run it small), and `.github/workflows/image-refresh.yml` scans the published image weekly and
-rebuilds the latest release on a moved base image (`docs/DOCKER.md`). Every action in the workflows is pinned to a full commit SHA with its version
+rebuilds the latest release on a moved base image (`docs/DOCKER.md`), and
+`.github/workflows/latest-deps.yml` runs the suite weekly with the newest release of every
+dependency instead of the pins (not a merge condition either). Every action in the workflows is pinned to a full commit SHA with its version
 in a comment (`uses: actions/checkout@<sha>  # v7.0.1`); Dependabot updates both, and zizmor
 and `tests/test_release_pipeline.py` fail on a tag reference.
 
@@ -141,9 +143,13 @@ files) and `requirements-build.txt` (PyInstaller, and build + setuptools for the
 package, with their dependencies); Dependabot updates them with `requirements.txt`, and
 `python tools/refresh_locks.py` regenerates them after a hand-made change
 (`tests/test_build_lock.py` checks that they match). The PyPI package (`pyproject.toml`)
-lists the packages ser2netweb imports as ranges from each pin to below its next major (next
-minor for 0.x): a pin bumped out of its range fails `tests/test_pyproject.py` in the same
-job, so widen the range in the same pull request. The browser libraries
+lists the packages ser2netweb imports with a floor each, the oldest release it works with
+(what Linux and BSD distributions ship, [`docs/PACKAGING.md`](docs/PACKAGING.md)), and an
+upper bound only for a release known to break it; a pin bump needs no change there.
+`requirements-min.pins` has every floor exactly, and CI's job "minimum dependencies" runs
+the suite on it (not a merge condition): code that needs something newer than a floor
+raises that floor in `pyproject.toml`, `requirements-min.pins` and the page's table
+together (`tests/test_pyproject.py` checks the first two agree), or works without it. The browser libraries
 in `ser2netweb/web/static/` (htmx, xterm.js) are pinned in `vendor/npm/package.json`; change a
 version there and run `python tools/refresh_assets.py`, which copies the files out of the npm
 release and records their sha256 (Dependabot proposes minor updates, `refresh-pins.yml`
@@ -182,6 +188,12 @@ ser2netweb, not into a fork or a process-wide patch:
   `vendor/wheels/`).
 - BSD-licensed code (pyserial, pyserial-asyncio-fast) may be subclassed or copied with its
   notice; LGPL code (ldap3) is used through its public API only.
+- Every undocumented part of a dependency ser2netweb builds on (a class it subclasses, a
+  method it overrides or calls, an attribute it reads or replaces: uvicorn's h11 protocol
+  for `ser2netweb/web/httpguard.py`, pyserial's and pyserial-asyncio-fast's classes,
+  Starlette's StaticFiles and Route hooks) is listed in `tests/test_dependency_internals.py`
+  (SURFACE) and checked against the installed release's code, whatever its version; the
+  test also fails when a subclass uses something SURFACE doesn't list.
 
 Dependabot opens a pull request of its own for pyserial, pyserial-asyncio-fast, ldap3 and
 pyasn1 (everything else comes grouped): read their changelogs, and for ldap3 / pyasn1 check
@@ -283,13 +295,15 @@ bir checkout'ta çevrimdışı ilk açılışı dener (CI'da her test leg'inde, 
 macOS ve QEMU altında armv7).
 
 `ci-ok` işi ancak diğer bütün CI işleri geçince geçer (zorunlu olmayan en yeni Python leg'i
-hariç); birleştirme onu bekler, bu yüzden `ci.yml`'ye eklenen her iş onun `needs` listesine
+ve "minimum dependencies" hariç); birleştirme onu bekler, bu yüzden `ci.yml`'ye eklenen her iş onun `needs` listesine
 de girer (`tests/test_ci_gate.py` bunu denetler). Pull request'ler arasında
 `.github/workflows/scheduled.yml` bağımlılık denetimini her gün; Docker imajını ve seri veri
 yolunun uzun yük testini (`tests/stress_24.py`: 24 köprü, her cihaz 20 kez çıkarılıp geri
 takılır, açık dosyalar ve bellek denetlenir; CI test leg'leri küçük boyutta çalıştırır) her
 hafta yeniden çalıştırır; `.github/workflows/image-refresh.yml` yayımlanan imajı her hafta tarar ve
-taban imaj değiştiyse son sürümü yeniden derler (`docs/DOCKER.md`). Workflow'lardaki her action, sürümü bir yorumda olacak şekilde tam bir
+taban imaj değiştiyse son sürümü yeniden derler (`docs/DOCKER.md`);
+`.github/workflows/latest-deps.yml` de test takımını her hafta pin'ler yerine her bağımlılığın
+en yeni sürümüyle çalıştırır (o da birleştirme koşulu değildir). Workflow'lardaki her action, sürümü bir yorumda olacak şekilde tam bir
 commit SHA'sına sabitlenir (`uses: actions/checkout@<sha>  # v7.0.1`); ikisini de
 Dependabot günceller, tag ile verilen bir referansta zizmor ve
 `tests/test_release_pipeline.py` başarısız olur.
@@ -392,10 +406,14 @@ pin'ler, her sürümün dosyalarının sha256'larıyla) ve `requirements-build.t
 PyPI paketi için build + setuptools ve bağımlılıkları). Dependabot bunları `requirements.txt`
 ile birlikte günceller; elle yapılan bir değişiklikten sonra `python tools/refresh_locks.py`
 yeniden üretir (`tests/test_build_lock.py` eşleştiklerini denetler). PyPI paketi
-(`pyproject.toml`) ser2netweb'in import ettiği paketleri her pin'den bir sonraki major
-sürümün altına kadar (0.x için bir sonraki minor) aralıklar olarak listeler: aralığının
-dışına çıkan bir pin aynı işte `tests/test_pyproject.py`'yi düşürür, aralığı aynı PR'da
-genişletin. `ser2netweb/web/static/` içindeki tarayıcı
+(`pyproject.toml`) ser2netweb'in import ettiği paketleri birer alt sınırla listeler: birlikte
+çalıştığı en eski sürüm (Linux ve BSD dağıtımlarının getirdiği,
+[`docs/PACKAGING.md`](docs/PACKAGING.md)); üst sınır yalnızca ser2netweb'i bozduğu bilinen bir
+sürüm için konur, pin yükseltmek orada değişiklik gerektirmez. `requirements-min.pins` her
+alt sınırı tam olarak içerir ve CI'ın "minimum dependencies" işi test takımını onunla
+çalıştırır (birleştirme koşulu değildir): bir alt sınırdan yenisini gerektiren kod o sınırı
+`pyproject.toml`'da, `requirements-min.pins`'te ve sayfadaki tabloda birlikte yükseltir
+(`tests/test_pyproject.py` ilk ikisinin uyduğunu denetler) ya da onsuz da çalışır. `ser2netweb/web/static/` içindeki tarayıcı
 kütüphaneleri (htmx, xterm.js) `vendor/npm/package.json`'da sabitlenir; oradaki sürümü
 değiştirip `python tools/refresh_assets.py` çalıştırın: dosyaları npm sürümünden kopyalar ve
 sha256'larını kaydeder (Dependabot minor güncellemeleri önerir, `refresh-pins.yml` onları
@@ -433,6 +451,13 @@ bir fork'a ya da tüm süreci değiştiren bir yamaya değil, ser2netweb'e girer
   `vendor/wheels/` yenilenir).
 - BSD lisanslı kod (pyserial, pyserial-asyncio-fast) alt sınıflanabilir ya da lisans notuyla
   kopyalanabilir; LGPL kod (ldap3) yalnızca açık API'si üzerinden kullanılır.
+- ser2netweb'in dayandığı, bir bağımlılığın belgelenmemiş her parçası (alt sınıfladığı bir
+  sınıf, ezdiği ya da çağırdığı bir metot, okuduğu ya da yerine koyduğu bir nitelik:
+  `ser2netweb/web/httpguard.py` için uvicorn'un h11 protokolü, pyserial'ın ve
+  pyserial-asyncio-fast'in sınıfları, Starlette'in StaticFiles ve Route kancaları)
+  `tests/test_dependency_internals.py`'de (SURFACE) listelenir ve sürümü ne olursa olsun kurulu
+  sürümün koduna karşı denetlenir; bir alt sınıf SURFACE'te olmayan bir şey kullanırsa test de
+  başarısız olur.
 
 Dependabot pyserial, pyserial-asyncio-fast, ldap3 ve pyasn1 için ayrı birer pull request
 açar (diğerleri gruplu gelir): değişiklik günlüklerini okuyun; ldap3 / pyasn1 için

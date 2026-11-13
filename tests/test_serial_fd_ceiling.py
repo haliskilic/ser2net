@@ -255,9 +255,11 @@ def test_bridge_above_fd_setsize():
 
 def test_upstream_internals():
     """What serial_compat builds on, so a pyserial / pyserial-asyncio-fast bump that changes
-    it fails here instead of in the field."""
-    import serial_asyncio_fast as saf
+    it fails here instead of in the field (without pyserial-asyncio-fast: the copy of its
+    transport serial_compat builds on then)."""
     from serial import serialposix
+
+    from ser2netweb.engine.serial_compat import _saf as saf
 
     opened = inspect.getsource(serialposix.Serial.open)
     for name in ("pipe_abort_read_r", "pipe_abort_read_w", "pipe_abort_write_r",

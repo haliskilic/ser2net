@@ -1,0 +1,69 @@
+name: Latest dependencies
+
+# Once a week (and by hand): ser2netweb with the newest release of every dependency instead
+# of the pins. pyproject.toml's dependencies and extras are installed by name, without a
+# version, with pip install --upgrade (their own dependencies too) on the newest Python,
+# then pip check and the whole suite. An upstream release that breaks ser2netweb, or moves
+# the private parts it builds on (tests/test_dependency_internals.py), shows here within a
+# week: before Dependabot's pull request for it, and as soon as a pip install would get it
+# (pyproject.toml has floors, no upper bounds; docs/PACKAGING.md).
+#
+# Not a merge condition: a workflow of its own, so ci.yml (and its ci-ok) never runs it
+# and it runs nothing of ci.yml's (tests/test_ci_gate.py checks both). The other end of the
+# ranges is ci.yml's job "minimum dependencies". GitHub turns scheduled workflows off after
+# 60 days without activity in the repository; Actions -> Latest dependencies -> "Enable
+# workflow" turns it back on.
+on:
+  schedule:
+    - cron: "29 6 * * 1"    # Mondays 06:29 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: latest-deps
+  cancel-in-progress: false
+
+jobs:
+  latest-deps:
+    name: latest dependencies (newest Python, not required)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    timeout-minutes: 60
+    env:
+      SER2NETWEB_BLACKHOLE_TESTS: "1"
+      SER2NETWEB_OPTIONAL_TESTS: "1"  # every extra's package is installed: their tests run
+      SER2NETWEB_SKIP_PIN_CHECKS: "1"  # (the pins are not what is installed here)
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7.1.0
+        with:
+          python-version: "3.x"   # the newest released Python
+          check-latest: true
+      - name: The newest release of every dependency and extra (no pins)
+        run: |
+          python -m pip install --upgrade pip
+          python - > "$RUNNER_TEMP/latest-requirements.txt" <<'EOF'
+          import re
+          import tomllib
+          with open("pyproject.toml", "rb") as fh:
+              project = tomllib.load(fh)["project"]
+          extras = [req for extra, reqs in project["optional-dependencies"].items()
+                    if extra != "all" for req in reqs]
+          for req in project["dependencies"] + extras:
+              name = re.match(r"[A-Za-z0-9._-]+", req).group(0)
+              marker = req.partition(";")[2].strip()
+              print(name + (f" ; {marker}" if marker else ""))
+          EOF
+          cat "$RUNNER_TEMP/latest-requirements.txt"
+          python -m pip install --upgrade --upgrade-strategy eager \
+            -r "$RUNNER_TEMP/latest-requirements.txt"
+          python -m pip check
+          python -m pip list
+      - name: Install socat
+        run: sudo apt-get update && sudo apt-get install -y socat
+      - name: Run full test suite incl. socat data-path
+        run: python tests/run_all.py --socat -v
