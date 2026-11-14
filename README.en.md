@@ -2212,7 +2212,8 @@ when other accounts can use the folder — give ser2netweb a folder of its own:
   mapping deletes its traces; those of mappings a replace import or a restore removed stay until
   the next start (an undone restore finds them), which deletes them and logs how many.
 - `tls/` — certificate/key if self-signed is generated, and the TLS files uploaded in the
-  browser (`uploaded-<hash>-cert.pem`, `-key.pem`, `-ca.pem`). A relative TLS path (admin UI, a
+  browser (`uploaded-<hash>-cert.pem`, `-key.pem`, `-ca.pem`, set as the relative paths
+  `tls/uploaded-…`). A relative TLS path (admin UI, a
   mapping or its MQTT connection: certificate, key, CA files; not the LDAP CA file) is a file
   in the data directory, e.g. `tls/cert.pem`,
   so it keeps working when the data directory moves. An absolute path that is no longer

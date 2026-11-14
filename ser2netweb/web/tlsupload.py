@@ -14,9 +14,10 @@ same files uploaded again replace themselves, renewed ones stand next to the old
 stay until someone deletes them: a configuration backup may name them), and a key never
 replaces another one (a pair already in use keeps its key and its password).
 
-The upload only stores files and answers their paths. They go into the same settings a
-typed path goes into (admin_ui.tls_cert, network.tls_cert, ...), which keep working as
-before.
+The upload only stores files and answers their paths, relative to the data folder
+(tls/uploaded-...pem, which config.data_path resolves there: a backup restored into
+another data folder still finds them). They go into the same settings a typed path goes
+into (admin_ui.tls_cert, network.tls_cert, ...), which keep working as before.
 """
 from __future__ import annotations
 
@@ -166,8 +167,9 @@ def store(data_dir: str, *, cert: Optional[bytes] = None, key: Optional[bytes] =
     `password`), and the CA files `cas` ({"ca": ..., "client_ca": ...}). `others`:
     (certificate path, key path) pairs it must not be the same as (UploadError with
     `reuse_message`). Returns {"cert": path, "key": path, <ca name>: path} for what was
-    uploaded (absolute paths). Raises UploadError; OSError when the folder can't be
-    written. Blocking: call via asyncio.to_thread."""
+    uploaded: relative to `data_dir`, "tls/<name>" (config.data_path resolves it there).
+    Raises UploadError; OSError when the folder can't be written. Blocking: call via
+    asyncio.to_thread."""
     given = {name: data for name, data in (cas or {}).items() if data is not None}
     _check_shape(cert, key, given)
     if cert is not None and key is not None:
@@ -201,7 +203,7 @@ def store(data_dir: str, *, cert: Optional[bytes] = None, key: Optional[bytes] =
         for tmp in aside.values():
             with contextlib.suppress(OSError):
                 os.remove(tmp)
-    return {what: path for what, (path, _data) in files.items()}
+    return {what: f"{TLS_DIR}/{os.path.basename(path)}" for what, (path, _data) in files.items()}
 
 
 def _keep(tmp: str, path: str, data: bytes) -> None:

@@ -2291,7 +2291,8 @@ klasörünü verin:
   eşlemelerinkiler sonraki açılışa kadar kalır (geri alınan bir geri yükleme onları bulur),
   açılış onları siler ve kaç dosya olduğunu log'a yazar.
 - `tls/` — self-signed üretilirse sertifika/anahtar ve tarayıcıdan yüklenen TLS dosyaları
-  (`uploaded-<hash>-cert.pem`, `-key.pem`, `-ca.pem`). Göreli bir TLS yolu (yönetim arayüzü,
+  (`uploaded-<hash>-cert.pem`, `-key.pem`, `-ca.pem`; göreli `tls/uploaded-…` yollarıyla
+  ayarlanır). Göreli bir TLS yolu (yönetim arayüzü,
   bir eşleme ya da onun MQTT bağlantısı: sertifika, anahtar, CA dosyaları; LDAP CA dosyası
   değil) veri klasöründeki bir dosyadır, örneğin
   `tls/cert.pem`; böylece veri klasörü taşınınca da çalışır. Taşımadan ya da başka bir

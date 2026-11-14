@@ -1,8 +1,9 @@
 """TLS files uploaded in the browser (ser2netweb/web/tlsupload.py).
 
 Checks:
-  * store(): a certificate with its key (and CA files) is kept in <data>/tls with private
-    permissions (also a tls/ folder made before with others' access) under names made
+  * store(): a certificate with its key (and CA files) is kept in <data>/tls, and named
+    by a path relative to the data folder (tls/...: a restored backup still finds it), with
+    private permissions (also a tls/ folder made before with others' access) under names made
     from each file's own hash (a key never replaces another pair's), only after it loaded
     as ser2netweb will load it: a key that is another certificate's, an encrypted key
     without or with a wrong password, a file that is not PEM, a file over the size limit,
@@ -28,6 +29,7 @@ import concurrent.futures
 import datetime
 import json
 import os
+import shutil
 import socket
 import ssl
 import stat
@@ -99,17 +101,30 @@ def test_store(src):
         os.makedirs(tdir)
         if os.name != "nt":  # (made before: by Generate, or by hand, with others' access)
             os.chmod(tdir, 0o755)
+        def at(path):  # (a path the configuration keeps: relative to the data folder)
+            return config_module.data_path(path, data)
+
         got = tlsupload.store(data, cert=cert_a, key=key_a, cas={"ca": read(ca.path),
                                                                "client_ca": None})
         assert set(got) == {"cert", "key", "ca"}, got
-        for what, path in got.items():
-            assert os.path.dirname(path) == tdir and os.path.isabs(path), path
+        for what, rel in got.items():
+            # relative to the data folder: a backup restored elsewhere still finds them
+            assert rel.startswith("tls/") and rel.count("/") == 1 and not os.path.isabs(rel), rel
+            path = at(rel)
+            assert os.path.dirname(path) == tdir, path
             name = os.path.basename(path)
             assert name.startswith("uploaded-") and name.endswith(
                 {"cert": "-cert.pem", "key": "-key.pem", "ca": "-ca.pem"}[what]), name
             if os.name != "nt":
                 assert stat.S_IMODE(os.stat(path).st_mode) == 0o600, oct(os.stat(path).st_mode)
-        assert read(got["cert"]) == cert_a and read(got["key"]) == key_a
+        assert read(at(got["cert"])) == cert_a and read(at(got["key"])) == key_a
+        moved = data + "-restored"  # (a backup restored into another data folder)
+        shutil.copytree(data, moved)
+        try:
+            assert all(read(config_module.data_path(rel, moved)) == read(at(rel))
+                       for rel in got.values())
+        finally:
+            shutil.rmtree(moved)
         if os.name != "nt":
             assert stat.S_IMODE(os.stat(tdir).st_mode) == 0o700
         kept = sorted(os.listdir(tdir))
@@ -121,8 +136,8 @@ def test_store(src):
         again_cert, again_key = other_cert_same_key(key_a, "a", "pw")
         other = tlsupload.store(data, cert=cert_a, key=again_key, password="pw")
         assert other["cert"] == got["cert"] and other["key"] != got["key"], other
-        assert read(got["key"]) == key_a and read(other["key"]) == again_key
-        os.remove(other["key"])
+        assert read(at(got["key"])) == key_a and read(at(other["key"])) == again_key
+        os.remove(at(other["key"]))
         # uploads at the same time each have their own files aside
         with concurrent.futures.ThreadPoolExecutor(8) as pool:
             results = list(pool.map(lambda _i: tlsupload.store(data, cert=cert_a, key=key_a),
@@ -145,12 +160,12 @@ def test_store(src):
                 "cert": got["cert"], "key": got["key"]}, "kept: the same bytes are there"
             assert len(refusals) == 2 and sorted(os.listdir(tdir)) == kept, refusals
             refusals.clear()
-            os.remove(got["key"])  # (not there: refused, then tried again until it can)
+            os.remove(at(got["key"]))  # (not there: refused, then tried again until it can)
             config_module.REPLACE_WAIT_S = 5.0
             assert tlsupload.store(data, cert=cert_a, key=key_a)["key"] == got["key"]
-            assert len(refusals) == 3 and read(got["key"]) == key_a, refusals
+            assert len(refusals) == 3 and read(at(got["key"])) == key_a, refusals
             refusals.clear()
-            os.remove(got["key"])
+            os.remove(at(got["key"]))
             config_module.REPLACE_WAIT_S = 0.0
             try:
                 tlsupload.store(data, cert=cert_a, key=key_a)
@@ -183,7 +198,7 @@ def test_store(src):
         assert sorted(os.listdir(tdir)) == kept, \
             f"a refused upload leaves nothing behind: {sorted(os.listdir(tdir))}"
         ok = tlsupload.store(data, cert=enc_cert, key=enc_key, password="s3cret")
-        assert read(ok["key"]) == enc_key, "an encrypted key is kept as it is"
+        assert read(at(ok["key"])) == enc_key, "an encrypted key is kept as it is"
         with open(ca.der_path, "rb") as fh:
             assert "client_ca" in tlsupload.store(data, cas={"client_ca": fh.read()}), "DER CA"
         print("store: wrong key, missing or wrong password, not PEM, too large, a CA file "
@@ -318,7 +333,9 @@ def test_live(src):
         fields = json.loads(h["HX-Trigger"])["tlsUploaded"]
         assert set(fields) == {"network_tls_cert", "network_tls_key"}, fields
         assert h["HX-Trigger"].isascii() and "X-Notice" in h
-        assert read(fields["network_tls_cert"]) == cert_a and len(uploaded()) == 2
+        assert fields["network_tls_cert"].startswith("tls/uploaded-"), fields
+        assert read(os.path.join(srv.data, fields["network_tls_cert"])) == cert_a
+        assert len(uploaded()) == 2
         record = audit("tls_upload")
         assert len(record) == 1 and record[0][4] == "admin" and record[0][3].startswith(
             "tls-map: uploaded-"), record
@@ -369,8 +386,9 @@ def test_live(src):
         assert st == 200 and "Certificate and key uploaded and set" in page, (st, page[:400])
         assert "use HTTPS now" in page
         saved = srv.saved_config()["admin_ui"]
-        assert os.path.basename(saved["tls_cert"]).startswith("uploaded-") and \
-            read(saved["tls_cert"]) == cert_ui and read(saved["tls_key"]) == key_ui, saved
+        assert saved["tls_cert"].startswith("tls/uploaded-") and \
+            read(os.path.join(srv.data, saved["tls_cert"])) == cert_ui and \
+            read(os.path.join(srv.data, saved["tls_key"])) == key_ui, saved
         assert pem_body(served_cert(srv.port)) == pem_body(cert_ui), \
             "new connections to the UI get the uploaded certificate at once"
         record = audit("admin_tls_upload")
