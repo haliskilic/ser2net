@@ -321,7 +321,7 @@ def test_replace_in_use():
         store = ConfigStore(os.path.join(d, "config.json"))
         cfg = AppConfig.from_dict({"mappings": [{
             "id": "e00000000003", "name": "A", "serial": {"port": "/dev/s2n-e3"},
-            "network": {"mode": "server", "bind_ip": "127.0.0.1", "port": 4303}}]})
+            "network": {"mode": "server", "bind_ip": "127.0.0.1", "port": free_port()}}]})
         store.save(cfg)
 
         def name_on_disk():
