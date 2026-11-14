@@ -15,6 +15,9 @@ dicts plus warnings. Checks:
     Windows //./COMn, network/IPMI connectors skipped; nobreak / hangup-when-done are kept
     with a warning that they have no effect here;
   * an RFC 2217 connection's signature (4.x option, 3.x SIGNATURE) -> rfc2217_signature;
+  * a UDP connection's fixed remote addresses -> udp_targets, chardelay (when the file sets
+    it) -> packing, rotators -> port pools: each with what ser2net documents, quoted at
+    the test;
   * options: kickolduser, max-connections, banner escapes, openstr/closestr/closeon,
     trace-both, timeout, enable: off, remaddr -> allowed IPs, unsupported -> one warning;
     an escape for a byte of 0x80 or more (sent as two UTF-8 bytes here) holds an open or
@@ -847,7 +850,9 @@ def test_substitution():
     assert u0["network"]["protocol"] == "rfc2217" and u0["network"]["kick_old_user"] is True
     assert u0["options"]["banner"] == r"Connected to port \N(\d)\r\n"
     assert u1["serial"]["baudrate"] == 115200 and maps["second"]["serial"]["baudrate"] == 38400
-    assert has(warns, "rotator rot1", "not imported")
+    assert has(warns, "rotator rot1", "imported as the port pool rot1", "ttyUSB0, ttyUSB1")
+    assert (u0["network"]["pool"], u1["network"]["pool"]) == ("rot1", "rot1")
+    assert "pool" not in maps["second"]["network"]
     print("version 2: defines/=(name), defaults, connections map, two documents, rotator  OK")
 
 
@@ -1050,7 +1055,7 @@ def test_yaml_syntax():
     assert lit["options"]["banner"] == "first \\d\\nsecond\\n", lit["options"]
     assert lit["options"]["closeon"] == "unicode \u00e9 A"
     assert maps["doc2"]["serial"]["port"] == "/dev/ttyS8"  # tab indentation, 2nd document
-    assert has(warns, "rotator r", "not imported")
+    assert has(warns, "rotator r", "imported as the port pool r", "q, lit")  # by alias
     print("YAML subset: quotes, comments, folded/literal blocks, flow lists of aliases, "
           "documents, tab indentation  OK")
 
@@ -1358,6 +1363,319 @@ def test_migration_notes():
     print("migration notes: openstr once per open, a port below 1024 this process can't use  OK")
 
 
+# ser2net.yaml(5), "SER2NET DEFAULTS", remaddr: [!]<addr>[;[!]<addr>[;...]]: "If a "!" is
+# given at the beginning of the address, the address is a "connect back" address. ... If
+# data comes in on the device, ser2net will attempt to connect to the address. This works on
+# TCP and UDP." and, under "UDP": "If you set a remote address (remaddr) with a non-zero
+# port and a connect back port ... ser2net will take one of the connections and assign it
+# to that port permanently. This is called a fixed remote address. All the traffic from the
+# device will go to that port." 4.x also has connback: "<connector>[;<connector>[;...]]
+# specifies reverse connections that will be made when data comes in on the device. ...
+# Connect back addresses must match the format of the accepter address."
+UDP_TARGETS = r"""
+connection: &nmea
+  accepter: udp,10110
+  connector: serialdev,/dev/ttyS1,4800n81
+  options:
+    max-connections: 4
+    remaddr: "!192.168.1.20,10110;!ipv4,udp,192.168.1.21,10111;192.168.1.0/24,0"
+connection: &cb
+  accepter: udp,10112
+  connector: serialdev,/dev/ttyS2
+  options:
+    connback: udp,10.0.0.9,5000;udp,loghost,5001
+connection: &bcast
+  accepter: udp,10113
+  connector: serialdev,/dev/ttyS3
+  options:
+    remaddr: "!255.255.255.255,10113;!fd00::5,10113;!10.0.0.0/24,7;!10.0.0.7,0"
+connection: &v6
+  accepter: udp,ipv6,10114
+  connector: serialdev,/dev/ttyS4
+  options:
+    remaddr: "!fd00::5,10114;!10.0.0.7,10114"
+connection: &tcp
+  accepter: tcp,10115
+  connector: serialdev,/dev/ttyS5
+  options:
+    remaddr: "!10.0.0.7,10115;10.0.0.8"
+    connback: tcp,10.0.0.9,5000
+"""
+
+
+def test_udp_targets():
+    maps, warns = parse(UDP_TARGETS)
+    for d in maps.values():
+        MappingConfig.from_dict(d).validate_input()
+    n = maps["nmea"]["network"]
+    assert n["udp_targets"] == ["192.168.1.20:10110", "192.168.1.21:10111"], n
+    # a connect-back address is one of the allowed remote addresses too
+    assert n["allowed_client_ips"] == ["192.168.1.20", "192.168.1.21", "192.168.1.0/24"], n
+    assert maps["nmea"]["enabled"] is True
+    assert has(warns, "nmea:", "remaddr !192.168.1.20,10110", "always sent to 192.168.1.20:10110",
+               "a UDP target")
+    # connback on a UDP accepter: targets, but no limit on who may send
+    c = maps["cb"]["network"]
+    assert c["udp_targets"] == ["10.0.0.9:5000"] and not c.get("allowed_client_ips"), c
+    assert has(warns, "cb:", "connback udp,loghost,5001", "only an IP address")
+    assert has(warns, "cb:", "connback udp,10.0.0.9,5000", "always sent to 10.0.0.9:5000")
+    assert not has(warns, "cb:", "not imported (no equivalent here)")
+    b = maps["bcast"]["network"]
+    assert b["udp_targets"] == ["255.255.255.255:10113"] and b["udp_broadcast"] is True, b
+    assert has(warns, "bcast:", "[fd00::5]:10113", "the other family")
+    assert has(warns, "bcast:", "!10.0.0.0/24,7", "only an IP address")
+    assert has(warns, "bcast:", "!10.0.0.7,0", "it has no port")
+    assert maps["v6"]["network"]["udp_targets"] == ["[fd00::5]:10114"]
+    assert has(warns, "v6:", "10.0.0.7:10114", "the other family")
+    # TCP: as before (not imported; the mapping keeps its other addresses)
+    t = maps["tcp"]["network"]
+    assert "udp_targets" not in t and t["allowed_client_ips"] == ["10.0.0.8"], t
+    assert has(warns, "tcp:", "remaddr !10.0.0.7,10115", "connect-back addresses are not imported")
+    assert has(warns, "tcp:", "not imported (no equivalent here)", "connback")
+    assert not has(warns, "rotator")
+
+    # ser2net(8) 3.5: "If you set a remote address (remaddr) with a non-zero port, ser2net
+    # will take one of the connections and assign it to that port permanently. This is
+    # called a fixed remote address. All the traffic from the device will go to that port."
+    conf = "\n".join(["udp,7301:raw:0:/dev/ttyS1:remaddr=10.3.3.3,7000;10.3.3.4,0",
+                      "7302:raw:0:/dev/ttyS2:remaddr=10.3.3.3,7000"])
+    maps, warns = parse(conf, "ser2net.conf")
+    u = maps["ser2net-udp-7301"]["network"]
+    assert u["udp_targets"] == ["10.3.3.3:7000"], u
+    assert u["allowed_client_ips"] == ["10.3.3.3", "10.3.3.4"], u
+    assert has(warns, "ser2net-udp-7301", "always sent to 10.3.3.3:7000")
+    assert "udp_targets" not in maps["ser2net-7302"]["network"], "TCP: the client's port only"
+    print("UDP fixed remote addresses (4.x remaddr !addr,port and connback, 3.x remaddr with "
+          "a port) -> udp_targets; unusable ones noted; TCP as before  OK")
+
+
+# ser2net.yaml(5): "chardelay: true|false enables the small wait after each character
+# received on the connecting gensio before sending data on the accepted gensio. Normally
+# ser2net will wait the time it takes to receive 2 serial port characters, or at least
+# 1000us, before sending. ... Default is true." / "chardelay-scale: <number> sets the time,
+# measured in tenths of serial port characters, to wait ... The default value is 20" /
+# "chardelay-min: <number> is the same as chardelay-scale, but in microseconds. The larger
+# of chardelay-scale and chardelay-min is used. The default value is 1000" / "chardelay-max:
+# <number> sets the maximum delay that ser2net will wait, in microseconds, after receiving a
+# character, before sending the data. The default value is 20000" / "sendon: <sendon
+# string> If the given string is seen coming from the connector side of the connection,
+# sends buffered data up to and including the string. ... this can be set to \r\n with
+# appropriate chardelay settings to send one line at a time."
+# dataxfer.c, recalc_port_chardelay: bpc = data bits + stop bits + parity bits + 1;
+# chardelay = (bpc * 100000 * chardelay_scale) / bps, at least chardelay_min; and
+# handle_dev_read sends when the buffer has no room left (dev-to-net-bufsize, 64).
+CHARDELAY = r"""
+connection: &quiet
+  accepter: tcp,5301
+  connector: serialdev,/dev/ttyS1,9600n81
+connection: &on
+  accepter: tcp,5302
+  connector: serialdev,/dev/ttyS2,9600n81
+  options:
+    chardelay: true
+connection: &scaled
+  accepter: tcp,5303
+  connector: serialdev,/dev/ttyS3,9600e72
+  options:
+    chardelay-scale: 100
+    dev-to-net-bufsize: 512
+connection: &slow
+  accepter: udp,5304
+  connector: serialdev,/dev/ttyS4,300n81
+  options:
+    chardelay-max: 50000
+    sendon: '\r\n'
+connection: &fast
+  accepter: tcp,5305
+  connector: serialdev,/dev/ttyS5,115200n81
+  options:
+    chardelay-min: 4500
+    sendon: 'ET\003\\x'
+connection: &off
+  accepter: tcp,5306
+  connector: serialdev,/dev/ttyS6
+  options:
+    chardelay: false
+    chardelay-scale: 30
+    sendon: 'x'
+connection: &tn
+  accepter: telnet,tcp,5307
+  connector: serialdev,/dev/ttyS7
+  options:
+    chardelay: true
+    chardelay-min: 2000
+default:
+  name: chardelay-scale
+  value: 50
+connection: &dflt
+  accepter: tcp,5308
+  connector: serialdev,/dev/ttyS8,9600n81
+connection: &long
+  accepter: tcp,5309
+  connector: serialdev,/dev/ttyS9
+  options:
+    sendon: '12345678901234567'
+"""
+
+
+def test_chardelay_packing():
+    maps, warns = parse(CHARDELAY)
+    for d in maps.values():
+        MappingConfig.from_dict(d).validate_input()
+
+    def pack(name):
+        o = maps[name]["options"]
+        return o.get("pack_gap_ms"), o.get("pack_delimiter"), o.get("pack_max_bytes")
+
+    # not set in the file: ser2net's default alone gives no packing (data as it arrives)
+    assert pack("quiet") == (None, None, None) and not has(warns, "quiet:", "chardelay")
+    # 9600 8N1: 10 bits * 100000 * 20 / 9600 = 2083 us -> 3 ms; ser2net's 64-byte buffer
+    assert pack("on") == (3, None, 64), pack("on")
+    assert has(warns, "on:", "chardelay is imported as packing", "3 ms", "64 bytes", "2083")
+    # 9600 7E2: 11 bits * 100000 * 100 / 9600 = 11458 us -> 12 ms; its buffer size
+    assert pack("scaled") == (12, None, 512), pack("scaled")
+    # 300 8N1: 66666 us, never longer than chardelay-max (50000); sendon -> the delimiter
+    assert pack("slow") == (50, r"\r\n", 64), pack("slow")
+    assert has(warns, "slow:", "sendon is imported as the packing delimiter")
+    # 115200: 173 us, at least chardelay-min (4500) -> 5 ms; bytes as \xHH, a backslash
+    assert pack("fast") == (5, r"ET\x03\\x", 64), pack("fast")
+    # chardelay: false is what happens here anyway; what it set is listed, as before
+    assert pack("off") == (None, None, None)
+    assert has(warns, "off:", "not imported (no equivalent here)", "chardelay-scale", "sendon")
+    # packing is for the raw protocol
+    assert pack("tn") == (None, None, None)
+    assert has(warns, "tn:", "not imported (no equivalent here)", "chardelay-min")
+    # a default set in the file counts: 10 * 100000 * 50 / 9600 = 5208 us -> 6 ms
+    assert pack("dflt") == (6, None, 64), pack("dflt")
+    assert pack("long") == (6, None, 64), pack("long")  # (the default before it, too)
+    assert has(warns, "long:", "sendon is not imported", "1 to 16 bytes")
+    # a mapping with packing: the runner takes these values
+    from ser2netweb.config import pack_settings
+    assert pack_settings(MappingConfig.from_dict(maps["slow"]).options) == (0.05, b"\r\n", 64)
+
+    # ser2net(8) 3.5: "chardelay-scale=<number>", "chardelay-min=<number>",
+    # "chardelay-max=<number>", "dev-to-net-bufsize=<number>"; chardelay / -chardelay
+    conf = "\n".join(["7401:raw:0:/dev/ttyS1:19200 chardelay-scale=40 dev-to-net-bufsize=128",
+                      "7402:raw:0:/dev/ttyS2:9600 chardelay",
+                      "7403:raw:0:/dev/ttyS3:9600 -chardelay chardelay-min=3000",
+                      "7404:raw:0:/dev/ttyS4:9600"])
+    maps, warns = parse(conf, "ser2net.conf")
+    # 19200 8N1: 10 * 100000 * 40 / 19200 = 2083 us -> 3 ms
+    assert pack("ser2net-7401") == (3, None, 128), pack("ser2net-7401")
+    assert pack("ser2net-7402") == (3, None, 64)
+    assert pack("ser2net-7403") == (None, None, None)
+    assert has(warns, "ser2net-7403", "not imported", "chardelay-min")
+    assert pack("ser2net-7404") == (None, None, None)
+    print("chardelay (when the file sets it) -> packing: ser2net's formula for the gap, its "
+          "buffer for the frame size, sendon the delimiter; raw only; not for the default "
+          "alone  OK")
+
+
+# ser2net.yaml(5), ROTATOR: "A rotator allows a single network connection to connect to one
+# of a number of connections. ... Connections to the accepter will go through the set of
+# connections and find the first unused one and use that. The next connection will start
+# after the last connection used. Note that disabled connections are still accessible
+# through rotators." (options: "authdir", "pamauth", "allowed-users" and
+# "accepter-retry-time")
+ROTATORS = r"""
+connection: &r1
+  accepter: tcp,5401
+  connector: serialdev,/dev/ttyS1
+connection: &r2
+  accepter: telnet,tcp,5402
+  connector: serialdev,/dev/ttyS2
+  enable: off
+connection: &r3
+  accepter: udp,5403
+  connector: serialdev,/dev/ttyS3
+connection: &r4
+  accepter: tcp,5404
+  connector: serialdev,/dev/ttyS4
+rotator: &lab+pool
+  accepter: tcp,localhost,5400
+  connections: [ *r2, *r1, *r3, nosuch ]
+  options:
+    authdir: /etc/ser2net/auth
+rotator: &second
+  accepter: tcp,5410
+  connections: [ *r1, *r4 ]
+rotator: &secure
+  accepter: ssl,tcp,5420
+  connections: [ *r4 ]
+rotator: &dgram
+  accepter: udp,5430
+  connections: [ *r4 ]
+rotator: &taken
+  accepter: tcp,5404
+  connections: [ *r4 ]
+rotator: &nothing
+  accepter: tcp,5440
+  connections: [ *r3 ]
+rotator: &broken
+  accepter: tcp,5450
+"""
+
+
+def test_rotators():
+    from ser2netweb.config import PortPool
+    from ser2netweb.ser2net_import import parse_ser2net
+    parsed = parse_ser2net(ROTATORS)
+    maps = {d["name"]: d for d in parsed.mappings}
+    warns = parsed.warnings
+    assert parse_ser2net_config(ROTATORS) == (parsed.mappings, parsed.warnings)
+    assert parsed.pools == [
+        {"name": "lab-pool", "bind_ip": "127.0.0.1", "port": 5400, "enabled": True,
+         "rotate": True},
+        {"name": "second", "bind_ip": "0.0.0.0", "port": 5410, "enabled": True,
+         "rotate": True}], parsed.pools
+    pools = [PortPool(**p) for p in parsed.pools]
+    assert all(not p.problem() for p in pools)
+    cfg = AppConfig(mappings=[MappingConfig.from_dict(d) for d in parsed.mappings], pools=pools)
+    for m in cfg.mappings:
+        m.validate_input()
+    assert cfg.pools_problem(pools) == ""
+    assert [m.name for m in cfg.pool_members("lab-pool")] == ["r1", "r2"]
+    assert [m.name for m in cfg.pool_members("second")] == ["r4"]
+    assert "pool" not in maps["r3"]["network"]
+    assert has(warns, "rotator lab+pool", "imported as the port pool lab-pool",
+               "127.0.0.1:5400", "r1, r2", "in this order")
+    assert has(warns, "rotator lab+pool", "r3 is not in the pool", "TCP mapping without TLS")
+    assert has(warns, "rotator lab+pool", "nosuch is not imported")
+    assert has(warns, "rotator lab+pool", "its accepter is raw", "r2 telnet")
+    assert has(warns, "rotator lab+pool", "disabled gets no clients", "r2")
+    assert has(warns, "rotator lab+pool", "not imported (no equivalent here)", "authdir")
+    assert has(warns, "rotator second", "r1 is already in the pool lab-pool")
+    assert has(warns, "rotator second", "imported as the port pool second", "for r4")
+    assert not has(warns, "rotator second", "in this order")
+    assert has(warns, "rotator secure", "not imported", "plain TCP")
+    assert has(warns, "rotator dgram", "not imported", "listens on a TCP port")
+    assert has(warns, "rotator taken", "not imported", "TCP port 5404 is already used by 'r4'")
+    assert has(warns, "rotator nothing", "not imported", "none of its connections")
+    assert has(warns, "rotator broken", "not imported", "an accepter and a list")
+
+    # version 2 names its connections by name
+    parsed = parse_ser2net(VERSION2)
+    assert parsed.pools == [{"name": "rot1", "bind_ip": "0.0.0.0", "port": 4010,
+                             "enabled": True, "rotate": True}]
+    assert [d["network"].get("pool") for d in parsed.mappings] == ["rot1", "rot1", None]
+
+    # ser2net(8) 3.5: "ROTATOR:<TCP port>:<port list>"
+    conf = "\n".join(["7501:raw:0:/dev/ttyS1:9600", "localhost,7502:telnet:0:/dev/ttyS2:9600",
+                      "7503:raw:0:/dev/ttyS3:9600",
+                      "ROTATOR:7500:7501 localhost,7502 7599",
+                      "ROTATOR:udp,7510:7503"])
+    parsed = parse_ser2net(conf, "ser2net.conf")
+    assert parsed.pools == [{"name": "rotator-7500", "bind_ip": "0.0.0.0", "port": 7500,
+                             "enabled": True, "rotate": True}], parsed.pools
+    assert [d["network"].get("pool") for d in parsed.mappings] == \
+        ["rotator-7500", "rotator-7500", None]
+    assert has(parsed.warnings, "ROTATOR 7500", "imported as the port pool rotator-7500")
+    assert has(parsed.warnings, "ROTATOR 7500", "7599 is not imported")
+    assert has(parsed.warnings, "ROTATOR udp,7510", "not imported")
+    print("rotators -> port pools that rotate, their TCP connections as members (4.x "
+          "aliases and names, 3.x port lists); what can't be carried over is said  OK")
+
+
 def main():
     test_debian_default()
     test_accepters()
@@ -1367,6 +1685,9 @@ def main():
     test_serial_words()
     test_options()
     test_remaddr_default()
+    test_udp_targets()
+    test_chardelay_packing()
+    test_rotators()
     test_high_bytes()
     test_escapes()
     test_substitution()

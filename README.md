@@ -393,6 +393,69 @@ düzenlemeye gerek yok.
   sürenin, `options.rfc2217_net_timeout_s`, ardından) reddedilir; böylece bir poller, bir
   SCADA master'ı ya da sanal COM yönlendiricisi kesintiyi görür. Dışarı bağlanan eşleme de
   o zaman yalnızca portu açıkken bağlanır.
+- **Cihazı paylaşma** (her biri eşleme başına, varsayılan kapalı):
+  - **Paketleme** (raw protokolü: TCP sunucu, dışarı bağlanma, UDP): cihazın çıktısı
+    okunduğu gibi değil, çerçeveler halinde iletilir. Bir çerçeve, cihazdan **Paketleme
+    boşluğu (ms)** kadar süre bayt gelmeyince (`options.pack_gap_ms`), **Paketleme
+    ayırıcısı** ile (`pack_delimiter`; baytlar sorgu dizesindeki gibi yazılır: `\r\n`,
+    `\x03`; ayırıcı kendi çerçevesinde kalır) ya da **Paketleme çerçeve boyutu**na
+    (`pack_max_bytes`; 0 ise 4096) ulaşınca biter; hangisi önce gelirse. Bir UDP eşlemesi
+    her çerçeve için tek datagram gönderir; böylece bir telgraf ya da bir NMEA cümlesi
+    bütün olarak ulaşır. Boşluk olmadan yalnızca ayırıcı ya da boyut ayarlıysa yarım
+    kalan çerçeve 1 sn bayt gelmeyince gönderilir; hiçbir şey sonsuza dek bekletilmez.
+    Konsol, hex görünümü, trace ve MQTT veriyi yine okunduğu gibi alır; kapatma dizesi
+    çerçevelerde aranır.
+  - **Tek yazan, salt okunur dinleyiciler:** **Yazabilen istemci IP'leri / CIDR'lar**
+    (`network.writer_client_ips`, TCP sunucu ve UDP) ayarlıyken cihaza yalnızca bu
+    adreslerden gelen istemciler gönderir; kabul edilen diğer her istemci yalnızca cihazın
+    çıktısını alır. Bir dinleyicinin gönderdiği atılır ve sayılır (`bytes_dropped`),
+    eşlemenin log'u bunu bağlantı başına bir kez (UDP'de adres başına bir kez) söyler ve
+    pano istemciyi işaretler (durumda `listen_only`). İzin listesi, öncelikli istemciler ve
+    **Salt okunur** (kimse yazmaz) eskisi gibi çalışır; bir telnet / RFC 2217 dinleyicisi
+    BREAK de gönderemez, hat ayarlarını da değiştiremez. MQTT yazmaları ve web konsolu
+    istemci sayılmaz. UDP'de bir dinleyicinin datagramı onu yine de cihazın çıktısını alan
+    karşı taraf yapar (liste yokken olduğu gibi son gönderen); yani gönderen bir dinleyici
+    çıktıyı yazandan devralır: böyle bir eşlemeye bir yanıt adresi ya da UDP hedefleri
+    verin.
+  - **Seri portu yalnızca bir istemci bağlıyken aç** (`network.open_on_connect`, TCP
+    sunucu, raw / telnet / rfc2217): eşleme port kapalıyken dinler (pano *istemci
+    bekleniyor* der, durumda `"waiting": true`), portu ilk istemci için açar (istemci port
+    açılınca kabul edilir, böylece ilk gönderdiği kaybolmaz; port
+    `options.rfc2217_net_timeout_s` içinde açılamazsa istemci geri çevrilir) ve son
+    istemci ayrıldıktan **Son istemciden sonra portu açık tut (sn)** (`port_linger_s`,
+    varsayılan 2) kadar sonra kapatır; arada başka bir program cihazı kullanabilir. Açılış
+    dizgesi o zaman her açılışta gönderilir, RTS / DTR de her seferinde ayarlanır. Web
+    konsolu istemci sayılır; hex görünümü, MQTT ve sorgu dizesi portu açmaz.
+  - **Port havuzları** (klasik ser2net'in rotator'ları; **Ayarlar → Port havuzları**,
+    `config.json`'da `pools`): birkaç eşleme için dinlenen tek bir TCP portu. Bir eşleme
+    havuza havuzun adıyla katılır (**Port havuzu**, `network.pool`: TCP sunucu, raw /
+    telnet / rfc2217, TLS'siz — havuzun portu düz TCP'dir) ve kendi portunu korur. Havuzun
+    portuna gelen her istemci, eşlemelerin sırasıyla, boş bağlantısı olan ilk üyeye verilir
+    (`rotate` ile, ser2net'teki gibi son istemciyi alan üyeden sonra başlanarak) ve o
+    andan sonra o eşlemenin istemcisidir (izin listesi, protokolü, karşılama mesajı,
+    zamanlayıcıları). Bir üyenin seri portunun açılmasını bekleyen istemci (yalnızca
+    istemci bağlıyken açma, RFC 2217) beklerken o üyenin bağlantısını tutar; böylece aynı
+    anda bağlanan istemciler farklı üyelere gider. Portu zamanında açılamayan üye
+    istemciyi sıradakine bırakır. Havuzun istemcisi için kimse atılmaz; bütün üyeler
+    kullanımdaysa istemci `Busy: every port of the pool is in use.` satırını okur ve
+    bağlantısı kesilir;
+    havuz bunu sayar (`refused`) ve loglar. Ayarlar paneli ve `GET /api/v1/pools` her
+    havuzun durumunu, üyelerini ve kaçının kullanımda olduğunu gösterir.
+  - **Dışarı bağlanmada yedek hedefler:** **Diğer hedefler** (`network.remote_targets`, en
+    fazla 8 `sunucu:port` girdisi) uzak sunucuya ulaşılamayınca sırayla, her biri bağlantı
+    zaman aşımıyla denenir; bağlantı yanıt veren hedefte kalır, o da koparsa listede
+    devam edilir (sondan başa dönülür); hiçbiri yanıt vermezse alışılmış bekleme uygulanır.
+    **İlk hedefe dönüş (sn)** (`failover_return_s`, 5 ile 86400 arası) ayarlıyken bağlantı
+    başka bir hedefteyken ilk hedef bu aralıkla yeniden denenir ve yanıt verince bağlantı
+    ona geri döner (diğeri için kuyrukta bekleyen önce gönderilir). Pano ve durumdaki
+    `link_target` kullanılan hedefi gösterir. TLS'te her hedefin sertifikası o hedefin
+    adını taşımalıdır.
+
+  Eski bir sürüm bu ayarları yok sayar ve `config.json`'ı kaydederken onları (ve `pools`'u)
+  dışarıda bırakır (`backups/` dosyayı olduğu gibi saklar): sürüm düşürüldüğünde eşlemeler
+  bu ayarlar yokken olduğu gibi çalışır — veri geldiği gibi iletilir, her istemci yazar,
+  port açık tutulur, havuz portu yoktur, yalnızca uzak sunucuya bağlanılır. Filo görünümü,
+  eski sürüm çalıştıran bir düğümdeki eşleme için bu alanları sunmaz.
 - **Gözlemlenebilirlik:** per-mapping trafik trace (hex/timestamp, döner dosyalar,
   arayüzden indirilir), Prometheus `/metrics`, denetim kaydı ekranı, canlı log görüntüleyici,
   **tarayıcı-içi seri konsol** (xterm.js, WebSocket — trafiği izle veya cihaza yaz) ve
@@ -1049,7 +1112,13 @@ hangilerinin devre dışı geldiğini ve nedenini, neyin farklı çalıştığı
 - TLS / istemci sertifikası satırlarını ve devre dışı gelenleri kontrol edin.
 
 Bir eşleme seri cihazını açık tutar: açılış dizgesi (openstr) her istemci için değil, port
-açıldığında bir kez gönderilir ve oturumlar arasında başka programlar cihazı kullanamaz.
+açıldığında bir kez gönderilir ve oturumlar arasında başka programlar cihazı kullanamaz;
+klasik ser2net'in yaptığı gibi olsun isterseniz bir TCP sunucu eşlemesinde **Seri portu
+yalnızca bir istemci bağlıyken aç**'ı işaretleyin. Bir UDP bağlantısının sabit uzak
+adresleri (4.x `remaddr: !adres,port` ve `connback`, 3.x portlu `remaddr`) UDP hedefleri,
+dosyanın ayarladığı `chardelay` (`chardelay: true`, `chardelay-scale` / `-min` / `-max`,
+`sendon`; raw bağlantıda) paketleme, bir rotator da TCP bağlantıları üye olan, sırayla
+dağıtan bir port havuzu olur; her biri önizlemede bir notla gösterilir.
 Adımlar, farklar ve seçenek tablosu (İngilizce):
 [`docs/MIGRATING-FROM-SER2NET.md`](docs/MIGRATING-FROM-SER2NET.md).
 
@@ -1216,6 +1285,8 @@ Uç noktalar: `GET/POST /mappings`, `GET/PUT/PATCH/DELETE /mappings/{id}`,
 `POST /mappings/{id}/{start|stop|restart}`, `GET/DELETE /mappings/{id}/traces`,
 `GET/DELETE /mappings/{id}/traces/{name}`, `POST/DELETE /mappings/{id}/capture`,
 `POST /import`, `GET /status`, `GET /ports`,
+`GET/PUT /pools` (port havuzları ve durumları; `PUT` hepsinin yerine geçer:
+`{"pools": [{"name": "lab", "port": 3000}]}`, ayrıca `bind_ip`, `enabled`, `rotate`),
 `GET /metrics`, `GET /info` (ser2netweb'in sürümü, API'nin sürümü ve sunduğu `features`),
 `GET /health` ve `GET /openapi.json` (ikisi de kimlik doğrulamasız). Web arayüzünün kendi uç
 noktaları (`/api/status`: panonun tablosu; `X-Content-Hash`'ini geri gönderen sayfaya `204`
@@ -1264,7 +1335,7 @@ dosyanın içe aktarılması da. Elle düzenlenmiş bir `config.json`'da koruyuc
 (`read_only`, `tls`, `require_login`, `tls_verify`, `start_tls`, `mask_personal_data`,
 MQTT'nin `tls_check_hostname`'i) metin,
 2.9.0 öncesindeki gibi boş değilse onu açık tutar ve açılışta not düşülür. Yalnızca JSON `true` ile bir şeyi açan
-ayarlar (`dual_stack`, `udp_broadcast`, `disconnect_without_device`, `poll_with_clients`,
+ayarlar (`dual_stack`, `udp_broadcast`, `disconnect_without_device`, `open_on_connect`, `poll_with_clients`,
 MQTT'nin `tx_enabled`'ı, `proxy_hsts`, `email_separately`) de metni
 reddeder; elle düzenlenmiş bir `config.json`'da metin onları kapalı bırakır ve açılışta not
 düşülür. Ayar olmayan anahtarlar yok sayılır ve yanıttaki `warnings` listesinde

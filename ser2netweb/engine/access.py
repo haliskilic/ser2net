@@ -12,7 +12,11 @@
   priority client's place, and is refused while only priority clients are connected.
   Only clients still connected count: one kicked (or otherwise on its way out) is neither
   counted nor kicked again, so connections that arrive together can't all take the same
-  slot;
+  slot. A client a port pool hands over never kicks anyone (engine/pool.py);
+- ``writer_client_ips`` (the transparent bridge: TCP server and UDP): blank lets every
+  admitted client send to the device, otherwise only those from the listed IPs/CIDRs;
+  the others only receive (the runner drops and counts what they send). Entries are read
+  as the allow-list's are, and a list with no usable entry lets nobody send;
 - ``read_only``: a client may watch the device but not change it. Each runner enforces it
   for its protocol: the bridge never writes a client's bytes to the port (and its RFC2217
   session refuses line changes), the Modbus gateway answers write requests with an
@@ -132,20 +136,30 @@ class AccessPolicy:
         # no allow-list = everyone; one whose entries are all unusable = nobody (the runner
         # logs which entries it left out at start: MappingConfig.ignored_settings)
         self._everyone = not net.allowed_client_ips
+        writers = net.writer_client_ips if isinstance(net.writer_client_ips, list) else []
+        self._writers = parse_nets(writers)
+        # some clients only listen (never for a connect-out link, which has one peer)
+        self.writers_only = bool(writers) and net.mode != "client"
 
     def allowed(self, ip: str) -> bool:
         return self._everyone or ip_in_nets(ip, self._allowed)
+
+    def may_write(self, ip: str) -> bool:
+        """An admitted client from ``ip`` may send to the device (writer_client_ips;
+        read_only is the runner's to enforce)."""
+        return not self.writers_only or ip_in_nets(ip, self._writers)
 
     def is_priority(self, ip: str) -> bool:
         return ip_in_nets(ip, self._priority)
 
     def admit(self, ip: str, label: str, clients: Collection[Client],
-              log: Callable[[str], None]) -> Admission:
+              log: Callable[[str], None], kick: bool = True) -> Admission:
         """Let a new connection from ``ip`` (``label``: ip:port, for the log) in or not,
         given the ``clients`` listed now. Kicks one of them to make room when the policy
-        says so; logs each refusal and kick. The caller closes a refused connection, and
-        adds an admitted one to ``clients`` before it awaits anything (so the next
-        connection is decided with this one counted)."""
+        says so (never with ``kick`` False: a port pool's client); logs each refusal and
+        kick. The caller closes a refused connection, and adds an admitted one to
+        ``clients`` before it awaits anything (so the next connection is decided with this
+        one counted)."""
         if not self.allowed(ip):
             log(f"rejected {label}: not in allowed list")
             return Admission(False)
@@ -154,7 +168,7 @@ class AccessPolicy:
         if len(live) >= self.net.max_connections:
             # A priority client always gets in (kick to make room); a normal client
             # gets in only if kick_old_user is set, and never in a priority client's place.
-            if not (priority or self.net.kick_old_user):
+            if not kick or not (priority or self.net.kick_old_user):
                 log(f"rejected {label}: max connections reached")
                 return Admission(False, priority, at_capacity=True)
             victim = pick_victim(live, priority)

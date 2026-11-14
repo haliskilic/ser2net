@@ -151,6 +151,12 @@ PORTABLE = [
     "test_console_break.py",       # the web console's BREAK; POSIX PTYs, skips on Windows
     "test_device_unavailable.py",  # disconnect_without_device (stand-in port, loopback)
     "test_serial_mqtt.py",         # MQTT line ends, <topic>/tx writes, the poll string
+    "test_packing.py",             # pack_gap_ms / pack_delimiter / pack_max_bytes (raw TCP, UDP)
+    "test_writer_clients.py",      # writer_client_ips: one writer, read-only listeners
+    "test_open_on_connect.py",     # the serial port only while a client is connected
+    "test_connect_failover.py",    # connect-out: remote_targets, failover_return_s
+    "test_port_pools.py",          # port pools (rotators): config, engine, REST, Settings
+    "test_sharing_ui.py",          # the dashboard tags and form blocks of the five above
     "test_rfc2217_settings.py",
     "test_serial_fd_ceiling.py",  # POSIX PTYs (os.openpty); skips on Windows
     "test_serial_compat.py",      # PTY parts POSIX only; the transport parts run on Windows too
