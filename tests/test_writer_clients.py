@@ -10,9 +10,9 @@ others only listen.
     output) but is not written; the log names the address once;
   - off (the default, and every config written without the key): everyone writes;
   - with read_only nobody writes; a connect-out mapping has one peer, which writes;
-  - with the allow-list and priority clients: they decide who gets a connection (a
-    priority listener kicks the writer at max_connections), the writer list only who
-    writes;
+  - with the allow-list and priority clients: they decide who gets a connection, the
+    writer list who writes; at max_connections a listener (also a priority one) never
+    kicks a writer out, only another listener;
   - entries are read as the allow-list's: a list with no usable entry lets nobody write;
     edits refuse a bad entry, validate() does not;
   - the form field is its own presence marker.
@@ -28,7 +28,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "lib"))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, os.path.dirname(__file__))
 
-from _device import FakeDevice, port_of, read_for, running, until
+from _device import FakeDevice, eof_within, port_of, read_for, running, until
 
 from ser2netweb.config import ConfigError, MappingConfig
 from ser2netweb.engine.access import AccessPolicy
@@ -161,17 +161,29 @@ async def _priority_and_allow_list():
     device, logs = await FakeDevice().start(), []
     try:
         m = mapping(writer_client_ips=["127.0.0.2"], priority_client_ips=["127.0.0.3"],
-                    allowed_client_ips=["127.0.0.2", "127.0.0.3"], max_connections=1)
+                    allowed_client_ips=["127.0.0.2", "127.0.0.3", "127.0.0.5"],
+                    max_connections=2, kick_old_user=True)
         async with running(m, device, logs) as runner:
             wr, ww = await connect_from(runner, "127.0.0.2")
             await until(lambda: runner.status.client_count == 1)
+            _ar, aw = await connect_from(runner, "127.0.0.5")  # a listener: the 2nd slot
+            await until(lambda: runner.status.client_count == 2)
             lr, lw = await connect_from(runner, "127.0.0.3")  # priority, not a writer
-            assert await asyncio.wait_for(wr.read(100), 5) == b"", "kicked for the priority one"
-            await until(lambda: [c["listen_only"] for c in runner.status.as_dict()["clients"]]
-                        == [True])
+            assert await asyncio.wait_for(_ar.read(100), 5) == b"", "the listener made room"
+            await until(lambda: sorted(c["listen_only"] for c in
+                                       runner.status.as_dict()["clients"]) == [False, True])
             lw.write(b"nope")
             await until(lambda: runner.status.bytes_dropped == 4)
             assert not device.heard, "a priority client that is no writer only listens"
+            # the slots are the writer's and a priority listener's: another listener
+            # (kick_old_user) takes neither, and is refused
+            _r2, w2 = await connect_from(runner, "127.0.0.5")
+            assert await eof_within(_r2, 5), "refused"
+            assert any("127.0.0.5" in ln and "takes no writer's place" in ln for ln in logs), logs
+            ww.write(b"w")
+            await until(lambda: bytes(device.heard) == b"w")
+            w2.close()
+            aw.close()
             # the allow-list still comes first: a writer address outside it is not let in
             _r, w = await connect_from(runner, "127.0.0.4")
             assert await asyncio.wait_for(_r.read(100), 5) == b""

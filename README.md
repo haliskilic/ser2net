@@ -414,7 +414,9 @@ düzenlemeye gerek yok.
     çıktısını alır. Bir dinleyicinin gönderdiği atılır ve sayılır (`bytes_dropped`),
     eşlemenin log'u bunu bağlantı başına bir kez (UDP'de adres başına bir kez) söyler ve
     pano istemciyi işaretler (durumda `listen_only`). İzin listesi, öncelikli istemciler ve
-    **Salt okunur** (kimse yazmaz) eskisi gibi çalışır; bir telnet / RFC 2217 dinleyicisi
+    **Salt okunur** (kimse yazmaz) eskisi gibi çalışır; yalnız **En fazla bağlantı**
+    dolduğunda bir dinleyici (**Eski istemciyi at** ile ya da öncelikli istemci olarak)
+    yalnızca başka bir dinleyicinin yerini alır, hiçbir zaman yazanınkini almaz; bir telnet / RFC 2217 dinleyicisi
     BREAK de gönderemez, hat ayarlarını da değiştiremez. MQTT yazmaları ve web konsolu
     istemci sayılmaz. UDP'de bir dinleyicinin datagramı onu yine de cihazın çıktısını alan
     karşı taraf yapar (liste yokken olduğu gibi son gönderen); yani gönderen bir dinleyici

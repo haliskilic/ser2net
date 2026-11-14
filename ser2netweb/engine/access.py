@@ -43,7 +43,8 @@ if TYPE_CHECKING:
 
 
 class Client(Protocol):
-    """A connected client as the policy sees it."""
+    """A connected client as the policy sees it (and, when it has one, its listen_only:
+    admitted from an address that is no writer, see AccessPolicy.may_write)."""
     peer: str            # "ip:port", for the log
     priority: bool       # admitted as a priority client
     seq: int             # its place in the order clients connected in (connection_order)
@@ -171,9 +172,17 @@ class AccessPolicy:
             if not kick or not (priority or self.net.kick_old_user):
                 log(f"rejected {label}: max connections reached")
                 return Admission(False, priority, at_capacity=True)
-            victim = pick_victim(live, priority)
+            # one that would only listen (writer_client_ips) never takes a writer's place,
+            # also as a priority client: the mapping would be left without its writer
+            listener = not self.may_write(ip)
+            victims = [c for c in live if getattr(c, "listen_only", False)] if listener else live
+            victim = pick_victim(victims, priority)
             if victim is None:
-                log(f"rejected {label}: max connections reached (all priority clients)")
+                why = ("all priority clients" if not listener else
+                       ("the other listeners are priority clients" if victims else
+                        "the clients connected write")
+                       + ", and one that only listens takes no writer's place")
+                log(f"rejected {label}: max connections reached ({why})")
                 return Admission(False, priority, at_capacity=True)
             why = "priority client" if priority else "new client"
             log(f"kicking {victim.peer} for {why} {label}")

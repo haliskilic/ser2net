@@ -403,8 +403,10 @@ everything from a **password-protected web UI** — no CLI or hand-edited config
     listener sends is dropped and counted (`bytes_dropped`), the mapping's log says so
     once per connection (once per address for UDP), and the dashboard marks the client
     (`listen_only` in the status). The allow-list, priority clients and **Read-only**
-    (nobody writes) work as before; a telnet / RFC 2217 listener can't send a BREAK or
-    change the line settings either. MQTT writes and the web console are not clients.
+    (nobody writes) work as before, except that at **Max connections** a listener (with
+    **Kick old client**, or as a priority client) only ever takes another listener's place,
+    never a writer's; a telnet / RFC 2217 listener can't send a BREAK or change the line
+    settings either. MQTT writes and the web console are not clients.
     Over UDP a listener's datagram still makes it the peer that gets the device's output
     (the last sender, as without the list), so a listener that sends takes the output
     over from the writer: give such a mapping a reply address or UDP targets.
