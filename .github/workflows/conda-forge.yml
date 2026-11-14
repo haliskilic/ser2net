@@ -62,7 +62,10 @@ jobs:
             "ser2netweb=$version"
           "$env/bin/ser2netweb" --version | grep -Fx "ser2netweb $version"
           "$env/bin/ser2netweb" --about
+          # (made first: as root, --set-password leaves making a new data directory to the
+          # account ser2netweb runs as; here root runs it)
           data="$RUNNER_TEMP/data"
+          mkdir -m 0700 "$data"
           echo 'conda-forge-smoke-1' | "$env/bin/ser2netweb" --data-dir "$data" --set-password admin
           test -s "$data/config.json"
           SER2NETWEB_BIND_IP=127.0.0.1 SER2NETWEB_PORT=18080 \
