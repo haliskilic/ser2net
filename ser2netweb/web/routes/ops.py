@@ -7,7 +7,7 @@ import dataclasses
 import itertools
 from typing import NamedTuple, Optional
 
-from ... import importer
+from ... import i18n, importer
 from ...config import (
     ConfigError, MappingConfig, _ip_overlaps, mapping_revision, mqtt_clashes, serial_conflict,
     sparkplug_identity, valid_mapping_id,
@@ -391,15 +391,26 @@ def import_counts(rows: list[dict]) -> dict[str, int]:
     return {a: sum(1 for r in rows if r["action"] == a) for a in ("add", "update", "same", "remove")}
 
 
-async def save_pools(state, pools: list) -> None:
+async def save_pools(state, pools: list) -> list[str]:
     """Replace the port pools (config.PortPool) and run them as they are now: the Settings
     form and the REST API. Raises ConfigError when they can't be saved (AppConfig.
-    pools_problem, a failed write): nothing changed then."""
+    pools_problem, a failed write): nothing changed then. Returns the warnings about them
+    (AppConfig.pool_exposures), which are logged too."""
     async with state.edit_config():
         if problem := state.config.pools_problem(pools):
             raise ConfigError(problem)
         state.config.pools[:] = pools
     await state.supervisor.apply_pools(state.config.pools)
+    return pool_warnings(state)
+
+
+def pool_warnings(state, member=None) -> list[str]:
+    """AppConfig.pool_exposures (of `member` only, when given), in the page's language;
+    each is also a WARNING in all.log (in English)."""
+    with i18n.english():
+        for w in state.config.pool_exposures(member):
+            state.log(f"WARNING: {w}")
+    return state.config.pool_exposures(member)
 
 
 def pool_rows(state) -> list[dict]:

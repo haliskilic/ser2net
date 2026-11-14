@@ -491,10 +491,15 @@ def routes(ctx: Ctx) -> list:
         ctx.audit(request, "mapping_save", msg)
         # the focus then: the mapping's Edit button (a new one's, once the table shows it)
         focus = f"m-{saved.id}-edit"
+        stored = state.config.get_mapping(saved.id)
+        warnings = " ".join(ops.pool_warnings(state, stored)) if stored is not None else ""
         if saved.start_error:  # saved, but it didn't start: say why, and what to do
             why, raw = _start_failure(saved.start_error, saved.retrying)
-            note = notice(_("“{0}” saved, but it could not start: {1}").format(msg, why),
+            note = notice(" ".join(filter(None, [_("“{0}” saved, but it could not start: {1}")
+                                                 .format(msg, why), warnings])),
                           "warn", focus, raw)
+        elif warnings:
+            note = notice(_("“{0}” saved.").format(msg) + " " + warnings, "warn", focus=focus)
         else:
             note = notice(_("“{0}” saved.").format(msg), focus=focus)
         return Response("", headers={**TRIGGER, **note})

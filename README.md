@@ -447,7 +447,11 @@ düzenlemeye gerek yok.
     kullanımdaysa istemci `Busy: every port of the pool is in use.` satırını okur ve
     bağlantısı kesilir;
     havuz bunu sayar (`refused`) ve loglar. Ayarlar paneli ve `GET /api/v1/pools` her
-    havuzun durumunu, üyelerini ve kaçının kullanımda olduğunu gösterir.
+    havuzun durumunu, üyelerini ve kaçının kullanımda olduğunu gösterir. Havuz kendi
+    adresinde dinler: 127.0.0.1'deki bir üyeye (örneğin bir SSH tüneli için) 0.0.0.0'daki
+    bir havuz üzerinden ağdan ulaşılır. Böyle bir havuzu ya da üyeyi kaydetmek bunu söyler
+    (Ayarlar, eşleme formu, REST yanıtında `warnings`, all.log); kayıt reddedilmez ve
+    üyenin izin listesi yine geçerlidir.
   - **Dışarı bağlanmada yedek hedefler:** **Diğer hedefler** (`network.remote_targets`, en
     fazla 8 `sunucu:port` girdisi) uzak sunucuya ulaşılamayınca sırayla, her biri bağlantı
     zaman aşımıyla denenir; bağlantı yanıt veren hedefte kalır, o da koparsa listede

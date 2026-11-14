@@ -436,7 +436,11 @@ everything from a **password-protected web UI** — no CLI or hand-edited config
     its client on to the next one. Nobody is kicked for a pool's client; when every member
     is in use the client reads `Busy: every port of the pool is in use.` and is
     disconnected, which the pool counts (`refused`) and logs. The Settings panel and
-    `GET /api/v1/pools` show each pool's state, its members and how many are in use.
+    `GET /api/v1/pools` show each pool's state, its members and how many are in use. The
+    pool listens on its own address: a member on 127.0.0.1 (say, for an SSH tunnel) is
+    reached from the network through a pool on 0.0.0.0. Saving such a pool, or such a
+    member, says so (Settings, the mapping form, `warnings` in the REST answer, all.log);
+    it is not refused, and the member's allow-list still applies.
   - **Connect-out failover:** **Other targets** (`network.remote_targets`, up to 8
     `host:port` entries) are tried in order when the remote host can't be reached, each
     with the connect timeout; the link stays on the one that answered and goes on through

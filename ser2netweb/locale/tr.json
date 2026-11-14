@@ -1736,5 +1736,6 @@
   "{0}: not imported as a UDP target: it has no port": "{0}: UDP hedefi olarak içe aktarılmadı: portu yok",
   "{0}: not imported as a UDP target: only an IP address can be one here": "{0}: UDP hedefi olarak içe aktarılmadı: burada yalnızca bir IP adresi hedef olabilir",
   "{0}: not imported: it needs an accepter and a list of connections": "{0}: içe aktarılmadı: bir accepter ve bir bağlantı listesi gerekli",
-  "{0}: the device's output is always sent to {1} (a UDP target), as ser2net sent it to this fixed remote address": "{0}: cihazın çıktısı her zaman {1} adresine gönderilir (bir UDP hedefi); ser2net de onu bu sabit uzak adrese gönderirdi"
+  "{0}: the device's output is always sent to {1} (a UDP target), as ser2net sent it to this fixed remote address": "{0}: cihazın çıktısı her zaman {1} adresine gönderilir (bir UDP hedefi); ser2net de onu bu sabit uzak adrese gönderirdi",
+  "Port pool {0} listens on {1}, more widely than its mapping '{2}' listens ({3}): clients reach that mapping through the pool from where its own port takes none (its allowed client IPs still apply).": "{0} port havuzu {1} üzerinde dinliyor, '{2}' eşlemesinin dinlediğinden ({3}) daha geniş: istemciler bu eşlemeye, kendi portunun hiç istemci almadığı yerlerden havuz üzerinden ulaşır (izin verilen istemci IP'leri yine geçerlidir)."
 }

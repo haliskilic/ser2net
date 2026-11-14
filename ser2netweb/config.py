@@ -4210,6 +4210,30 @@ class AppConfig:
                          "port.").format(_shown(pool.name), pool.port)
         return ""
 
+    def pool_exposures(self, member: Optional[MappingConfig] = None) -> list[str]:
+        """Warnings, never a refusal (repo rule: a stored setting keeps working): a port
+        pool that is on and listens on addresses where a member mapping's own port does
+        not (the mapping on 127.0.0.1 for an SSH tunnel, the pool on 0.0.0.0), so clients
+        reach that mapping through the pool from where it otherwise takes none (its
+        allow-list still applies). ``member``: only that mapping's. Said where the pools
+        or a mapping are saved (Settings, the mapping form, the REST API)."""
+        out = []
+        for pool in self.pools:
+            if pool.enabled is not True:
+                continue
+            for m in self.pool_members(pool.name):
+                net = m.network
+                if member is not None and m.id != member.id:
+                    continue
+                if _listens_wider(pool.bind_ip, net.bind_ip, b_both=net.both_families):
+                    out.append(_("Port pool {0} listens on {1}, more widely than its mapping "
+                                 "'{2}' listens ({3}): clients reach that mapping through the "
+                                 "pool from where its own port takes none (its allowed client "
+                                 "IPs still apply).").format(_shown(pool.name),
+                                                             shown_host(pool.bind_ip), m.name,
+                                                             net.bind_shown))
+        return out
+
     def pool_port_conflict(self, m: MappingConfig) -> str:
         """Why mapping ``m`` can't listen where it is set to next to the port pools ("" when
         it can). Checked where own_port_conflict is."""
@@ -4516,6 +4540,22 @@ def _ip_overlaps(a: str, b: str, a_both: bool = False, b_both: bool = False) -> 
     xs = list(WILDCARDS) if a_both else [a]
     ys = list(WILDCARDS) if b_both else [b]
     return any(_address_overlaps(x, y) for x in xs for y in ys)
+
+
+def _listens_wider(a: str, b: str, b_both: bool = False) -> bool:
+    """Whether a TCP listener on bind IP ``a`` takes connections on an address that one on
+    ``b`` (``b_both``: of both families, NetworkSettings.both_families) does not: ``b``
+    is not ``a`` and not the wildcard of ``a``'s family. False when either is no address."""
+    if b_both:
+        return False
+    x, y = canonical_ip(a), canonical_ip(b)
+    if x == y:
+        return False
+    try:
+        ax, ay = ipaddress.ip_address(x), ipaddress.ip_address(y)
+    except ValueError:
+        return False
+    return not (ay.is_unspecified and ay.version == ax.version)
 
 
 def _address_overlaps(a: str, b: str) -> bool:

@@ -109,7 +109,8 @@ def _edit_view(mapping, state, request=None) -> dict:
     replaced by a supported one) and about settings it has that do nothing
     (MappingConfig.ignored_settings)."""
     view = _mapping_view(mapping, state, request)
-    warnings = mapping.input_warnings() + mapping.ignored_settings()
+    warnings = (mapping.input_warnings() + mapping.ignored_settings()
+                + ops.pool_warnings(state, mapping))
     if warnings:
         view["warnings"] = warnings
     return view
@@ -530,14 +531,15 @@ def build_api_routes(state: AppState) -> list[Route]:
         except _BAD_INPUT as e:
             return JSONResponse({"error": "validation", "detail": str(e)}, status_code=400)
         try:
-            await ops.save_pools(state, pools)
+            warnings = await ops.save_pools(state, pools)
         except ConfigError as e:
             return _not_saved(e)
         shown = ", ".join(f"{p.name} {config.host_port(p.bind_ip, p.port)}"
                           + ("" if p.enabled else " (off)") for p in pools) or "none"
         state.log(f"api: port pools: {shown}")
         state.audit(_client_ip(request), "api_pools", shown, user=_caller(request))
-        return JSONResponse({"pools": ops.pool_rows(state)})
+        return JSONResponse({"pools": ops.pool_rows(state),
+                             **({"warnings": warnings} if warnings else {})})
 
     async def metrics(request):
         return PlainTextResponse(await metrics_text(state), media_type=METRICS_TYPE)
@@ -886,8 +888,12 @@ def openapi_spec(admin, base: str = "") -> dict:
                             "description": "clients turned away: no member was free"},
                 "last_refused": {"type": "integer",
                                  "description": "Unix time of the last refusal (0: none)"}}}]},
-        "PortPoolList": {"type": "object", "properties": {"pools": {
-            "type": "array", "items": {"$ref": "#/components/schemas/PortPoolStatus"}}}},
+        "PortPoolList": {"type": "object", "properties": {
+            "pools": {"type": "array", "items": {"$ref": "#/components/schemas/PortPoolStatus"}},
+            "warnings": {"type": "array", "items": {"type": "string"}, "description": (
+                "PUT only, when there are any: a pool that listens more widely than a "
+                "member mapping's own port (clients reach that mapping through the pool "
+                "from where it otherwise takes none); saved all the same")}}},
         "PortPoolsBody": {"type": "object", "required": ["pools"], "properties": {"pools": {
             "type": "array", "items": {"$ref": "#/components/schemas/PortPool"}}}},
         "PortList": {"type": "object", "properties": {"ports": {

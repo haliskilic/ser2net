@@ -5,7 +5,9 @@
     text ("name port", "name IP:port", "... off") reads back as written; edits refuse a
     doubled name or address, a port a TCP server mapping or the admin UI listens on, and
     a mapping's port that is a pool's; a mapping is a member by its network.pool when it
-    is a TCP server mapping of the transparent bridge without TLS;
+    is a TCP server mapping of the transparent bridge without TLS; a pool that listens
+    more widely than a member's own port is warned of (Settings, REST, all.log), not
+    refused;
   - engine (a Supervisor with stand-in serial devices): each client of the pool's port is
     handed to the first member with a free connection, in the order of the mappings, and
     talks to that mapping's device; a member that does not let the client's address in is
@@ -135,8 +137,25 @@ def test_config():
         assert "pool name" in str(e)
     else:
         raise AssertionError("an edit took a pool name with a space")
+    # a pool that listens more widely than a member's own port: warned of, never refused
+    wide = AppConfig.from_dict({
+        "pools": [{"name": "lab", "bind_ip": "0.0.0.0", "port": 3000}],
+        "mappings": [mapping("lo", 4101), mapping("any", 4102, bind_ip="0.0.0.0"),
+                     mapping("dual", 4103, bind_ip="::", dual_stack=True),
+                     mapping("lan", 4104, bind_ip="192.168.1.10")]})
+    wide.validate()
+    warned = wide.pool_exposures()
+    assert len(warned) == 2 and "mapping 'lo'" in warned[0] and "mapping 'lan'" in warned[1], \
+        warned
+    assert "listens on 0.0.0.0" in warned[0] and "(127.0.0.1)" in warned[0], warned[0]
+    assert wide.pool_exposures(wide.get_mapping("poollo00001")) == warned[:1]
+    assert wide.pool_exposures(wide.get_mapping("poolany00001")) == []
+    wide.pools[0].bind_ip = "127.0.0.1"
+    assert ["mapping 'lan'" in w for w in wide.pool_exposures()] == [True], "same address: fine"
+    wide.pools[0].bind_ip, wide.pools[0].enabled = "0.0.0.0", False
+    assert wide.pool_exposures() == [], "a pool that is off listens nowhere"
     print("config: optional key, entries left out with a note, the Settings text, the "
-          "edit-time checks, who is a member  OK")
+          "edit-time checks, who is a member; a pool wider than a member is warned of  OK")
 
 
 class Devices:
@@ -502,6 +521,19 @@ def test_web():
         assert st == 200 and body["pools"]["lab"]["state"] == "listening"
         st, body = call(base, "GET", "/info")
         assert "pools" in body["features"]
+        assert "warnings" not in call(base, "PUT", "/pools", {"pools": [
+            {"name": "lab", "bind_ip": "127.0.0.1", "port": pool_port}]})[1]
+        # a pool on an address where its member's port is not: saved, with a warning
+        # (also in all.log); the member's REST edit says so too
+        st, body = call(base, "PUT", "/pools", {"pools": [
+            {"name": "lab", "bind_ip": "127.0.0.2", "port": pool_port}]})
+        assert st == 200 and len(body["warnings"]) == 1, body
+        assert "more widely than its mapping 'a'" in body["warnings"][0], body["warnings"]
+        assert srv.saved_config()["pools"][0]["bind_ip"] == "127.0.0.2"
+        assert 'WARNING: Port pool "lab" listens on 127.0.0.2' in srv.output(), srv.output()[-800:]
+        st, body = call(base, "PUT", "/mappings/poola00001", dict(mapping("a", map_port),
+                                                                  enabled=False))
+        assert st == 200 and any("more widely" in w for w in body.get("warnings", [])), body
         # PUT replaces them; they listen at once
         st, body = call(base, "PUT", "/pools", {"pools": [
             {"name": "lab", "bind_ip": "127.0.0.1", "port": pool_port},
@@ -528,6 +560,8 @@ def test_web():
         b.login("admin", "admin-pass-1")
         st, _, page = b.get("/settings")
         assert st == 200 and 'id="pools"' in page and f"lab 127.0.0.1:{pool_port}" in page
+        st, _, page = b.post("/settings/pools", {"pools": f"lab 127.0.0.2:{pool2}\n"})
+        assert st == 200 and "Saved: 1 port pool." in page and "more widely than its" in page
         st, _, page = b.post("/settings/pools", {"pools": f"lab 127.0.0.1:{pool2}\n"})
         assert st == 200 and b.redirected == "/settings#pools", (st, b.redirected)
         assert srv.saved_config()["pools"] == [

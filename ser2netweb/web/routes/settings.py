@@ -1333,16 +1333,16 @@ def routes(ctx: Ctx) -> list:
         text = str(form.get("pools", ""))
         try:
             pools = pools_from_text(text)
-            await ops.save_pools(state, pools)
+            warnings = await ops.save_pools(state, pools)
         except ConfigError as e:
             return await _failed(request, "pools", str(e), pools=text)
         shown = ", ".join(f"{p.name} {host_port(p.bind_ip, p.port)}"
                           + ("" if p.enabled else " (off)") for p in pools) or "none"
         state.log(f"port pools: {shown}")
         ctx.audit(request, "pools", shown)
-        return _done(request, "pools", ok=ngettext(
-            "Saved: {0} port pool.", "Saved: {0} port pools.", len(pools)).format(len(pools))
-            if pools else _("Saved: no port pools."))
+        saved = (ngettext("Saved: {0} port pool.", "Saved: {0} port pools.",
+                          len(pools)).format(len(pools)) if pools else _("Saved: no port pools."))
+        return _done(request, "pools", ok=" ".join([saved, *warnings]))
 
     # ---------------- config export / import ----------------
     async def config_export(request):
