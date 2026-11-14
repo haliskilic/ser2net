@@ -5,8 +5,10 @@ to give it HTTPS with a certificate your browsers already trust, or one name for
 services. ser2netweb itself then speaks plain HTTP to the proxy only. This page is what the
 web UI needs from the proxy, the settings for it in **Settings → Reverse proxy**, examples
 and what to look for when something doesn't work. (The examples follow what
-`tests/test_reverse_proxy.py` checks with a stand-in proxy; the configurations themselves
-are not run in CI.)
+`tests/test_reverse_proxy.py` checks with a stand-in proxy. The two nginx blocks below run
+in CI as they are: `tests/nginx_proxy.py` takes them from this page, puts ser2netweb behind
+them and checks the web UI, sign-in, the console and the hex view, the REST API and the
+client's address with and without Trusted proxies, at `/` and under the path.)
 
 Only the web UI goes through the proxy. The mapping ports (raw TCP, telnet, RFC 2217,
 Modbus TCP) are not HTTP: clients keep connecting to them directly. LAN-cluster nodes call
@@ -145,9 +147,26 @@ server {
 }
 ```
 
-Under a path (Public URL `https://gw.example.com/ser2netweb`): the same `proxy_set_header`
-lines in `location /ser2netweb/ { proxy_pass http://127.0.0.1:8080; … }` — without a path
-after the address, nginx passes `/ser2netweb/…` on as it is.
+Under a path (Public URL `https://gw.example.com/ser2netweb`), with the same `map` in
+`http { }`: `proxy_pass` without a path after the address, so nginx passes `/ser2netweb/…`
+on as it is:
+
+```nginx
+server {
+    listen 443 ssl;
+    server_name gw.example.com;
+    # ssl_certificate / ssl_certificate_key …
+    location /ser2netweb/ {
+        proxy_pass http://127.0.0.1:8080;
+        proxy_http_version 1.1;
+        proxy_set_header Host $http_host;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection $connection_upgrade;
+    }
+}
+```
 
 **Apache** 2.4.47 or later (`mod_proxy_http` and `mod_headers`; older versions need
 `mod_proxy_wstunnel` for the WebSockets). `mod_proxy` sends `X-Forwarded-For` by itself:

@@ -23,7 +23,10 @@
     proxy trusted and a public URL with a path: signing in, pages, forms and the console
     under the path, Secure cookies of the path's own, the client's address in the logs;
     a proxy that strips the path (X-Forwarded-Prefix) works the same; '/' still works
-    directly; the start-up log says what is published and trusted.
+    directly; the start-up log says what is published and trusted;
+  * docs/REVERSE-PROXY.md's two nginx blocks are what tests/nginx_proxy.py runs behind real
+    nginx in CI (ci.yml's job "nginx", which ci-ok needs): each takes the test's changes
+    (listen, certificate, upstream port) exactly once.
 
 Run: python3 tests/test_reverse_proxy.py
 """
@@ -32,6 +35,7 @@ import http.cookiejar
 import http.server
 import json
 import os
+import re
 import select
 import socket
 import ssl
@@ -479,7 +483,30 @@ def test_through_proxy(srv, proxied: Proxy, stripping: Proxy) -> None:
           + (" Secure" if secure else "") + " cookies, the client's address  OK")
 
 
+def test_nginx_examples() -> None:
+    import nginx_proxy
+
+    map_line, blocks = nginx_proxy.doc_blocks()
+    for location, _host, _prefix in nginx_proxy.VARIANTS:
+        conf = nginx_proxy.nginx_conf("/t", blocks[location], map_line, 4443, "/t/c", "/t/k",
+                                      18080)
+        assert "listen 127.0.0.1:4443 ssl;" in conf and "ssl_certificate /t/c;" in conf, conf
+        assert "proxy_pass http://127.0.0.1:18080;" in conf and "8080;" not in conf.replace(
+            "18080;", ""), conf
+        for line in ("proxy_set_header Host $http_host;", "proxy_set_header Upgrade $http_upgrade;",
+                     "proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;"):
+            assert line in conf, (location, line)
+    with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".github",
+                           "workflows", "ci.yml"), encoding="utf-8") as fh:
+        ci = fh.read()
+    assert "\n  nginx:\n" in ci and "run: python tests/nginx_proxy.py --nginx /usr/sbin/nginx" in ci
+    assert re.search(r"(?m)^    needs: \[.*\bnginx\b.*\]$", ci), "ci-ok needs the nginx job"
+    print("docs/REVERSE-PROXY.md's nginx blocks (/ and the path) are what tests/nginx_proxy.py "
+          "runs behind nginx in ci.yml  OK")
+
+
 def main():
+    test_nginx_examples()
     test_matcher()
     test_redirect_uri()
     provider = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _Discovery)
