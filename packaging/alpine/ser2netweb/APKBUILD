@@ -48,6 +48,7 @@ _check_tests="
 	test_config_types.py
 	test_config_validation.py
 	test_console_log.py
+	test_dependency_internals.py
 	test_env_bind.py
 	test_explain.py
 	test_kept_names.py
@@ -68,6 +69,7 @@ _check_tests="
 	test_rfc2217_settings.py
 	test_secure_cookies.py
 	test_ser2net_import.py
+	test_serial_compat.py
 	test_serial_mqtt.py
 	test_sparkplug.py
 	test_sparkplug_node.py

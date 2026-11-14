@@ -290,9 +290,15 @@ changed dependency or unit fails there until the recipes follow. **3.0.1 is the 
 release to submit:** 3.0.0's tag still had the old, narrow dependency ranges and no
 built-in transport, so no distribution can build it with its own packages.
 
-What a recipe's check step leaves out: `tests/test_dependency_internals.py` and
-`tests/test_serial_compat.py` ask for pyserial's Windows backend, which openSUSE's package
-doesn't ship, and the latter for a glibc detail a Fedora builder answers differently.
+The check steps also run `tests/test_dependency_internals.py` and
+`tests/test_serial_compat.py`, which check the dependencies' code ser2netweb builds on. In a
+distribution's build (the recipe's `ser2netweb/distro.json` in the tree) they name instead
+of failing what only a distribution's packages do: pyserial code that differs from the
+pinned release's (Fedora's pyserial 3.5 carries upstream's later fixes for custom baud
+rates, so the stand-in for glibc 2.42's refusal has nothing to refuse there), and
+pyserial's Windows-only modules a package leaves out (openSUSE's has no `serialwin32`).
+Everything else, the built-in transport's hash and every behaviour they check, is as strict
+as in ser2netweb's own CI, where a changed pin still fails.
 
 ### Debian and Ubuntu
 
