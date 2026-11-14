@@ -14,7 +14,8 @@ forwarded to raw TCP / UDP clients as frames instead of as it is read.
     RFC 2217: not packed, and the mapping says so (ignored_settings);
   - edits refuse values out of range (validate_input); validate() does not; a stored one
     turns packing off with a log line instead of failing the start;
-  - the form: its fields have a presence marker (absent: the stored values are kept).
+  - the form: its fields have a presence marker (absent: the stored values are kept); a
+    delimiter of real CR / LF, which its text box can't show, survives a save.
 
 Run: python3 tests/test_packing.py
 """
@@ -219,8 +220,15 @@ def test_form():
     assert parsed(dict(base, opt_pack_gap_ms="50", opt_pack_delimiter=r"\r\n",
                        opt_pack_max_bytes="1400")) == (50, r"\r\n", 1400)
     assert parsed(base) == (0, "", 0)
+    # a delimiter stored as real CR LF (REST API, an import, by hand): its text box can't
+    # show it (a browser takes the line breaks out), so a save posts "" for it
+    existing = mapping(pack_gap_ms=0, pack_delimiter="\r\n", pack_max_bytes=0)
+    shown = dict(base, id=existing.id, opt_pack_gap_ms="", opt_pack_delimiter="",
+                 opt_pack_max_bytes="")
+    assert parsed(shown) == (0, "\r\n", 0), "a save of the form keeps it"
+    assert parsed(dict(shown, opt_pack_delimiter=";")) == (0, ";", 0), "a changed one is taken"
     print("form: the packing fields are kept when the form leaves them out, set when "
-          "shown  OK")
+          "shown; a delimiter of real CR LF survives a save  OK")
 
 
 def main():

@@ -133,7 +133,7 @@ def test_this_node_edits_an_older_one(fx: dict) -> None:
         sent = dict(fields)
         # a one-line field that can't show its stored value: the stored one is sent (that
         # node's own form loses its line breaks)
-        raw = {f: own[section][attr] for f, (section, attr) in forms._TEXT_INPUTS.items()}
+        raw = {f: own[section].get(attr) for f, (section, attr) in forms._TEXT_INPUTS.items()}
         problems = [f"{k}: {v!r} -> {sent.get(k, '<not sent>')!r}"
                     for k, v in fx["own_forms"][mid]
                     if not same_value(v, sent.get(k, "\0")) and sent.get(k) != raw.get(k)]

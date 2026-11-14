@@ -315,11 +315,13 @@ _UNMANAGED_FIELDS = {
 
 # One-line text inputs that can hold a stored value they can't show: a browser drops
 # its line breaks (CR, LF) and turns a NUL into U+FFFD, so posted back unchanged it
-# differs (close-on strings imported from a ser2netweb configuration have them).
+# differs (close-on strings imported from a ser2netweb configuration have them; a packing
+# delimiter set over the REST API, by an import or by hand can be a real CR LF).
 #   form field -> (config section, attribute)
 _TEXT_INPUTS = {
     "opt_banner": ("options", "banner"),
     "opt_closeon": ("options", "closeon"),
+    "opt_pack_delimiter": ("options", "pack_delimiter"),
 }
 
 # What a form from before 2.8.0 (an older cluster node's) leaves out of each Modbus
@@ -802,7 +804,8 @@ def _preserve_unmanaged_fields(new_map, existing, form=None) -> None:
     silently discards it: the settings the form doesn't have (_UNMANAGED_FIELDS), the
     not-always-posted fields the submitted `form` lacks (_OPTIONAL_FORM_FIELDS; no form
     = none posted), a one-line text field posted back unchanged although it can't show
-    the stored value (_TEXT_INPUTS: a banner or close-on string with a NUL, CR or LF,
+    the stored value (_TEXT_INPUTS: a banner, close-on string or packing delimiter with a
+    NUL, CR or LF,
     in_text_box), the stored MQTT password and TLS key password, which the form never
     shows, when it keeps them (mqtt_password_from_form; a blank key password field), the
     dual-stack choice of a form that doesn't offer it, the per-point Modbus fields a
