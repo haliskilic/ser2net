@@ -21,7 +21,7 @@
 # an application, built for the distribution's default Python only
 %define pythons python3
 Name:           ser2netweb
-Version:        3.0.1
+Version:        3.1.0
 Release:        0
 Summary:        Serial-to-network bridge with a web UI
 # ser2netweb: AGPL-3.0-only; copied code of pyserial-asyncio-fast and Starlette:

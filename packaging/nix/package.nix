@@ -8,14 +8,14 @@
 
 python3Packages.buildPythonApplication (finalAttrs: {
   pname = "ser2netweb";
-  version = "3.0.1";
+  version = "3.1.0";
   pyproject = true;
 
   src = fetchFromGitHub {
     owner = "haliskilic";
     repo = "ser2netweb";
     tag = "v${finalAttrs.version}";
-    hash = "sha256-0i6yjA66dE7Ah75QUjg7EdgQA04IA9/n50YmxHZvGb4=";
+    hash = "sha256-aXrKJRreO5apwYwGX3sTXaDuvlYR+urUVDzyymI3lnw=";
   };
 
   # ser2netweb/distro.json (pyproject.toml takes it into the wheel): the distribution
