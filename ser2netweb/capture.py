@@ -97,16 +97,21 @@ class Captures:
         await self.state.supervisor.retrace(mapping_id)
         return until
 
-    async def end(self, mapping_id: str) -> bool:
+    async def end(self, mapping_id: str, until: Optional[float] = None) -> bool:
         """End the mapping's capture now. Returns whether it had one. Its trace is closed
         (not one that is on by its trace file name) even when config.json can't be
-        written: ConfigError is raised then, and the next start ends it for good."""
-        self._ends.pop(mapping_id, None)
+        written: ConfigError is raised then, and the next start ends it for good.
+        `until`: the end the watcher found due; a capture begun again meanwhile (another
+        end) is left alone, and False returned."""
         try:
             async with self.state.edit_config(backup=False, keep_on_failure=True):
                 m = self.state.config.get_mapping(mapping_id)
                 if m is None or not m.options.trace_until:
+                    self._ends.pop(mapping_id, None)
                     return False
+                if until is not None and m.options.trace_until != until:
+                    return False  # (extended while this waited for the configuration)
+                self._ends.pop(mapping_id, None)
                 m.options.trace_until = 0.0
         finally:
             await self.state.supervisor.retrace(mapping_id)
@@ -157,7 +162,7 @@ class Captures:
     async def _expire(self, mapping, why: str) -> None:
         name = mapping.name
         try:
-            ended = await self.end(mapping.id)
+            ended = await self.end(mapping.id, until=mapping.options.trace_until)
         except ConfigError as e:
             self.state.log(f"[{name}] timed capture ended, but config.json could not keep "
                            f"that ({e}): it ends again at the next start")
