@@ -567,3 +567,38 @@ paho-mqtt 2.1.0 only up to Python 3.13, and no Authlib. FreeBSD's `devel/py-setu
   `ser2netweb: new port, version 3.0.1`, with the Portfile at the same path; the pull request's template asks for the
   macOS and Xcode versions tested on and `port lint --nitpick` / `sudo port -vst install`.
   The maintainer is given by GitHub handle (`@haliskilic`) with `openmaintainer`.
+
+## conda-forge
+
+`packaging/conda-forge/recipe.yaml` is the recipe in rattler-build's v1 format that
+conda-forge's staged-recipes takes (`recipes/ser2netweb/recipe.yaml` there, with its patch),
+for the newest release on PyPI. Unlike the recipes above it builds PyPI's sdist, which is
+the official source conda-forge prefers (it has no tests; the recipe's own run instead).
+
+- **Files:** `recipe.yaml` (`noarch: python` on conda-forge's `python_min`, the console
+  script `ser2netweb` as an entry point, the dependencies of `pyproject.toml` with their
+  floors, the extras' packages as `run_constraints` with theirs, every licence file of
+  `pyproject.toml`'s `license-files`, the maintainer `haliskilic`) and
+  `0001-Leave-out-pyserial-asyncio-fast.patch`, which takes that dependency out of
+  `pyproject.toml`: conda-forge doesn't have it, ser2netweb runs on its built-in copy of the
+  transport, and `pip check` then agrees. conda-forge's `python_min` is 3.11, so the
+  Python 3.10 backports (exceptiongroup, taskgroup) aren't needed. A conda install keeps its
+  data in the user's data folder, as a pip install does.
+- **Its tests:** the imports and `pip check` on the oldest and the newest Python,
+  `ser2netweb --version`, `--about` and `--help`.
+- **CI:** `.github/workflows/conda-forge.yml`, in a Miniforge container pinned by digest:
+  conda-forge's linter (`conda-smithy recipe-lint --conda-forge`), `rattler-build build`
+  against conda-forge with conda-forge's pinning (`conda-forge-pinning`), which runs the
+  tests above, then the built package installed into a fresh environment, `--set-password`
+  and a start answering `/healthz`. For a pull request that changes the recipe, by hand and
+  every Tuesday; not a merge condition. `tests/test_conda_recipe.py` (in the suite) checks
+  the recipe against `pyproject.toml`.
+- **Build it locally:** `rattler-build build --recipe packaging/conda-forge/recipe.yaml
+  --variant-config <conda-forge-pinning's conda_build_config.yaml>` (the pinning's channel is
+  conda-forge).
+- **Submit:** a pull request to conda-forge/staged-recipes from a fork, adding
+  `recipes/ser2netweb/` with both files; its template's checklist, then a comment asking the
+  Python team (`@conda-forge/help-python, ready for review!`, which a first-time contributor
+  asks the bot to send: `@conda-forge-admin, please ping team`). Once merged, conda-forge
+  makes the feedstock `conda-forge/ser2netweb-feedstock` with the maintainer in it; its bot
+  opens a pull request for each new PyPI release. Copy what changes there back here.

@@ -1,0 +1,78 @@
+name: conda-forge recipe
+
+# packaging/conda-forge/recipe.yaml, the recipe submitted to conda-forge (staged-recipes'
+# recipes/ser2netweb/recipe.yaml, docs/PACKAGING.md "conda-forge"), as conda-forge's CI
+# treats it, in a clean Miniforge container (pinned by digest): conda-forge's linter
+# (conda-smithy recipe-lint --conda-forge), then rattler-build against the conda-forge
+# channel with conda-forge's pinning (python_min), which runs the recipe's tests (imports and
+# pip check on the oldest and the newest Python, --version, --about, --help). The package
+# it built is then installed into a fresh environment and started: --set-password, a start
+# on 127.0.0.1 answering /healthz (ser2netweb --healthcheck).
+# For a pull request that changes the recipe or this workflow, by hand, and every week (a
+# conda-forge release of a dependency that breaks the recipe shows here first). Not a merge
+# condition: a workflow of its own that no required check names.
+on:
+  pull_request:
+    paths:
+      - .github/workflows/conda-forge.yml
+      - packaging/conda-forge/**
+      - tests/test_conda_recipe.py
+  workflow_dispatch:
+  schedule:
+    - cron: "43 5 * * 2"  # Tuesdays
+
+permissions:
+  contents: read
+
+concurrency:
+  group: conda-forge-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  build:
+    name: conda-forge recipe (conda-smithy lint, rattler-build)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    container:
+      image: condaforge/miniforge3:26.9.4-2@sha256:dfb274710eee2bb062c87b15c10fde6ea91f71b763796b5de489df87b08cf678
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - name: rattler-build, conda-smithy and conda-forge's pinning (from conda-forge)
+        run: |
+          conda install -y -q -n base -c conda-forge rattler-build conda-smithy conda-forge-pinning
+          rattler-build --version
+          conda-smithy --version
+          conda list -n base conda-forge-pinning | tail -1
+      - name: conda-forge's linter, as staged-recipes runs it
+        run: conda-smithy recipe-lint --conda-forge packaging/conda-forge
+      - name: rattler-build build (with the recipe's tests)
+        run: |
+          rattler-build build --recipe packaging/conda-forge/recipe.yaml \
+            --variant-config "$(conda info --base)/conda_build_config.yaml" \
+            --output-dir "$RUNNER_TEMP/conda-bld" --log-style plain
+          ls -l "$RUNNER_TEMP"/conda-bld/noarch/ser2netweb-*.conda
+      - name: Installed from the built package, started (--set-password, /healthz)
+        timeout-minutes: 10
+        run: |
+          version=$(sed -n 's/^  version: "\(.*\)"$/\1/p' packaging/conda-forge/recipe.yaml)
+          env="$RUNNER_TEMP/env"
+          conda create -y -q -p "$env" -c "file://$RUNNER_TEMP/conda-bld" -c conda-forge \
+            "ser2netweb=$version"
+          "$env/bin/ser2netweb" --version | grep -Fx "ser2netweb $version"
+          "$env/bin/ser2netweb" --about
+          data="$RUNNER_TEMP/data"
+          echo 'conda-forge-smoke-1' | "$env/bin/ser2netweb" --data-dir "$data" --set-password admin
+          test -s "$data/config.json"
+          SER2NETWEB_BIND_IP=127.0.0.1 SER2NETWEB_PORT=18080 \
+            "$env/bin/ser2netweb" --data-dir "$data" </dev/null >"$RUNNER_TEMP/server.log" 2>&1 &
+          pid=$!
+          ok=
+          for _ in $(seq 60); do
+            if "$env/bin/ser2netweb" --healthcheck --data-dir "$data"; then ok=1; break; fi
+            sleep 1
+          done
+          kill "$pid"
+          cat "$RUNNER_TEMP/server.log"
+          test -n "$ok"
