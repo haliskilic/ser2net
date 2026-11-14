@@ -5,16 +5,21 @@
   version (no drafts, pre-releases or other tags), or up to a given tag; each file checked
   against its release's SHA256SUMS and the digest GitHub lists;
 * the files users get: ser2netweb.sources (deb822, Signed-By the dearmored keyring in
-  /usr/share/keyrings), ser2netweb.repo (repo_gpgcheck=1, gpgcheck=0 with its reason);
+  /usr/share/keyrings), ser2netweb.repo (repo_gpgcheck=1 and gpgcheck=1, with the reason);
   the committed key packaging/ser2netweb-archive-keyring.asc is the documented one (its
   fingerprint and expiry, read from its packets);
 * the commands: docs/PACKAGES.md, both READMEs and index.html give the tool's commands
   (the ones tests/package_repo_smoke.sh runs in containers), with the fingerprint;
 * `verify` finds a Packages, Release, repomd.xml or primary that doesn't match its files
-  (on small trees made here), reads InRelease's signed text and an armored key;
+  (on small trees made here), reads InRelease's signed text and an armored key, and takes
+  an .rpm only with a good signature by the site's key (rpmkeys -Kv as rpm 4 and rpm 6
+  write it; an unsigned one passes rpm -K on its digests alone);
+* `sign` signs every .rpm with rpmsign, the key's passphrase in a file of gpg's home (0600,
+  removed afterwards; never an argument), then makes each architecture's repodata again;
 * the workflow: its triggers, least privilege per job, the signing secrets in the signing
-  step only and never in a pull request's run, the deployment only after the container
-  tests and never from a pull request; release.yml starts it once a release is out.
+  step only and only for a release's run or one on main or a v* tag (never a pull
+  request's or another branch's), the deployment only after the container tests and never
+  from a pull request; release.yml starts it once a release is out.
 
 Run: python3 tests/test_package_repo.py   (stdlib only)
 """
@@ -149,12 +154,13 @@ def test_repository_files():
     repo = pr.REPO_FILE.format(base=pr.SITE_URL)
     lines = repo.splitlines()
     want = {"[ser2netweb]", "name=ser2netweb", f"baseurl={pr.SITE_URL}/rpm/$basearch",
-            "type=rpm-md", "enabled=1", "repo_gpgcheck=1", "gpgcheck=0",
+            "type=rpm-md", "enabled=1", "repo_gpgcheck=1", "gpgcheck=1",
             f"gpgkey={pr.SITE_URL}/ser2netweb-archive-keyring.asc"}
     assert want == {line for line in lines if not line.startswith("#")}, lines
     reason = repo.split("[ser2netweb]", 1)[1].split("repo_gpgcheck=1", 1)[0]
-    assert "aren't signed" in reason and "SHA-256 of every package" in reason, reason
-    print("ser2netweb.sources pins the keyring; ser2netweb.repo checks the signed metadata  OK")
+    assert "SHA-256 of every package" in reason and "and of every package" in reason, reason
+    print("ser2netweb.sources pins the keyring; ser2netweb.repo checks the signed metadata "
+          "and every package's signature  OK")
 
 
 def _blocks(markdown: str) -> list[list[str]]:
@@ -276,6 +282,87 @@ def test_verify_finds_mismatches():
     print("verify finds a changed Packages, package, repomd.xml or RPM; reads InRelease  OK")
 
 
+RPM4_GOOD = """ser2netweb-3.0.1-1.x86_64.rpm:
+    Header V4 RSA/SHA512 Signature, key ID 711bb799: OK
+    Header SHA256 digest: OK
+    Header SHA1 digest: OK
+    Payload SHA256 digest: OK
+    MD5 digest: OK
+"""
+RPM6_GOOD = """ser2netweb-3.0.1-1.x86_64.rpm:
+    Header OpenPGP V4 RSA/SHA512 signature, key fingerprint: b58760e7c0b0515e81d250f98164d694711bb799: OK
+    Header SHA256 digest: OK
+    Payload SHA256 digest: OK
+"""
+UNSIGNED = """ser2netweb-3.0.1-1.x86_64.rpm:
+    Header SHA256 digest: OK
+    Payload SHA256 digest: OK
+"""
+
+
+def test_rpm_signatures():
+    keys = [pr.FINGERPRINT]
+    for out in (RPM4_GOOD, RPM6_GOOD):
+        assert pr.rpm_signature_problems("a.rpm", out, 0, keys) == [], out
+    assert pr.rpm_signature_problems("a.rpm", UNSIGNED, 0, keys) == ["a.rpm: no signature"]
+    other = RPM4_GOOD.replace("711bb799", "0badc0de")
+    assert pr.rpm_signature_problems("a.rpm", other, 0, keys) == [
+        f"a.rpm: signed by 0BADC0DE, not {pr.FINGERPRINT}"]
+    nokey = RPM4_GOOD.replace("711bb799: OK", "711bb799: NOKEY")
+    assert pr.rpm_signature_problems("a.rpm", nokey, 1, keys) == [
+        "a.rpm: signature by 711BB799: NOKEY"]
+    bad = RPM6_GOOD.replace("Payload SHA256 digest: OK", "Payload SHA256 digest: NOT OK")
+    assert pr.rpm_signature_problems("a.rpm", bad, 1, keys) == [
+        "a.rpm: Payload SHA256 digest: NOT OK"]
+    assert pr.rpm_signature_problems("a.rpm", RPM4_GOOD, 1, keys) == [
+        "a.rpm: rpmkeys -K exits 1"]
+    # sign: rpmsign with the key, the passphrase in a file of gpg's home, then the repodata
+    with tempfile.TemporaryDirectory() as tmp:
+        site = os.path.join(tmp, "site")
+        for arch in pr.RPM_ARCHES:
+            _put(os.path.join(site, "rpm", arch, f"ser2netweb-3.0.1-1.{arch}.rpm"), b"rpm")
+        home = os.path.join(tmp, "g")
+        os.mkdir(home, 0o700)
+        seen, indexed = {}, []
+
+        class Gpg:
+            gpg = "/usr/bin/gpg"
+
+        Gpg.home = home
+
+        def run(cmd, **_kw):
+            arg = next(a for a in cmd if a.startswith("_gpg_sign_cmd_extra_args "))
+            secret = arg.rsplit("--passphrase-file ", 1)[1]
+            with open(secret, "rb") as fh:
+                seen.update(cmd=cmd, file=secret, passphrase=fh.read(),
+                            mode=os.stat(secret).st_mode & 0o777)
+            return subprocess.CompletedProcess(cmd, 0, "", "")
+
+        saved = pr.subprocess.run, pr.program, pr.index_rpm
+        pr.subprocess.run = run
+        pr.program = lambda name: f"/usr/bin/{name}"
+        pr.index_rpm = indexed.append
+        try:
+            files = pr.sign_rpms(site, Gpg(), pr.FINGERPRINT, b"s3cret")
+        finally:
+            pr.subprocess.run, pr.program, pr.index_rpm = saved
+        cmd = seen["cmd"]
+        assert cmd[:2] == ["/usr/bin/rpmsign", "--addsign"] and cmd[-2:] == files, cmd
+        assert sorted(os.path.basename(f) for f in files) == [
+            "ser2netweb-3.0.1-1.aarch64.rpm", "ser2netweb-3.0.1-1.x86_64.rpm"], files
+        for define in (f"_gpg_name {pr.FINGERPRINT}", f"_gpg_path {home}",
+                       "__gpg /usr/bin/gpg", "_gpg_digest_algo sha512"):
+            assert define in cmd, define
+        assert seen["passphrase"] == b"s3cret", seen
+        assert os.name != "posix" or seen["mode"] == 0o600, seen  # (Windows has no such modes)
+        assert os.path.dirname(seen["file"]) == home and not os.path.exists(seen["file"])
+        assert not any("s3cret" in a for a in cmd), "the passphrase is never an argument"
+        assert indexed == [os.path.join(site, "rpm", a) for a in pr.RPM_ARCHES], indexed
+    print("verify takes an .rpm only with a good signature by the site's key (rpm 4 / 6); "
+          "sign signs each with rpmsign (the passphrase in a file of gpg's home), then makes "
+          "the repodata again  OK")
+
+
 # --- the workflows ---------------------------------------------------------------------------
 
 def test_workflow():
@@ -298,18 +385,22 @@ def test_workflow():
     assert permissions(deploy) == {"pages": "write", "id-token": "write"}, permissions(deploy)
     writers = [j for j, b in all_jobs.items() if "write" in permissions(b).values()]
     assert writers == ["deploy"], writers
-    # the secrets: in the signing step only, and empty in a pull request's run
+    # the secrets: in the signing step only, and only for a release or a run on main or a
+    # v* tag (empty in a pull request's run and another branch's)
     secret_steps = [s for s in steps(build) if "secrets." in s]
     assert len(secret_steps) == 1 and "id: sign" in secret_steps[0], secret_steps
     sign = secret_steps[0]
+    release_ref = ("github.event_name == 'release' || github.ref == 'refs/heads/main' || "
+                   "startsWith(github.ref, 'refs/tags/v')")
     for name in ("PACKAGES_GPG_PRIVATE_KEY", "PACKAGES_GPG_PASSPHRASE", "PACKAGES_GPG_FINGERPRINT"):
-        assert (f"{name}: ${{{{ github.event_name != 'pull_request' && secrets.{name} || '' }}}}"
-                in sign), name
+        assert (f"{name}: ${{{{ ({release_ref}) && secrets.{name} || '' }}}}" in sign), name
+    assert f"RELEASE_REF: ${{{{ {release_ref} }}}}" in sign
     assert wf.count("secrets.") == 3, "no other secret anywhere"
     assert 'if [ "$EVENT" = pull_request ]; then' in sign
-    assert sign.count("python3 tools/package_repo.py sign site --test-key") == 2, sign
+    assert 'elif [ "$RELEASE_REF" != true ]; then' in sign
+    assert sign.count("python3 tools/package_repo.py sign site --test-key") == 3, sign
     assert "--keyring packaging/ser2netweb-archive-keyring.asc" in sign
-    assert sign.count('echo "deploy=false" >> "$GITHUB_OUTPUT"') == 2
+    assert sign.count('echo "deploy=false" >> "$GITHUB_OUTPUT"') == 3
     assert sign.count('echo "deploy=true" >> "$GITHUB_OUTPUT"') == 1
     assert "::notice::The secret PACKAGES_GPG_PRIVATE_KEY is not set" in sign
     order = steps(build)
@@ -321,6 +412,8 @@ def test_workflow():
     assert list(idx.values()) == sorted(idx.values()), idx
     assert "if: steps.sign.outputs.deploy == 'true'" in order[idx["pages"]]
     assert '--signer-workflow "$GITHUB_REPOSITORY/.github/workflows/release.yml"' in build
+    # rpmsign (sign) and rpmkeys (verify) come with the runner's rpm package
+    assert "--no-install-recommends apt-utils createrepo-c rpm >/dev/null" in build
     assert "      deploy: ${{ steps.sign.outputs.deploy }}" in build
     # every tree is tested in the containers before it is deployed, never from a PR
     assert needs(test) == ["build"] and needs(deploy) == ["build", "test"], needs(deploy)
@@ -406,6 +499,7 @@ if __name__ == "__main__":
     test_repository_files()
     test_documented_commands()
     test_verify_finds_mismatches()
+    test_rpm_signatures()
     test_workflow()
     test_release_starts_it()
     print("\nPASS: package repositories")

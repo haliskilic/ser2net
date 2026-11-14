@@ -5,18 +5,23 @@ name: Package repositories
 # them from the .deb / .rpm files of the newest three releases (not pre-releases), each
 # checked against its release's SHA256SUMS and build provenance and never rebuilt:
 # apt-ftparchive and createrepo_c write the indexes, and the package signing key signs
-# InRelease, Release.gpg and each repodata/repomd.xml (the secrets PACKAGES_GPG_*, in the
-# signing step only). Every tree is tested before it is deployed: served on 127.0.0.1, it
-# is added in clean Debian, Ubuntu, Fedora, AlmaLinux and openSUSE containers (x64; Debian
-# and Fedora on arm64 too) with the commands docs/PACKAGES.md gives, ser2netweb installed
-# from it, updated and removed, and a copy whose InRelease and repomd.xml were changed
-# after signing must be refused. After the deployment the published site gets the same
-# test.
+# every .rpm (rpmsign adds its signature to the package's signature header; the repodata
+# is made again for the signed files), InRelease, Release.gpg and each
+# repodata/repomd.xml (the secrets PACKAGES_GPG_*, in the signing step only). Every tree is
+# tested before it is deployed: each signature checked (gpgv, rpmkeys -K), then, served on
+# 127.0.0.1, it is added in clean Debian, Ubuntu, Fedora, AlmaLinux and openSUSE
+# containers (x64; Debian and Fedora on arm64 too) with the commands docs/PACKAGES.md gives
+# (dnf and zypper with repo_gpgcheck=1 and gpgcheck=1), ser2netweb installed from it, its
+# signature named, updated and removed, and a copy whose InRelease and repomd.xml were
+# changed after signing must be refused. After the deployment the published site gets the
+# same test.
 # Started by release.yml once a release is out (GitHub starts no workflow for a release
 # that GITHUB_TOKEN created), by a release published by hand, and by Actions -> Package
 # repositories -> Run workflow (tag: the newest release to include, for a rebuild or a
 # rollback; empty: the newest release). A pull request that changes it builds and tests a
-# tree signed with a throwaway key made in the job and deploys nothing; so does a run
+# tree signed with a throwaway key made in the job, its .rpm files too (rpmkeys -K checks
+# them against that key), and deploys nothing; so do a run started on another branch than
+# main (the key goes to a release's run and runs on main or a v* tag only) and a run
 # without the signing key (with a notice). The environment github-pages must allow main
 # and the v* tags.
 on:
@@ -58,12 +63,13 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           persist-credentials: false
-      - name: apt-ftparchive and createrepo_c
+      - name: apt-ftparchive, createrepo_c, rpmsign and rpmkeys
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq --no-install-recommends apt-utils createrepo-c >/dev/null
+          sudo apt-get install -y -qq --no-install-recommends apt-utils createrepo-c rpm >/dev/null
           apt-ftparchive --version | head -1
           createrepo_c --version
+          rpmsign --version
       - name: The packages of the newest releases, checked against their SHA256SUMS
         id: fetch
         env:
@@ -81,17 +87,23 @@ jobs:
           done
       - name: The repository tree
         run: python3 tools/package_repo.py build packages site
-      - name: Sign it (InRelease, Release.gpg, repomd.xml.asc)
+      - name: Sign it (the .rpm files, InRelease, Release.gpg, repomd.xml.asc)
         id: sign
         env:
           EVENT: ${{ github.event_name }}
-          # never handed to a pull request's run: a throwaway key signs that tree
-          PACKAGES_GPG_PRIVATE_KEY: ${{ github.event_name != 'pull_request' && secrets.PACKAGES_GPG_PRIVATE_KEY || '' }}
-          PACKAGES_GPG_PASSPHRASE: ${{ github.event_name != 'pull_request' && secrets.PACKAGES_GPG_PASSPHRASE || '' }}
-          PACKAGES_GPG_FINGERPRINT: ${{ github.event_name != 'pull_request' && secrets.PACKAGES_GPG_FINGERPRINT || '' }}
+          # handed only to a release's run and one on main or a v* tag, never to a pull
+          # request's or another branch's: a throwaway key signs those trees
+          RELEASE_REF: ${{ github.event_name == 'release' || github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v') }}
+          PACKAGES_GPG_PRIVATE_KEY: ${{ (github.event_name == 'release' || github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')) && secrets.PACKAGES_GPG_PRIVATE_KEY || '' }}
+          PACKAGES_GPG_PASSPHRASE: ${{ (github.event_name == 'release' || github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')) && secrets.PACKAGES_GPG_PASSPHRASE || '' }}
+          PACKAGES_GPG_FINGERPRINT: ${{ (github.event_name == 'release' || github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')) && secrets.PACKAGES_GPG_FINGERPRINT || '' }}
         run: |
           if [ "$EVENT" = pull_request ]; then
             echo "::notice::A pull request: the tree is signed with a throwaway key made here, tested and not deployed"
+            python3 tools/package_repo.py sign site --test-key
+            echo "deploy=false" >> "$GITHUB_OUTPUT"
+          elif [ "$RELEASE_REF" != true ]; then
+            echo "::notice::A run on $GITHUB_REF, not main or a release tag: the tree is signed with a throwaway key made here, tested and not deployed"
             python3 tools/package_repo.py sign site --test-key
             echo "deploy=false" >> "$GITHUB_OUTPUT"
           elif [ -z "$PACKAGES_GPG_PRIVATE_KEY" ]; then
@@ -102,7 +114,7 @@ jobs:
             python3 tools/package_repo.py sign site --keyring packaging/ser2netweb-archive-keyring.asc
             echo "deploy=true" >> "$GITHUB_OUTPUT"
           fi
-      - name: Every index against its files, every signature (gpgv)
+      - name: Every index against its files, every signature (gpgv, rpmkeys -K)
         env:
           DEPLOY: ${{ steps.sign.outputs.deploy }}
         run: |

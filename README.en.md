@@ -869,9 +869,14 @@ sudo systemctl enable --now ser2netweb             # installing it doesn't start
 They are signed with the key `B587 60E7 C0B0 515E 81D2  50F9 8164 D694 711B B799` (RSA
 4096, until 2031-11-12; `ser2netweb-archive-keyring.asc` / `.gpg` on the site and
 [`packaging/ser2netweb-archive-keyring.asc`](packaging/ser2netweb-archive-keyring.asc)):
-dnf shows it on the first install, accept it only with this fingerprint. The `.rpm` files themselves aren't signed;
-dnf and zypper check the signed repository metadata, which holds the SHA-256 of every
-package (`repo_gpgcheck=1`, `gpgcheck=0`).
+dnf shows it on the first install, accept it only with this fingerprint. The `.rpm` files
+in the repository are signed with it too, and dnf and zypper check both: the repository
+metadata, which holds the SHA-256 of every package, and each package's own signature
+(`repo_gpgcheck=1`, `gpgcheck=1`). A `ser2netweb.repo` fetched while the packages weren't
+signed yet says `gpgcheck=0` and keeps working (the metadata is still checked); fetching it
+again turns the package check on. The release's `.rpm` assets on GitHub are the unsigned build of the same
+packages (`SHA256SUMS`, `gh attestation verify`); [docs/PACKAGES.md](docs/PACKAGES.md) has
+the details.
 
 ### pipx / pip
 The PyPI package `ser2netweb`, for any OS and CPU with Python 3.10 or newer:

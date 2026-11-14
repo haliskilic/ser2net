@@ -8,14 +8,17 @@
         the static tree in SITE: deb/ (apt-ftparchive: Packages, Packages.gz, by-hash,
         Release), rpm/<arch>/ (createrepo_c), ser2netweb.sources, ser2netweb.repo, index.html
     python3 tools/package_repo.py sign SITE (--keyring ASC | --test-key) [--fingerprint FPR]
-        InRelease, Release.gpg and each repodata/repomd.xml.asc, and the public key as
-        ser2netweb-archive-keyring.asc / .gpg: with --keyring the secret key in
-        $PACKAGES_GPG_PRIVATE_KEY ($PACKAGES_GPG_PASSPHRASE), whose fingerprint must be FPR
-        (default: FINGERPRINT), ASC's and $PACKAGES_GPG_FINGERPRINT's (when set), and ASC is
-        what users get; with --test-key a throwaway key made for this run (pull requests)
+        every .rpm (rpmsign: a header signature added, the package as released otherwise)
+        and its repodata made again, then InRelease, Release.gpg and each
+        repodata/repomd.xml.asc, and the public key as ser2netweb-archive-keyring.asc /
+        .gpg: with --keyring the secret key in $PACKAGES_GPG_PRIVATE_KEY
+        ($PACKAGES_GPG_PASSPHRASE), whose fingerprint must be FPR (default: FINGERPRINT),
+        ASC's and $PACKAGES_GPG_FINGERPRINT's (when set), and ASC is what users get; with
+        --test-key a throwaway key made for this run (pull requests)
     python3 tools/package_repo.py verify SITE [--fingerprint FPR | --any-key]
-        every index against the files it lists, and every signature (gpgv) against the
-        site's keyring, whose key must be FPR (default: FINGERPRINT)
+        every index against the files it lists, every signature (gpgv) against the site's
+        keyring, whose key must be FPR (default: FINGERPRINT), and every .rpm's (rpmkeys
+        -K, the same key)
     python3 tools/package_repo.py fingerprint ASC
         the fingerprint of the key in ASC (an armored public key)
     python3 tools/package_repo.py commands FAMILY [--part install|update|remove]
@@ -25,10 +28,12 @@
         (tests/package_repo_smoke.sh runs them in containers)
 
 .github/workflows/package-repo.yml runs these (docs/PACKAGES.md). The packages are the
-release files as they are, never rebuilt; the RPMs are unsigned, so dnf / zypper check them
-through the signed repository metadata, which carries each package's SHA-256
-(repo_gpgcheck=1, gpgcheck=0). Standard library only; build needs apt-ftparchive
-(apt-utils) and createrepo_c, sign and verify need gpg / gpgv.
+release files, never rebuilt: the .deb files as they are, the .rpm files with the package
+signing key's signature added to their signature header (their header, payload and digests
+stay the release's). dnf / zypper check both, the signed repository metadata, which
+carries each package's SHA-256, and each package's own signature (repo_gpgcheck=1,
+gpgcheck=1). Standard library only; build needs apt-ftparchive (apt-utils) and
+createrepo_c, sign gpg, rpmsign (rpm) and createrepo_c, verify gpgv and rpmkeys (rpm).
 """
 from __future__ import annotations
 
@@ -83,11 +88,10 @@ name=ser2netweb
 baseurl={{base}}/rpm/$basearch
 type=rpm-md
 enabled=1
-# dnf / zypper check the signature of the repository's metadata (repodata/repomd.xml)
-# with this key, and that metadata holds the SHA-256 of every package: a changed package
-# doesn't match it. The packages themselves aren't signed, so gpgcheck stays off.
+# dnf / zypper check with this key the signature of the repository's metadata
+# (repodata/repomd.xml, which holds the SHA-256 of every package) and of every package
 repo_gpgcheck=1
-gpgcheck=0
+gpgcheck=1
 gpgkey={{base}}/{KEYRING}.asc
 """
 
@@ -350,8 +354,17 @@ def build_deb(dl: str, releases: list[dict], site: str) -> None:
     write(os.path.join(dists, "Release"), release_file)
 
 
+def index_rpm(folder: str) -> None:
+    """repodata/ for the RPMs in `folder` (made anew: sign() makes it again once they are
+    signed)."""
+    shutil.rmtree(os.path.join(folder, "repodata"), ignore_errors=True)
+    # gzip: every dnf / zypper reads it (zstd needs a newer one); no sqlite databases
+    # (only yum 3 used them, on systems older than the packages' glibc 2.28)
+    subprocess.run([program("createrepo_c"), "--quiet", "--general-compress-type", "gz",
+                    "--no-database", "--checksum", "sha256", folder], check=True)
+
+
 def build_rpm(dl: str, releases: list[dict], site: str) -> None:
-    createrepo = program("createrepo_c")
     for arch in RPM_ARCHES:
         folder = os.path.join(site, "rpm", arch)
         os.makedirs(folder, exist_ok=True)
@@ -361,10 +374,7 @@ def build_rpm(dl: str, releases: list[dict], site: str) -> None:
                 if m and m["arch"] == arch:
                     shutil.copyfile(os.path.join(dl, release["tag"], name),
                                     os.path.join(folder, name))
-        # gzip: every dnf / zypper reads it (zstd needs a newer one); no sqlite databases
-        # (only yum 3 used them, on systems older than the packages' glibc 2.28)
-        subprocess.run([createrepo, "--quiet", "--general-compress-type", "gz", "--no-database",
-                        "--checksum", "sha256", folder], check=True)
+        index_rpm(folder)
 
 
 def build(dl: str, site: str) -> list[dict]:
@@ -415,7 +425,7 @@ p code, li code {{ background: var(--code); border-radius: 4px; padding: .1em .3
 <a href="https://github.com/{repository}">ser2netweb</a>, a serial-to-network bridge with a
 web management UI (an independent project, not the classic <code>ser2net</code> daemon), for
 x86_64 and arm64 Linux. They hold the <code>.deb</code> / <code>.rpm</code> files of the
-newest releases, as released: {versions}.</p>
+newest releases, as released (the <code>.rpm</code> files signed): {versions}.</p>
 
 <h2>Debian, Ubuntu, Raspberry Pi OS (64-bit)</h2>
 <pre><code>{apt}</code></pre>
@@ -449,9 +459,9 @@ the account <code>ser2netweb</code>.</p>
 <code>{fingerprint}</code><br>
 (RSA 4096, &ldquo;ser2netweb package signing&rdquo;, valid until {expires}):
 <a href="{keyring}.asc">{keyring}.asc</a>, dearmored for APT's <code>Signed-By</code>:
-<a href="{keyring}.gpg">{keyring}.gpg</a>. The RPM packages themselves aren't signed;
-dnf and zypper check the signed metadata, which carries the SHA-256 of every package
-(<code>repo_gpgcheck=1</code>, <code>gpgcheck=0</code> in
+<a href="{keyring}.gpg">{keyring}.gpg</a>. The RPM packages carry its signature too
+(<code>rpm -K</code>), and dnf and zypper check both, the metadata, which carries the SHA-256
+of every package, and each package (<code>repo_gpgcheck=1</code>, <code>gpgcheck=1</code> in
 <a href="ser2netweb.repo">ser2netweb.repo</a>). APT:
 <a href="ser2netweb.sources">ser2netweb.sources</a>.</p>
 
@@ -590,6 +600,51 @@ class GnuPG:
         shutil.rmtree(self.home, ignore_errors=True)
 
 
+def rpm_files(site: str) -> list[str]:
+    """The .rpm files of the site, every architecture's."""
+    out = []
+    for arch in RPM_ARCHES:
+        folder = os.path.join(site, "rpm", arch)
+        if os.path.isdir(folder):
+            out += sorted(os.path.join(folder, n) for n in os.listdir(folder) if n.endswith(".rpm"))
+    return out
+
+
+def rpmsign_command(gpg: GnuPG, key: str, passphrase_file: str, files: list[str]) -> list[str]:
+    """rpmsign adding a signature by `key` (gpg in gpg.home, the passphrase read from a
+    file: gpg's standard input is what it signs) to each of `files`."""
+    return [program("rpmsign"), "--addsign",
+            "--define", f"_gpg_name {key}", "--define", f"_gpg_path {gpg.home}",
+            "--define", f"__gpg {gpg.gpg}", "--define", "_gpg_digest_algo sha512",
+            "--define", "_gpg_sign_cmd_extra_args --batch --no-tty --pinentry-mode loopback "
+            f"--passphrase-file {passphrase_file}", *files]
+
+
+def sign_rpms(site: str, gpg: GnuPG, key: str, passphrase: bytes) -> list[str]:
+    """Every .rpm of the site signed by `key` (rpmsign: a header signature added; their
+    header, payload and digests stay as released), then each architecture's repodata made
+    again for the signed files. Returns the files."""
+    files = rpm_files(site)
+    if not files:
+        return files
+    passphrase_file = os.path.join(gpg.home, "passphrase")  # (gpg's home: 0700, deleted)
+    fd = os.open(passphrase_file, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    try:
+        with os.fdopen(fd, "wb") as fh:
+            fh.write(passphrase)
+        proc = subprocess.run(rpmsign_command(gpg, key, passphrase_file, files),
+                              capture_output=True, text=True, check=False)
+    finally:
+        os.remove(passphrase_file)
+    if proc.returncode:
+        fail(f"rpmsign failed: {proc.stderr.strip()}")
+    for arch in RPM_ARCHES:
+        folder = os.path.join(site, "rpm", arch)
+        if os.path.isdir(folder):
+            index_rpm(folder)
+    return files
+
+
 def metadata_files(site: str) -> list[tuple[str, str, str]]:
     """(data, signature, kind) of each file to sign: kind clearsign, detach or armor."""
     release = os.path.join(site, "deb", "dists", SUITE, "Release")
@@ -635,6 +690,8 @@ def sign(site: str, keyring: str = "", test_key: bool = False, fingerprint: str 
                 if set(fprs) != want:
                     fail(f"{what} is {', '.join(fprs) or 'no key'}, not {fingerprint}")
             key = fingerprint.upper()
+        for path in sign_rpms(site, gpg, key, passphrase):
+            print(f"{os.path.relpath(path, site)}: signed")
         for data, signature, kind in metadata_files(site):
             mode = ["--clearsign"] if kind == "clearsign" else ["--armor", "--detach-sign"]
             gpg.run("--pinentry-mode", "loopback", "--passphrase-fd", "0", "--yes",
@@ -699,6 +756,61 @@ def gpgv(keyring: str, signature: str, data: str = "") -> set[tuple[str, str]]:
     if proc.returncode or not good:
         fail(f"gpgv refuses {signature}:\n{proc.stderr}{proc.stdout}")
     return good
+
+
+# rpmkeys -Kv's line for a signature: rpm 4 "Header V4 RSA/SHA512 Signature, key ID
+# 711bb799: OK", rpm 6 "Header OpenPGP V4 RSA/SHA512 signature, key fingerprint: b587...: OK"
+RPM_SIGNATURE = re.compile(r"(?i)\bsignature, key (?:id|fingerprint:) ([0-9a-f]+): (.*)$")
+
+
+def rpm_signature_problems(name: str, output: str, returncode: int,
+                           keys: list[str]) -> list[str]:
+    """What rpmkeys -Kv says is wrong with the package `name`: each signature has to be
+    good and by one of `keys` (fingerprints), and there has to be one (an unsigned package
+    passes rpm -K on its digests alone)."""
+    problems, signatures = [], 0
+    for line in output.splitlines():
+        m = RPM_SIGNATURE.search(line.strip())
+        if not m:
+            if re.search(r"(?i)\b(not ok|bad|nokey|notrusted)\b", line):
+                problems.append(f"{name}: {line.strip()}")
+            continue
+        signatures += 1
+        key_id, verdict = m.group(1).upper(), m.group(2).strip()
+        if verdict != "OK":
+            problems.append(f"{name}: signature by {key_id}: {verdict}")
+        elif not any(k.upper().endswith(key_id) for k in keys):
+            problems.append(f"{name}: signed by {key_id}, not {' / '.join(keys)}")
+    if not signatures:
+        problems.append(f"{name}: no signature")
+    if returncode and not problems:
+        problems.append(f"{name}: rpmkeys -K exits {returncode}")
+    return problems
+
+
+def check_rpms(site: str, keys: list[str]) -> list[str]:
+    """Every .rpm's signature, rpmkeys -K against the site's key in an RPM database of
+    its own."""
+    files = rpm_files(site)
+    if not files:
+        return []
+    rpmkeys = program("rpmkeys")
+    db = tempfile.mkdtemp(prefix="rpmdb-")
+    try:
+        imported = subprocess.run([rpmkeys, "--dbpath", db, "--import",
+                                   os.path.join(site, f"{KEYRING}.asc")],
+                                  capture_output=True, text=True, check=False)
+        if imported.returncode:
+            return [f"rpmkeys --import {KEYRING}.asc: {imported.stderr.strip()}"]
+        problems = []
+        for path in files:
+            proc = subprocess.run([rpmkeys, "--dbpath", db, "-Kv", path], capture_output=True,
+                                  text=True, check=False)
+            problems += rpm_signature_problems(os.path.relpath(path, site),
+                                               proc.stdout + proc.stderr, proc.returncode, keys)
+        return problems
+    finally:
+        shutil.rmtree(db, ignore_errors=True)
 
 
 def check_release(deb: str) -> list[str]:
@@ -827,6 +939,7 @@ def verify(site: str, fingerprint: str | None = FINGERPRINT) -> list[str]:
         for signer, algo in good:
             if signer not in keys or algo not in ("8", "10"):  # SHA256, SHA512
                 problems.append(f"{signature}: signed by {signer} with hash algorithm {algo}")
+    problems += check_rpms(site, keys)
     with open(os.path.join(deb, "dists", SUITE, "InRelease"), encoding="utf-8",
               newline="") as fh:
         signed = fh.read()
@@ -890,7 +1003,7 @@ def main(argv: list[str] | None = None) -> int:
     elif args.command == "verify":
         keys = verify(args.site, None if args.any_key else args.fingerprint)
         print(f"PASS: {args.site}: every index matches its files, every signature is "
-              f"good ({', '.join(keys)})")
+              f"good, every package's too ({', '.join(keys)})")
     elif args.command == "fingerprint":
         with open(args.asc, encoding="ascii") as fh:
             print("\n".join(fingerprints(dearmor(fh.read()))))

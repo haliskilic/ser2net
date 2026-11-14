@@ -12,8 +12,10 @@
 #           ser2netweb is not installed;
 #         - against the tree as built they install ser2netweb with no signature warning,
 #           `ser2netweb --version` says VERSION, it comes from this repository (dnf prints
-#           the key it imports), the update commands run, and the remove commands remove
-#           the package and the repository, after which the package manager works as before.
+#           the key it imports; dnf and zypper check the package's signature too,
+#           gpgcheck=1, and rpm names the key that made it), the update commands run, and
+#           the remove commands remove the package and the repository, after which the
+#           package manager works as before.
 #   tests/package_repo_smoke.sh --live SITE IMAGE VERSION
 #       Once https://haliskilic.github.io/ser2netweb serves SITE's InRelease and repomd.xml
 #       (GitHub Pages' cache may take some minutes), the same commands against it, as they
@@ -107,6 +109,19 @@ inside() {  # inside FAMILY VERSION BASE FINGERPRINT [live]
         zypper)
             zypper --non-interactive --no-refresh info ser2netweb | tee /tmp/info.txt
             grep -Eq '^Repository *: ser2netweb$' /tmp/info.txt || fail "not from the repository ser2netweb"
+            ;;
+    esac
+    case "$family" in
+        dnf | zypper)
+            # the package's own signature (gpgcheck=1), by the repository's key
+            sig=$(rpm -q --qf '%{RSAHEADER:pgpsig}' ser2netweb)
+            id=$(printf '%s' "$fingerprint" | cut -c25-40 | tr 'A-F' 'a-f')
+            printf '%s' "$sig" | tr 'A-F' 'a-f' | grep -q "key id $id" ||
+                fail "the installed package isn't signed by $fingerprint: $sig"
+            repo=/etc/yum.repos.d/ser2netweb.repo
+            [ "$family" = dnf ] || repo=/etc/zypp/repos.d/ser2netweb.repo
+            grep -q '^gpgcheck *= *1$' "$repo" || { cat "$repo"; fail "$repo has no gpgcheck=1"; }
+            echo "OK: the package is signed: $sig"
             ;;
     esac
     echo "OK: ser2netweb $version from the repository"
