@@ -68,6 +68,11 @@ not turned off).
     (an Arduino) resets when the mapping starts, not at each connection;
   - `hangup-when-done` and `nobreak` are kept in the mapping but have no effect (the preview
     says so);
+  - to get the classic behaviour back for a TCP server mapping, tick **Open the serial port
+    only while a client is connected** (`network.open_on_connect`): the port is then opened
+    for the first client and closed a little after the last one left, the open string goes
+    out at each of those opens, and another program can use the device in between. The
+    import does not turn it on;
   - other programs can't use the device between sessions: stop the mapping first.
 - **One mapping per device.** Several classic connections may share one device (each opens
   it only while used); here the first keeps it and the later ones come in disabled. A
@@ -89,9 +94,37 @@ not turned off).
 - **Traces:** one trace file per mapping, both directions, in the data folder's `traces/`
   and rotated by size (`trace-read` alone is not imported: a trace here records what
   clients send too).
-- **Left out, with a note:** LEDs, rotators, mDNS, `telnet-brk-on-sync`, unknown options.
-  `chardelay` (how the classic ser2net batches what it reads) is dropped without one: data
-  is forwarded as it arrives.
+- **UDP fixed remote addresses** become the mapping's UDP targets (**Also send the device's
+  output to**), each with a note: on a UDP connection, 4.x `remaddr: !addr,port` and
+  `connback: udp,addr,port`, and 3.x `remaddr=addr,port` with a port (the classic ser2net
+  sends all of the device's traffic to such an address). Only an IP address with a port
+  can be one, of the address family the mapping listens on; `255.255.255.255` also ticks
+  **Allow broadcast**. A `remaddr` address still limits who may send; a `connback` one
+  does not. On a TCP connection a connect-back address is not imported, as before.
+- **chardelay** becomes **packing** when the file sets it on a raw connection: `chardelay:
+  true`, one of `chardelay-scale` / `chardelay-min` / `chardelay-max`, or `sendon` (4.x); in
+  3.x the `chardelay` keyword or one of the `chardelay-…=` options. The packing gap is the
+  classic ser2net's own wait after a byte, (bits per character × 100000 × chardelay-scale)
+  ÷ baud rate microseconds, at least `chardelay-min` and never more than `chardelay-max`,
+  in whole milliseconds (9600 8N1 with the defaults: 2083 µs → 3 ms); the frame size is
+  its buffer (`dev-to-net-bufsize`, 64 bytes), since there is no time limit like
+  `chardelay-max` here and the frame size is what bounds the wait in a steady stream;
+  `sendon` is the packing delimiter (at most 16 bytes). A file that says nothing about
+  chardelay gets no packing, although the classic default is on: data is forwarded as it
+  arrives here, which is what a 2-character wait amounts to on a network. `chardelay:
+  false` is that too; telnet and RFC 2217 connections are not packed (their chardelay
+  options are listed as not imported).
+- **Rotators** become **port pools** (Settings → Port pools) that rotate as the classic
+  one does (the search for a free connection starts after the one that got the last
+  client), with the rotator's TCP connections as members. A pool tries its mappings in
+  the order of the mappings (a note says so when the rotator lists them in another
+  order), hands a client only to a mapping that runs (the classic rotator also used
+  connections that were turned off) and gives it that mapping's protocol. Not imported,
+  with the reason: a rotator on UDP, with `ssl` / `certauth` or on a host name, one whose
+  port a connection uses, its `authdir` / `pamauth` / `allowed-users` options, and as
+  members UDP connections and connections with TLS. A pool whose name already exists
+  here is left as it is; the imported mappings join it.
+- **Left out, with a note:** LEDs, mDNS, `telnet-brk-on-sync`, unknown options.
 
 ## Option by option
 
@@ -116,12 +149,15 @@ not turned off).
 | `kickolduser`, `max-connections` | **Kick old client**, **Max connections** |
 | `timeout` | **Idle timeout (s)** |
 | `remaddr` | **Allowed client IPs / CIDRs** |
+| UDP: `remaddr: !addr,port`, `connback` (4.x), `remaddr=addr,port` (3.x) | **Also send the device's output to** (UDP targets) |
+| `chardelay: true`, `chardelay-scale` / `-min` / `-max`, `dev-to-net-bufsize`, `sendon` (raw) | **Packing gap**, **Packing frame size**, **Packing delimiter** |
+| `rotator:` / `ROTATOR:` | a port pool with `rotate`; its TCP connections name it (**Port pool**) |
 | `no-acc-to-con` | **Read-only** |
 | `no-con-to-acc` | imported disabled |
 | `banner`, `openstr`, `closestr`, `closeon` | the mapping's strings (escapes converted) |
 | `signature` (RFC 2217) | **RFC 2217 signature** |
 | `trace-both` / `trace-read` / `trace-write`, `trace-*-hexdump`, `-timestamp` | **Trace file name**, **Trace as hex dump** |
-| LEDs, rotators, mDNS, `chardelay` | not imported |
+| LEDs, mDNS, `chardelay: false`, chardelay on telnet / RFC 2217 | not imported |
 | `enable: off` / `port:off:` | imported disabled |
 | `default:` (and classes), `define`, `*(name)` | applied to each connection as the classic ser2net applies them |
 

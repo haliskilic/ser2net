@@ -139,6 +139,14 @@
       <label>{{ _("Connect timeout (s)") }} <span class="muted">({{ _("0 = OS default") }})</span>
         <input type="number" required name="network_connect_timeout_s" min="0" max="3600" step="any" value="{{ '%g'|format(mapping.network.connect_timeout_s) }}"></label>
     </div>
+    {% if 'failover' not in hide %}
+    <div class="grid2" data-show-when="network_mode=client">
+      <label>{{ _("Other targets") }} <span class="muted">({{ _("host:port, tried in this order when the remote host can’t be reached; several separated by spaces") }})</span>
+        <input type="text" name="network_remote_targets" value="{{ mapping.network.remote_targets | join(' ') }}" placeholder="{{ _('e.g. %(example)s', example='192.168.1.21:4001') }}" autocapitalize="none" autocorrect="off" spellcheck="false"></label>
+      <label>{{ _("Back to the first target (s)") }} <span class="muted">({{ _("0 = only when the link in use fails; else the remote host is tried again this often, and the link moves back once it answers") }})</span>
+        <input type="number" name="network_failover_return_s" min="0" max="86400" value="{{ mapping.network.failover_return_s }}"></label>
+    </div>
+    {% endif %}
 
     <div data-show-when="network_mode=server">
       <div class="grid3">
@@ -148,6 +156,19 @@
       <label>{{ _("High-priority client IPs / CIDRs") }} <span class="muted">({{ _("kick an existing client when full") }})</span>
         <input type="text" name="network_priority_client_ips" value="{{ mapping.network.priority_client_ips | join(' ') }}" placeholder="{{ _('e.g. %(example)s', example='192.168.1.10') }}">
       </label>
+      {% if 'open_on_connect' not in hide %}
+      <div class="grid2" data-show-when="network_protocol=raw,telnet,rfc2217">
+        <input type="hidden" name="network_open_on_connect_shown" value="1">
+        <label class="chk chk-pad"><input type="checkbox" name="network_open_on_connect" {% if mapping.network.open_on_connect %}checked{% endif %}> {{ _("Open the serial port only while a client is connected") }} <span class="muted">({{ _("another program can use the port in between; a client is taken once the port is open. The web console counts as a client") }})</span></label>
+        <label>{{ _("Keep the port open after the last client (s)") }}
+          <input type="number" name="network_port_linger_s" min="0" max="3600" step="any" value="{{ '%g'|format(mapping.network.port_linger_s) }}"></label>
+      </div>
+      {% endif %}
+      {% if 'pool' not in hide %}
+      <label data-show-when="network_protocol=raw,telnet,rfc2217">{{ _("Port pool") }} <span class="muted">({{ _("optional: the name of a pool from Settings → Port pools, whose port hands each new client to the first mapping of the pool with a free connection; not with TLS") }})</span>
+        <input type="text" name="network_pool" maxlength="64" value="{{ mapping.network.pool }}" placeholder="{{ _('optional') }}" autocapitalize="none" autocorrect="off" spellcheck="false">
+      </label>
+      {% endif %}
       {% if mapping.network.kick_old_user and not mapping.network.allowed_client_ips %}
       <p class="sub mb-sm" data-kick-hint>{{ _("“Kick old client” is on and no allowed client IPs are set: any host that can reach this port can take the connection over from the client using it.") }}</p>
       {% endif %}
@@ -161,6 +182,11 @@
       <label>{{ _("Allowed client IPs / CIDRs") }} <span class="muted">({{ _("blank = any; enforced for TCP server and UDP") }})</span>
         <input type="text" name="network_allowed_client_ips" value="{{ mapping.network.allowed_client_ips | join(' ') }}" placeholder="{{ _('e.g. %(example)s', example='192.168.1.0/24') }}">
       </label>
+      {% if 'writer_ips' not in hide %}
+      <label data-show-when="network_protocol=raw,telnet,rfc2217">{{ _("Writer client IPs / CIDRs") }} <span class="muted">({{ _("blank = every client may send; set: only these may send to the device, the others only receive its output") }})</span>
+        <input type="text" name="network_writer_client_ips" value="{{ mapping.network.writer_client_ips | join(' ') }}" placeholder="{{ _('e.g. %(example)s', example='192.168.1.10') }}">
+      </label>
+      {% endif %}
     </div>
 
     {% if 'udp_reply' not in hide %}
@@ -276,6 +302,16 @@
       <label>{{ _("RFC 2217 signature") }} <span class="muted">({{ _("the answer to a client that asks for the server’s signature · blank = ser2net") }})</span>
         <input type="text" name="opt_rfc2217_signature" maxlength="128" value="{{ mapping.options.rfc2217_signature }}" placeholder="ser2net"></label>
       {% endif %}
+    </div>
+    {% endif %}
+    {% if 'packing' not in hide %}
+    <div class="grid3" data-show-when="network_protocol=raw">
+      <label>{{ _("Packing gap (ms)") }} <span class="muted">({{ _("forward the device’s output as one frame once it has sent nothing for this long; one datagram per frame over UDP · 0 = off") }})</span>
+        <input type="number" name="opt_pack_gap_ms" min="0" max="60000" value="{{ mapping.options.pack_gap_ms }}"></label>
+      <label>{{ _("Packing delimiter") }} <span class="muted">({{ _("a frame ends with these bytes:") }} <span class="mono">\r \n \t \\ \xHH</span> · {{ _("blank = none") }})</span>
+        <input type="text" name="opt_pack_delimiter" value="{{ mapping.options.pack_delimiter }}" placeholder="{{ _('e.g. %(example)s', example='\\r\\n') }}" autocapitalize="none" autocorrect="off" spellcheck="false"></label>
+      <label>{{ _("Packing frame size (bytes)") }} <span class="muted">({{ _("a frame is sent once it has this many bytes · 0 = 4096 while packing is on") }})</span>
+        <input type="number" name="opt_pack_max_bytes" min="0" max="65507" value="{{ mapping.options.pack_max_bytes }}"></label>
     </div>
     {% endif %}
     {% if 'poll_string' not in hide %}

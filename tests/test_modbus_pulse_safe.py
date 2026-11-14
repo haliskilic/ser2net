@@ -13,7 +13,9 @@ tests/test_modbus_mqtt_write.py (no broker, no hardware). Checks:
     closes; the same for a Sparkplug DCMD;
   * safe values: once the broker connection has been away for a point's safe_after_s its
     safe_value is written, once, through the write queue (logged with why; the point's
-    read-back follows); not when the broker is back sooner; again at the next outage; from
+    read-back follows); not when the broker is back sooner; a broker that keeps taking and
+    dropping the client is away from the first loss (a session ends an outage only once it
+    lasts SAFE_STEADY_S, at most the shortest safe_after_s); again at the next outage; from
     the mapping's start too when the broker never comes; a write that fails is tried
     again; the mapping's status has it (safe: waiting, applied, ok) and the dashboard row
     and the notifier (safe_values, opt-in) report it;
@@ -269,7 +271,9 @@ async def test_safe_values(port):
         assert st["state"] == "waiting" and st["watching"] == "broker" and st["since"], st
         assert any(m.startswith("safe values: 2 point(s) are written") for m in logs), logs
         await connack(fake)
-        assert r.status.as_dict()["safe"]["state"] == "ok"
+        # (an outage ends once the broker is back for SAFE_STEADY_S, at most the shortest
+        # safe_after_s: here 1 s)
+        assert await wait(lambda: r.status.as_dict()["safe"]["state"] == "ok", 3.0)
         assert r.status.as_dict()["safe"]["since"] is None
         fake.deliver("plant/a/setpoint/set", b"55")
         fake.deliver("plant/a/pump/set", b"1")
@@ -307,7 +311,7 @@ async def test_safe_values(port):
               "point its own), once, logged, in the status, a safe_values event  OK")
 
         await connack(fake)
-        assert r.status.as_dict()["safe"]["state"] == "ok"
+        assert await wait(lambda: r.status.as_dict()["safe"]["state"] == "ok", 3.0)
         assert any("safe values: the broker is back; 'setpoint', 'pump' keep(s)" in m
                    for m in logs), logs
         assert REGS[10] == 7, "the safe value stays until a command changes it"
@@ -362,6 +366,36 @@ async def test_safe_values(port):
         assert any(m.startswith("safe values: not written, the mapping is read-only")
                    for m in logs), logs
     print("safe values: a read-only mapping writes none, and says so  OK")
+
+
+async def test_safe_values_flapping(port):
+    # a broker that takes the client and drops it again (another client with its client
+    # ID, an ACL plugin, a crash loop): away all along, from the first loss
+    reset()
+    fake, logs = FakeMqtt(), []
+    REGS[10] = 55
+    async with started(port, fake, points=[dict(SETPOINT, safe_value=7, safe_after_s=1)],
+                       logs=logs) as r:
+        await connack(fake)
+        assert await wait(lambda: r.status.as_dict()["safe"]["state"] == "ok", 3.0)
+        SEEN.clear()
+        began, up = time.monotonic(), []
+        while REGS[10] != 7 and time.monotonic() - began < 5.0:
+            await lost(fake)
+            await asyncio.sleep(0.25)
+            await connack(fake)
+            up.append(REGS[10])  # (what the device holds while the broker is there)
+            await asyncio.sleep(0.2)
+        took = time.monotonic() - began
+        assert REGS[10] == 7, ("never written while the broker keeps dropping the client",
+                               logs[-5:])
+        assert 0.9 < took < 2.5, took
+        assert 55 in up and all(v == 55 for v in up[:-1]), up
+        assert r.status.as_dict()["safe"]["state"] in ("waiting", "applied")
+        assert await wait(lambda: r.status.as_dict()["safe"]["state"] == "ok", 3.0)
+        assert len(safe_writes()) == 1, ("once for the whole outage", safe_writes())
+    print("safe values: a broker that keeps taking and dropping the client is away from the "
+          "first loss; the value is written once, not while the broker is there  OK")
 
 
 async def test_safe_values_primary_host(port):
@@ -557,6 +591,7 @@ async def main():
         await test_pulse_off_retried(port)
         await test_pulse_survives_stop(port)
         await test_safe_values(port)
+        await test_safe_values_flapping(port)
         await test_safe_values_primary_host(port)
         await test_stored_bad_values(port)
     finally:

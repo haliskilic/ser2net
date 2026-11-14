@@ -28,7 +28,7 @@ ROOT = os.path.join(os.path.dirname(__file__), "..")
 UI = free_port()
 BASE = f"http://127.0.0.1:{UI}"
 
-from _server import ui_cookie
+from _server import refusal, ui_cookie
 
 
 def wait_port(port, timeout=15):
@@ -115,7 +115,8 @@ def main():
             "serial_port": "/dev/ttyUSB-test", "serial_baudrate": "9600",
         })
         s2 = getattr(r2, "code", getattr(r2, "status", 200))
-        assert s2 == 200, f"valid mapping should save (200), got {s2}"
+        body2 = r2.read().decode("utf-8", "replace")
+        assert s2 == 200, f"valid mapping should save (200), got {s2}: {refusal(body2)}"
         assert r2.headers.get("HX-Trigger") == "refreshMappings"
         print("valid save -> 200 + HX-Trigger refresh  OK")
 

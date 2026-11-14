@@ -217,6 +217,16 @@ class Server:
         shutil.rmtree(self.tmp, ignore_errors=True)
 
 
+def refusal(body: str) -> str:
+    """What a refused web UI answer says, for a test's failure message: the text of its
+    first error banner (a form shown again with the reason), else the start of the body."""
+    import html
+    import re
+
+    m = re.search(r'class="banner error"[^>]*>(.*?)</div>', body, re.S)
+    return html.unescape(m.group(1)).strip() if m else body[:300]
+
+
 def ui_cookie(name: str, port, scheme: str = "http", path: str = "/") -> str:
     """The name the web UI gives its cookie `name` (ser2net_session, ser2net_csrf, ...) at
     scheme://127.0.0.1:`port`: tagged by the port unless it is 8080, with __Host- over https

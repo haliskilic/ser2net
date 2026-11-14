@@ -44,7 +44,7 @@ import urllib.request
 from collections import deque
 from email.message import EmailMessage
 from email.utils import formataddr, parseaddr
-from typing import Optional
+from typing import Awaitable, Callable, Optional
 
 from . import __version__, certwatch, i18n, storage, user_agent
 from .config import node_name as configured_name
@@ -571,10 +571,12 @@ class Notifier:
                 await t
         self._tasks = []
 
-    def emit(self, event: str, key: str, mapping: str, detail: str = "") -> bool:
+    def emit(self, event: str, key: str, mapping: str, detail: str = "",
+             sent: Optional[Callable[[bool], Awaitable[None]]] = None) -> bool:
         """Queue an event if it is enabled and not a repeat; True when queued. A client
         event's address is masked here (mask_personal_data); its repeat key stays the
-        address itself."""
+        address itself. `sent(ok)` is awaited once the worker has tried it: ok when every
+        channel took it (False also when the rate limit held it back)."""
         s = self.settings
         if not s.enabled or event not in s.events:
             return False
@@ -589,7 +591,7 @@ class Notifier:
         if s.mask_personal_data and event in CLIENT_EVENTS:
             detail = mask_address(detail)
         try:
-            self._queue.put_nowait((event, mapping, detail))
+            self._queue.put_nowait((event, mapping, detail) + ((sent,) if sent else ()))
         except asyncio.QueueFull:
             return False
         return True
@@ -695,26 +697,34 @@ class Notifier:
 
     async def _worker(self) -> None:
         while True:
-            event, mapping, detail = await self._queue.get()
+            # (event, mapping, detail[, sent]): see emit
+            event, mapping, detail, *after = await self._queue.get()
             try:
-                await self._send(event, mapping, detail)
+                ok = await self._send(event, mapping, detail)
+                for sent in after:
+                    try:
+                        await sent(ok)
+                    except Exception as e:  # (its own: never the worker's end)
+                        self.state.log(f"notifications: after {event}: {e}")
             finally:
                 self._queue.task_done()
 
-    async def _send(self, event: str, mapping: str, detail: str) -> None:
+    async def _send(self, event: str, mapping: str, detail: str) -> bool:
+        """Send one event now; whether every channel took it."""
         now = time.monotonic()
         while self._sent and now - self._sent[0] > 60:
             self._sent.popleft()
         if len(self._sent) >= MAX_PER_MINUTE:
             self.state.log(f"notifications: rate limit ({MAX_PER_MINUTE}/min), "
                            f"not sent: {event} {mapping}")
-            return
+            return False
         self._sent.append(now)
         warnings: list[str] = []
         errors = await self.deliver(event, mapping, detail, warnings=warnings)
         what = f"{event}, mapping {mapping!r}" if mapping else event
         for err in [str(e) for e in errors] + warnings:
             self.state.log(f"notifications: {err} ({what})")
+        return not errors
 
     async def deliver(self, event: str, mapping: str, detail: str,
                       settings=None, warnings: Optional[list] = None) -> list["Failure"]:

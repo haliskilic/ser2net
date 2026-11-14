@@ -193,6 +193,12 @@ nobody can command it any more:
   instead: its STATE saying offline, or the broker connection lost, for that long. A
   connection that breaks without a word (a cable pulled, a router gone) is noticed by the
   MQTT keepalive (30 s), up to a minute later; the time counts from then.
+- An outage counts from its first loss. A connection that comes back ends it once it has
+  stayed up for 10 s (or for the shortest `safe_after_s` of the mapping's points, when
+  that is less); a broker that takes the client and drops it again sooner (another client
+  with the same client ID, an authorization plugin, a broker in a crash loop) is away all
+  along. No safe value is written while the connection is up: a point whose time comes
+  then is written when it drops again.
 - The time also runs from the mapping's start: a gateway that starts (or is saved, which
   restarts it) and does not reach its broker, or does not see its primary host online,
   within `safe_after_s` writes the safe values.
@@ -201,7 +207,7 @@ nobody can command it any more:
   scale) and within its `min` / `max` / `allowed` (an edit refuses another; a stored one is
   not used, with a warning in the log at start). A write that fails (the unit does
   not answer, the port is down) is tried again every 10 s until it works or the broker is
-  back. Back in time: nothing is written. Afterwards the point keeps the safe value until
+  back (for good, see above). Back in time: nothing is written. Afterwards the point keeps the safe value until
   a command changes it.
 - It is logged (`wrote 'setpoint' = 20 (… from its safe value: no broker for 60 s)`), shown
   on the dashboard and in the status (`status.safe`: `state` ok / waiting / applied,

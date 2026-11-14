@@ -5,6 +5,9 @@ running bridges. Editing a mapping at runtime stops the old runner (awaiting ful
 teardown so the listening socket is released) before starting the new one, which
 avoids address-in-use / port races.
 
+The port pools (engine/pool.py) run next to the mappings: start_all starts them after the
+mappings, stop_all stops them first, apply_pools brings them in line with a changed config.
+
 A mapping whose listener can't take its address (netguard.BindError: the port is in use,
 or the address is not on this machine yet, as at boot before DHCP) stays in state "error"
 and is started again after a backoff (up to BIND_RETRY_MAX_S between tries), for as long
@@ -29,8 +32,11 @@ import time
 from typing import Any, Callable, Optional, Protocol
 
 from .. import tlsreload
-from ..config import AppConfig, MappingConfig, mqtt_start_warnings, mqtt_warnings
+from ..config import (
+    AppConfig, MappingConfig, PortPool, mqtt_start_warnings, mqtt_warnings, pool_member,
+)
 from . import bindhint, portlist, serial_io
+from .pool import PoolManager
 from .bridge import MappingRunner, RunnerStatus, remove_files
 from .netguard import BindError
 from .serial_link import Backoff
@@ -167,6 +173,22 @@ class Supervisor:
         self._late: set[str] = set()
         self._retries: dict[str, asyncio.Task] = {}  # mapping id -> its bind retry
         self._ports: Optional[set[str]] = None  # the serial ports last seen (ports_changed)
+        # the port pools that run (engine/pool.py): each hands its clients to its members
+        self.pools = PoolManager(self._pool_members, self.log)
+
+    def _pool_members(self, name: str) -> list[MappingRunner]:
+        """A pool's member runners, in the order of the mappings: the transparent bridge's
+        TCP server mappings that name it (config.pool_member)."""
+        out = []
+        for mid in list(self._order):
+            runner = self._runners.get(mid)
+            if isinstance(runner, MappingRunner) and pool_member(runner.mapping) == name:
+                out.append(runner)
+        return out
+
+    async def apply_pools(self, pools: list[PortPool]) -> None:
+        """Run the port pools as the config has them now (PoolManager.apply)."""
+        await self.pools.apply(pools)
 
     @contextlib.asynccontextmanager
     async def _turn(self, mapping_id: str):
@@ -213,6 +235,7 @@ class Supervisor:
                     await self._apply(current.id, current, mqtt_notes)
                 else:
                     self._ensure_stopped_placeholder(current)
+        await self.apply_pools(config.pools)  # (after their members: a client finds them)
 
     async def stop_all(self) -> None:
         """Stop every runner, side by side, each in its mapping's turn, waiting at most
@@ -221,6 +244,7 @@ class Supervisor:
         finish in the background, instead of keeping the others running (an import or a
         restore stops all, then starts the new set) or the process from exiting. Loops
         until no runner is left (also one an operation under way adds meanwhile)."""
+        await self.pools.stop_all()  # first: no client is handed to a runner that stops
         loop = asyncio.get_running_loop()
         deadline = loop.time() + STOP_ALL_TIMEOUT_S
         while self._runners:

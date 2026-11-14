@@ -39,6 +39,19 @@ With MQTT, the device's lines are published; with mqtt.tx_enabled each message o
 send, from a queue of at most MQTT_TX_MAX_BYTES, and answered on <base_topic>/tx/result.
 options.poll_string is sent every poll_interval_s while the port is open (by default not
 while a TCP client is connected).
+
+Opt-in, per mapping (each off by default):
+  - packing (options.pack_gap_ms / pack_delimiter / pack_max_bytes, raw protocol): the
+    device's output reaches the clients as frames (Packer), one datagram each over UDP;
+    the console, the hex view, the trace and MQTT still get it as it is read;
+  - network.writer_client_ips: only clients from these addresses may send to the device,
+    the others only listen (what they send is dropped and counted);
+  - network.open_on_connect (TCP server): the serial port is open only while a client (or
+    the web console) is connected, and for port_linger_s after the last one left; in
+    between the status says the mapping waits for a client;
+  - network.remote_targets (connect-out): more targets, tried in order when the one in
+    use can't be reached (failover_return_s: back to the first once it answers);
+  - network.pool: a port pool's listener (engine/pool.py) hands clients to take_client().
 """
 from __future__ import annotations
 
@@ -71,8 +84,9 @@ else:  # pragma: no cover - exercised only on Python 3.10
 
 from .. import i18n, storage
 from ..config import (
-    MQTT_TX_MAX_BYTES, MappingConfig, canonical_ip, host_port, mapping_file, mqtt_topic_problem,
-    poll_bytes, udp_peer_address, udp_peer_timeout, udp_targets,
+    MQTT_TX_MAX_BYTES, MappingConfig, canonical_ip, connect_targets, failover_return, host_port,
+    mapping_file, mqtt_topic_problem, pack_settings, poll_bytes, port_linger, udp_peer_address,
+    udp_peer_timeout, udp_targets,
 )
 from . import netguard, portdiag, serial_io, sockopts, tls
 from .netguard import LogEvery as _LogEvery
@@ -111,6 +125,9 @@ BREAK_S = 0.25
 # its output (flow control, a driver that never reports an empty queue) delays the command
 # no more than this, since an RFC 2217 client waits about 3 s for its answer
 SETTLE_MAX_S = 2.0
+# packing without a gap (a delimiter and / or a frame size only): an unfinished frame is
+# sent after this long without a byte from the device, so nothing is held back for good
+PACK_IDLE_FLUSH_S = 1.0
 # errno/winerror values for "the peer stopped answering" (keepalive or retransmission
 # timeout): ETIMEDOUT, plus on Windows WSAETIMEDOUT, WSAENETRESET and the overlapped-I/O
 # ERROR_SEM_TIMEOUT.
@@ -133,6 +150,70 @@ async def _close_client(writer: asyncio.StreamWriter) -> None:
     if not done:
         with contextlib.suppress(Exception):
             writer.transport.abort()
+
+
+class Packer:
+    """Cuts the device's output into frames (options.pack_*): a frame ends with the
+    delimiter (which stays in it) or at ``size`` bytes, whichever comes first; what is
+    left waits for more (flush(): the gap passed, or the port closed)."""
+
+    def __init__(self, delimiter: bytes, size: int) -> None:
+        self._delimiter = delimiter
+        self._size = max(1, size)
+        self._buf = bytearray()
+        self._searched = 0  # bytes of _buf that hold no delimiter's beginning and end
+
+    @property
+    def pending(self) -> int:
+        """Bytes waiting for the end of their frame."""
+        return len(self._buf)
+
+    def feed(self, data: bytes) -> list[bytes]:
+        """Take what was read from the device; the frames that are complete now."""
+        buf, delimiter, size = self._buf, self._delimiter, self._size
+        buf += data
+        frames = []
+        while buf:
+            end = -1
+            if delimiter:
+                at = buf.find(delimiter, self._searched, size)  # (all of it in the frame)
+                if at >= 0:
+                    end = at + len(delimiter)
+            if end < 0 and len(buf) >= size:
+                end = size
+            if end < 0:
+                break
+            frames.append(bytes(buf[:end]))
+            del buf[:end]
+            self._searched = 0
+        if delimiter:
+            self._searched = max(0, len(buf) - len(delimiter) + 1)
+        return frames
+
+    def flush(self) -> bytes:
+        """What is waiting, as the last frame (b"" when nothing is)."""
+        frame = bytes(self._buf)
+        self._buf.clear()
+        self._searched = 0
+        return frame
+
+
+class _Demand:
+    """Whether an open-on-connect mapping's serial port is wanted now: ``wanted`` is set
+    while it is, ``idle`` while it is not (two events, so either can be awaited)."""
+
+    def __init__(self) -> None:
+        self.wanted = asyncio.Event()
+        self.idle = asyncio.Event()
+        self.idle.set()
+
+    def set(self, wanted: bool) -> None:
+        if wanted:
+            self.idle.clear()
+            self.wanted.set()
+        else:
+            self.wanted.clear()
+            self.idle.set()
 
 
 def describe_disconnect(exc: BaseException) -> str:
@@ -584,8 +665,12 @@ class RunnerStatus:
     device: str = ""
     client_count: int = 0
     # connected peers, in the order they connected: each {"peer": "ip:port",
-    # "connected_at": time.monotonic() then, "priority": bool}
+    # "connected_at": time.monotonic() then, "priority": bool, "listen_only": bool (not
+    # one of network.writer_client_ips: what it sends is dropped)}
     clients: list[dict] = field(default_factory=list)
+    # network.open_on_connect: the mapping runs with its serial port closed, until a client
+    # connects (`state` stays "running": the listener is up)
+    waiting: bool = False
     # counted at the device, once (not per client, no telnet/RFC2217 control bytes);
     # serial<->serial bridge: in = port A -> B, out = port B -> A
     bytes_in: int = 0       # read from the serial device
@@ -610,6 +695,8 @@ class RunnerStatus:
     link: str = ""
     link_error: str = ""
     link_since: float = 0.0   # time.time() of the last change of `link`
+    # the connect-out target the link is on, or the one being tried ("host:port")
+    link_target: str = ""
     connect_failures: int = 0  # connect-out attempts that failed
     # why the serial port can't be opened, when that can be told (portdiag.Note: the group
     # the device needs, the mapping that has it open, ...), or, with state "error", why the
@@ -660,7 +747,8 @@ class RunnerStatus:
         """Publish the connected clients (access.Client: peer, seq, connected_at, priority),
         first connected first."""
         self.client_count = len(clients)
-        self.clients = [{"peer": c.peer, "connected_at": c.connected_at, "priority": c.priority}
+        self.clients = [{"peer": c.peer, "connected_at": c.connected_at, "priority": c.priority,
+                         "listen_only": getattr(c, "listen_only", False)}
                         for c in sorted(clients, key=lambda c: c.seq)]
 
     def watch_traffic(self, now: float) -> None:
@@ -669,7 +757,7 @@ class RunnerStatus:
         since begin a wait for one. Precise to that interval, which the no-data alarm
         (at least NO_DATA_MIN_S) allows, and nothing is added to the data path."""
         seen, self._seen = self._seen, (self.bytes_in, self.bytes_out)
-        if self.state != "running":
+        if self.state != "running" or self.waiting:  # (waiting: the port is closed)
             self._quiet_since = self._unanswered_since = None
             return
         if self.bytes_in != seen[0]:
@@ -693,12 +781,14 @@ class RunnerStatus:
             {"peer": c["peer"], "duration": fmt_duration(now - c["connected_at"]),
              "connected_s": max(0, int(now - c["connected_at"])),  # the same, as a number
              "priority": c.get("priority", False),
+             "listen_only": c.get("listen_only", False),
              "connected_at": float(round(wall + c["connected_at"]))}
             for c in self.clients
         ]
         return {
             "state": self.state,
             "device": self.device,
+            "waiting": self.waiting,
             "client_count": self.client_count,
             "clients": clients,
             "bytes_in": self.bytes_in,
@@ -717,6 +807,7 @@ class RunnerStatus:
             "link": self.link,
             "link_error": self.link_error,
             "link_since": int(self.link_since),
+            "link_target": self.link_target,
             "connect_failures": self.connect_failures,
             # in the web UI's language on the dashboard (English for the REST API)
             "hint": self.hint.text(i18n.gettext) if self.hint else "",
@@ -761,7 +852,7 @@ def _render_banner(template: str, mapping: MappingConfig, device: str, peer: str
 class _ClientConn:
     def __init__(self, runner: "MappingRunner", reader: asyncio.StreamReader,
                  writer: asyncio.StreamWriter, peer_ip: str, peer_port: int = 0,
-                 priority: bool = False):
+                 priority: bool = False, listen_only: bool = False):
         self.runner = runner
         self.reader = reader
         self.writer = writer
@@ -769,6 +860,10 @@ class _ClientConn:
         self.peer_port = peer_port
         self.peer = netguard.client_label(peer_ip, peer_port)
         self.priority = priority
+        # not one of network.writer_client_ips: it gets the device's output, and what it
+        # sends for the device is dropped (counted; the log says so once)
+        self.listen_only = listen_only
+        self._input_refused = False
         self.seq = connection_order()
         self.connected_at = time.monotonic()
         self._queue_max = runner.mapping.network.client_queue_max or CLIENT_QUEUE_MAX
@@ -850,7 +945,8 @@ class _ClientConn:
             return
         self._session = make_session(m.network.protocol, ser,
                                      poll_interval=m.options.rfc2217_poll_modem_interval_s,
-                                     read_only=m.network.read_only, log=self._protocol_log,
+                                     read_only=m.network.read_only or self.listen_only,
+                                     log=self._protocol_log,
                                      signature=m.options.rfc2217_signature)
 
         # initial bytes: protocol negotiation, then banner
@@ -932,6 +1028,9 @@ class _ClientConn:
             # in order: the data for the port, a BREAK, the commands that act on the port
             # (each after what came before it; see the module docstring)
             for part in parts:
+                if self.listen_only and (isinstance(part, bytes) or part is BREAK):
+                    self._refuse_input(len(part) if isinstance(part, bytes) else 0)
+                    continue
                 if isinstance(part, bytes):
                     if not m.network.read_only and await runner.serial_write(part):
                         written = True
@@ -953,6 +1052,15 @@ class _ClientConn:
                 # socket buffer holds more.
                 await asyncio.sleep(0)
         raise _Disconnect("closed by peer")
+
+    def _refuse_input(self, n: int) -> None:
+        """A listen-only client sent ``n`` bytes for the device (0: a BREAK): dropped and
+        counted; the log says so once per connection."""
+        self.runner.status.bytes_dropped += n
+        if not self._input_refused:
+            self._input_refused = True
+            self.runner._log(f"client {self.peer} only listens (it is not one of the writer "
+                             "client IPs): what it sends for the device is dropped")
 
     async def _pump_serial_to_net(self) -> None:
         while True:
@@ -1000,13 +1108,13 @@ class _ClientConn:
         with contextlib.suppress(Exception):
             self.writer.transport.abort()
 
-    def request_graceful_close(self) -> None:
+    def request_graceful_close(self, reason: str = "closed by closeon match") -> None:
         """Stop feeding new serial data, but let already-queued bytes flush to the
         client before closing (used by closeon so the triggering data is delivered)."""
         if self._closing:
             return
         self._closing = True
-        self.close_reason = self.close_reason or "closed by closeon match"
+        self.close_reason = self.close_reason or reason
         try:
             self._out.put_nowait(None)  # sentinel handled by _pump_serial_to_net
         except asyncio.QueueFull:
@@ -1053,6 +1161,38 @@ class MappingRunner:
             co = ""
         self._closeon = co.encode("utf-8", "replace") if co else b""
         self._closeon_tail = b""  # rolling carry-over so matches across reads aren't missed
+        # packing (options.pack_*, raw protocol): the frames the clients get
+        self._packer: Optional[Packer] = None
+        self._pack_gap = 0.0
+        self._pack_timer: Optional[asyncio.TimerHandle] = None
+        self._pack_note = self._set_up_packing()
+        # open on connect: who wants the port (clients, those waiting for it, the console)
+        self._demand = _Demand()
+        self._pending = 0  # clients waiting for the port before they are admitted
+        self._listener_log = _LogEvery(self._log)  # UDP senders that only listen
+        self._listeners_said: set[str] = set()
+
+    def _set_up_packing(self) -> str:
+        """Build the packer from options.pack_*; what the log says about it at start."""
+        m = self.mapping
+        if m.kind != "net" or m.network.protocol != "raw":
+            return ""
+        try:
+            pack = pack_settings(m.options)
+        except ValueError as e:
+            return f"warning: packing is off, the device's output is forwarded as it arrives: {e}"
+        if pack is None:
+            return ""
+        gap, delimiter, size = pack
+        self._packer = Packer(delimiter, size)
+        self._pack_gap = gap or PACK_IDLE_FLUSH_S
+        ends = ([f"{gap * 1000:g} ms without a byte"] if gap else []) \
+            + ([f"the delimiter {delimiter!r}"] if delimiter else []) + [f"{size} bytes"]
+        return ("packing the device's output: a frame ends after " + ", ".join(ends[:-1])
+                + (" or " if len(ends) > 1 else "") + ends[-1]
+                + ("" if gap else f" (an unfinished one is sent after {PACK_IDLE_FLUSH_S:g} s "
+                                  "without a byte)")
+                + (", one datagram per frame" if m.network.mode == "udp" else ""))
 
     @property
     def serial_instance(self):
@@ -1076,8 +1216,24 @@ class MappingRunner:
     @property
     def needs_port(self) -> bool:
         """A client session runs only while the serial port is open: RFC 2217 (it drives
-        the port), and any TCP mapping with disconnect_without_device."""
-        return self.mapping.network.protocol == "rfc2217" or self.drops_clients
+        the port), any TCP mapping with disconnect_without_device, and one that opens the
+        port for its clients (open_on_connect: a client is taken once the port is open, so
+        what it sends first is not lost)."""
+        return (self.mapping.network.protocol == "rfc2217" or self.drops_clients
+                or self.on_demand)
+
+    @property
+    def on_demand(self) -> bool:
+        """open_on_connect, on a TCP server mapping (true itself, not text)."""
+        net = self.mapping.network
+        return (net.open_on_connect is True and net.mode == "server"
+                and self.mapping.kind == "net")
+
+    def _demand_changed(self) -> None:
+        """Open on connect: the port is wanted while a client is connected or waits for it,
+        or the web console is open."""
+        if self.on_demand:
+            self._demand.set(bool(self._clients or self._pending or self._monitors))
 
     @property
     def drops_clients(self) -> bool:
@@ -1101,9 +1257,11 @@ class MappingRunner:
     # ---------------- console monitors (browser xterm) ----------------
     def add_monitor(self, mon) -> None:
         self._monitors.add(mon)
+        self._demand_changed()
 
     def discard_monitor(self, mon) -> None:
         self._monitors.discard(mon)
+        self._demand_changed()
 
     def _feed_monitors(self, data: bytes) -> None:
         for mon in list(self._monitors):
@@ -1183,18 +1341,32 @@ class MappingRunner:
             if poll is not None:
                 self._poll_task = asyncio.create_task(
                     self._poll_loop(*poll), name=f"poll:{self.mapping.name}")
+            if self._pack_note:
+                self._log(self._pack_note)
+            if self._access.writers_only:
+                self._log("only the writer client IPs may send to the device; other clients "
+                          "only listen")
             # up from here; the serial side reports its own state once it has tried the port
             self.status.state = "running"
             self.status.last_error = ""
             # serial side is shared by server/client/udp
-            self._serial_task = asyncio.create_task(
-                self._link.run(self._serial_session), name=f"serial:{self.mapping.name}")
+            if self.on_demand:
+                self.status.waiting = True
+                self._demand_changed()
+                self._serial_task = asyncio.create_task(
+                    self._serial_on_demand(), name=f"serial:{self.mapping.name}")
+            else:
+                self._serial_task = asyncio.create_task(
+                    self._link.run(self._serial_session), name=f"serial:{self.mapping.name}")
             if net.mode == "client":
                 self.status.set_link("connecting")
+                targets, _bad = connect_targets(net)
                 self._main_task = asyncio.create_task(
                     self._client_supervisor(), name=f"connectout:{self.mapping.name}")
-                self._log(f"connect-out to {host_port(net.remote_host, net.remote_port)} "
-                          f"({net.protocol}, {sockopts.describe(net)})")
+                self._log(f"connect-out to {host_port(*targets[0])} "
+                          + (f"(then {', '.join(host_port(*t) for t in targets[1:])}) "
+                             if len(targets) > 1 else "")
+                          + f"({net.protocol}, {sockopts.describe(net)})")
             elif udp is not None:
                 self._main_task = asyncio.create_task(udp.run(), name=f"udp:{self.mapping.name}")
         except BaseException:
@@ -1220,6 +1392,9 @@ class MappingRunner:
             mon.close()
         self._monitors.clear()
         self._traffic.clear()
+        if self._pack_timer is not None:
+            self._pack_timer.cancel()
+            self._pack_timer = None
         if self._mqtt is not None:
             mqtt, self._mqtt = self._mqtt, None
             await mqtt.aclose()
@@ -1241,7 +1416,9 @@ class MappingRunner:
             await self._tracer.aclose()
             self._tracer = None
         self.status.state = "stopped"
+        self.status.waiting = False
         self.status.set_link("")
+        self.status.link_target = ""
         self.status.client_count = 0
         self.status.clients = []
         self._log("stopped")
@@ -1423,6 +1600,21 @@ class MappingRunner:
             for c in list(self._clients):
                 c.serial_changed(serial)
 
+    def note_listener(self, ip: str, n: int) -> None:
+        """A UDP sender that is not one of the writer client IPs sent ``n`` bytes: dropped
+        and counted; the log names each such address once (the first 256, then at most
+        once a minute)."""
+        self.status.bytes_dropped += n
+        if ip in self._listeners_said:
+            return
+        text = (f"datagrams from {ip} are not written to the device: it is not one of the "
+                "writer client IPs (it still gets the device's output)")
+        if len(self._listeners_said) < 256:
+            self._listeners_said.add(ip)
+            self._log(text)
+        else:
+            self._listener_log(text)
+
     def _restore_port_settings(self) -> None:
         """rfc2217_restore_on_disconnect: once the RFC 2217 client has left, put the port
         back to this mapping's settings, so what comes next (the next client, the console,
@@ -1475,7 +1667,56 @@ class MappingRunner:
         if self.mapping.options.openstr:
             writer.write(self.mapping.options.openstr.encode("utf-8", "replace"))
             await writer.drain()
-        await self._serial_read_loop(reader)
+        try:
+            await self._serial_read_loop(reader)
+        finally:
+            if self._packer is not None:  # the port is gone: what waited is the last frame
+                self._pack_flush()
+
+    async def _serial_on_demand(self) -> None:
+        """open_on_connect: keep the port open (SerialLink.run, as always: reopened when it
+        goes away) only while it is wanted, and close it port_linger_s after the last
+        client left, so another program can use it until the next one connects."""
+        linger = port_linger(self.mapping.network)
+        st, demand = self.status, self._demand
+        self._log("the serial port is opened while a client is connected, and closed "
+                  f"{linger:g} s after the last one left")
+        while not self._stop.is_set():
+            await demand.wanted.wait()
+            st.waiting = False
+            run = asyncio.create_task(self._link.run(self._serial_session),
+                                      name=f"serial-open:{self.mapping.name}")
+            try:
+                while True:  # until nobody has wanted the port for the linger time
+                    await demand.idle.wait()
+                    with contextlib.suppress(asyncio.TimeoutError):
+                        await asyncio.wait_for(demand.wanted.wait(), timeout=linger)
+                    # (a client taken just as the linger ran out wants the port, too)
+                    if not demand.wanted.is_set():
+                        break
+            finally:
+                was_open = self._link.is_open
+                # No await since the last check: a client that connects from here on finds
+                # the port not open, waits for it (_admit) and so has it opened again
+                # once it is closed, instead of being taken on a port about to close.
+                self._link.ready.clear()
+                run.cancel()
+                with contextlib.suppress(asyncio.CancelledError, Exception):
+                    await run
+                await self._link.close()
+                if not self._stop.is_set():
+                    st.waiting, st.devices = True, ()
+                    if was_open or st.state not in ("device-missing", "reconnecting"):
+                        # the listener is up and the port is closed on purpose: no error
+                        st.state, st.hint, st.last_error = "running", None, ""
+                        self._log("serial port closed: no client is connected" if was_open
+                                  else "no client is connected: the serial port is not "
+                                  "tried any more")
+                    else:
+                        # it could not be opened: it stays so, with why, until an open works
+                        # (the notifier's device_back is for a device that is back)
+                        self._log("no client is connected: the serial port, which could not "
+                                  "be opened, is not tried any more until the next one")
 
     async def _serial_read_loop(self, reader: asyncio.StreamReader) -> None:
         while not self._stop.is_set():
@@ -1489,10 +1730,39 @@ class MappingRunner:
             self._feed_traffic(FROM_DEVICE, data)
             if self._mqtt is not None:
                 self._mqtt.feed(data)
-            for c in list(self._clients):
-                c.feed_from_serial(data)
-            if self._closeon:
-                self._check_closeon(data)
+            if self._packer is None:
+                self._to_clients(data)
+            else:
+                self._pack(data)
+
+    def _to_clients(self, data: bytes) -> None:
+        """The device's output for the clients: as it was read, or a frame (packing)."""
+        for c in list(self._clients):
+            c.feed_from_serial(data)
+        if self._closeon:
+            self._check_closeon(data)
+
+    def _pack(self, data: bytes) -> None:
+        """Packing: pass on the frames ``data`` completes; what is left goes out when the
+        gap has passed without another byte (_pack_flush)."""
+        packer = self._packer
+        assert packer is not None  # noqa: S101 - called only with packing on
+        for frame in packer.feed(data):
+            self._to_clients(frame)
+        if self._pack_timer is not None:
+            self._pack_timer.cancel()
+            self._pack_timer = None
+        if packer.pending:
+            self._pack_timer = asyncio.get_running_loop().call_later(
+                self._pack_gap, self._pack_flush)
+
+    def _pack_flush(self) -> None:
+        if self._pack_timer is not None:
+            self._pack_timer.cancel()
+            self._pack_timer = None
+        frame = self._packer.flush() if self._packer is not None else b""
+        if frame:
+            self._to_clients(frame)
 
     def _check_closeon(self, data: bytes) -> None:
         window = self._closeon_tail + data
@@ -1507,52 +1777,126 @@ class MappingRunner:
     # ---------------- network side ----------------
     def _refresh_clients(self) -> None:
         self.status.set_clients(self._clients)
+        self._demand_changed()
+
+    def free_for(self, peer_ip: str) -> bool:
+        """A port pool asks: would a client from ``peer_ip`` get a connection here now,
+        without anyone being kicked for it? (A TCP server mapping that runs, lets the
+        address in, has a connection left and, where a session needs the serial port, has
+        it open or opens it for its clients.)"""
+        return self.lets_in(peer_ip) and not self.full
+
+    def lets_in(self, peer_ip: str) -> bool:
+        """A port pool asks: is this a running TCP server mapping (without TLS: the pool's
+        port is plain TCP) whose allow-list has ``peer_ip``?"""
+        net = self.mapping.network
+        return (self._server is not None and not self._stop.is_set() and net.mode == "server"
+                and not net.tls and self._access.allowed(peer_ip))
+
+    @property
+    def full(self) -> bool:
+        """No client would get a connection now: every one is taken (a client waiting for
+        the serial port to open counts: it is taken once it is open), or a session needs
+        the serial port and it is neither open nor opened for a client."""
+        if self.needs_port and not self.on_demand and not self._link.is_open:
+            return True
+        live = [c for c in self._clients if not c.closing]
+        return len(live) + self._pending >= self.mapping.network.max_connections
+
+    async def take_client(self, reader: asyncio.StreamReader,
+                          writer: asyncio.StreamWriter) -> Optional[_ClientConn]:
+        """A client a port pool hands over (engine/pool.py), admitted as one that connected
+        to the mapping's own port, except that nobody is kicked to make room for it. The
+        client, for serve_client(); or None when the mapping turns it away after all (it
+        stops, its serial port could not be opened in time, another client took the last
+        connection meanwhile): the connection is then left as it is, for the pool's next
+        member."""
+        return await self._admit(reader, writer, handed=True)
+
+    async def serve_client(self, client: _ClientConn) -> None:
+        """Serve a client take_client() admitted, until it is gone."""
+        await self._serve(client)
 
     async def _on_client(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        client = await self._admit(reader, writer)
+        if client is not None:
+            await self._serve(client)
+
+    async def _admit(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter,
+                     handed: bool = False) -> Optional[_ClientConn]:
+        """A new connection: the client, listed in self._clients, or None when it is turned
+        away (closed, unless a port pool ``handed`` it over: take_client)."""
         if self._stop.is_set():  # accepted while the mapping stops
-            writer.close()
-            return
+            if not handed:
+                writer.close()
+            return None
         peer_ip, peer_port = netguard.peer_address(writer)
         peer_label = netguard.client_label(peer_ip, peer_port)
 
         # An RFC2217 session (and any, with disconnect_without_device) needs the open serial
         # port: wait briefly for it (an allowed client) BEFORE admission, so a client
         # waiting here holds no slot and nobody is kicked for a newcomer that is then
-        # turned away.
+        # turned away. (It counts as taking a connection for a port pool: full.)
         ready = self._link.ready
         if self.needs_port and not ready.is_set() and self._access.allowed(peer_ip):
-            with contextlib.suppress(asyncio.TimeoutError):
-                await asyncio.wait_for(ready.wait(),
-                                       timeout=self.mapping.options.rfc2217_net_timeout_s)
+            self._pending += 1  # (open on connect: the port is opened for it)
+            self._demand_changed()
+            try:
+                with contextlib.suppress(asyncio.TimeoutError):
+                    await asyncio.wait_for(ready.wait(),
+                                           timeout=self.mapping.options.rfc2217_net_timeout_s)
+            finally:
+                self._pending -= 1
+                if not ready.is_set():
+                    self._demand_changed()
             if not ready.is_set():
                 # (a poller retrying all the time: each reason once a minute, with a count)
-                if self.drops_clients:
+                if self.on_demand and not self.drops_clients \
+                        and self.mapping.network.protocol != "rfc2217":
+                    self._refusal_log(f"rejected {peer_label}: the serial port could not be "
+                                      f"opened ({self.status.last_error or 'not open yet'})")
+                elif self.drops_clients:
                     self._refusal_log(f"rejected {peer_label}: the serial port is not open "
                                       "(disconnect_without_device)")
                 else:
                     self._refusal_log(f"rejected {peer_label}: serial not ready for RFC2217")
-                writer.close()
-                return
+                if not handed:
+                    writer.close()
+                return None
+            if self._stop.is_set():
+                if not handed:
+                    writer.close()
+                return None
 
-        # allow-list, then max connections (a priority client / kick_old_user makes room);
-        # from here until the client is in self._clients nothing awaits, so connections
-        # accepted together are admitted one after the other, each seeing the one before
-        admission = self._access.admit(peer_ip, peer_label, self._clients, self._refusal_log)
+        # allow-list, then max connections (a priority client / kick_old_user makes room,
+        # never for a pool's client); from here until the client is in self._clients
+        # nothing awaits, so connections accepted together are admitted one after the
+        # other, each seeing the one before
+        admission = self._access.admit(peer_ip, peer_label, self._clients, self._refusal_log,
+                                       kick=not handed)
         if not admission.admitted:
+            if handed:
+                return None
             if admission.at_capacity:
                 with contextlib.suppress(Exception):
                     writer.write(b"Busy: maximum connections reached.\r\n")
                     await writer.drain()
             writer.close()
-            return
+            return None
         is_priority = admission.priority
 
         self._enable_keepalive(writer, peer_label)
-        client = _ClientConn(self, reader, writer, peer_ip, peer_port, priority=is_priority)
+        client = _ClientConn(self, reader, writer, peer_ip, peer_port, priority=is_priority,
+                             listen_only=not self._access.may_write(peer_ip))
         self._clients.add(client)
         self._refresh_clients()
-        tag = (" [priority]" if is_priority else "") + tls.client_certificate(writer)
+        tag = (" [priority]" if is_priority else "") \
+            + (" [listen-only]" if client.listen_only else "") + tls.client_certificate(writer)
         self._log(f"client connected: {peer_label}{tag} ({len(self._clients)} total)")
+        return client
+
+    async def _serve(self, client: _ClientConn) -> None:
+        """An admitted client (_admit), until it is gone; then what its leaving does."""
         try:
             await client.run()
         finally:
@@ -1560,7 +1904,7 @@ class MappingRunner:
             self._refresh_clients()
             held = fmt_duration(time.monotonic() - client.connected_at)
             why = f" — {client.close_reason}" if client.close_reason else ""
-            self._log(f"client disconnected: {peer_label} after {held}{why} "
+            self._log(f"client disconnected: {client.peer} after {held}{why} "
                       f"({len(self._clients)} total)")
             self._restore_port_settings()
             # closestr to device when the last client leaves
@@ -1576,8 +1920,8 @@ class MappingRunner:
             self._log(f"TCP keepalive not enabled for {peer}: {err}")
 
     # ---------------- connect-out (TCP client) ----------------
-    async def _connect_out(self):
-        """Resolve the remote host, then connect (+ TLS handshake) to each resolved
+    async def _connect_out(self, host: str, port: int):
+        """Resolve a target's host, then connect (+ TLS handshake) to each resolved
         address in turn, giving each one connect_timeout_s — like an OS connect
         timeout per address — so a dual-stack host whose IPv6 path is dead still
         falls back to IPv4 instead of the first address eating the whole budget.
@@ -1590,19 +1934,18 @@ class MappingRunner:
 
         Returns (reader, writer, what the log says about TLS); over TLS the server's
         certificate is checked first (tls.check_server: a pin that does not match is that
-        address's failure)."""
+        address's failure; with a CA file the certificate must name ``host``)."""
         net = self.mapping.network
         loop = asyncio.get_running_loop()
-        infos = await loop.getaddrinfo(net.remote_host, net.remote_port,
-                                       type=socket.SOCK_STREAM)
+        infos = await loop.getaddrinfo(host, port, type=socket.SOCK_STREAM)
         ssl_ctx = self._client_ssl()
-        error: BaseException = ConnectionError(f"no address for {net.remote_host}")
+        error: BaseException = ConnectionError(f"no address for {host}")
         for family, _type, _proto, _name, sockaddr in infos:
             try:
                 reader, writer = await asyncio.wait_for(
                     asyncio.open_connection(
                         str(sockaddr[0]), int(sockaddr[1]), family=family, ssl=ssl_ctx,
-                        server_hostname=net.remote_host if ssl_ctx else None),
+                        server_hostname=host if ssl_ctx else None),
                     timeout=net.connect_timeout_s or None)
             except asyncio.TimeoutError as e:
                 if getattr(e, "errno", None) is not None:
@@ -1622,51 +1965,129 @@ class MappingRunner:
                 error = e
         raise error
 
-    async def _client_supervisor(self) -> None:
-        net = self.mapping.network
-        target = host_port(net.remote_host, net.remote_port)
-        backoff = Backoff()
-        failures = FailureLog(self._log, "connect-out failed")
-        while not self._stop.is_set():
-            # an RFC 2217 session drives the serial port (disconnect_without_device: no
-            # session without it): connect out only while it is open
-            if self.needs_port and not await self._serial_open():
-                break
-            st = self.status
+    async def _connect_round(self, targets: list, first: int) -> tuple:
+        """Try the targets once each, in order from ``first`` (the one the link was on)
+        and on to the first again. Returns (index, reader, writer, TLS note) of the one
+        that answered; raises ConnectionError (why each failed) when none did."""
+        st = self.status
+        errors = []
+        for step in range(len(targets)):
+            i = (first + step) % len(targets)
+            st.link_target = host_port(*targets[i])
             try:
-                reader, writer, tls_note = await self._connect_out()
-                self._enable_keepalive(writer, target)
-                client = _ClientConn(self, reader, writer, net.remote_host, net.remote_port)
-                self._clients.add(client)
-                self._refresh_clients()
-                self._log(f"connected out to {target}{tls_note}{failures.recovered()}")
-                if st.link_error and st.last_error == st.link_error:
-                    st.last_error = ""  # (the link's error, not one of the serial side)
-                st.set_link("up")
-                backoff.reset()
-                try:
-                    await client.run()
-                finally:
-                    self._clients.discard(client)
-                    self._refresh_clients()
-                    # closed (by either end, or a timer): "down" only if the next try fails,
-                    # so a max connection time or idle timeout recycle is no outage
-                    st.set_link("connecting")
-                    held = fmt_duration(time.monotonic() - client.connected_at)
-                    why = f" — {client.close_reason}" if client.close_reason else ""
-                    self._log(f"connect-out link to {target} closed after {held}{why}")
-                    self._restore_port_settings()
+                return (i, *await self._connect_out(*targets[i]))
             except asyncio.CancelledError:
                 raise
             except Exception as e:
-                st.last_error = str(e)
                 st.connect_failures += 1
-                st.set_link("down", str(e))
-                failures.failed(str(e))
+                errors.append(str(e) if len(targets) == 1
+                              else f"{host_port(*targets[i])}: {e}")
             if self._stop.is_set():
                 break
-            if not await backoff.wait(self._stop):
-                break
+        raise ConnectionError("; ".join(errors))
+
+    async def _return_to_first(self, client: _ClientConn, target: tuple, every: float):
+        """failover_return_s: while the link is on another target, try the first one every
+        ``every`` seconds; once it answers, end the link in use (what is queued for it goes
+        out first) and return the new connection for the supervisor to use."""
+        while True:
+            await asyncio.sleep(every)
+            try:
+                conn = await self._connect_out(*target)
+            except asyncio.CancelledError:
+                raise
+            except Exception:  # still away (said when the link went to another target)
+                continue
+            client.request_graceful_close(
+                f"the first target {host_port(*target)} answers again")
+            return conn
+
+    async def _client_supervisor(self) -> None:
+        net = self.mapping.network
+        targets, bad = connect_targets(net)
+        for entry in bad:
+            self._log(f"warning: connect-out target {entry!r} is not a host and a port "
+                      "(host:port): left out")
+        back = failover_return(net) if len(targets) > 1 else 0.0
+        backoff = Backoff()
+        failures = FailureLog(self._log, "connect-out failed")
+        current = 0  # the target the link is on (tried first after it closes)
+        # a connection to the first target, made while the link was on another one
+        ready: Optional[tuple] = None
+        st = self.status
+        try:
+            while not self._stop.is_set():
+                # an RFC 2217 session drives the serial port (disconnect_without_device: no
+                # session without it): connect out only while it is open
+                if self.needs_port and not await self._serial_open():
+                    break
+                returned: Optional[tuple] = None
+                try:
+                    if ready is not None:
+                        index, (reader, writer, tls_note) = 0, ready
+                        ready = None
+                    else:
+                        first, current = current, 0  # (none answers: the first comes next)
+                        index, reader, writer, tls_note = await self._connect_round(
+                            targets, first)
+                        current = first
+                    target = host_port(*targets[index])
+                    st.link_target = target
+                    self._enable_keepalive(writer, target)
+                    client = _ClientConn(self, reader, writer, *targets[index])
+                    self._clients.add(client)
+                    self._refresh_clients()
+                    other = (f" (target {index + 1} of {len(targets)}: "
+                             f"{host_port(*targets[current])} did not answer)"
+                             if index != current and index else "")
+                    self._log(f"connected out to {target}{tls_note}{other}"
+                              f"{failures.recovered()}")
+                    current = index
+                    if st.link_error and st.last_error == st.link_error:
+                        st.last_error = ""  # (the link's error, not one of the serial side)
+                    st.set_link("up")
+                    backoff.reset()
+                    returner = (asyncio.create_task(
+                        self._return_to_first(client, targets[0], back),
+                        name=f"connectout-return:{self.mapping.name}")
+                        if index and back else None)
+                    try:
+                        await client.run()
+                    finally:
+                        if returner is not None:
+                            if not returner.done():
+                                returner.cancel()
+                            with contextlib.suppress(asyncio.CancelledError, Exception):
+                                returned = await returner
+                        self._clients.discard(client)
+                        self._refresh_clients()
+                        # closed (by either end, or a timer): "down" only if the next try
+                        # fails, so a max connection time or idle timeout recycle is no outage
+                        st.set_link("connecting")
+                        held = fmt_duration(time.monotonic() - client.connected_at)
+                        why = f" — {client.close_reason}" if client.close_reason else ""
+                        self._log(f"connect-out link to {target} closed after {held}{why}")
+                        self._restore_port_settings()
+                except asyncio.CancelledError:
+                    if returned is not None:
+                        returned[1].transport.abort()
+                    raise
+                except Exception as e:
+                    st.last_error = str(e)  # (_connect_round counted each target's failure)
+                    st.set_link("down", str(e))
+                    failures.failed(str(e))
+                if self._stop.is_set():
+                    if returned is not None:
+                        returned[1].transport.abort()
+                    break
+                if returned is not None:  # back to the first target, at once
+                    ready = returned
+                    continue
+                if not await backoff.wait(self._stop):
+                    break
+        finally:
+            if ready is not None:
+                ready[1].transport.abort()
 
     # ---------------- serial <-> serial bridge ----------------
     async def _serialbridge_supervisor(self) -> None:
@@ -1879,9 +2300,14 @@ class _UdpBridge(asyncio.DatagramProtocol):
         if not r._access.allowed(addr[0]):
             self._refused_log(f"rejected datagram from {_udp_label(addr)}: not in allowed list")
             return
-        if self.reply_to is None:
+        # (with writer_client_ips only a writer's datagram moves the peer: a listener that
+        # sends would take the device's output away from the writer)
+        if self.reply_to is None and r._access.may_write(addr[0]):
             self._heard_from(addr)
         if r.mapping.network.read_only or not data:
+            return
+        if not r._access.may_write(addr[0]):
+            r.note_listener(canonical_ip(str(addr[0])), len(data))
             return
         if r._link.writer is None:
             r._drop(len(data), "the serial port is not open")
@@ -1904,9 +2330,9 @@ class _UdpBridge(asyncio.DatagramProtocol):
         return peer
 
     def _heard_from(self, addr) -> None:
-        """No reply address: the sender of an allowed datagram gets the device's output
-        from now on. A new sender is logged (a change at most once a minute) and listed
-        with its own connection time."""
+        """No reply address: the sender of an allowed datagram (with writer_client_ips: a
+        writer's) gets the device's output from now on. A new sender is logged (a change
+        at most once a minute) and listed with its own connection time."""
         old = self.peer
         if old is not None and old.addr == addr:
             old.last_heard = time.monotonic()

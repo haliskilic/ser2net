@@ -577,7 +577,10 @@ def test_number_fields_required():
     blank_ok = {"network_udp_peer_port", "network_udp_peer_timeout_s", "modbus_poll_interval_s",
                 "opt_poll_interval_s", "opt_modbus_response_timeout_s", "modbus_block_gap",
                 "serial_rs485_delay_before_tx_ms", "serial_rs485_delay_after_tx_ms",
-                "serial_b_rs485_delay_before_tx_ms", "serial_b_rs485_delay_after_tx_ms"}
+                "serial_b_rs485_delay_before_tx_ms", "serial_b_rs485_delay_after_tx_ms",
+                # (blank: packing off, the default linger, no return to the first target)
+                "opt_pack_gap_ms", "opt_pack_max_bytes", "network_port_linger_s",
+                "network_failover_return_s"}
     numbers = [n for n in root.walk() if n.tag == "input" and n.attrs.get("type") == "number"]
     bad = [n.attrs["name"] for n in numbers if ("required" in n.attrs) == (n.attrs["name"] in blank_ok)]
     assert numbers and not bad, bad

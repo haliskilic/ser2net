@@ -1,6 +1,7 @@
 """Client admission shared by the transparent bridge and the Modbus gateway (access.py):
 allow-list, max connections, kick_old_user and priority clients (the oldest client is the
-one that connected first, by a counter, not by a clock), plus the reconnect backoff of
+one that connected first, by a counter, not by a clock; with writer_client_ips a client
+that would only listen never evicts a writer), plus the reconnect backoff of
 serial_link.py. Pure: no sockets, no serial port, so it runs on any OS
 (tests/test_access_priority.py drives the same rules end to end over socat PTYs).
 
@@ -27,8 +28,9 @@ from ser2netweb.engine.serial_link import Backoff
 
 
 class FakeClient:
-    def __init__(self, peer, seq, priority=False, connected_at=None):
+    def __init__(self, peer, seq, priority=False, connected_at=None, listen_only=False):
         self.peer, self.seq, self.priority = peer, seq, priority
+        self.listen_only = listen_only
         self.connected_at = time.monotonic() if connected_at is None else connected_at
         self.kicked = ""
         self.closing = False
@@ -134,8 +136,18 @@ def test_admit():
     a = p.admit("10.0.0.9", "10.0.0.9:8", {vip_new, vip_old}, logs.append)
     assert a.admitted and vip_old.kicked and not vip_new.kicked
 
+    # a port pool's client (kick=False) never makes room, priority or kick_old_user
+    p = policy(kick_old_user=True, priority_client_ips=["10.0.0.9"])
+    held = FakeClient("10.0.0.1:1", 1.0)
+    for ip in ("10.0.0.2", "10.0.0.9"):
+        a = p.admit(ip, f"{ip}:6", {held}, logs.append, kick=False)
+        assert (a.admitted, a.at_capacity) == (False, True) and not held.kicked, ip
+        assert logs[-1] == f"rejected {ip}:6: max connections reached", logs
+    assert p.admit("10.0.0.2", "10.0.0.2:6", set(), logs.append, kick=False).admitted
+
     assert access.pick_victim(set()) is None
-    print("admit: room / full / not allowed / kick_old_user / priority victim choice  OK")
+    print("admit: room / full / not allowed / kick_old_user / priority victim choice, a "
+          "pool's client kicks nobody  OK")
 
 
 def test_only_live_clients_count():
@@ -180,6 +192,30 @@ def test_normal_newcomer_never_evicts_priority():
     assert access.pick_victim(vips, priority=False) is None
     assert access.pick_victim(vips, priority=True).peer == "10.0.0.9:1"
     print("admit: a normal newcomer (kick_old_user) never evicts a priority client  OK")
+
+
+def test_listener_never_evicts_a_writer():
+    # writer_client_ips: a newcomer that would only listen never takes a writer's place,
+    # with kick_old_user or as a priority client; it may take another listener's
+    logs = []
+    p = policy(kick_old_user=True, writer_client_ips=["10.0.0.5"],
+               priority_client_ips=["10.0.0.9"])
+    writer = FakeClient("10.0.0.5:1", 1.0)
+    for ip in ("10.0.0.99", "10.0.0.9"):  # a listener, a priority listener
+        a = p.admit(ip, f"{ip}:2", {writer}, logs.append)
+        assert (a.admitted, a.at_capacity) == (False, True) and not writer.kicked, (ip, a)
+        assert logs[-1] == (f"rejected {ip}:2: max connections reached (the clients connected "
+                            "write, and one that only listens takes no writer's place)"), logs
+    p = policy(max_connections=2, kick_old_user=True, writer_client_ips=["10.0.0.5"])
+    listener = FakeClient("10.0.0.98:3", 2.0, listen_only=True)
+    a = p.admit("10.0.0.99", "10.0.0.99:4", {writer, listener}, logs.append)
+    assert a.admitted and listener.kicked and not writer.kicked, "the listener makes room"
+    # a writer newcomer: the oldest client makes room, as without the list
+    listener = FakeClient("10.0.0.98:3", 2.0, listen_only=True)
+    a = p.admit("10.0.0.5", "10.0.0.5:5", {writer, listener}, logs.append)
+    assert a.admitted and writer.kicked and not listener.kicked
+    print("admit: a client that only listens never evicts a writer (kick_old_user, "
+          "priority); it may evict another listener  OK")
 
 
 # ---- the runners' accept handlers, with stand-in streams ----
@@ -424,6 +460,7 @@ def main():
     test_admit()
     test_only_live_clients_count()
     test_normal_newcomer_never_evicts_priority()
+    test_listener_never_evicts_a_writer()
     test_runners_admit_within_the_limit()
     test_connection_order()
     test_backoff()

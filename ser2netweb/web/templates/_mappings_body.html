@@ -10,6 +10,12 @@
   'tx_open': _('MQTT messages on &lt;topic&gt;/tx are written to the device over a broker connection without TLS or a username: any client the broker lets publish to that topic can write to it'),
   'tx': _('MQTT messages on &lt;topic&gt;/tx are written to the device'),
   'link_down': _('link down'), 'connecting': _('connecting'), 'retrying_now': _('retrying now'),
+  'waiting': _('waiting for a client'),
+  'waiting_title': _('the serial port is closed and is opened when a client connects (open on connect)'),
+  'listen_only': _('listens only'),
+  'listen_only_title': _('not one of the writer client IPs: what it sends is not written to the device'),
+  'pool_title': _('clients of this port pool are handed to the mapping'),
+  'link_target_title': _('the connect-out target the link is on, or the one being tried'),
   'link_down_title': _('the connection to the remote server is down; it is tried again'),
   'dropped': _('data from the network that was not written to the serial device; the mapping’s log says why'),
   'trace_not_written': _('trace not written'),
@@ -52,7 +58,7 @@
       <td data-label="{{ t.network }}">
         <div class="mono">
           {%- if m.kind == 'serialbridge' -%}{{ m.serial_b.port|softbreak }}
-          {%- elif m.network.mode == 'client' -%}→ {{ shown_host(m.network.remote_host)|softbreak }}:<wbr>{{ m.network.remote_port }}
+          {%- elif m.network.mode == 'client' -%}→ {{ shown_host(m.network.remote_host)|softbreak }}:<wbr>{{ m.network.remote_port }}{% if m.network.remote_targets %} <span class="muted">+{{ m.network.remote_targets|length }}</span>{% endif %}
           {%- elif m.network.both_families -%}<span title="{{ _('All interfaces (IPv4 + IPv6)') }}">*</span>:<wbr>{{ m.network.port }}
           {%- else -%}{{ m.network.bind_shown|softbreak }}:<wbr>{{ m.network.port }}{%- endif -%}
         </div>
@@ -61,6 +67,7 @@
           {%- else -%}{{ m.network.mode }}/{{ m.network.protocol }}
             {%- if m.network.tls %} <span class="tag">TLS</span>{% endif %}
             {%- if m.network.read_only %} <span class="tag" title="{{ t.read_only }}">RO</span>{% endif %}
+            {%- if m.network.pool and m.network.mode == 'server' and m.network.protocol != 'modbus' and not m.network.tls %} <span class="tag" data-pool title="{{ t.pool_title }}">⇉ {{ m.network.pool }}</span>{% endif %}
             {%- if m.accepts_mqtt_writes %}{% set open_cmd = not (m.mqtt.tls and m.mqtt.username) %} <span class="tag{% if open_cmd %} tag-danger{% endif %}" title="{{ t.cmd_open if open_cmd else t.cmd }}">CMD{% if open_cmd %} ⚠{% endif %}</span>
             {%- elif m.accepts_mqtt_tx %}{% set open_cmd = not (m.mqtt.tls and m.mqtt.username) %} <span class="tag{% if open_cmd %} tag-danger{% endif %}" title="{{ t.tx_open if open_cmd else t.tx }}">CMD{% if open_cmd %} ⚠{% endif %}</span>{% endif %}
           {%- endif -%}
@@ -70,6 +77,8 @@
         <span class="state state-{{ state }}">{{ state_label(state) }}</span>
         {%- if link_down %} <span class="tag tag-warn" title="{{ t.link_down_title }}">{{ t.link_down }}</span>
         {%- elif st and st.link == 'connecting' and state == 'running' %} <span class="tag">{{ t.connecting }}</span>{% endif %}
+        {%- if st and st.waiting and state in ('running', 'device-missing', 'reconnecting') %} <span class="tag" data-waiting title="{{ t.waiting_title }}">{{ t.waiting }}</span>{% endif %}
+        {%- if st and st.link_target and m.network.remote_targets and state != 'stopped' %}<div class="sub mono" data-link-target title="{{ t.link_target_title }}">→ {{ st.link_target }}</div>{% endif %}
         {% if st and st.last_error and state in ('error','device-missing','reconnecting')
               and not (link_down and st.last_error == st.link_error) %}
           {#- what it means in the page's language; the error itself in the tooltip. With
@@ -106,7 +115,7 @@
           <div class="clients">
             {#- data-since: app.js counts the connection time on (the table is not sent again for it) #}
             {#- the time in the page's language (the REST API's duration is English) #}
-            {% for cl in st.clients %}{% set dur = cl.connected_at|since if cl.connected_at else cl.duration %}<span class="peer mono {% if cl.priority %}peer-prio{% endif %}"{% if cl.connected_at %} data-since="{{ cl.connected_at }}"{% endif %} title="{{ _('connected %(duration)s', duration=dur) }}{% if cl.priority %} · {{ t.priority }}{% endif %}">{% if cl.priority %}★ {% endif %}{{ cl.peer }} · <span class="dur">{{ dur }}</span></span>{% endfor %}
+            {% for cl in st.clients %}{% set dur = cl.connected_at|since if cl.connected_at else cl.duration %}<span class="peer mono {% if cl.priority %}peer-prio{% endif %}"{% if cl.connected_at %} data-since="{{ cl.connected_at }}"{% endif %} title="{{ _('connected %(duration)s', duration=dur) }}{% if cl.priority %} · {{ t.priority }}{% endif %}{% if cl.listen_only %} · {{ t.listen_only_title }}{% endif %}">{% if cl.priority %}★ {% endif %}{{ cl.peer }} · <span class="dur">{{ dur }}</span>{% if cl.listen_only %} · {{ t.listen_only }}{% endif %}</span>{% endfor %}
           </div>
         {% endif %}
         {% if st and st.dropped_clients %}<div class="err-small">⚠ {{ ngettext("%(num)s slow client dropped", "%(num)s slow clients dropped", st.dropped_clients) }}</div>{% endif %}

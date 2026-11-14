@@ -28,7 +28,8 @@ from ...config import (
     NotificationSettings, User, backup_time, clean_login_notice, data_path, host_port,
     login_notice_problem, login_notice_url_problem, new_api_token_id, new_pwd_version,
     node_name_from_env, node_name_problem, normalize_public_url, parse_cluster_peer,
-    proxy_entry_problem, public_url_problem, split_proxy_entries, tls_file_message,
+    pools_from_text, pools_text, proxy_entry_problem, public_url_problem, split_proxy_entries,
+    tls_file_message,
 )
 from ...engine import tls
 from ...engine.cluster import KEY_OVERLAP_S, key_bytes
@@ -220,6 +221,7 @@ def routes(ctx: Ctx) -> list:
                       trace_days=state.config.trace_max_age_days, trace_days_max=TRACE_DAYS_MAX,
                       log_days=state.config.log_max_age_days, log_days_max=LOG_DAYS_MAX,
                       backups_min=BACKUPS_MIN_KEPT, disk=disk, size_text=storage.size_text,
+                      pools_text=pools_text(state.config.pools), pool_rows=ops.pool_rows(state),
                       ldap=state.config.ldap, ldap_problem=ldap_problem,
                       ldap_tls_problem=state.ldap_tls_problem,
                       oidc=state.config.oidc, oidc_problem=oidc_problem,
@@ -1319,6 +1321,29 @@ def routes(ctx: Ctx) -> list:
         return _done(request, "users", ok=_("Two-factor sign-in is off for '{0}'; they were "
                                             "signed out everywhere.").format(username))
 
+    # ---------------- port pools ----------------
+    async def settings_pools(request):
+        """The port pools, one per line (config.pools_from_text): saved and run as a whole.
+        Operators may, as they may change the mappings the pools hand clients to."""
+        if deny := require_role(request, "operator"):
+            return deny
+        form = await read_form(request)
+        if not auth.csrf_token_matches(request, form.get("_csrf")):
+            return csrf_failed()
+        text = str(form.get("pools", ""))
+        try:
+            pools = pools_from_text(text)
+            warnings = await ops.save_pools(state, pools)
+        except ConfigError as e:
+            return await _failed(request, "pools", str(e), pools=text)
+        shown = ", ".join(f"{p.name} {host_port(p.bind_ip, p.port)}"
+                          + ("" if p.enabled else " (off)") for p in pools) or "none"
+        state.log(f"port pools: {shown}")
+        ctx.audit(request, "pools", shown)
+        saved = (ngettext("Saved: {0} port pool.", "Saved: {0} port pools.",
+                          len(pools)).format(len(pools)) if pools else _("Saved: no port pools."))
+        return _done(request, "pools", ok=" ".join([saved, *warnings]))
+
     # ---------------- config export / import ----------------
     async def config_export(request):
         # mappings only — never export password_hash / secret_key. Mappings can carry
@@ -1995,6 +2020,7 @@ def routes(ctx: Ctx) -> list:
         Route("/settings/oidc", settings_oidc_post, methods=["POST"]),
         Route("/settings/cluster", settings_cluster_post, methods=["POST"]),
         Route("/settings/cluster/identity", settings_cluster_identity, methods=["POST"]),
+        Route("/settings/pools", settings_pools, methods=["POST"]),
         Route("/settings/config/export", config_export),
         # the body is refused (413) past the import file limit, before it is spooled
         Route("/settings/config/import", config_import, methods=["POST"],

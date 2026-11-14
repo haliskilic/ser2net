@@ -205,7 +205,10 @@ everything from a **password-protected web UI** — no CLI or hand-edited config
   still be ON. **Fail-safe outputs:** a writable point with `"safe_value"` and
   `"safe_after_s"` (1–86400) is written to that value once the broker connection (for a
   Sparkplug B node with a primary host: that host's STATE) has been away for that many
-  seconds, also when it never comes after the mapping's start: once per outage, through
+  seconds, also when it never comes after the mapping's start (an outage counts from its
+  first loss and ends once the connection has stayed up for 10 s, or the shortest
+  `safe_after_s` when that is less, so a broker that keeps dropping the client is away
+  all along): once per outage, through
   the write queue and within the point's limits, tried again every 10 s if the unit does
   not answer, logged, shown on the dashboard and in the status (`safe`), and reported by
   the notification *Safe values written* when that is ticked; never by a read-only
@@ -383,6 +386,76 @@ everything from a **password-protected web UI** — no CLI or hand-edited config
   an RFC 2217 client gets, `options.rfc2217_net_timeout_s`) until it is back, so a poller,
   a SCADA master or a virtual-COM redirector sees the outage; a connect-out mapping then
   connects only while its port is open.
+- **Sharing a device** (each off by default, per mapping):
+  - **Packing** (raw protocol: TCP server, connect-out, UDP): the device's output is
+    forwarded as frames instead of as it is read. A frame ends after **Packing gap (ms)**
+    without a byte from the device (`options.pack_gap_ms`), with the **Packing delimiter**
+    (`pack_delimiter`, bytes written like a poll string's: `\r\n`, `\x03`; the delimiter stays
+    in its frame) or at the **Packing frame size** (`pack_max_bytes`; 4096 when it is 0),
+    whichever comes first. A UDP mapping sends one datagram per frame, so a telegram or an
+    NMEA sentence arrives whole. With a delimiter or a size but no gap, an unfinished frame
+    goes out after 1 s without a byte, so nothing is held back for good. The console, the
+    hex view, the trace and MQTT still get the data as it is read; a close-on string is
+    looked for in the frames.
+  - **One writer, read-only listeners:** with **Writer client IPs / CIDRs**
+    (`network.writer_client_ips`, TCP server and UDP) only clients from those addresses
+    send to the device; every other admitted client only receives its output. What a
+    listener sends is dropped and counted (`bytes_dropped`), the mapping's log says so
+    once per connection (once per address for UDP), and the dashboard marks the client
+    (`listen_only` in the status). The allow-list, priority clients and **Read-only**
+    (nobody writes) work as before, except that at **Max connections** a listener (with
+    **Kick old client**, or as a priority client) only ever takes another listener's place,
+    never a writer's; a telnet / RFC 2217 listener can't send a BREAK or change the line
+    settings either. MQTT writes and the web console are not clients.
+    Over UDP the device's output goes to the writer that sent last (or to the reply
+    address): a listener's datagram does not make it the peer, so a listener can't take
+    the output away from the writer; to give listeners the output, list them as UDP
+    targets.
+  - **Open the serial port only while a client is connected** (`network.open_on_connect`,
+    TCP server, raw / telnet / rfc2217): the mapping listens with the port closed (the
+    dashboard says *waiting for a client*, `"waiting": true` in the status), opens it for
+    the first client (taken once the port is open, so what it sends first is not lost; a
+    port that can't be opened within `options.rfc2217_net_timeout_s` turns the client
+    away; the mapping then stays *device missing* with the reason while it waits, and
+    the notifications say *device lost* once and *device back* only after an open that
+    works) and closes it **Keep the port open after the last client (s)**
+    (`port_linger_s`, 2 by default) after the last one left, so another program can use
+    the device in between. The open string then goes out at each of those opens, and RTS /
+    DTR are set each time. The web console counts as a client; the hex view, MQTT and the
+    poll string do not open the port.
+  - **Port pools** (classic ser2net's rotators; **Settings → Port pools**, `pools` in
+    `config.json`): one listening TCP port for several mappings. A mapping joins by the
+    pool's name (**Port pool**, `network.pool`: TCP server, raw / telnet / rfc2217, no
+    TLS — a pool's port is plain TCP) and keeps its own port. Each client of the pool's
+    port is handed to the first member with a free connection, in the order of the
+    mappings (with `rotate`, starting after the member that got the last client, as
+    ser2net does), and is that mapping's client from then on (its allow-list, protocol,
+    banner, timers). A client that waits for a member's serial port to open (open on
+    connect, RFC 2217) holds that member's connection meanwhile, so clients that connect
+    together go to different members; a member whose port can't be opened in time hands
+    its client on to the next one. Nobody is kicked for a pool's client; when every member
+    is in use the client reads `Busy: every port of the pool is in use.` and is
+    disconnected, which the pool counts (`refused`) and logs. The Settings panel and
+    `GET /api/v1/pools` show each pool's state, its members and how many are in use. The
+    pool listens on its own address: a member on 127.0.0.1 (say, for an SSH tunnel) is
+    reached from the network through a pool on 0.0.0.0. Saving such a pool, or such a
+    member, says so (Settings, the mapping form, `warnings` in the REST answer, all.log);
+    it is not refused, and the member's allow-list still applies.
+  - **Connect-out failover:** **Other targets** (`network.remote_targets`, up to 8
+    `host:port` entries) are tried in order when the remote host can't be reached, each
+    with the connect timeout; the link stays on the one that answered and goes on through
+    the list (round to the first) when that one fails; when none answers the usual backoff
+    applies. With **Back to the first target (s)** (`failover_return_s`, 5 to 86400) the
+    first target is tried again on that interval while the link is elsewhere, and the link
+    moves back once it answers (what is queued for the other one goes out first). The
+    dashboard and `link_target` in the status name the target in use. With TLS, each
+    target's certificate must name that target.
+
+  An older release ignores these settings and leaves them (and `pools`) out when it saves
+  `config.json` (`backups/` keeps the file as it was): after a downgrade the mappings run
+  as they did before the settings existed — data as it arrives, every client writes, the
+  port held open, no pool port, the remote host alone. The fleet view does not offer the
+  fields for a mapping on a node that runs an older version.
 - **Observability:** per-mapping traffic trace (hex/timestamp, rotated files, downloadable
   from the UI), Prometheus `/metrics`, an audit log page, live log viewer, an in-browser
   **serial console** (xterm.js over WebSocket — watch traffic or type to the device) and a
@@ -409,7 +482,8 @@ everything from a **password-protected web UI** — no CLI or hand-edited config
   to any of its points in 3 polls in a row) or answers again, a **TLS certificate about
   to expire** (the admin UI's and each enabled TLS mapping's, read once a day: one message
   when fewer than 30, 7 and 1 days are left and one once it has ended — once per
-  certificate and threshold, also across restarts; a renewed certificate starts afresh),
+  certificate and threshold, also across restarts; one that did not get through goes out
+  again at the next daily check; a renewed certificate starts afresh),
   the **system clock stepped** while ser2netweb runs (see *Time synchronisation*), and
   **safe values written** (a gateway wrote points to their `safe_value`: the broker or the
   Sparkplug primary host was away for their `safe_after_s`).
@@ -566,6 +640,11 @@ everything from a **password-protected web UI** — no CLI or hand-edited config
   interfaces (IPv4 + IPv6)**. An RFC 2217 connection's signature (4.x `signature`, 3.x
   `SIGNATURE`) becomes its **RFC 2217 signature**; `hangup-when-done` and `nobreak` are kept
   but have no effect here (the port stays open between connections), and the import says so.
+  A UDP connection's fixed remote addresses (4.x `remaddr: !addr,port` and `connback`, 3.x
+  `remaddr` with a port) become its UDP targets; `chardelay`, where the file sets it
+  (`chardelay: true`, `chardelay-scale` / `-min` / `-max`, `sendon`) on a raw connection,
+  becomes packing; a rotator becomes a port pool that rotates, with its TCP connections
+  as members. Each of them has a note in the preview.
   Merging such a file again later takes only what the file says and keeps what was set on
   its mappings here (USB identity, RS-485, MQTT, Modbus points, a disabled mapping stays
   disabled; the RFC 2217 signature comes only with the first import); the bind IP, the
@@ -1019,7 +1098,9 @@ mappings):
 - check the TLS / client certificate rows and the ones that came in disabled.
 
 A mapping keeps its serial device open, so an open string goes out once when the port opens
-(not for each client) and other programs can't use the device between sessions. The steps,
+(not for each client) and other programs can't use the device between sessions; tick **Open
+the serial port only while a client is connected** on a TCP server mapping for what the
+classic ser2net did. The steps,
 what differs and an option table: [`docs/MIGRATING-FROM-SER2NET.md`](docs/MIGRATING-FROM-SER2NET.md).
 
 ---
@@ -1173,6 +1254,8 @@ Endpoints: `GET/POST /mappings`, `GET/PUT/PATCH/DELETE /mappings/{id}`,
 `POST /mappings/{id}/{start|stop|restart}`, `GET/DELETE /mappings/{id}/traces`,
 `GET/DELETE /mappings/{id}/traces/{name}`, `POST/DELETE /mappings/{id}/capture`,
 `POST /import`, `GET /status`, `GET /ports`,
+`GET/PUT /pools` (the port pools with their state; `PUT` replaces them all:
+`{"pools": [{"name": "lab", "port": 3000}]}`, also `bind_ip`, `enabled`, `rotate`),
 `GET /metrics`, `GET /info` (ser2netweb's version, the API's version and its `features`),
 `GET /health` and `GET /openapi.json` (both unauthenticated). The web UI's own endpoints
 (`/api/status`, the dashboard's table, which answers `204` or only the changed counters to a
@@ -1215,7 +1298,7 @@ refused (`network.read_only: use true or false (JSON booleans), not a string.`),
 import of such a file. In a hand-edited `config.json`, text in a protective switch
 (`read_only`, `tls`, `require_login`, `tls_verify`, `start_tls`, `mask_personal_data`, the
 MQTT `tls_check_hostname`) keeps it on unless empty, as before 2.9.0, with a start-up note. The switches that turn something on only when set to
-JSON `true` (`dual_stack`, `udp_broadcast`, `disconnect_without_device`, `poll_with_clients`,
+JSON `true` (`dual_stack`, `udp_broadcast`, `disconnect_without_device`, `open_on_connect`, `poll_with_clients`,
 the MQTT `tx_enabled`, `proxy_hsts`, `email_separately`) refuse text as
 well; in a hand-edited `config.json` it leaves them off, with a start-up note. Keys that are
 not settings are ignored and named in the response's `warnings` list. An unexpected server error is a JSON `500` too.
@@ -2129,7 +2212,8 @@ when other accounts can use the folder — give ser2netweb a folder of its own:
   mapping deletes its traces; those of mappings a replace import or a restore removed stay until
   the next start (an undone restore finds them), which deletes them and logs how many.
 - `tls/` — certificate/key if self-signed is generated, and the TLS files uploaded in the
-  browser (`uploaded-<hash>-cert.pem`, `-key.pem`, `-ca.pem`). A relative TLS path (admin UI, a
+  browser (`uploaded-<hash>-cert.pem`, `-key.pem`, `-ca.pem`, set as the relative paths
+  `tls/uploaded-…`). A relative TLS path (admin UI, a
   mapping or its MQTT connection: certificate, key, CA files; not the LDAP CA file) is a file
   in the data directory, e.g. `tls/cert.pem`,
   so it keeps working when the data directory moves. An absolute path that is no longer

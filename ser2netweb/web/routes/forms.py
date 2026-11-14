@@ -260,6 +260,16 @@ _OPTIONAL_FORM_FIELDS = {
     "network_udp_peer_timeout_s": ("network", ("udp_peer_host", "udp_peer_port",
                                                "udp_peer_timeout_s")),
     "network_udp_targets_shown": ("network", ("udp_targets", "udp_broadcast")),
+    # forms before 3.1.0 have none of these. Raw protocol: packing
+    "opt_pack_gap_ms": ("options", ("pack_gap_ms", "pack_delimiter", "pack_max_bytes")),
+    # TCP server and UDP (not a Modbus gateway): who may send to the device
+    "network_writer_client_ips": ("network", ("writer_client_ips",)),
+    # TCP server (not a Modbus gateway): the port only while a client is connected (a
+    # checkbox, absent when unticked), and the pool
+    "network_open_on_connect_shown": ("network", ("open_on_connect", "port_linger_s")),
+    "network_pool": ("network", ("pool",)),
+    # TCP client: more targets
+    "network_remote_targets": ("network", ("remote_targets", "failover_return_s")),
     # the bind IP choice "All interfaces (IPv4 + IPv6)": an older node's form doesn't
     # offer it (_preserve_unmanaged_fields keeps it only while the bind IP is a wildcard)
     "network_dual_stack_shown": ("network", ("dual_stack",)),
@@ -305,11 +315,13 @@ _UNMANAGED_FIELDS = {
 
 # One-line text inputs that can hold a stored value they can't show: a browser drops
 # its line breaks (CR, LF) and turns a NUL into U+FFFD, so posted back unchanged it
-# differs (close-on strings imported from a ser2netweb configuration have them).
+# differs (close-on strings imported from a ser2netweb configuration have them; a packing
+# delimiter set over the REST API, by an import or by hand can be a real CR LF).
 #   form field -> (config section, attribute)
 _TEXT_INPUTS = {
     "opt_banner": ("options", "banner"),
     "opt_closeon": ("options", "closeon"),
+    "opt_pack_delimiter": ("options", "pack_delimiter"),
 }
 
 # What a form from before 2.8.0 (an older cluster node's) leaves out of each Modbus
@@ -405,6 +417,20 @@ def _build_mapping_dict(form, strict: bool) -> dict:
     if "network_udp_targets_shown" in form:
         network.update(udp_targets=_split(form.get("network_udp_targets", "")),
                        udp_broadcast=_checkbox(form, "network_udp_broadcast"))
+    if "network_writer_client_ips" in form:
+        network["writer_client_ips"] = _split(form.get("network_writer_client_ips", ""))
+    if "network_open_on_connect_shown" in form:
+        network.update(
+            open_on_connect=_checkbox(form, "network_open_on_connect"),
+            port_linger_s=(_num(form, "network_port_linger_s", 2.0, strict=strict, cast=float)
+                           if form.get("network_port_linger_s", "").strip() else 2.0))
+    if "network_pool" in form:
+        network["pool"] = form.get("network_pool", "").strip()
+    if "network_remote_targets" in form:
+        network.update(
+            remote_targets=_split(form.get("network_remote_targets", "")),
+            failover_return_s=(_num(form, "network_failover_return_s", 0, strict=strict)
+                               if form.get("network_failover_return_s") else 0))
     options = {
         "idle_timeout_s": _num(form, "opt_idle_timeout_s", 0, strict=strict),
         "trace_both": form.get("opt_trace_both", "").strip(),
@@ -435,6 +461,13 @@ def _build_mapping_dict(form, strict: bool) -> dict:
             poll_interval_s=(_num(form, "opt_poll_interval_s", 0.0, strict=strict, cast=float)
                              if form.get("opt_poll_interval_s") else 0.0),
             poll_with_clients=_checkbox(form, "opt_poll_with_clients"))
+    if "opt_pack_gap_ms" in form:
+        options.update(
+            pack_gap_ms=(_num(form, "opt_pack_gap_ms", 0, strict=strict)
+                         if form.get("opt_pack_gap_ms") else 0),
+            pack_delimiter=form.get("opt_pack_delimiter", ""),
+            pack_max_bytes=(_num(form, "opt_pack_max_bytes", 0, strict=strict)
+                            if form.get("opt_pack_max_bytes") else 0))
     if "opt_modbus_unit_map" in form:
         options["modbus_unit_map"] = _parse_unit_map(form.get("opt_modbus_unit_map", ""), strict)
     if "opt_modbus_response_timeout_s" in form:  # blank: the default
@@ -723,6 +756,12 @@ FORM_BLOCKS_SINCE = {
     "unit_status": (2, 9, 0),       # <topic>/unit<N>/status
     "mqtt5": (3, 1, 0),             # MQTT version, clean start, session and message expiry
     "point_safety": (3, 1, 0),      # point keys of 3.1: pulse_ms, safe_value, safe_after_s
+    # sharing a port
+    "packing": (3, 1, 0),           # packing gap, delimiter, frame size
+    "writer_ips": (3, 1, 0),        # writer client IPs
+    "open_on_connect": (3, 1, 0),   # the port only while a client is connected, linger
+    "pool": (3, 1, 0),              # port pool
+    "failover": (3, 1, 0),          # other connect-out targets, back to the first
 }
 
 
@@ -765,7 +804,8 @@ def _preserve_unmanaged_fields(new_map, existing, form=None) -> None:
     silently discards it: the settings the form doesn't have (_UNMANAGED_FIELDS), the
     not-always-posted fields the submitted `form` lacks (_OPTIONAL_FORM_FIELDS; no form
     = none posted), a one-line text field posted back unchanged although it can't show
-    the stored value (_TEXT_INPUTS: a banner or close-on string with a NUL, CR or LF,
+    the stored value (_TEXT_INPUTS: a banner, close-on string or packing delimiter with a
+    NUL, CR or LF,
     in_text_box), the stored MQTT password and TLS key password, which the form never
     shows, when it keeps them (mqtt_password_from_form; a blank key password field), the
     dual-stack choice of a form that doesn't offer it, the per-point Modbus fields a
