@@ -123,10 +123,12 @@ def _read(path: str) -> Optional[bytes]:
         return None
 
 
-def _same_pair(cert: bytes, key: bytes, other_cert: str, other_key: str) -> bool:
-    """Is the uploaded pair the one in the files `other_cert` / `other_key` (paths from
-    the configuration; a file that can't be read is not the same)? The same public key
-    in the certificates, or the same key or certificate block."""
+def same_pair(cert: bytes, key: bytes, other_cert: str, other_key: str) -> bool:
+    """Is the pair `cert` / `key` (their bytes) the one in the files `other_cert` /
+    `other_key` (paths from the configuration; a file that can't be read is not the
+    same)? The same public key in the certificates, or the same key or certificate block.
+    An upload is checked with it, and so is a mapping's pair against the admin UI's
+    (AppConfig.admin_key_reuse, same_pair_files)."""
     theirs_cert, theirs_key = _read(other_cert), _read(other_key)
     mine = public_key(cert)
     if mine is not None and theirs_cert is not None and public_key(theirs_cert) == mine:
@@ -137,6 +139,11 @@ def _same_pair(cert: bytes, key: bytes, other_cert: str, other_key: str) -> bool
         if a and b and a[0] == b[0]:
             return True
     return False
+
+
+def same_pair_files(cert: str, key: str, other_cert: str, other_key: str) -> bool:
+    """same_pair for a pair in the files `cert` / `key` (paths from the configuration)."""
+    return same_pair(_read(cert) or b"", _read(key) or b"", other_cert, other_key)
 
 
 def _problem(e: tls.TlsFileError) -> str:
@@ -165,7 +172,7 @@ def store(data_dir: str, *, cert: Optional[bytes] = None, key: Optional[bytes] =
     _check_shape(cert, key, given)
     if cert is not None and key is not None:
         for other_cert, other_key in others:
-            if _same_pair(cert, key, other_cert, other_key):
+            if same_pair(cert, key, other_cert, other_key):
                 raise UploadError(reuse_message)
     folder = os.path.join(os.path.abspath(data_dir), TLS_DIR)
     os.makedirs(folder, mode=0o700, exist_ok=True)

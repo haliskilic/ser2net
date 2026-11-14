@@ -217,6 +217,40 @@ def pem_body(pem):
     return b"".join(pem.split())
 
 
+def test_admin_key_reuse(src):
+    # a mapping's save (form, REST, peer) refuses the admin UI's key compared as an upload
+    # is: the same file, a copy, or the key written another way with another certificate
+    from ser2netweb.config import AppConfig, MappingConfig
+
+    ui_cert, ui_key = make_pair(src, "ui")
+    own_cert, own_key = make_pair(src, "own")
+    again_cert, again_key = other_cert_same_key(ui_key, "ui-again", "pw")
+    paths = {}
+    for name, data in (("ui.crt", ui_cert), ("ui.key", ui_key), ("copy.crt", ui_cert),
+                       ("copy.key", ui_key), ("again.crt", again_cert), ("again.key", again_key),
+                       ("own.crt", own_cert), ("own.key", own_key)):
+        paths[name] = os.path.join(src, "reuse-" + name)
+        with open(paths[name], "wb") as fh:
+            fh.write(data)
+    cfg = AppConfig.from_dict({"admin_ui": {"tls_cert": paths["ui.crt"],
+                                            "tls_key": paths["ui.key"]}})
+
+    def reuse(cert, key):
+        m = MappingConfig.from_dict({"name": "m", "serial": {"port": "/dev/ttyS9"}, "network": {
+            "mode": "server", "port": 4001, "tls": True, "tls_cert": paths[cert],
+            "tls_key": paths[key]}})
+        return cfg.admin_key_reuse(m)
+
+    assert "the admin UI's own key" in reuse("ui.crt", "ui.key"), "the same file"
+    assert "the admin UI's own key" in reuse("copy.crt", "copy.key"), "a copy"
+    assert "the admin UI's own key" in reuse("again.crt", "again.key"), "written another way"
+    assert reuse("own.crt", "own.key") == ""
+    os.remove(paths["copy.crt"])  # (no certificate to compare: the key block still is)
+    assert "the admin UI's own key" in reuse("copy.crt", "copy.key")
+    print("admin_key_reuse: the admin UI's key as the same file, a copy or written another "
+          "way with another certificate is refused for a mapping, as an upload is  OK")
+
+
 def test_live(src):
     cert_a, key_a = make_pair(src, "map")
     cert_b, key_b = make_pair(src, "other")
@@ -357,6 +391,7 @@ def main():
         print("(Windows: file permissions are the data folder's ACL; not checked here)")
     with tempfile.TemporaryDirectory() as src:
         test_store(src)
+        test_admin_key_reuse(src)
         test_live(src)
     print("\nPASS: TLS files uploaded in the browser")
 
