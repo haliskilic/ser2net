@@ -1,6 +1,6 @@
 PORTNAME=	ser2netweb
 DISTVERSIONPREFIX=	v
-DISTVERSION=	3.0.1
+DISTVERSION=	3.1.0
 CATEGORIES=	net comms python
 
 MAINTAINER=	mail@haliskilic.com.tr

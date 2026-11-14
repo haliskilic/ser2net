@@ -4,7 +4,7 @@
 # builds it in an alpine:edge container: .github/workflows/distro-packages.yml;
 # tools/bump_recipes.py moves it to a release).
 pkgname=ser2netweb
-pkgver=3.0.1
+pkgver=3.1.0
 pkgrel=0
 pkgdesc="Serial-to-network bridge with a web UI: raw TCP, telnet, RFC 2217, UDP, Modbus, MQTT"
 url="https://github.com/haliskilic/ser2netweb"
@@ -113,7 +113,7 @@ package() {
 }
 
 sha512sums="
-5b4a2a454b6e43d59f97771806179fdf8122177c0d8fb1370d436c8660891b81f4069360bf597a7438f9a236355d45e3e1642dc084507d661ab03ec7614f6dad  ser2netweb-3.0.1.tar.gz
+89d2832fccbf29cc35d9add3863c8e0d2e4da54b145a67183e233a514cb8d087bcba50975a9d07e1f3a3f9ce6bae23963ab8879be910d55b14f82a2d7c55612b  ser2netweb-3.1.0.tar.gz
 9fc69daa1f293cf60beec385eaf6f4fa289b683c23613e48192d8f5b072839ec6e5caa70163bdee1056bf3bba84f430b8138067fa3d1e09652aafa980723d15e  ser2netweb.initd
 046a2b7f124f9b372dc62c6e3fb9fbcf2999d2d6a513ebdd545f1c4a24bcbebcfcc18bf9eea6f75f84b437a3e7ccd99649c83672ca9a267b644f3cefb4f4af0a  ser2netweb.confd
 "
