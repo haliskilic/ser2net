@@ -15,7 +15,8 @@ tests/test_modbus_mqtt_write.py (no broker, no hardware). Checks:
     safe_value is written, once, through the write queue (logged with why; the point's
     read-back follows); not when the broker is back sooner; a broker that keeps taking and
     dropping the client is away from the first loss (a session ends an outage only once it
-    lasts SAFE_STEADY_S, at most the shortest safe_after_s); again at the next outage; from
+    lasts SAFE_STEADY_S, at most the longest safe_after_s, so a short point does not keep a
+    long one from being written); again at the next outage; from
     the mapping's start too when the broker never comes; a write that fails is tried
     again; the mapping's status has it (safe: waiting, applied, ok) and the dashboard row
     and the notifier (safe_values, opt-in) report it;
@@ -271,8 +272,8 @@ async def test_safe_values(port):
         assert st["state"] == "waiting" and st["watching"] == "broker" and st["since"], st
         assert any(m.startswith("safe values: 2 point(s) are written") for m in logs), logs
         await connack(fake)
-        # (an outage ends once the broker is back for SAFE_STEADY_S, at most the shortest
-        # safe_after_s: here 1 s)
+        # (an outage ends once the broker is back for SAFE_STEADY_S, at most the longest
+        # safe_after_s: here 1.5 s)
         assert await wait(lambda: r.status.as_dict()["safe"]["state"] == "ok", 3.0)
         assert r.status.as_dict()["safe"]["since"] is None
         fake.deliver("plant/a/setpoint/set", b"55")
@@ -396,6 +397,32 @@ async def test_safe_values_flapping(port):
         assert len(safe_writes()) == 1, ("once for the whole outage", safe_writes())
     print("safe values: a broker that keeps taking and dropping the client is away from the "
           "first loss; the value is written once, not while the broker is there  OK")
+
+    # a point with a short safe_after_s does not keep one with a longer one from being
+    # written: the sessions that end an outage are as long as the longest (at most 10 s)
+    reset()
+    fake, logs = FakeMqtt(), []
+    REGS[10], COILS[0] = 55, True
+    async with started(port, fake, logs=logs, points=[
+            dict(SETPOINT, safe_value=7, safe_after_s=1),
+            pump(safe_value=False, safe_after_s=2.5)]) as r:
+        await connack(fake)
+        assert await wait(lambda: r.status.as_dict()["safe"]["state"] == "ok", 4.0)
+        began = time.monotonic()
+
+        def written():
+            return [p["name"] for p in r.status.as_dict()["safe"]["points"] if p["written"]]
+
+        while len(written()) < 2 and time.monotonic() - began < 8.0:
+            await lost(fake)
+            await asyncio.sleep(0.45)
+            await connack(fake)  # (up for longer than the short point's 1 s)
+            await asyncio.sleep(1.15)
+        assert written() == ["setpoint", "pump"], (written(), time.monotonic() - began, logs[-6:])
+        assert REGS[10] == 7 and COILS[0] is False
+    print("safe values: on a flapping broker a short point's safe_after_s does not keep a "
+          "longer one from being written (the session that ends an outage lasts the longest) "
+          " OK")
 
 
 async def test_safe_values_primary_host(port):

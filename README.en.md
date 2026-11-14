@@ -206,8 +206,8 @@ everything from a **password-protected web UI** — no CLI or hand-edited config
   `"safe_after_s"` (1–86400) is written to that value once the broker connection (for a
   Sparkplug B node with a primary host: that host's STATE) has been away for that many
   seconds, also when it never comes after the mapping's start (an outage counts from its
-  first loss and ends once the connection has stayed up for 10 s, or the shortest
-  `safe_after_s` when that is less, so a broker that keeps dropping the client is away
+  first loss and ends once the connection has stayed up for 10 s, or the longest
+  `safe_after_s` of its points when that is less, so a broker that keeps dropping the client is away
   all along): once per outage, through
   the write queue and within the point's limits, tried again every 10 s if the unit does
   not answer, logged, shown on the dashboard and in the status (`safe`), and reported by
@@ -482,8 +482,10 @@ everything from a **password-protected web UI** — no CLI or hand-edited config
   to any of its points in 3 polls in a row) or answers again, a **TLS certificate about
   to expire** (the admin UI's and each enabled TLS mapping's, read once a day: one message
   when fewer than 30, 7 and 1 days are left and one once it has ended — once per
-  certificate and threshold, also across restarts; one that did not get through goes out
-  again at the next daily check; a renewed certificate starts afresh),
+  certificate, threshold and channel, also across restarts: a channel the message did not
+  reach (the mail server down, say) gets it at the next daily check, and only that one;
+  a certificate whose mapping is disabled or the admin UI's TLS off for a while is not
+  told again; a renewed certificate starts afresh),
   the **system clock stepped** while ser2netweb runs (see *Time synchronisation*), and
   **safe values written** (a gateway wrote points to their `safe_value`: the broker or the
   Sparkplug primary host was away for their `safe_after_s`).

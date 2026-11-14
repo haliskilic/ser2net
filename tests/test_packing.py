@@ -15,7 +15,8 @@ forwarded to raw TCP / UDP clients as frames instead of as it is read.
   - edits refuse values out of range (validate_input); validate() does not; a stored one
     turns packing off with a log line instead of failing the start;
   - the form: its fields have a presence marker (absent: the stored values are kept); a
-    delimiter of real CR / LF, which its text box can't show, survives a save.
+    delimiter of real CR / LF is shown escaped (the same bytes) and kept as it is stored by
+    an unchanged save; a blank box turns it off.
 
 Run: python3 tests/test_packing.py
 """
@@ -32,12 +33,12 @@ sys.path.insert(0, os.path.dirname(__file__))
 from _device import FakeDevice, port_of, read_for, running, until
 
 from ser2netweb.config import (
-    PACK_MAX_BYTES_DEFAULT, ConfigError, MappingConfig, pack_settings,
+    PACK_MAX_BYTES_DEFAULT, ConfigError, MappingConfig, pack_settings, poll_bytes,
 )
 from ser2netweb.engine import bridge
 from ser2netweb.engine.bridge import MappingRunner, Packer
 from ser2netweb.web.routes.forms import (
-    _build_mapping_dict, _preserve_unmanaged_fields,
+    _build_mapping_dict, _preserve_unmanaged_fields, escaped_text,
 )
 
 
@@ -220,15 +221,19 @@ def test_form():
     assert parsed(dict(base, opt_pack_gap_ms="50", opt_pack_delimiter=r"\r\n",
                        opt_pack_max_bytes="1400")) == (50, r"\r\n", 1400)
     assert parsed(base) == (0, "", 0)
-    # a delimiter stored as real CR LF (REST API, an import, by hand): its text box can't
-    # show it (a browser takes the line breaks out), so a save posts "" for it
+    # a delimiter stored as real CR LF (REST API, an import, by hand): its box shows it
+    # escaped (\r\n, the same bytes), and an unchanged save keeps the stored value exactly
     existing = mapping(pack_gap_ms=0, pack_delimiter="\r\n", pack_max_bytes=0)
-    shown = dict(base, id=existing.id, opt_pack_gap_ms="", opt_pack_delimiter="",
+    assert escaped_text(existing.options.pack_delimiter) == r"\r\n"
+    shown = dict(base, id=existing.id, opt_pack_gap_ms="", opt_pack_delimiter=r"\r\n",
                  opt_pack_max_bytes="")
-    assert parsed(shown) == (0, "\r\n", 0), "a save of the form keeps it"
+    assert parsed(shown) == (0, "\r\n", 0), "an unchanged save keeps it as it is stored"
+    assert parsed(dict(shown, opt_pack_delimiter="")) == (0, "", 0), "a blank box: off"
     assert parsed(dict(shown, opt_pack_delimiter=";")) == (0, ";", 0), "a changed one is taken"
+    for stored in ("\r\n", r"\r\n", "a\0b\x7f\tc", "ç\x01;", ""):
+        assert poll_bytes(escaped_text(stored)) == poll_bytes(stored), stored
     print("form: the packing fields are kept when the form leaves them out, set when "
-          "shown; a delimiter of real CR LF survives a save  OK")
+          "shown; a delimiter of real CR LF is shown escaped and kept as it is by a save  OK")
 
 
 def main():

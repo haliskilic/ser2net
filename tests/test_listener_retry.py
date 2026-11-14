@@ -5,7 +5,8 @@
     bind has done none of those (no DTR/RTS pulse, no broker reconnect per attempt);
   - such a failure is a BindError, whether the port is in use or the address is not on
     this machine (Python 3.11+ reports that without an errno);
-  - the supervisor keeps the mapping in "error" with retrying / next_retry_s and starts
+  - the supervisor keeps the mapping in "error" with retrying / next_retry_s (never more
+    than the pause, also read at once) and starts
     it again after a backoff until the address can be used, logging the first failure, a
     changed error and the start that worked; any other start error is not retried;
   - Stop, a new apply, removing the mapping and stop_all() end the retry (a Stop is not
@@ -349,7 +350,22 @@ def test_dashboard_shows_the_retry():
           "up by itself once the port is free  OK")
 
 
+def test_next_retry_exact():
+    # read at once (a clock that has not moved yet), the time to the next try is the
+    # pause itself, not a second more: (now + 1) - now can be a hair over 1 in floats
+    from ser2netweb.engine.bridge import RunnerStatus
+
+    now = 1023.9983333333333  # (where (now + 1) - now > 1)
+    assert (now + 1) - now > 1
+    st = RunnerStatus(state="error")
+    st.retry_at = now + 1
+    with mock.patch("ser2netweb.engine.bridge.time.monotonic", return_value=now):
+        assert st.as_dict()["next_retry_s"] == 1, st.as_dict()["next_retry_s"]
+    print("status: next_retry_s read at once is the pause, not a second more  OK")
+
+
 if __name__ == "__main__":
+    test_next_retry_exact()
     test_backoff_cap()
     test_bind_first()
     test_retry()

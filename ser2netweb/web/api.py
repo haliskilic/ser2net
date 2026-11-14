@@ -789,8 +789,10 @@ def openapi_spec(admin, base: str = "") -> dict:
             "state": {"type": "string",
                       "description": "stopped, running, reconnecting, device-missing or error"},
             "waiting": {"type": "boolean",
-                        "description": "open_on_connect: running with the serial port closed "
-                                       "until a client connects"},
+                        "description": "open_on_connect: the serial port is closed until a "
+                                       "client connects; the state is running, or "
+                                       "device-missing / reconnecting (with last_error) "
+                                       "when the last open failed"},
             "link_target": {"type": "string",
                             "description": "connect-out: the target the link is on, or the "
                                            "one being tried (host:port)"},

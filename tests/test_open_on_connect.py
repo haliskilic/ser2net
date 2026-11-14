@@ -260,6 +260,15 @@ def test_settings():
           "at edit time, a stored bad one reads as 2 s  OK")
 
 
+def test_openapi():
+    from ser2netweb.web.api import openapi_spec
+
+    waiting = openapi_spec(None)["components"]["schemas"]["MappingStatus"]["properties"][
+        "waiting"]
+    assert "device-missing" in waiting["description"] and "running" in waiting["description"]
+    print("OpenAPI: status.waiting says it is also true for a port whose last open failed  OK")
+
+
 def test_form():
     base = {"name": "od", "kind": "net", "enabled": "on", "serial_port": "COM7",
             "serial_baudrate": "9600", "network_mode": "server", "network_protocol": "raw",
@@ -284,6 +293,7 @@ def test_form():
 def main():
     test_settings()
     test_form()
+    test_openapi()
     test_runner()
     print("\nPASS: the serial port only while a client is connected (open_on_connect)")
 
