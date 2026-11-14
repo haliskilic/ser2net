@@ -139,8 +139,10 @@ class AccessPolicy:
         self._everyone = not net.allowed_client_ips
         writers = net.writer_client_ips if isinstance(net.writer_client_ips, list) else []
         self._writers = parse_nets(writers)
-        # some clients only listen (never for a connect-out link, which has one peer)
-        self.writers_only = bool(writers) and net.mode != "client"
+        # some clients only listen (never for a connect-out link, which has one peer, nor
+        # for a Modbus gateway, whose masters all write: the list is not used there, as
+        # MappingConfig.ignored_settings says)
+        self.writers_only = bool(writers) and net.mode != "client" and net.protocol != "modbus"
 
     def allowed(self, ip: str) -> bool:
         return self._everyone or ip_in_nets(ip, self._allowed)

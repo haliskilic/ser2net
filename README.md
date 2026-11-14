@@ -208,8 +208,8 @@ düzenlemeye gerek yok.
   **Güvenli çıkışlar:** `"safe_value"` ve `"safe_after_s"` (1–86400) verilen yazılabilir bir
   noktaya, broker bağlantısı (primary host'lu bir Sparkplug B düğümünde o host'un STATE'i)
   o kadar saniye yok olunca bu değer yazılır; eşleme başladıktan sonra hiç gelmezse de
-  (kesinti ilk kopuştan sayılır ve bağlantı 10 sn boyunca, ya da daha kısaysa en kısa
-  `safe_after_s` boyunca, ayakta kalınca biter; istemciyi kabul edip yeniden düşüren bir
+  (kesinti ilk kopuştan sayılır ve bağlantı 10 sn boyunca, ya da daha kısaysa noktalarının
+  en uzun `safe_after_s` süresi boyunca, ayakta kalınca biter; istemciyi kabul edip yeniden düşüren bir
   broker baştan sona yok sayılır).
   Kesinti başına bir kez, yazma kuyruğu üzerinden ve noktanın sınırları içinde yazılır;
   unit yanıt vermezse 10 sn'de bir yeniden denenir. Loga yazılır, panoda ve durumda
@@ -495,8 +495,10 @@ düzenlemeye gerek yok.
   yanıt vermemesi) ve yeniden yanıt vermesi, **süresi dolmak üzere olan bir TLS
   sertifikası** (yönetim arayüzününki ve etkin her TLS eşlemesininki, günde bir kez okunur:
   30, 7 ve 1 günden az kaldığında birer mesaj, süresi dolduğunda bir mesaj daha — sertifika
-  ve eşik başına bir kez, yeniden başlatmalardan sonra da; ulaşamayan bir mesaj ertesi günkü
-  denetimde yeniden gönderilir; yenilenen sertifika baştan başlar), ser2netweb çalışırken **sistem saatinin değiştirilmesi** (bkz. *Saat
+  ve eşik ve kanal başına bir kez, yeniden başlatmalardan sonra da: mesajın ulaşmadığı bir
+  kanal (örneğin çalışmayan bir posta sunucusu) onu ertesi günkü denetimde alır, yalnızca o
+  kanal; eşlemesi bir süre devre dışı kalan ya da yönetim arayüzünün TLS'i kapatılan bir
+  sertifika yeniden bildirilmez; yenilenen sertifika baştan başlar), ser2netweb çalışırken **sistem saatinin değiştirilmesi** (bkz. *Saat
   senkronizasyonu*) ve **güvenli değerlerin yazılması** (bir gateway noktalarına
   `safe_value` değerini yazdı: broker ya da Sparkplug primary host, `safe_after_s` süresince
   yoktu). Tekrarlar bastırılır, test mesajı gönderilebilir. Bu olaylar gönderilsin ya da gönderilmesin all.log'a yazılır.

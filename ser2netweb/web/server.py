@@ -32,7 +32,7 @@ from ..textfold import search_key
 from . import auth, proxy, tlsupload
 from .routes import build_routes
 from .routes.common import bytesize, client_ip, domid, duration, since
-from .routes.forms import in_text_box
+from .routes.forms import escaped_text, in_text_box
 from .starlette_compat import RequestBodyLimitMiddleware
 
 if TYPE_CHECKING:
@@ -444,6 +444,7 @@ def make_templates() -> Jinja2Templates:
     # data-search of the dashboard rows: app.js folds what is typed the same way
     templates.env.filters["searchkey"] = search_key
     templates.env.filters["in_text_box"] = in_text_box   # a value as a text box sends it
+    templates.env.filters["escaped_text"] = escaped_text  # a text of escapes, control chars too
     from ..notify import no_data_for
     templates.env.globals["no_data_for"] = no_data_for  # a mapping's no-data alarm, now
     # _("...") in every template, translated for the request's language (ser2netweb/i18n.py);
