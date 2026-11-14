@@ -9,8 +9,9 @@
   * the service runs ser2netweb on $SNAP_COMMON/data (layout.py's default for root in the
     snap), with `snap set ser2netweb bind-ip=... port=...` as SER2NETWEB_BIND_IP / _PORT;
     the configure hook refuses a bad address or port and restarts a running service;
-  * snap.yml: on a release (not a pre-release; to stable; release.yml's channels job starts
-    it with the tag), by hand with a tag and a channel,
+  * snap.yml: on a release (not a pre-release; release.yml's channels job starts it with the
+    tag), to every channel (stable, candidate, beta and edge, so that edge never keeps an
+    older version than stable), by hand with a tag and every channel or one,
     on pull requests that change the snap; snapcore/action-build, the snap tested on the
     runner (tests/snap_smoke.sh) before the upload, which needs SNAPCRAFT_STORE_CREDENTIALS
     (skipped with a notice without it) and has no GitHub permission.
@@ -151,7 +152,7 @@ def test_workflow():
     on = text.split("\npermissions:", 1)[0]
     assert "\n  release:\n    types: [published]\n" in on
     assert re.search(r"(?m)^      tag:\n        description: .*\n        required: true", on)
-    assert "        options: [stable, candidate, beta, edge]\n" in on
+    assert "        options: [all, stable, candidate, beta, edge]\n        default: all\n" in on
     assert "\n  pull_request:\n    paths:\n      - snap/**\n" in on
     assert "\npermissions:\n  contents: read\n" in text
     wf = jobs(text)
@@ -172,8 +173,14 @@ def test_workflow():
     assert 'if [ -z "$CREDENTIALS" ]; then' in st[1] and "::notice::" in st[1]
     assert st[2].startswith("      - if: steps.store.outputs.upload == 'true'\n"), st[2]
     assert "snapcore/action-publish@" in st[2]
-    assert "release: ${{ github.event_name == 'release' && 'stable' || inputs.channel || 'stable' }}" \
-        in st[2]
+    # a release (no inputs) and release.yml's start (the default "all"): every channel the
+    # input offers, so that edge never keeps an older version than stable; by hand: one
+    release = re.search(r"(?m)^          release: (.+)$", st[2]).group(1)
+    assert release == ("${{ inputs.channel != 'all' && inputs.channel || "
+                       "'stable,candidate,beta,edge' }}"), release
+    every = re.search(r"\|\| '([a-z,]+)' }}$", release).group(1).split(",")
+    offered = re.search(r"(?m)^        options: \[(.+)\]$", on).group(1).split(", ")
+    assert offered == ["all"] + every, (offered, every)
     smoke = _text("tests", "snap_smoke.sh")
     for part in ("sudo snap install --dangerous", "disabled +inactive", "ser2netweb:$plug",
                  "sudo snap start --enable ser2netweb.daemon", "healthy 8080",
@@ -183,7 +190,8 @@ def test_workflow():
                  "sudo snap remove --purge ser2netweb"):
         assert part in smoke, part
     _started_by_release("snap.yml")
-    print("snap.yml: releases (stable; release.yml starts it), by hand (a channel), pull "
+    print("snap.yml: releases (every channel; release.yml starts it), by hand (all or one "
+          "channel), pull "
           "requests; built and tested on both architectures before the upload, which needs "
           "its secret  OK")
 
