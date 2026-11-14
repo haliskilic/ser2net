@@ -194,7 +194,7 @@ nobody can command it any more:
   connection that breaks without a word (a cable pulled, a router gone) is noticed by the
   MQTT keepalive (30 s), up to a minute later; the time counts from then.
 - An outage counts from its first loss. A connection that comes back ends it once it has
-  stayed up for 10 s (or for the shortest `safe_after_s` of the mapping's points, when
+  stayed up for 10 s (or for the longest `safe_after_s` of the mapping's points, when
   that is less); a broker that takes the client and drops it again sooner (another client
   with the same client ID, an authorization plugin, a broker in a crash loop) is away all
   along. No safe value is written while the connection is up: a point whose time comes

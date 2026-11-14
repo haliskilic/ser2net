@@ -208,8 +208,8 @@ düzenlemeye gerek yok.
   **Güvenli çıkışlar:** `"safe_value"` ve `"safe_after_s"` (1–86400) verilen yazılabilir bir
   noktaya, broker bağlantısı (primary host'lu bir Sparkplug B düğümünde o host'un STATE'i)
   o kadar saniye yok olunca bu değer yazılır; eşleme başladıktan sonra hiç gelmezse de
-  (kesinti ilk kopuştan sayılır ve bağlantı 10 sn boyunca, ya da daha kısaysa en kısa
-  `safe_after_s` boyunca, ayakta kalınca biter; istemciyi kabul edip yeniden düşüren bir
+  (kesinti ilk kopuştan sayılır ve bağlantı 10 sn boyunca, ya da daha kısaysa noktalarının
+  en uzun `safe_after_s` süresi boyunca, ayakta kalınca biter; istemciyi kabul edip yeniden düşüren bir
   broker baştan sona yok sayılır).
   Kesinti başına bir kez, yazma kuyruğu üzerinden ve noktanın sınırları içinde yazılır;
   unit yanıt vermezse 10 sn'de bir yeniden denenir. Loga yazılır, panoda ve durumda

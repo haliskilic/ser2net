@@ -206,8 +206,8 @@ everything from a **password-protected web UI** — no CLI or hand-edited config
   `"safe_after_s"` (1–86400) is written to that value once the broker connection (for a
   Sparkplug B node with a primary host: that host's STATE) has been away for that many
   seconds, also when it never comes after the mapping's start (an outage counts from its
-  first loss and ends once the connection has stayed up for 10 s, or the shortest
-  `safe_after_s` when that is less, so a broker that keeps dropping the client is away
+  first loss and ends once the connection has stayed up for 10 s, or the longest
+  `safe_after_s` of its points when that is less, so a broker that keeps dropping the client is away
   all along): once per outage, through
   the write queue and within the point's limits, tried again every 10 s if the unit does
   not answer, logged, shown on the dashboard and in the status (`safe`), and reported by

@@ -42,7 +42,7 @@ writes it at once, before the port closes. A writable point with "safe_value" an
 (_safe_watch): the broker connection, or for a Sparkplug B node with a primary host that
 host (its STATE); never by a read-only mapping. An outage is counted from its first loss:
 a connection that comes back ends it only once it has stayed up for SAFE_STEADY_S (at most
-the points' shortest safe_after_s), so a broker that takes the client and drops it again
+the points' longest safe_after_s), so a broker that takes the client and drops it again
 (another client with its ID, an ACL plugin, a broker in a crash loop) is away all along;
 nothing is written while the connection is up.
 """
@@ -121,7 +121,8 @@ PULSE_STOP_WAIT_S = 10.0
 # tried again this often, until it is written or whoever commands the point is back.
 SAFE_RETRY_S = 10.0
 # An outage of whoever commands the points ends once it is back for this long (at most
-# the shortest safe_after_s of the mapping's points); a shorter session doesn't end it.
+# the longest safe_after_s of the mapping's points: a session as long as that is no
+# flapping for any of them); a shorter session doesn't end it.
 SAFE_STEADY_S = 10.0
 # The mapping form's test read (read_now): at most this many points, for at most this long.
 READ_NOW_MAX = 32
@@ -985,7 +986,8 @@ class ModbusGatewayRunner:
         """MqttPublisher / SparkplugNode, on the event loop: whoever commands the points
         (the broker connection; the Sparkplug primary host) is there / is gone. An outage
         goes on from its first loss until the link has stayed up for SAFE_STEADY_S (at most
-        the shortest safe_after_s): a session shorter than that doesn't end it."""
+        the longest safe_after_s): a session shorter than that doesn't end it, so a point
+        with a short one does not keep the others from ever being written."""
         if self._closing or up == self._supervised:
             return
         self._supervised = up
@@ -1003,7 +1005,7 @@ class ModbusGatewayRunner:
         if self._safe_task is None:
             self._safe_status("ok", None)
             return
-        steady = min([SAFE_STEADY_S] + [after for _p, _value, after in self._safe_points])
+        steady = min(SAFE_STEADY_S, max(after for _p, _value, after in self._safe_points))
         self._safe_steady = asyncio.get_running_loop().call_later(steady, self._safe_back)
 
     def _safe_back(self) -> None:
