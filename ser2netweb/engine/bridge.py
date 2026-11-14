@@ -1705,12 +1705,18 @@ class MappingRunner:
                     await run
                 await self._link.close()
                 if not self._stop.is_set():
-                    # the listener is up and the port is closed on purpose: no error
-                    st.state, st.waiting = "running", True
-                    st.devices, st.hint = (), None
-                    st.last_error = ""
-                    self._log("serial port closed: no client is connected" if was_open else
-                              "no client is connected: the serial port is not tried any more")
+                    st.waiting, st.devices = True, ()
+                    if was_open or st.state not in ("device-missing", "reconnecting"):
+                        # the listener is up and the port is closed on purpose: no error
+                        st.state, st.hint, st.last_error = "running", None, ""
+                        self._log("serial port closed: no client is connected" if was_open
+                                  else "no client is connected: the serial port is not "
+                                  "tried any more")
+                    else:
+                        # it could not be opened: it stays so, with why, until an open works
+                        # (the notifier's device_back is for a device that is back)
+                        self._log("no client is connected: the serial port, which could not "
+                                  "be opened, is not tried any more until the next one")
 
     async def _serial_read_loop(self, reader: asyncio.StreamReader) -> None:
         while not self._stop.is_set():

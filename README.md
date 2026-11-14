@@ -424,7 +424,9 @@ düzenlemeye gerek yok.
     sunucu, raw / telnet / rfc2217): eşleme port kapalıyken dinler (pano *istemci
     bekleniyor* der, durumda `"waiting": true`), portu ilk istemci için açar (istemci port
     açılınca kabul edilir, böylece ilk gönderdiği kaybolmaz; port
-    `options.rfc2217_net_timeout_s` içinde açılamazsa istemci geri çevrilir) ve son
+    `options.rfc2217_net_timeout_s` içinde açılamazsa istemci geri çevrilir; eşleme o zaman
+    beklerken nedeniyle birlikte *cihaz yok* olarak kalır, bildirimler bir kez *cihaz
+    koptu*, *cihaz geri geldi*yi de ancak işe yarayan bir açılıştan sonra der) ve son
     istemci ayrıldıktan **Son istemciden sonra portu açık tut (sn)** (`port_linger_s`,
     varsayılan 2) kadar sonra kapatır; arada başka bir program cihazı kullanabilir. Açılış
     dizgesi o zaman her açılışta gönderilir, RTS / DTR de her seferinde ayarlanır. Web

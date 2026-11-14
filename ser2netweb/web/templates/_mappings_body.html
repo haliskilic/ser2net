@@ -77,7 +77,7 @@
         <span class="state state-{{ state }}">{{ state_label(state) }}</span>
         {%- if link_down %} <span class="tag tag-warn" title="{{ t.link_down_title }}">{{ t.link_down }}</span>
         {%- elif st and st.link == 'connecting' and state == 'running' %} <span class="tag">{{ t.connecting }}</span>{% endif %}
-        {%- if st and st.waiting and state == 'running' %} <span class="tag" data-waiting title="{{ t.waiting_title }}">{{ t.waiting }}</span>{% endif %}
+        {%- if st and st.waiting and state in ('running', 'device-missing', 'reconnecting') %} <span class="tag" data-waiting title="{{ t.waiting_title }}">{{ t.waiting }}</span>{% endif %}
         {%- if st and st.link_target and m.network.remote_targets and state != 'stopped' %}<div class="sub mono" data-link-target title="{{ t.link_target_title }}">→ {{ st.link_target }}</div>{% endif %}
         {% if st and st.last_error and state in ('error','device-missing','reconnecting')
               and not (link_down and st.last_error == st.link_error) %}

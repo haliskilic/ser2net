@@ -2,7 +2,8 @@
 connect-out target list.
 
   - the dashboard row: "waiting for a client" while an open-on-connect mapping runs with
-    its port closed (not once a client is there, not while it is stopped), the pool a
+    its port closed (not once a client is there, not while it is stopped; next to the
+    missing device and why, when the last open failed), the pool a
     mapping is handed clients from (not for one a pool passes over: TLS), a client that
     only listens, the number of other connect-out targets and the target the link is on;
     without the settings a row is what it was;
@@ -63,6 +64,11 @@ def test_dashboard():
     assert len(marked(root, "data-waiting")) == 1 and "waiting for a client" in out
     assert not marked(row(od, waiting=False)[0], "data-waiting"), "a client is connected"
     assert not marked(row(od, waiting=True, state="stopped")[0], "data-waiting")
+    # its device could not be opened at the last try: that state and why, and waiting
+    root, out = row(od, waiting=True, state="device-missing",
+                    last_error="[Errno 2] could not open port /dev/ttyS0")
+    assert len(marked(root, "data-waiting")) == 1 and "state-device-missing" in out, out
+    assert "could not open port" in out, out
 
     root, out = row(mapping("member", pool="lab"))
     tags = marked(root, "data-pool")

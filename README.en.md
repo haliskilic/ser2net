@@ -413,7 +413,9 @@ everything from a **password-protected web UI** — no CLI or hand-edited config
     dashboard says *waiting for a client*, `"waiting": true` in the status), opens it for
     the first client (taken once the port is open, so what it sends first is not lost; a
     port that can't be opened within `options.rfc2217_net_timeout_s` turns the client
-    away) and closes it **Keep the port open after the last client (s)**
+    away; the mapping then stays *device missing* with the reason while it waits, and
+    the notifications say *device lost* once and *device back* only after an open that
+    works) and closes it **Keep the port open after the last client (s)**
     (`port_linger_s`, 2 by default) after the last one left, so another program can use
     the device in between. The open string then goes out at each of those opens, and RTS /
     DTR are set each time. The web console counts as a client; the hex view, MQTT and the

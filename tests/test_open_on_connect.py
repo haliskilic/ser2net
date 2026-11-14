@@ -8,8 +8,9 @@
     on the port that closes;
   - while the mapping waits, the no-data alarm does not count the silence;
   - a device that can't be opened: the client is turned away after the short wait
-    (options.rfc2217_net_timeout_s), the status says why while it is tried, and goes back
-    to waiting (no error left) once nobody wants the port;
+    (options.rfc2217_net_timeout_s), the status says why, and keeps saying it while it
+    waits once nobody wants the port: the notifier reports device_lost once and
+    device_back only after an open that works (not for a port closed on purpose);
   - the web console counts as a client; the hex view does not;
   - RFC 2217 works with it (the session begins once the port is open);
   - off (the default): the port is opened at start and kept;
@@ -28,6 +29,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 
 from _device import FakeDevice, eof_within, port_of, read_for, running, until
 
+from ser2netweb import notify
 from ser2netweb.config import ConfigError, MappingConfig, port_linger
 from ser2netweb.engine.bridge import MappingRunner
 from ser2netweb.web.routes.forms import (
@@ -138,21 +140,45 @@ async def _missing_device():
     try:
         async with running(mapping(), device, logs, wait_open=False) as runner:
             st = runner.status
+            seen = [notify.snapshot({"m": st.as_dict()})]
+
+            def device_events():  # what the notifier says since its last look
+                now = {"m": st.as_dict()}
+                events = notify.status_events(seen[-1], now, {"m": "ondemand"})
+                seen.append(notify.snapshot(now, seen[-1]))
+                return [(e[0], e[3]) for e in events if e[0].startswith("device_")]
+
             r, w = await asyncio.open_connection("127.0.0.1", port_of(runner))
             await until(lambda: st.state == "device-missing")
             assert st.waiting is False and st.last_error
+            assert [e for e, _why in device_events()] == ["device_lost"]
             assert await eof_within(r, 5), "turned away once the short wait is over"
             w.close()
             assert st.client_count == 0 and not any("client connected" in ln for ln in logs)
             assert any("the serial port could not be opened" in ln for ln in logs), logs
+            error = st.last_error
             await until(lambda: st.waiting)
-            assert st.state == "running" and st.last_error == "", "waiting is no error"
-            # the device is back: the next client is served
+            assert st.state == "device-missing" and st.last_error == error, \
+                ("waiting, and still saying why the port could not be opened", st.as_dict())
+            assert device_events() == [], "no device_back: the device never came back"
+            # another client while it is still missing: no device_lost again
+            r, w = await asyncio.open_connection("127.0.0.1", port_of(runner))
+            await until(lambda: not st.waiting)
+            assert await eof_within(r, 5)
+            w.close()
+            await until(lambda: st.waiting)
+            assert device_events() == [] and st.state == "device-missing"
+            # the device is back: the next client is served, and that is device_back
             device.present = True
             r, w = await asyncio.open_connection("127.0.0.1", port_of(runner))
             w.write(b"ok")
             await until(lambda: bytes(device.heard) == b"ok")
+            assert st.state == "running" and st.last_error == ""
+            assert [e for e, _why in device_events()] == ["device_back"]
             w.close()
+            await until(lambda: st.waiting and not device.is_open)
+            assert st.state == "running" and device_events() == [], \
+                "a port closed on purpose after it worked is no device event"
     finally:
         await device.close()
 
@@ -199,8 +225,8 @@ def test_runner():
     asyncio.run(_client_while_closing())
     print("a client that connects while the port closes waits for the next open  OK")
     asyncio.run(_missing_device())
-    print("a device that can't be opened: the client is turned away, waiting again without "
-          "an error, served once it is back  OK")
+    print("a device that can't be opened: the client is turned away, the status keeps why "
+          "while it waits; device_lost once, device_back only once an open works  OK")
     asyncio.run(_console_and_rfc2217())
     print("the web console opens the port, the hex view does not; RFC 2217 begins once it "
           "is open  OK")
