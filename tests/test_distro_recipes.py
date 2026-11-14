@@ -467,9 +467,14 @@ def test_old_setuptools():
     assert ("%if 0%{?rhel} && 0%{?rhel} <= 10\n%bcond_without old_setuptools\n%else\n"
             "%bcond_with old_setuptools\n%endif\n") in spec, "EPEL 10 only"
     prep = spec.split("\n%prep\n", 1)[1].split("\n%generate_buildrequires", 1)[0]
-    block = re.search(r"(?ms)^%if %\{with old_setuptools\}\n(?:#.*?\n)*sed -i (.*?) pyproject\.toml"
-                      r"\n%endif$", prep).group(1)
-    script = re.findall(r"-e '([^']*)'", block)
+    # (the block itself: its comment lines, then sed -i ... pyproject.toml)
+    block = prep.split("\n%if %{with old_setuptools}\n", 1)[1].split("\n%endif\n", 1)[0]
+    lines = block.split("\n")
+    while lines[0].startswith("#"):
+        lines.pop(0)
+    command = "\n".join(lines)
+    assert command.startswith("sed -i ") and command.endswith(" pyproject.toml"), command
+    script = re.findall(r"-e '([^']*)'", command)
     makefile = read("freebsd", "net", "ser2netweb", "Makefile").replace("$$", "$")
     port = re.search(r"(?ms)^post-patch:\n\t@\$\{REINPLACE_CMD\} (.*?) \$\{WRKSRC\}/pyproject",
                      makefile).group(1)
@@ -486,7 +491,7 @@ def test_old_setuptools():
     assert want["build-system"]["requires"] == ["setuptools>=77"], "(PyPI's stays as it is)"
     # the licence texts where setuptools 77 would put them, and packaged
     install = spec.split("\n%install\n", 1)[1].split("\n%check\n", 1)[0]
-    copied = re.search(r"(?ms)^%if %\{with old_setuptools\}\n(.*?)^%endif$", install).group(1)
+    copied = install.split("\n%if %{with old_setuptools}\n", 1)[1].split("\n%endif\n", 1)[0]
     assert "licenses=%{buildroot}%{python3_sitelib}/ser2netweb-%{version}.dist-info/licenses" \
         in copied
     named = re.findall(r"install -Dpm 0644 -t \$licenses(\S*) (.*)", copied)
