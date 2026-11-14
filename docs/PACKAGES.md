@@ -2,10 +2,10 @@
 
 <https://haliskilic.github.io/ser2netweb/> serves signed APT and DNF / zypper repositories with the `.deb` and
 `.rpm` packages of ser2netweb's newest three releases (not pre-releases), for x86_64 and
-arm64. They are the release files as they are, the ones on GitHub Releases: each is checked
-against its release's `SHA256SUMS` and build provenance before it goes in, and nothing is
-rebuilt. With the repository added once, the package manager installs the updates with
-the rest of the system. What the package installs (the binary, its systemd unit, the
+arm64. They are the release files, the ones on GitHub Releases: each is checked against its
+release's `SHA256SUMS` and build provenance before it goes in, and nothing is rebuilt; the
+`.rpm` files get the signing key's signature added (below). With the repository added
+once, the package manager installs the updates with the rest of the system. What the package installs (the binary, its systemd unit, the
 account `ser2netweb` and `/var/lib/ser2netweb`) is in the README's
 [*Linux packages*](../README.en.md#linux-packages-deb--rpm).
 
@@ -41,7 +41,7 @@ sudo curl -fsSLo /etc/yum.repos.d/ser2netweb.repo https://haliskilic.github.io/s
 sudo dnf install ser2netweb
 ```
 This adds `/etc/yum.repos.d/ser2netweb.repo` (`baseurl=https://haliskilic.github.io/ser2netweb/rpm/$basearch`,
-`repo_gpgcheck=1`, `gpgcheck=0`, see [below](#why-the-rpm-packages-are-checked-through-the-signed-metadata)).
+`repo_gpgcheck=1`, `gpgcheck=1`, `pkg_gpgcheck=1`, see [below](#how-the-rpm-packages-are-checked)).
 On the first install dnf fetches the key named by `gpgkey=` and asks before it imports it
 (`Importing GPG key 0x711BB799` … `Fingerprint: B587 60E7 C0B0 515E 81D2  50F9 8164 D694 711B B799`): answer `y` only when it shows this
 fingerprint.
@@ -64,8 +64,8 @@ sets the first password. For the network address and the rest, see the README's 
 service*.
 
 ## The signing key
-`InRelease` and `Release.gpg` (APT) and every `repodata/repomd.xml.asc` (DNF, zypper) are
-signed with
+`InRelease` and `Release.gpg` (APT), every `repodata/repomd.xml.asc` (DNF, zypper) and every
+`.rpm` file in the repository are signed with
 
     B587 60E7 C0B0 515E 81D2  50F9 8164 D694 711B B799
 
@@ -118,23 +118,49 @@ account `ser2netweb` (delete them by hand if wanted). A key that `rpm --import` 
 put into the RPM database stays there: `rpm -qa gpg-pubkey --qf '%{NAME}-%{VERSION}-%{RELEASE} %{SUMMARY}\n'`
 names it, `sudo rpm -e <that name>` removes it.
 
-## Why the RPM packages are checked through the signed metadata
-The `.rpm` files are released unsigned (like the `.deb` files: Debian packages carry no
-signature of their own either). What dnf and zypper check is the repository:
-`repo_gpgcheck=1` makes them verify `repodata/repomd.xml` against `repomd.xml.asc` with
-the key above before they use it, `repomd.xml` holds the SHA-256 of the package list
-(`primary.xml.gz`), and that list holds the SHA-256 and size of every package, which dnf
-and zypper compare with what they download. A package that was changed on the server or on
-the way doesn't match, and a changed list doesn't match the signed `repomd.xml`
-(the workflow tests both). `gpgcheck=0` only tells them not to look for a signature inside
-the package file, which isn't there. APT works the same way: `InRelease` is signed and
-holds the SHA-256 of `Packages`, which holds each package's.
+## How the RPM packages are checked
+Two signatures by the key above, and dnf and zypper check both, as `ser2netweb.repo` tells
+them (`repo_gpgcheck=1` the repository's; `gpgcheck=1` the packages' for dnf, and
+`pkg_gpgcheck=1` for zypper, which with a good repository signature otherwise skips the
+packages'; dnf 5 reads `pkg_gpgcheck` as its name for `gpgcheck`, dnf 4 passes over it):
+- the repository's: dnf and zypper verify `repodata/repomd.xml` against `repomd.xml.asc`
+  before they use it; `repomd.xml` holds the SHA-256 of the package list (`primary.xml.gz`),
+  and that list the SHA-256 and size of every package, which they compare with what they
+  download. A package or list changed on the server or on the way doesn't match (the
+  workflow tests that a changed copy is refused);
+- each package's own: the `.rpm` files carry a signature in their signature header
+  (`rpmsign`, RSA/SHA-512), which `rpm` checks before it installs one. A copy downloaded from
+  the repository can be checked on its own too, with the key imported
+  (`sudo rpm --import https://haliskilic.github.io/ser2netweb/ser2netweb-archive-keyring.asc`):
+  `rpm -K ser2netweb-X.Y.Z-1.x86_64.rpm` says `digests signatures OK`, and once installed
+  `rpm -q --qf '%{RSAHEADER:pgpsig}\n' ser2netweb` names the key (`Key ID 8164d694711bb799`).
+  `zypper repos` shows both checks as `(rp) Yes` in its *GPG Check* column.
 
-A `.rpm` (or `.deb`) copied around outside the repository has none of this: compare it
-with the release's `SHA256SUMS`, or check its build provenance
-(`gh attestation verify ser2netweb-X.Y.Z-1.x86_64.rpm -R haliskilic/ser2netweb`). Signing the
-RPM files themselves when they are built (nfpm's `rpm.signature`) would let `gpgcheck=1`
-check each file too; that is a later step.
+The packages are signed when the repository is built, not when they are released: the
+signature is added to the release's file, whose header, payload and their digests stay as
+they are (`rpm -K` shows the same `Header SHA256 digest` and `Payload SHA256 digest` for
+both), so every release in the repository, older ones included, is signed. Each signature
+is made at its package's build time (or at the key's creation, if that is later), so a
+package signed again on the next deployment is the same file, and one that has a good
+signature by the key already is left as it is: what a dnf or zypper cache holds of the
+repository keeps matching the files. The `.rpm`
+assets on GitHub Releases stay the unsigned build that `SHA256SUMS` and the build provenance
+are about (`gh attestation verify ser2netweb-X.Y.Z-1.x86_64.rpm -R haliskilic/ser2netweb`);
+the repository's copy differs from them by its signature header only, so check that one with
+`rpm -K`. APT works the same way as the metadata: `InRelease` is signed and holds the
+SHA-256 of `Packages`, which holds each package's (`.deb` files carry no signature of their
+own).
+
+A `ser2netweb.repo` fetched before the packages were signed says `gpgcheck=0`: it keeps
+working, with the signed metadata checked as before. Fetch it again (the install command
+above) to have each package checked as well; for zypper, remove the repository and add it
+again (`zypper removerepo ser2netweb`, then the commands above), as `addrepo` reads the file
+once.
+
+The first deployment with signed packages changes each `.rpm` once (its signature header):
+a dnf or zypper that cached the repository's metadata before it says the package doesn't
+match what it downloaded until the metadata is read again: `sudo dnf clean metadata` (or
+`dnf … --refresh`), `sudo zypper refresh`.
 
 ## How the repositories are built (maintainers)
 `.github/workflows/package-repo.yml` runs `tools/package_repo.py`:
@@ -147,18 +173,23 @@ check each file too; that is a later step.
    also under `by-hash/`, so a cached older index can't be mixed with a newer `InRelease`)
    and `dists/stable/Release`; `rpm/x86_64/` and `rpm/aarch64/` with `repodata/`
    (createrepo_c, gzip, no sqlite); `ser2netweb.sources`, `ser2netweb.repo`, `index.html`;
-3. **sign**: `InRelease`, `Release.gpg`, `repomd.xml.asc` (SHA-512) with the key in the
-   repository secrets `PACKAGES_GPG_PRIVATE_KEY` / `PACKAGES_GPG_PASSPHRASE` (only that
-   step gets them; their fingerprint must be the one above, the committed
-   `packaging/ser2netweb-archive-keyring.asc`'s and `PACKAGES_GPG_FINGERPRINT`'s), in a temporary
-   GnuPG home deleted afterwards; the published keyring is the committed file;
-4. **verify**: every index against the files it lists, every signature with `gpgv`;
+3. **sign**: every `.rpm` (`rpmsign --addsign`, after which `rpm/<arch>/repodata/` is made
+   again for the signed files), then `InRelease`, `Release.gpg`, `repomd.xml.asc` (SHA-512),
+   with the key in the repository secrets `PACKAGES_GPG_PRIVATE_KEY` /
+   `PACKAGES_GPG_PASSPHRASE` (only that step gets them; their fingerprint must be the one
+   above, the committed `packaging/ser2netweb-archive-keyring.asc`'s and
+   `PACKAGES_GPG_FINGERPRINT`'s), in a temporary GnuPG home deleted afterwards (rpmsign's
+   gpg reads the passphrase from a file there, never from its arguments); the published
+   keyring is the committed file;
+4. **verify**: every index against the files it lists, every signature with `gpgv`, every
+   `.rpm` with `rpmkeys -K` (a good signature by the site's key, not the digests alone);
 5. **test**: `tests/package_repo_smoke.sh` serves the tree on 127.0.0.1 and, in clean
    Debian 12, Ubuntu 24.04, Fedora, AlmaLinux 9 and openSUSE Leap 15.6 containers (x64;
    Debian and Fedora on arm64 too), runs the commands above (`tools/package_repo.py
    commands`): a copy whose `InRelease` and `repomd.xml` were changed after signing must be
-   refused, then ser2netweb is installed, `ser2netweb --version` checked, updated and
-   removed;
+   refused, then ser2netweb is installed (dnf and zypper with `gpgcheck=1`),
+   `ser2netweb --version` checked, the installed package's signature by the site's key,
+   updated and removed;
 6. **deploy** to GitHub Pages (the environment `github-pages`, which allows `main` and the
    `v*` tags), then the same commands against the published site.
 
@@ -166,14 +197,21 @@ It runs when release.yml has published a release (its job *start the release cha
 starts it on `main`: GitHub starts no workflow for a release its own token created), for a
 release published by hand, and from *Actions → Package repositories → Run workflow*, whose
 `tag` builds the repositories as of that release (it and the two before it; a rollback).
+Run it **from `main`** (the default) **with `tag`**, for a rollback or a redeployment too,
+never from an old tag's or branch's copy of the workflow: that runs the old
+`tools/package_repo.py`, and one from before the packages were signed deploys unsigned
+`.rpm` files, which a `gpgcheck=1` system refuses.
 A pull request that changes the workflow, `packaging/`, the tool or the smoke test builds
-and tests a tree signed with a throwaway key made in the job and deploys nothing; so does
-a run without `PACKAGES_GPG_PRIVATE_KEY` (with a notice). Every run replaces the whole
+and tests a tree signed with a throwaway key made in the job (the `.rpm` files too, checked
+with `rpmkeys -K` against that key and installed with `gpgcheck=1`) and deploys nothing; so
+do a run started by hand on another branch than `main` and a run without
+`PACKAGES_GPG_PRIVATE_KEY` (with a notice): only a release's run and one on `main` or a `v*`
+tag get the signing key's secrets and sign with it. Every run replaces the whole
 site, so anything else on GitHub Pages would have to be built here too.
 
 Each release adds about 95 MB (four packages); three releases stay well inside GitHub
-Pages' 1 GB site limit (`KEEP` in the tool). Locally, with apt-ftparchive and createrepo_c
-on `PATH`: `python3 tools/package_repo.py fetch dl`, `build dl site`,
+Pages' 1 GB site limit (`KEEP` in the tool). Locally, with apt-ftparchive, createrepo_c and
+rpm (rpmsign, rpmkeys) on `PATH`: `python3 tools/package_repo.py fetch dl`, `build dl site`,
 `sign site --test-key`, `verify site --any-key`; the smoke test needs Docker.
 
 Not here (yet): the distributions' own repositories (Debian, Ubuntu, Fedora: a long review

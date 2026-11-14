@@ -14,9 +14,10 @@ same files uploaded again replace themselves, renewed ones stand next to the old
 stay until someone deletes them: a configuration backup may name them), and a key never
 replaces another one (a pair already in use keeps its key and its password).
 
-The upload only stores files and answers their paths. They go into the same settings a
-typed path goes into (admin_ui.tls_cert, network.tls_cert, ...), which keep working as
-before.
+The upload only stores files and answers their paths, relative to the data folder
+(tls/uploaded-...pem, which config.data_path resolves there: a backup restored into
+another data folder still finds them). They go into the same settings a typed path goes
+into (admin_ui.tls_cert, network.tls_cert, ...), which keep working as before.
 """
 from __future__ import annotations
 
@@ -27,10 +28,9 @@ import hashlib
 import os
 import re
 import tempfile
-import time
 from typing import Optional
 
-from ..config import data_path, lock_down_dir
+from ..config import data_path, lock_down_dir, replace_when_free
 from ..engine import tls
 from ..i18n import _
 
@@ -124,10 +124,12 @@ def _read(path: str) -> Optional[bytes]:
         return None
 
 
-def _same_pair(cert: bytes, key: bytes, other_cert: str, other_key: str) -> bool:
-    """Is the uploaded pair the one in the files `other_cert` / `other_key` (paths from
-    the configuration; a file that can't be read is not the same)? The same public key
-    in the certificates, or the same key or certificate block."""
+def same_pair(cert: bytes, key: bytes, other_cert: str, other_key: str) -> bool:
+    """Is the pair `cert` / `key` (their bytes) the one in the files `other_cert` /
+    `other_key` (paths from the configuration; a file that can't be read is not the
+    same)? The same public key in the certificates, or the same key or certificate block.
+    An upload is checked with it, and so is a mapping's pair against the admin UI's
+    (AppConfig.admin_key_reuse, same_pair_files)."""
     theirs_cert, theirs_key = _read(other_cert), _read(other_key)
     mine = public_key(cert)
     if mine is not None and theirs_cert is not None and public_key(theirs_cert) == mine:
@@ -138,6 +140,11 @@ def _same_pair(cert: bytes, key: bytes, other_cert: str, other_key: str) -> bool
         if a and b and a[0] == b[0]:
             return True
     return False
+
+
+def same_pair_files(cert: str, key: str, other_cert: str, other_key: str) -> bool:
+    """same_pair for a pair in the files `cert` / `key` (paths from the configuration)."""
+    return same_pair(_read(cert) or b"", _read(key) or b"", other_cert, other_key)
 
 
 def _problem(e: tls.TlsFileError) -> str:
@@ -160,13 +167,14 @@ def store(data_dir: str, *, cert: Optional[bytes] = None, key: Optional[bytes] =
     `password`), and the CA files `cas` ({"ca": ..., "client_ca": ...}). `others`:
     (certificate path, key path) pairs it must not be the same as (UploadError with
     `reuse_message`). Returns {"cert": path, "key": path, <ca name>: path} for what was
-    uploaded (absolute paths). Raises UploadError; OSError when the folder can't be
-    written. Blocking: call via asyncio.to_thread."""
+    uploaded: relative to `data_dir`, "tls/<name>" (config.data_path resolves it there).
+    Raises UploadError; OSError when the folder can't be written. Blocking: call via
+    asyncio.to_thread."""
     given = {name: data for name, data in (cas or {}).items() if data is not None}
     _check_shape(cert, key, given)
     if cert is not None and key is not None:
         for other_cert, other_key in others:
-            if _same_pair(cert, key, other_cert, other_key):
+            if same_pair(cert, key, other_cert, other_key):
                 raise UploadError(reuse_message)
     folder = os.path.join(os.path.abspath(data_dir), TLS_DIR)
     os.makedirs(folder, mode=0o700, exist_ok=True)
@@ -195,30 +203,14 @@ def store(data_dir: str, *, cert: Optional[bytes] = None, key: Optional[bytes] =
         for tmp in aside.values():
             with contextlib.suppress(OSError):
                 os.remove(tmp)
-    return {what: path for what, (path, _data) in files.items()}
-
-
-# Windows refuses to replace a file while another upload of the same file is replacing it
-# or reading it (PermissionError), and while an antivirus scans it: tried again for up to
-# this long. A POSIX rename has no such refusal (a PermissionError there is the folder's).
-REPLACE_WAIT_S = 5.0 if os.name == "nt" else 0.0
+    return {what: f"{TLS_DIR}/{os.path.basename(path)}" for what, (path, _data) in files.items()}
 
 
 def _keep(tmp: str, path: str, data: bytes) -> None:
     """Move the checked file `tmp` to `path`. A file is named by its hash, so one that is
-    there with these bytes already (the same file uploaded before, or at the same time) is
-    kept as it is."""
-    end = time.monotonic() + REPLACE_WAIT_S
-    while True:
-        try:
-            os.replace(tmp, path)
-            return
-        except PermissionError:
-            if _holds(path, data):
-                return
-            if time.monotonic() >= end:
-                raise
-            time.sleep(0.05)
+    there with these bytes already (the same file uploaded before, or at the same time)
+    is kept as it is when Windows refuses the rename (config.replace_when_free)."""
+    replace_when_free(tmp, path, done=lambda: _holds(path, data))
 
 
 def _holds(path: str, data: bytes) -> bool:

@@ -1,6 +1,6 @@
 PORTNAME=	ser2netweb
 DISTVERSIONPREFIX=	v
-DISTVERSION=	3.0.1
+DISTVERSION=	3.1.0
 CATEGORIES=	net comms python
 
 MAINTAINER=	mail@haliskilic.com.tr
@@ -60,10 +60,15 @@ _LICENSES=	LICENSE NOTICE COMMERCIAL_LICENSE.md THIRD-PARTY-NOTICES.md \
 _LICENSEDIR=	${PYTHONPREFIX_SITELIBDIR:S;${PREFIX}/;;}/${PORTNAME}-${DISTVERSION}.dist-info/licenses
 PLIST_FILES=	${_LICENSES:S;^;${_LICENSEDIR}/;}
 
+# ser2netweb/distro.json (pyproject.toml takes it into the wheel): the distribution
+# ser2netweb names in --about, its service's data directory (the default without
+# --data-dir) and how an optional package is installed, for the hint about a missing one
 post-patch:
 	@${REINPLACE_CMD} -e 's|"setuptools>=77"|"setuptools"|' \
 		-e 's|^license = "\(.*\)"$$|license = {text = "\1"}|' \
 		-e '/^license-files = /,/]$$/d' ${WRKSRC}/pyproject.toml
+	@${PRINTF} '%s\n' '{"distribution": "FreeBSD ports", "data_dir": "/var/db/${PORTNAME}", "optional": "pkg install ${PYTHON_PKGNAMEPREFIX}{dist}"}' \
+		> ${WRKSRC}/ser2netweb/distro.json
 
 post-install:
 .for f in ${_LICENSES}

@@ -9,7 +9,7 @@
 %global xterm_fit_version 0.11.0
 
 Name:           ser2netweb
-Version:        3.0.1
+Version:        3.1.0
 Release:        1%{?dist}
 Summary:        Serial-to-network bridge with a web UI
 
@@ -26,6 +26,12 @@ Source5:        https://registry.npmjs.org/@xterm/xterm/-/xterm-%{xterm_version}
 Source6:        https://registry.npmjs.org/@xterm/addon-fit/-/addon-fit-%{xterm_fit_version}.tgz
 
 BuildArch:      noarch
+# RHEL 10 (EPEL 10) has setuptools 69, which doesn't know PEP 639's licence fields (%%prep)
+%if 0%{?rhel} && 0%{?rhel} <= 10
+%bcond_without old_setuptools
+%else
+%bcond_with old_setuptools
+%endif
 BuildRequires:  python3-devel
 BuildRequires:  systemd-rpm-macros
 %{?sysusers_requires_compat}
@@ -59,6 +65,20 @@ daemon (package ser2net), whose configuration files it can import.
 # not packaged in Fedora: ser2netweb runs on its built-in copy of that library's
 # serial transport (ser2netweb/engine/serial_transport.py)
 sed -i '/"pyserial-asyncio-fast>=/d' pyproject.toml
+%if %{with old_setuptools}
+# RHEL 10's python3-setuptools is 69, older than PEP 639's licence fields in
+# pyproject.toml (setuptools 77): the build takes them out (the licence is the License
+# tag above) and %%install puts the licence texts where setuptools 77 would
+sed -i -e 's|"setuptools>=77"|"setuptools"|' \
+    -e 's|^license = "\(.*\)"$|license = {text = "\1"}|' \
+    -e '/^license-files = /,/]$/d' pyproject.toml
+%endif
+# ser2netweb/distro.json (pyproject.toml takes it into the wheel): the distribution
+# ser2netweb names in --about, its service's data directory (the default without
+# --data-dir) and how an optional package is installed, for the hint about a missing one
+cat >ser2netweb/distro.json <<'EOF'
+{"distribution": "%{?fedora:Fedora}%{?rhel:EPEL}", "data_dir": "%{_sharedstatedir}/ser2netweb", "optional": "sudo dnf install python3-{dist}"}
+EOF
 
 %generate_buildrequires
 %pyproject_buildrequires
@@ -68,6 +88,12 @@ sed -i '/"pyserial-asyncio-fast>=/d' pyproject.toml
 
 %install
 %pyproject_install
+%if %{with old_setuptools}
+# the .dist-info's licenses/ folder, where the web UI's /licenses page reads them
+licenses=%{buildroot}%{python3_sitelib}/ser2netweb-%{version}.dist-info/licenses
+install -Dpm 0644 -t $licenses LICENSE NOTICE COMMERCIAL_LICENSE.md THIRD-PARTY-NOTICES.md
+install -Dpm 0644 -t $licenses/tools/licenses/npm tools/licenses/npm/*.txt
+%endif
 %pyproject_save_files -l ser2netweb
 install -Dpm 0644 %{SOURCE1} %{buildroot}%{_unitdir}/ser2netweb.service
 install -Dpm 0644 %{SOURCE2} %{buildroot}%{_sysusersdir}/ser2netweb.conf
@@ -84,6 +110,7 @@ for t in \
     test_config_types.py \
     test_config_validation.py \
     test_console_log.py \
+    test_dependency_internals.py \
     test_env_bind.py \
     test_explain.py \
     test_kept_names.py \
@@ -104,6 +131,7 @@ for t in \
     test_rfc2217_settings.py \
     test_secure_cookies.py \
     test_ser2net_import.py \
+    test_serial_compat.py \
     test_serial_mqtt.py \
     test_sparkplug.py \
     test_sparkplug_node.py \
@@ -131,6 +159,9 @@ done
 %systemd_postun_with_restart ser2netweb.service
 
 %files -f %{pyproject_files}
+%if %{with old_setuptools}
+%license %{python3_sitelib}/ser2netweb-%{version}.dist-info/licenses/
+%endif
 %doc README.en.md README.md CHANGELOG.md SECURITY.md
 %doc docs/LINUX-SERIAL.md docs/MIGRATING-FROM-SER2NET.md docs/MODBUS-MQTT.md
 %doc docs/PRIVACY.md docs/REVERSE-PROXY.md docs/SSO.md
@@ -141,6 +172,9 @@ done
 %attr(0700,ser2netweb,ser2netweb) %dir %{_sharedstatedir}/ser2netweb
 
 %changelog
+* Sat Nov 14 2026 Halis KILIÇ <mail@haliskilic.com.tr> - 3.1.0-1
+- Update to 3.1.0
+
 * Fri Nov 13 2026 Halis KILIÇ <mail@haliskilic.com.tr> - 3.0.1-1
 - Update to 3.0.1
 

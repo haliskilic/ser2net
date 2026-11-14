@@ -242,11 +242,11 @@ def test_pages():
         test_form_errors(b, tr)
         test_option_labels(b, tr)
         classic = (b"connection: &plc\n  accepter: tcp,127.0.0.1,4001\n"
-                   b"  connector: serialdev,/dev/ttyUSB9,9600n81\n  options:\n    chardelay-scale: 20\n")
+                   b"  connector: serialdev,/dev/ttyUSB9,9600n81\n  options:\n    mdns-name: plc\n")
         st, _, page = b.post("/settings/config/import", {"step": "preview", "mode": "merge"},
                              files={"file": ("ser2net.yaml", classic)})
         assert st == 200 and esc(tr["Import preview"]) in page, page[page.find("banner"):][:300]
-        assert esc(tr["not imported (no equivalent here): {0}"].format("chardelay-scale")) in page
+        assert esc(tr["not imported (no equivalent here): {0}"].format("mdns-name")) in page
         st, h, _ = b.get("/lang/en?next=/settings")
         assert st == 303 and h.get("Location") == "/settings"
         st, _, page = b.get("/settings")

@@ -39,7 +39,7 @@ sys.path.insert(0, ROOT)
 import refresh_locks as rl
 import refresh_wheels as rw
 
-from ser2netweb import envvars, optional
+from ser2netweb import envvars, layout, optional
 
 try:
     import tomllib
@@ -179,6 +179,10 @@ def test_files():
     assert setup["include-package-data"] is False
     globs = setup["package-data"]["ser2netweb"]
     pkg = os.path.join(ROOT, "ser2netweb")
+    # a distribution's recipe writes ser2netweb/distro.json before its build (layout.DISTRO);
+    # this tree, and so the PyPI files, never have one
+    assert "distro.json" in globs and layout.DISTRO_FILE == "distro.json", globs
+    assert not os.path.exists(os.path.join(pkg, layout.DISTRO_FILE)), "pip's layout, not a recipe's"
     count = 0
     for folder, dirs, files in os.walk(pkg):
         dirs[:] = [d for d in dirs if d != "__pycache__"]

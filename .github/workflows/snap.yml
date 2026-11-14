@@ -5,7 +5,7 @@ name: Snap
 # into build/snap/, snapcraft packs it on a runner of that architecture
 # (snapcore/action-build), and the snap is installed on the runner and tested
 # (tests/snap_smoke.sh: the command, the service off until enabled, the interfaces, /healthz,
-# snap set). Then it is uploaded to the Snap Store and released to a channel with the secret
+# snap set). Then it is uploaded to the Snap Store and released to its channels with the secret
 # SNAPCRAFT_STORE_CREDENTIALS (made with snapcraft export-login, below); without it the upload
 # is skipped with a notice. To set it up: register the name once (snapcraft login, snapcraft
 # register ser2netweb, on an account of https://snapcraft.io), then
@@ -14,9 +14,11 @@ name: Snap
 # and creds.txt's content as the repository secret SNAPCRAFT_STORE_CREDENTIALS.
 # Runs: for a release (release.yml starts it with the tag: a release created with the
 # GITHUB_TOKEN starts no workflow by itself; one published by hand does, pre-releases are
-# left out), to the stable channel; by hand for a release (Actions -> Snap -> Run workflow:
-# its tag and the channel, e.g. edge to try a build first); and on pull requests that change
-# the snap (build and test the latest release's, no upload).
+# left out), to every channel (stable, candidate, beta and edge: a channel the release
+# skipped would keep offering the version before it, as edge kept 3.0.0 next to a stable
+# 3.0.1); by hand for a release (Actions -> Snap -> Run workflow: its tag and the channels,
+# all of them by default, or one, e.g. edge to try a build first); and on pull requests that
+# change the snap (build and test the latest release's, no upload).
 on:
   release:
     types: [published]
@@ -27,11 +29,11 @@ on:
         required: true
         type: string
       channel:
-        description: The Snap Store channel to release it to
+        description: The Snap Store channels to release it to (all = stable, candidate, beta and edge)
         required: false
         type: choice
-        options: [stable, candidate, beta, edge]
-        default: stable
+        options: [all, stable, candidate, beta, edge]
+        default: all
   pull_request:
     paths:
       - snap/**
@@ -146,5 +148,6 @@ jobs:
           SNAPCRAFT_STORE_CREDENTIALS: ${{ secrets.SNAPCRAFT_STORE_CREDENTIALS }}
         with:
           snap: ${{ steps.store.outputs.path }}
-          # a release: stable; by hand: the channel chosen
-          release: ${{ github.event_name == 'release' && 'stable' || inputs.channel || 'stable' }}
+          # a release (published, or started by release.yml with its tag alone): every
+          # channel, so that none keeps an older version; by hand: the one chosen, or all
+          release: ${{ inputs.channel != 'all' && inputs.channel || 'stable,candidate,beta,edge' }}

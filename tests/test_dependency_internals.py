@@ -25,6 +25,11 @@ Config(http=...) gets, and that ser2netweb imports nothing of websockets (uvicor
 The hash pins of tests/test_serial_compat.py are the stricter check for pyserial and
 pyserial-asyncio-fast (any change to the code an override replaces fails there).
 
+A distribution's build runs it too (its recipe wrote ser2netweb/distro.json into this tree,
+its check step runs this file against the distribution's packages): every check holds there
+as well, but for pyserial's Windows-only modules, which a package may leave out off Windows
+(openSUSE's has no serialwin32 or win32): those parts are skipped with a note.
+
 Run: python3 tests/test_dependency_internals.py   (binds nothing)
 """
 import ast
@@ -39,9 +44,14 @@ ROOT = os.path.dirname(HERE)
 sys.path.insert(0, os.path.join(ROOT, "lib"))
 sys.path.insert(0, ROOT)
 
+from ser2netweb import layout
 from ser2netweb.engine import serial_compat
 
 TRANSPORT_MODULE = serial_compat._saf.__name__  # (without pyserial-asyncio-fast: the copy)
+# a distribution's build: its recipe wrote ser2netweb/distro.json into this tree (layout.DISTRO)
+DISTRO_BUILD = layout.distro_info() is not None
+# pyserial's modules for Windows alone, which a distribution's package may leave out
+WINDOWS_ONLY = ("serial.serialwin32", "serial.win32")
 
 
 class Part:
@@ -278,10 +288,29 @@ def module_names(module):
     return out
 
 
+def left_out(modules, distro_build=None, platform=sys.platform):
+    """The Windows-only modules among `modules` that a distribution's package left out
+    (in a distribution's build, off Windows); elsewhere none: a module that is missing
+    fails where it is used."""
+    if not (DISTRO_BUILD if distro_build is None else distro_build) or platform == "win32":
+        return []
+    return [m for m in modules if m in WINDOWS_ONLY and importlib.util.find_spec(m) is None]
+
+
+def _skipped(modules, what):
+    gone = left_out(modules)
+    if gone:
+        print(f"NOTE (a distribution's build): {', '.join(gone)} not installed (left out off "
+              f"Windows): {what} skipped")
+    return bool(gone)
+
+
 # ------------------------------------------------------------------------------ checks
 def test_surface():
     problems, checked = [], 0
     for part in SURFACE:
+        if _skipped([module for module, _cls in part.theirs], part.name):
+            continue
         where = (f"{part.name} ({part.dist} {_version(part.dist)}; ser2netweb's user: "
                  f"{part.used_by})")
         try:
@@ -317,7 +346,7 @@ def test_every_use_is_listed():
     """What ser2netweb's subclasses use of their bases is all in SURFACE."""
     problems = []
     for part in SURFACE:
-        if part.ours is None:
+        if part.ours is None or _skipped([m for m, _c in part.theirs], f"{part.name}'s uses"):
             continue
         methods, attributes = surface_of(part)
         theirs = set(methods) | attributes
@@ -333,6 +362,8 @@ def test_every_use_is_listed():
                             "add it to SURFACE (a method with the parameters it passes or "
                             "takes, else an attribute)")
     for module, (path, var, in_class) in MODULE_NAMES.items():
+        if _skipped([module], f"the names taken from {module}"):
+            continue
         missing = names_used_on(path, var, in_class) - module_names(module)
         for name in sorted(missing):
             problems.append(f"{path} takes {module}.{name}, which pyserial "
@@ -432,10 +463,27 @@ def test_no_websockets_internals():
           "h11: the public names httpguard uses are there  OK")
 
 
+def test_portable_in_a_distribution_build():
+    """left_out lets a Windows-only module be missing in a distribution's build off Windows,
+    and nothing else: another missing module, Windows, or outside such a build."""
+    global WINDOWS_ONLY
+    saved, gone = WINDOWS_ONLY, "serial.nonexistent_for_the_test"
+    WINDOWS_ONLY = (*saved, gone)
+    try:
+        assert left_out([gone, "serial.serialutil"], True, "linux") == [gone]
+        assert left_out([gone], True, "win32") == [] and left_out([gone], False, "linux") == []
+        assert left_out(["serial.nonexistent_too"], True, "linux") == []
+    finally:
+        WINDOWS_ONLY = saved
+    print("a distribution's build: only the Windows-only modules a package leaves out off "
+          f"Windows are skipped ({'this is one' if DISTRO_BUILD else 'this is none'})  OK")
+
+
 if __name__ == "__main__":
     test_surface()
     test_every_use_is_listed()
     test_transport_stand_in()
     test_config_takes_the_protocol()
     test_no_websockets_internals()
+    test_portable_in_a_distribution_build()
     print("\nPASS: the dependencies' parts ser2netweb builds on are where it expects them")

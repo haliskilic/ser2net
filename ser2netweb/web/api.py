@@ -38,7 +38,7 @@ _BOOLEANS = {"true": True, "1": True, "yes": True, "false": False, "0": False, "
 # The REST API's own version (OpenAPI info.version, GET /info) and what it offers beyond
 # 1.0.0, so a client can tell what it may use without parsing the software version.
 API_VERSION = "1.2.0"
-API_FEATURES = ("warnings", "changed", "if-match", "traces", "capture")
+API_FEATURES = ("warnings", "changed", "if-match", "traces", "capture", "pools")
 
 def _caller(request) -> str:
     """Who calls, for the audit log: the token's name (api-token:<name>), 'api-token' for
@@ -109,7 +109,8 @@ def _edit_view(mapping, state, request=None) -> dict:
     replaced by a supported one) and about settings it has that do nothing
     (MappingConfig.ignored_settings)."""
     view = _mapping_view(mapping, state, request)
-    warnings = mapping.input_warnings() + mapping.ignored_settings()
+    warnings = (mapping.input_warnings() + mapping.ignored_settings()
+                + ops.pool_warnings(state, mapping))
     if warnings:
         view["warnings"] = warnings
     return view
@@ -486,6 +487,8 @@ def build_api_routes(state: AppState) -> list[Route]:
             return JSONResponse({"error": "invalid_import", "detail": str(e)}, status_code=400)
         answer = {"mode": mode, "dry_run": _BOOLEANS[dry], "source": plan.source,
                   "count": len(plan.mappings), "warnings": plan.warnings}
+        if plan.pools:  # a classic ser2net file's rotators (added unless the name exists)
+            answer["pools"] = [dataclasses.asdict(p) for p in plan.pools]
         if _BOOLEANS[dry]:
             rows, problem = ops.import_preview(state, plan, mode)
             return JSONResponse({**answer, "rows": rows, "summary": ops.import_counts(rows),
@@ -508,12 +511,43 @@ def build_api_routes(state: AppState) -> list[Route]:
         return JSONResponse({**answer, "rows": rows, "summary": count, "valid": True,
                              "problem": None, "applied": True})
 
+    async def list_pools(request):
+        return JSONResponse({"pools": ops.pool_rows(state)})
+
+    async def put_pools(request):
+        """PUT /pools: the body's pools ({"pools": [{"name", "port", "bind_ip",
+        "enabled", "rotate"}, ...]}) replace all of them; they listen (or stop) at once."""
+        try:
+            body = await request.json()
+        except HTTPException:  # a body over the size limit: 413
+            raise
+        except Exception:
+            return JSONResponse({"error": "invalid_json"}, status_code=400)
+        if not isinstance(body, dict):
+            return JSONResponse({"error": "invalid_json", "detail": "object expected"},
+                                status_code=400)
+        try:
+            pools = config.pools_from_json(body.get("pools"))
+        except _BAD_INPUT as e:
+            return JSONResponse({"error": "validation", "detail": str(e)}, status_code=400)
+        try:
+            warnings = await ops.save_pools(state, pools)
+        except ConfigError as e:
+            return _not_saved(e)
+        shown = ", ".join(f"{p.name} {config.host_port(p.bind_ip, p.port)}"
+                          + ("" if p.enabled else " (off)") for p in pools) or "none"
+        state.log(f"api: port pools: {shown}")
+        state.audit(_client_ip(request), "api_pools", shown, user=_caller(request))
+        return JSONResponse({"pools": ops.pool_rows(state),
+                             **({"warnings": warnings} if warnings else {})})
+
     async def metrics(request):
         return PlainTextResponse(await metrics_text(state), media_type=METRICS_TYPE)
 
     async def status(request):
         certificates = [c.view() for c in await state.certwatch.current()]
         return JSONResponse({"mappings": state.supervisor.all_status(),
+                             "pools": state.supervisor.pools.status(),
                              "certificates": certificates,
                              "clock_steps": state.clockwatch.steps})
 
@@ -539,6 +573,8 @@ def build_api_routes(state: AppState) -> list[Route]:
         Route(f"{API_PREFIX}/import", import_mappings, methods=["POST"],
               max_body_size=importer.MAX_FILE_BYTES),
         Route(f"{API_PREFIX}/ports", ports, methods=["GET"]),
+        Route(f"{API_PREFIX}/pools", list_pools, methods=["GET"]),
+        Route(f"{API_PREFIX}/pools", put_pools, methods=["PUT"]),
         Route(f"{API_PREFIX}/mappings", list_mappings, methods=["GET"]),
         Route(f"{API_PREFIX}/mappings", create_mapping, methods=["POST"]),
         Route(f"{API_PREFIX}/mappings/{{mid}}", get_mapping, methods=["GET"]),
@@ -582,6 +618,7 @@ _ENUMS = {
     ("MqttSettings", "payload_format"): config.MQTT_FORMATS,
     ("MqttSettings", "line_end"): config.MQTT_LINE_ENDS,
     ("MqttSettings", "value_format"): config.MQTT_VALUE_FORMATS,
+    ("MqttSettings", "protocol"): config.MQTT_PROTOCOLS,
     ("ModbusPoint", "fn"): (1, 2, 3, 4),
     ("ModbusPoint", "dtype"): config.MODBUS_DTYPES,
     ("ModbusPoint", "word_order"): config.MODBUS_WORD_ORDERS,
@@ -605,11 +642,50 @@ _NOTES = {
     ("NetworkSettings", "allowed_client_ips"): "The clients (IP or CIDR) that may connect; "
                                                "empty = any client.",
     ("NetworkSettings", "read_only"): "Clients only read: nothing they send reaches the device.",
+    ("NetworkSettings", "writer_client_ips"): "server / udp: with entries, only clients from "
+                                              "these IPs or CIDRs send to the device; the "
+                                              "others only receive. Empty = every client.",
+    ("NetworkSettings", "open_on_connect"): "server: open the serial port only while a client "
+                                            "is connected, and close it port_linger_s seconds "
+                                            "after the last one left.",
+    ("NetworkSettings", "pool"): "server (no TLS): the name of the port pool (GET /pools) that "
+                                 "hands clients to this mapping; \"\" = none.",
+    ("NetworkSettings", "remote_targets"): "client: more targets (host:port, [IPv6]:port) "
+                                           "tried in order when remote_host:remote_port "
+                                           "can't be reached; at most 8.",
+    ("NetworkSettings", "failover_return_s"): "client: while the link is on one of "
+                                              "remote_targets, try the first target again "
+                                              "every this many seconds (5-86400) and move "
+                                              "back once it answers; 0 = off.",
+    ("MappingOptions", "pack_gap_ms"): "raw: forward the device's output as one frame once "
+                                       "it has sent nothing for this many milliseconds (one "
+                                       "datagram per frame over UDP); 0 = off.",
+    ("MappingOptions", "pack_delimiter"): "raw: a frame ends with these bytes (\\r \\n \\t "
+                                          "\\\\ \\xHH for those bytes); \"\" = none.",
+    ("MappingOptions", "pack_max_bytes"): "raw: a frame is sent once it has this many bytes; "
+                                          "0 = 4096 while packing is on.",
     ("MqttSettings", "password"): "Masked as ******** for a viewer token; sent back so in a PUT "
                                   "or PATCH, the stored one stays.",
     ("MqttSettings", "client_key_password"): "The password of an encrypted client_key. "
                                              "Masked as ******** for a viewer token; sent back "
                                              "so in a PUT or PATCH, the stored one stays.",
+    ("MqttSettings", "protocol"): "The MQTT version of the broker connection.",
+    ("MqttSettings", "clean_start"): "MQTT 5: begin a new session at every connect. false "
+                                     "needs a client_id; Sparkplug B always starts clean.",
+    ("MqttSettings", "session_expiry_s"): "MQTT 5: seconds the broker keeps the session "
+                                          "after the connection ends (0: not at all).",
+    ("MqttSettings", "message_expiry_s"): "MQTT 5: seconds after which the broker stops "
+                                          "handing out retained data (0: never).",
+    ("ModbusPoint", "pulse_ms"): "A writable coil: a write of true from MQTT is followed by "
+                                 "a write of false this many milliseconds later (50-600000); "
+                                 "null: none.",
+    ("ModbusPoint", "safe_value"): "With safe_after_s: the value (true / false for a coil, a "
+                                   "number for a register) written to a writable point once "
+                                   "the broker, or the Sparkplug primary host, has been away "
+                                   "that long; null: none.",
+    ("ModbusPoint", "safe_after_s"): "Seconds (1-86400) without the broker, or the Sparkplug "
+                                     "primary host, after which safe_value is written; "
+                                     "null: none.",
     ("NetworkSettings", "tls_key_password"): "The password of an encrypted tls_key. Masked as "
                                              "******** for a viewer token; sent back so in a "
                                              "PUT or PATCH, the stored one stays.",
@@ -624,12 +700,21 @@ def _field_schema(cls, f, hint) -> dict:
     its JSON type with the default, the allowed values and a note where there are any."""
     if dataclasses.is_dataclass(hint):
         return {"$ref": f"#/components/schemas/{_schema_name(hint)}"}
+    nullable = hint is typing.Any  # (a point's safe_value: true / false or a number)
+    options = typing.get_args(hint)
+    if type(None) in options and len(options) == 2:  # Optional[...]: null = not set
+        hint = next(o for o in options if o is not type(None))
+        nullable = True
     origin = typing.get_origin(hint)
-    if origin is list:
+    if nullable:
+        out: dict = ({} if hint is typing.Any else {"type": "array", "items": {}}
+                     if hint is list else {"type": _JSON_TYPES.get(hint, "string")})
+        out["nullable"] = True
+    elif origin is list:
         (item,) = typing.get_args(hint)
         items = ({"$ref": f"#/components/schemas/{_schema_name(item)}"}
                  if dataclasses.is_dataclass(item) else {"type": _JSON_TYPES.get(item, "string")})
-        out: dict = {"type": "array", "items": items}
+        out = {"type": "array", "items": items}
     elif origin is dict or hint is dict:
         out = {"type": "object", "additionalProperties": True}
     else:
@@ -703,13 +788,24 @@ def openapi_spec(admin, base: str = "") -> dict:
         "MappingStatus": {"type": "object", "additionalProperties": True, "properties": {
             "state": {"type": "string",
                       "description": "stopped, running, reconnecting, device-missing or error"},
+            "waiting": {"type": "boolean",
+                        "description": "open_on_connect: the serial port is closed until a "
+                                       "client connects; the state is running, or "
+                                       "device-missing / reconnecting (with last_error) "
+                                       "when the last open failed"},
+            "link_target": {"type": "string",
+                            "description": "connect-out: the target the link is on, or the "
+                                           "one being tried (host:port)"},
             "device": {"type": "string"},
             "client_count": {"type": "integer"},
             "clients": {"type": "array", "items": {"type": "object", "properties": {
                 "peer": {"type": "string"},
                 "duration": {"type": "string", "description": "connected for (text)"},
                 "connected_s": {"type": "integer", "description": "connected for (seconds)"},
-                "priority": {"type": "boolean"}}}},
+                "priority": {"type": "boolean"},
+                "listen_only": {"type": "boolean",
+                                "description": "not one of writer_client_ips: what it sends "
+                                               "is dropped"}}}},
             "bytes_in": {"type": "integer", "description": "read from the serial device"},
             "bytes_out": {"type": "integer", "description": "written to the serial device"},
             "bytes_dropped": {"type": "integer"},
@@ -724,12 +820,28 @@ def openapi_spec(admin, base: str = "") -> dict:
             "rx_idle_s": {"type": "number", "nullable": True,
                           "description": "how long the device has sent nothing"},
             "reply_wait_s": {"type": "number", "nullable": True,
-                             "description": "how long what was sent to it has had no answer"}}},
+                             "description": "how long what was sent to it has had no answer"},
+            "mqtt": {"type": "object", "additionalProperties": True, "description": (
+                "The MQTT connection while the mapping runs ({}: MQTT off): state "
+                "(connecting, connected, down, off), broker, since, error, dropped, "
+                "protocol (3.1.1 or 5); with MQTT 5 also reason_code (the broker's reason "
+                "code for refusing or ending the connection, else null) and rejected "
+                "(publications the broker refused).")},
+            "safe": {"type": "object", "additionalProperties": True, "description": (
+                "A Modbus gateway whose points have a safe value ({}: none): state (ok, "
+                "waiting: the broker or the Sparkplug primary host is away, applied: every "
+                "safe value is written), watching (broker or primary host), since, and "
+                "points: name, value, after_s, written (Unix time, null: not yet), "
+                "error.")}}},
         "MappingList": {"type": "object", "properties": {
             "mappings": {"type": "array", "items": {"$ref": "#/components/schemas/Mapping"}}}},
-        "StatusMap": {"type": "object", "properties": {"mappings": {
-            "type": "object", "description": "mapping id -> its live state",
-            "additionalProperties": {"$ref": "#/components/schemas/MappingStatus"}},
+        "StatusMap": {"type": "object", "properties": {
+            "mappings": {
+                "type": "object", "description": "mapping id -> its live state",
+                "additionalProperties": {"$ref": "#/components/schemas/MappingStatus"}},
+            "pools": {
+                "type": "object", "description": "name -> state of each port pool that runs",
+                "additionalProperties": {"$ref": "#/components/schemas/PortPoolStatus"}},
             "clock_steps": {"type": "integer",
                             "description": "steps of the system clock of 1 s or more seen "
                                            "since the start"},
@@ -750,6 +862,42 @@ def openapi_spec(admin, base: str = "") -> dict:
                         "valid", "expiring", "expired", "not_yet_valid", "unreadable"]},
                     "detail": {"type": "string",
                                "description": "why it is unreadable"}}}}}},
+        "PortPool": {"type": "object", "required": ["name", "port"], "properties": {
+            "name": {"type": "string", "description": "1-64 letters, digits, '-', '_' or '.'; "
+                                                      "mappings join with network.pool"},
+            "bind_ip": {"type": "string", "default": "0.0.0.0",
+                        "description": "the address it listens on"},
+            "port": {"type": "integer", "minimum": 1, "maximum": 65535},
+            "enabled": {"type": "boolean", "default": True},
+            "rotate": {"type": "boolean", "default": False,
+                       "description": "begin after the mapping that got the last client "
+                                      "(classic ser2net's rotator) instead of at the first"}}},
+        "PortPoolStatus": {"allOf": [{"$ref": "#/components/schemas/PortPool"}, {
+            "type": "object", "properties": {
+                "state": {"type": "string", "description": "listening, error (its address "
+                                                           "can't be taken; tried again) or "
+                                                           "stopped"},
+                "last_error": {"type": "string"},
+                "members": {"type": "array", "description": "its mappings, in the order "
+                                                            "clients are handed to them",
+                            "items": {"type": "object", "properties": {
+                                "id": {"type": "string"}, "name": {"type": "string"},
+                                "state": {"type": "string"}, "clients": {"type": "integer"},
+                                "max_connections": {"type": "integer"}}}},
+                "busy": {"type": "integer", "description": "members that take no client now"},
+                "handed": {"type": "integer", "description": "clients handed to a member"},
+                "refused": {"type": "integer",
+                            "description": "clients turned away: no member was free"},
+                "last_refused": {"type": "integer",
+                                 "description": "Unix time of the last refusal (0: none)"}}}]},
+        "PortPoolList": {"type": "object", "properties": {
+            "pools": {"type": "array", "items": {"$ref": "#/components/schemas/PortPoolStatus"}},
+            "warnings": {"type": "array", "items": {"type": "string"}, "description": (
+                "PUT only, when there are any: a pool that listens more widely than a "
+                "member mapping's own port (clients reach that mapping through the pool "
+                "from where it otherwise takes none); saved all the same")}}},
+        "PortPoolsBody": {"type": "object", "required": ["pools"], "properties": {"pools": {
+            "type": "array", "items": {"$ref": "#/components/schemas/PortPool"}}}},
         "PortList": {"type": "object", "properties": {"ports": {
             "type": "array", "items": {"type": "object", "additionalProperties": True}}}},
         "Health": {"type": "object", "properties": {"status": {"type": "string"},
@@ -802,6 +950,10 @@ def openapi_spec(admin, base: str = "") -> dict:
             "source": {"type": "string", "description": "what the body was"},
             "count": {"type": "integer", "description": "mappings in the body"},
             "warnings": {"type": "array", "items": {"type": "string"}},
+            "pools": {"type": "array", "items": {"$ref": "#/components/schemas/PortPool"},
+                      "description": "the port pools a classic ser2net file's rotators "
+                                     "become (only when it has some): added unless a pool "
+                                     "of that name exists"},
             "rows": {"type": "array", "items": {"type": "object", "properties": {
                 "name": {"type": "string"}, "kind": {"type": "string"},
                 "action": {"type": "string", "enum": ["add", "update", "same", "remove"]},
@@ -916,9 +1068,26 @@ def openapi_spec(admin, base: str = "") -> dict:
                                             "offers beyond 1.0.0 (`warnings` and `changed` in "
                                             "create / update / action answers, `if-match` on "
                                             "PUT / DELETE, `traces`: the trace file calls, "
-                                            "`capture`: timed capture).")},
+                                            "`capture`: timed capture, `pools`: the port "
+                                            "pool calls).")},
             "/status": {"get": op("Live status of all mappings", ("200", "StatusMap", "status map"))},
             "/ports": {"get": op("Detected serial ports", ("200", "PortList", "port list"))},
+            "/pools": {
+                "get": op("Port pools (config + state)", ("200", "PortPoolList", "pools"),
+                          description="A port pool is one listening TCP port that hands "
+                                      "each new client to the first of its mappings (those "
+                                      "whose network.pool is its name) with a free "
+                                      "connection; when none is free the client is refused."),
+                "put": op("Replace the port pools", ("200", "PortPoolList", "saved; they "
+                                                     "listen (or stopped) already"),
+                          "BadRequest", "TooLarge", "SaveFailed", write=True,
+                          body={"required": True, "content": {"application/json": {
+                              "schema": {"$ref": "#/components/schemas/PortPoolsBody"}}}},
+                          description="The body's pools replace all of them ([]: none). "
+                                      "Refused as a whole (400, nothing changed) when one is "
+                                      "not valid, a name or address is used twice, or a port "
+                                      "is a TCP server mapping's or the admin UI's."),
+            },
             "/metrics": {"get": {
                 "summary": "Prometheus metrics (the same as /metrics in a web UI session)",
                 "security": bearer,

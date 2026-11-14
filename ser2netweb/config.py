@@ -964,10 +964,34 @@ class NetworkSettings:
     # first), regardless of kick_old_user.
     priority_client_ips: list[str] = field(default_factory=list)
     read_only: bool = field(default=False, metadata=_PROTECTIVE)
+    # TCP server and UDP: with entries, only clients from these IPs/CIDRs may send to the
+    # device; every other admitted client only receives its output (what it sends is
+    # dropped and counted in bytes_dropped, and the log says so once per client). Empty
+    # (default): every client may send. read_only still stops everyone.
+    writer_client_ips: list[str] = field(default_factory=list)
+    # TCP server (raw / telnet / rfc2217): open the serial port only while a client (or the
+    # web console) is connected, and close it port_linger_s seconds after the last one
+    # left, so another program can use the port in between. Off (default): the port is
+    # kept open while the mapping runs.
+    open_on_connect: bool = field(default=False, metadata=_ONLY_TRUE)
+    port_linger_s: float = 2.0
+    # TCP server (raw / telnet / rfc2217, no TLS): the port pool (AppConfig.pools, by name)
+    # this mapping is a member of: the pool's listening port hands each new client to its
+    # first member with a free connection. "" (default): none.
+    pool: str = ""
+    # Connect-out: more targets ("host:port", "[IPv6]:port") tried in this order after
+    # remote_host:remote_port when that can't be reached; the link stays on the one that
+    # answered until it fails. With failover_return_s the first target is tried again
+    # every that many seconds while the link is on another one, and the link moves back
+    # once it answers (0, the default: only when the link in use fails).
+    remote_targets: list[str] = field(default_factory=list)
+    failover_return_s: int = 0
     # Per-client outbound (serial->network) buffer, in chunks. A client slower than
     # the serial source is dropped once this fills. A chunk is one serial read, at most
     # 4 KB (8 KB with telnet / RFC 2217, which double 0xFF bytes), so the worst case per
     # client is ~client_queue_max * 4 KB (8 KB); raise for bursty high-throughput links.
+    # With packing (options.pack_*) a chunk is one frame, at most pack_max_bytes: lower
+    # this with a large frame size on a small machine.
     client_queue_max: int = 2048
     # Dead-peer detection for TCP (server + client mode): after keepalive_idle_s of
     # silence the OS probes the peer every keepalive_interval_s and drops the link
@@ -1166,9 +1190,102 @@ def udp_peer_timeout(net: NetworkSettings) -> float:
     return 0.0
 
 
+REMOTE_TARGETS_MAX = 8
+FAILOVER_RETURN_RANGE_S = (5, 86400)
+PORT_LINGER_MAX_S = 3600
+_HOST_NAME = re.compile(r"[A-Za-z0-9_](?:[A-Za-z0-9_.-]{0,251}[A-Za-z0-9_.])?")
+
+
+def remote_target(entry: Any) -> tuple[str, int]:
+    """One connect-out target, "host:port" or "[IPv6]:port", as (host, port); the host is a
+    name or an IP address. Raises ValueError when it is not that."""
+    text = entry.strip() if isinstance(entry, str) else ""
+    host, sep, port = text.rpartition(":")
+    bracketed = host.startswith("[") and host.endswith("]")
+    if bracketed:
+        host = host[1:-1]
+    try:
+        if not sep or not port.isascii() or not port.isdigit():
+            raise ValueError
+        if bracketed or ":" in host:  # an IPv6 address, which needs its brackets
+            if not bracketed or ipaddress.ip_address(host).version != 6:
+                raise ValueError
+        elif not _HOST_NAME.fullmatch(host):
+            raise ValueError
+        number = int(port)
+        if not 1 <= number <= 65535:
+            raise ValueError
+    except ValueError:
+        raise ValueError(f"connect-out target {entry!r} is not a host and a port "
+                         "(host:port, [IPv6]:port)") from None
+    return host, number
+
+
+def connect_targets(net: NetworkSettings) -> tuple[list[tuple[str, int]], list[str]]:
+    """A connect-out mapping's targets in the order they are tried: remote_host:remote_port,
+    then remote_targets, each once. Also the stored entries that are no target (edits
+    refuse them: MappingConfig.validate_input), which the runner leaves out and logs."""
+    targets = [(str(net.remote_host).strip(), net.remote_port)]
+    bad: list[str] = []
+    entries = net.remote_targets if isinstance(net.remote_targets, list) else []
+    for entry in entries[:REMOTE_TARGETS_MAX]:
+        try:
+            target = remote_target(entry)
+        except ValueError:
+            bad.append(str(entry))
+            continue
+        if target not in targets:
+            targets.append(target)
+    return targets, bad
+
+
+def failover_return(net: NetworkSettings) -> float:
+    """failover_return_s in seconds, 0 = off; a stored value an edit refuses reads as 0."""
+    t = net.failover_return_s
+    low, high = FAILOVER_RETURN_RANGE_S
+    return float(t) if _is_int(t) and low <= t <= high else 0.0
+
+
+def port_linger(net: NetworkSettings) -> float:
+    """port_linger_s in seconds; a stored value an edit refuses reads as the default."""
+    t = net.port_linger_s
+    if _is_number(t) and math.isfinite(t) and 0 <= t <= PORT_LINGER_MAX_S:
+        return float(t)
+    return 2.0
+
+
+POOL_NAME_MAX = 64
+_POOL_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,%d}" % (POOL_NAME_MAX - 1))
+
+
+def pool_name_problem(name: Any) -> str:
+    """Why `name` can't be a port pool's name ("" when it can)."""
+    if isinstance(name, str) and _POOL_NAME.fullmatch(name):
+        return ""
+    return _("A pool name is 1 to {0} letters, digits, '-', '_' or '.', starting with a "
+             "letter or a digit, not {1}.").format(POOL_NAME_MAX, _shown(name))
+
+
+def pool_member(m: "MappingConfig") -> str:
+    """The pool a mapping is handed clients from ("" for none): its network.pool, when it
+    is a TCP server mapping of the transparent bridge without TLS (a pool's port is plain
+    TCP, so a TLS mapping is never handed a client that did not encrypt)."""
+    net = m.network
+    if (m.kind == "net" and net.mode == "server" and net.protocol != "modbus"
+            and not net.tls and isinstance(net.pool, str)):
+        return net.pool
+    return ""
+
+
 # ---------------------------------------------------------------------------
 # Per-mapping options
 # ---------------------------------------------------------------------------
+PACK_GAP_MAX_MS = 60_000
+PACK_MAX_BYTES_MAX = 65_507   # the largest UDP payload (IPv4)
+PACK_DELIMITER_MAX = 16       # bytes
+# a frame's size when pack_max_bytes is 0: one serial read, as without packing
+PACK_MAX_BYTES_DEFAULT = 4096
+
 RFC2217_SIGNATURE_MAX = 128  # characters (an edit's rule)
 
 # The text encoding of a mapping's web console and hex view (MappingOptions.
@@ -1251,6 +1368,16 @@ class MappingOptions:
     poll_string: str = ""
     poll_interval_s: float = 0.0
     poll_with_clients: bool = field(default=False, metadata=_ONLY_TRUE)
+    # Packing (raw protocol: TCP server, connect-out and UDP): the device's output is
+    # forwarded as frames instead of as it is read. A frame ends after pack_gap_ms
+    # milliseconds without a byte from the device, with pack_delimiter (bytes; \r \n \t
+    # \\ \xHH as in poll_string; the delimiter ends the frame it is in) or once it has
+    # pack_max_bytes bytes, whichever comes first. A UDP mapping sends one datagram per
+    # frame. All 0 / "" (default): off, data is forwarded as it arrives. Read through
+    # pack_settings().
+    pack_gap_ms: int = 0
+    pack_delimiter: str = ""
+    pack_max_bytes: int = 0
     # No-data alarm (notify.py: no_data / data_back, the dashboard, /metrics): the serial
     # port is open but the device has sent nothing for this many seconds (0 = off,
     # else NO_DATA_MIN_S..NO_DATA_MAX_S); with no_data_reply_only, only while something
@@ -1345,6 +1472,8 @@ def modbus_unit_map(opts: MappingOptions) -> dict[int, int]:
 # Per-mapping MQTT publishing (optional northbound to an IIoT broker)
 # ---------------------------------------------------------------------------
 MQTT_VALUE_FORMATS = ("text", "json")  # plain-format Modbus values (mqtt.value_format)
+MQTT_PROTOCOLS = ("3.1.1", "5")        # mqtt.protocol (engine/mqtt_pub.PROTOCOLS)
+MQTT_EXPIRY_MAX_S = 0xFFFFFFFF         # an MQTT 5 expiry interval: 32 bits of seconds
 MQTT_FORMATS = ("plain", "sparkplug_b")
 # what ends a serial line published to MQTT (MqttSettings.line_end)
 MQTT_LINE_ENDS = ("lf", "cr", "any")
@@ -1414,6 +1543,22 @@ class MqttSettings:
     # read fails or whose unit stops answering. Edits refuse other values; a stored one
     # (a later version's) is published as text.
     value_format: str = "text"
+    # The MQTT version the connection speaks: "3.1.1" (as before) or "5". Edits refuse
+    # other values; a stored one (a later version's) connects with 3.1.1, and says so in
+    # the log. The three below are MQTT 5's and do nothing with 3.1.1:
+    protocol: str = "3.1.1"
+    # clean start: the broker begins a new session at every connect (as 3.1.1 always
+    # does here). Off, with a client ID and a session expiry: it keeps the session (the
+    # subscriptions, and the QoS 1/2 messages for them that came while the connection
+    # was away) for that long. Sparkplug B always starts clean and keeps no session (the
+    # specification asks so).
+    clean_start: bool = True
+    session_expiry_s: int = 0   # 0: the session ends with the connection
+    # retained data (serial lines, polled values with retain on) expires at the broker
+    # this many seconds after it was published: a subscriber that connects later does not
+    # get a value that old. 0: never (as before). Not for <base_topic>/status and the
+    # units' states.
+    message_expiry_s: int = 0
 
     @staticmethod
     def from_dict(d: dict[str, Any], notes: Optional[list[FieldNote]] = None,
@@ -1460,7 +1605,13 @@ MODBUS_BLOCK_GAP_MAX = 124    # block reads: unused registers between two points
 _POINT_INTS = ("unit", "fn", "address")
 # the keys of a point and of the poll that 2.9 added: typed from the start, so read as they
 # are (not through _read_fields), for an edit to refuse what it can't use (validate_input)
-_POINT_STRICT = ("min", "max", "allowed", "poll", "word_order", "bit", "length")
+_POINT_STRICT = ("min", "max", "allowed", "poll", "word_order", "bit", "length",
+                 "pulse_ms", "safe_value", "safe_after_s")  # (the last three: 3.1)
+# a coil's pulse (ModbusPoint.pulse_ms), in milliseconds, and how long the broker (or the
+# Sparkplug primary host) may be away before a point's safe value is written
+# (ModbusPoint.safe_after_s), in seconds: what an edit accepts
+MODBUS_PULSE_MS = (50, 600000)
+MODBUS_SAFE_AFTER_S = (1, 86400)
 _POLL_STRICT = ("block_reads", "block_gap")
 
 
@@ -1518,6 +1669,17 @@ class ModbusPoint:
     bit: Optional[int] = None
     # dtype "string": how many registers it takes (two characters each), 1-125
     length: Optional[int] = None
+    # A writable coil: a write of true from MQTT is followed by a write of false this many
+    # milliseconds later (MODBUS_PULSE_MS), also when the mapping stops meanwhile (then at
+    # once). None: a coil stays as it was written, as before.
+    pulse_ms: Optional[int] = None
+    # A writable point: once the broker connection (Sparkplug B with a primary host: that
+    # host) has been away for safe_after_s seconds (MODBUS_SAFE_AFTER_S; also when it
+    # never came after the mapping started), safe_value is written to it, once per outage:
+    # true / false for a coil, a number within the point's limits for a register. Both
+    # or neither; never written by a read-only mapping.
+    safe_value: Any = None
+    safe_after_s: Optional[float] = None
 
     @staticmethod
     def from_dict(d: dict[str, Any], notes: Optional[list[FieldNote]] = None,
@@ -1667,10 +1829,10 @@ class ModbusPoll:
                                     "can be written.").format(repr(p.name)))
 
     def validate_input(self) -> None:
-        """The point options an edit may set (min, max, allowed, poll, word_order) and the
-        types of the rest. validate() leaves them alone (a stored config has to keep
-        loading); one stored that can't be used is ignored, with a warning in the gateway's
-        log at start."""
+        """The point options an edit may set (min, max, allowed, poll, word_order, pulse_ms,
+        safe_value, safe_after_s) and the types of the rest. validate() leaves them alone (a
+        stored config has to keep loading); one stored that can't be used is ignored, with
+        a warning in the gateway's log at start."""
         if not isinstance(self.block_reads, bool):
             raise ConfigError(_("Block reads must be on or off (true or false)."))
         if not (_is_int(self.block_gap) and 0 <= self.block_gap <= MODBUS_BLOCK_GAP_MAX):
@@ -1729,6 +1891,49 @@ class ModbusPoll:
                 raise ConfigError(_("Point {0}: allowed must be a list of the values MQTT may "
                                     "write: true / false for a coil, numbers for a "
                                     "register.").format(name))
+            if p.pulse_ms is not None:
+                low, high = MODBUS_PULSE_MS
+                if not (p.writable and p.fn == 1):
+                    raise ConfigError(_("Point {0}: pulse_ms is for a writable coil (fn 1, "
+                                        "\"writable\": true).").format(name))
+                if not (_is_int(p.pulse_ms) and low <= p.pulse_ms <= high):
+                    raise ConfigError(_("Point {0}: pulse_ms must be a whole number of "
+                                        "milliseconds from {1} to {2}.").format(name, low, high))
+            if (p.safe_value is None) != (p.safe_after_s is None):
+                raise ConfigError(_("Point {0}: safe_value and safe_after_s belong together: "
+                                    "set both or neither.").format(name))
+            if p.safe_value is not None and p.safe_after_s is not None:
+                low, high = MODBUS_SAFE_AFTER_S
+                if not p.writable:
+                    raise ConfigError(_("Point {0}: a safe value is written to the point, so "
+                                        "it needs \"writable\": true.").format(name))
+                if not (_is_number(p.safe_after_s) and low <= p.safe_after_s <= high):
+                    raise ConfigError(_("Point {0}: safe_after_s must be a number of seconds "
+                                        "from {1} to {2}.").format(name, low, high))
+                if coil and not isinstance(p.safe_value, bool):
+                    raise ConfigError(_("Point {0}: a coil's safe_value is true or "
+                                        "false.").format(name))
+                if not coil and not (_is_number(p.safe_value) and math.isfinite(p.safe_value)):
+                    raise ConfigError(_("Point {0}: safe_value must be a number.").format(name))
+                if not coil:  # (as write_point encodes it: in the type's range, scaled)
+                    from .engine.modbus import encode_value
+                    try:
+                        encode_value(p.safe_value, p.dtype, point_scale(p) or 1.0,
+                                     point_order(p))
+                    except ValueError:
+                        raise ConfigError(_("Point {0}: safe_value {1} does not fit its type "
+                                            "{2}.").format(name, _shown(p.safe_value),
+                                                           p.dtype)) from None
+                if p.safe_value is True and p.pulse_ms is not None:
+                    raise ConfigError(_("Point {0}: a coil with pulse_ms goes back to false by "
+                                        "itself, so its safe_value can only be false.").format(
+                                            name))
+                if ((p.allowed is not None and not any(
+                        v is p.safe_value if coil else v == p.safe_value for v in p.allowed))
+                        or (p.min is not None and p.safe_value < p.min)
+                        or (p.max is not None and p.safe_value > p.max)):
+                    raise ConfigError(_("Point {0}: safe_value is outside the point's own "
+                                        "min, max or allowed.").format(name))
             if not isinstance(p.poll, bool):
                 raise ConfigError(_("Point {0}: poll must be true or false.").format(name))
             if not p.poll and not p.writable:
@@ -1865,6 +2070,15 @@ class MappingConfig:
         if self.kind == "net" and self.network.mode == "udp" and self.options.closeon:
             out.append(_("A close-on string is set, but a UDP mapping has no connections to "
                          "close: it is not used."))
+        mq = self.mqtt
+        if mq.enabled and self.kind == "net":
+            session = mq.clean_start is False or mq.session_expiry_s != 0
+            if mq.protocol != "5" and (session or mq.message_expiry_s != 0):
+                out.append(_("Clean start, session expiry and message expiry are MQTT 5 "
+                             "settings: with MQTT 3.1.1 they are not used."))
+            elif mq.protocol == "5" and session and not _plain_mqtt(self):
+                out.append(_("Sparkplug B always starts a clean MQTT session and keeps none: "
+                             "clean start off and the session expiry are not used."))
         if self.kind == "net":  # a list an edit would refuse: only in a hand-edited file
             nets, bad = client_networks(self.network.allowed_client_ips)
             if bad:
@@ -1876,6 +2090,37 @@ class MappingConfig:
             if bad:
                 out.append(_("High-priority client IPs: these entries are not IP addresses or "
                              "networks, so they are left out: {0}.").format(", ".join(bad)))
+            out += self._ignored_sharing()
+        return out
+
+    def _ignored_sharing(self) -> list[str]:
+        """ignored_settings: packing, the writer list, open on connect and the pool where
+        they do nothing."""
+        out = []
+        net, o = self.network, self.options
+        gateway = net.protocol == "modbus"
+        if (o.pack_gap_ms or o.pack_delimiter or o.pack_max_bytes) and net.protocol != "raw":
+            out.append(_("Packing is set, but it applies to the raw protocol only: the "
+                         "device's output is forwarded as it arrives."))
+        writers = net.writer_client_ips if isinstance(net.writer_client_ips, list) else []
+        if writers and (gateway or net.mode == "client"):
+            out.append(_("Writer client IPs are set, but they apply to a TCP server or UDP "
+                         "mapping of the raw, telnet or RFC 2217 protocol: they are not used."))
+        elif writers:
+            nets, bad = client_networks(writers)
+            if bad:
+                out.append(_("Writer client IPs: these entries are not IP addresses or "
+                             "networks, so they are left out: {0}.").format(", ".join(bad))
+                           + ("" if nets else " " + _("No entry is usable, so no client "
+                                                      "may send to the device.")))
+        if net.open_on_connect is True and (gateway or net.mode != "server"):
+            out.append(_("Opening the serial port only while a client is connected applies "
+                         "to a TCP server mapping of the raw, telnet or RFC 2217 protocol: "
+                         "the port is kept open."))
+        if net.pool and not pool_member(self):
+            out.append(_("The mapping names the port pool {0}, but only a TCP server mapping "
+                         "(raw, telnet or RFC 2217) without TLS is handed clients by a pool: "
+                         "it is not a member.").format(_shown(net.pool)))
         return out
 
     def serial_sides(self) -> list[SerialSettings]:
@@ -1932,6 +2177,9 @@ class MappingConfig:
                                 "without control characters.").format(RFC2217_SIGNATURE_MAX))
         if self.kind == "net" and self.network.protocol != "modbus":
             self._validate_lines_and_poll()
+            self._validate_packing()
+        if self.kind == "net":
+            self._validate_sharing()
         if self.kind == "net" and net.tls and net.mode == "client":
             from .engine.tls import parse_pins
             try:
@@ -1962,6 +2210,8 @@ class MappingConfig:
                 if not isinstance(host, str) or any(c in host for c in "/+#"):
                     raise ConfigError(_("Sparkplug {0} must not contain '/', '+' or '#'.").format(
                         _("primary host ID")))
+        if self.kind == "net":
+            self._validate_mqtt_version()
         if self.kind == "net" and self.mqtt.enabled and _plain_mqtt(self):
             # (serial lines and their /tx writes too: a subscription to such a topic would
             # take every matching one)
@@ -1987,6 +2237,23 @@ class MappingConfig:
         except TlsFileError as e:
             raise ConfigError(tls_file_message(e)) from None
 
+    def _validate_mqtt_version(self) -> None:
+        """The MQTT version and MQTT 5's settings (an edit's rules: a stored protocol they
+        refuse connects with 3.1.1, a stored expiry they refuse reads as 0)."""
+        mq = self.mqtt
+        if mq.protocol not in MQTT_PROTOCOLS:
+            raise ConfigError(_("The MQTT protocol version must be one of {0}.").format(
+                _choices(MQTT_PROTOCOLS)))
+        for label, value in ((_("MQTT session expiry"), mq.session_expiry_s),
+                             (_("MQTT message expiry"), mq.message_expiry_s)):
+            if not (_is_int(value) and 0 <= value <= MQTT_EXPIRY_MAX_S):
+                raise ConfigError(_("{0} must be a whole number of seconds from 0 to "
+                                    "{1}.").format(label, MQTT_EXPIRY_MAX_S))
+        if (mq.enabled and mq.protocol == "5" and mq.clean_start is False
+                and _plain_mqtt(self) and not str(mq.client_id).strip()):
+            raise ConfigError(_("MQTT clean start off needs a client ID: the broker keeps a "
+                                "session for the client ID it knows."))
+
     def _validate_lines_and_poll(self) -> None:
         """A serial-to-network mapping's MQTT line end and its poll string (an edit's
         rules: a stored value they refuse reads as off / "lf"). Its base topic, also for
@@ -2009,6 +2276,64 @@ class MappingConfig:
                 POLL_STRING_MAX))
         if interval and not data:
             raise ConfigError(_("A poll interval needs a poll string to send."))
+
+    def _validate_packing(self) -> None:
+        """A serial-to-network mapping's packing (an edit's rules: with a stored value they
+        refuse the data is forwarded as it arrives, see pack_settings)."""
+        o = self.options
+        if not _is_int(o.pack_gap_ms) or not 0 <= o.pack_gap_ms <= PACK_GAP_MAX_MS:
+            raise ConfigError(_("The packing gap must be between 0 (off) and {0} "
+                                "milliseconds.").format(PACK_GAP_MAX_MS))
+        if not _is_int(o.pack_max_bytes) or not 0 <= o.pack_max_bytes <= PACK_MAX_BYTES_MAX:
+            raise ConfigError(_("The packing frame size must be between 0 (off) and {0} "
+                                "bytes.").format(PACK_MAX_BYTES_MAX))
+        try:
+            delimiter = poll_bytes(o.pack_delimiter)
+        except ValueError:
+            raise ConfigError(_(r"The packing delimiter can have only \r \n \t \\ or \xHH "
+                                "after a backslash.")) from None
+        if len(delimiter) > PACK_DELIMITER_MAX:
+            raise ConfigError(_("The packing delimiter can be at most {0} bytes.").format(
+                PACK_DELIMITER_MAX))
+
+    def _validate_sharing(self) -> None:
+        """A serial-to-network mapping's writer list, open-on-connect linger, pool and
+        connect-out targets (an edit's rules; what a stored value they refuse does is said
+        where it is read: access.AccessPolicy, port_linger, pool_member, connect_targets)."""
+        net = self.network
+        if not isinstance(net.writer_client_ips, list):
+            raise ConfigError(_("The writer client IPs must be a list of IPs / CIDRs."))
+        _nets, bad = client_networks(net.writer_client_ips)
+        if bad:
+            raise ConfigError(_("Invalid {0} client IP/CIDR: {1}.").format(_("writer"),
+                                                                          repr(bad[0])))
+        linger = net.port_linger_s
+        if not _is_number(linger) or not math.isfinite(linger) \
+                or not 0 <= linger <= PORT_LINGER_MAX_S:
+            raise ConfigError(_("The time the serial port stays open after the last client "
+                                "must be between 0 and {0} seconds.").format(PORT_LINGER_MAX_S))
+        # (where a pool does nothing — another mode, a Modbus gateway, TLS — the mapping
+        # says so: ignored_settings)
+        if net.pool != "" and (problem := pool_name_problem(net.pool)):
+            raise ConfigError(problem)
+        if not isinstance(net.remote_targets, list):
+            raise ConfigError(_("The other connect-out targets must be a list of host:port "
+                                "entries."))
+        if len(net.remote_targets) > REMOTE_TARGETS_MAX:
+            raise ConfigError(_("At most {0} other connect-out targets can be set.").format(
+                REMOTE_TARGETS_MAX))
+        for entry in net.remote_targets:
+            try:
+                remote_target(entry)
+            except ValueError:
+                raise ConfigError(_("Connect-out target {0} is not a host and a port "
+                                    "(host:port, [IPv6]:port).").format(repr(entry))) from None
+        low, high = FAILOVER_RETURN_RANGE_S
+        back = net.failover_return_s
+        if not _is_int(back) or not (back == 0 or low <= back <= high):
+            raise ConfigError(_("The time after which the first connect-out target is tried "
+                                "again must be 0 (off) or between {0} and {1} seconds.")
+                              .format(low, high))
 
     def check_mqtt_topics(self) -> None:
         """Plain MQTT on a Modbus gateway (an edit's rules, see validate_input): a point's
@@ -2144,6 +2469,25 @@ def poll_bytes(text: Any) -> bytes:
         pos = m.end()
     out += text[pos:].encode("utf-8")
     return bytes(out)
+
+
+def pack_settings(opts: "MappingOptions") -> Optional[tuple[float, bytes, int]]:
+    """A mapping's packing as (gap in seconds, delimiter, frame size), or None when it is
+    off: no gap, no delimiter and no size. The frame size is pack_max_bytes, or
+    PACK_MAX_BYTES_DEFAULT when that is 0. Raises ValueError for stored values an edit
+    refuses (MappingConfig.validate_input); the runner then forwards the data as it
+    arrives and logs why."""
+    gap, size = opts.pack_gap_ms, opts.pack_max_bytes
+    if not gap and not size and not opts.pack_delimiter:
+        return None
+    if not _is_int(gap) or not 0 <= gap <= PACK_GAP_MAX_MS:
+        raise ValueError(f"pack_gap_ms {gap!r} is not between 0 and {PACK_GAP_MAX_MS}")
+    if not _is_int(size) or not 0 <= size <= PACK_MAX_BYTES_MAX:
+        raise ValueError(f"pack_max_bytes {size!r} is not between 0 and {PACK_MAX_BYTES_MAX}")
+    delimiter = poll_bytes(opts.pack_delimiter) if opts.pack_delimiter != "" else b""
+    if len(delimiter) > PACK_DELIMITER_MAX:
+        raise ValueError(f"pack_delimiter is longer than {PACK_DELIMITER_MAX} bytes")
+    return gap / 1000.0, delimiter, size or PACK_MAX_BYTES_DEFAULT
 
 
 def mqtt_topic_problem(text: Any) -> bool:
@@ -3045,7 +3389,7 @@ class ClusterSettings:
 NOTIFY_EVENTS = ("device_lost", "device_back", "start_failed", "link_lost", "link_back",
                  "client_connected", "client_disconnected", "login_failed", "disk_low",
                  "no_data", "data_back", "peer_offline", "peer_back", "service_started",
-                 "unit_offline", "unit_back", "cert_expiring", "clock_step")
+                 "unit_offline", "unit_back", "cert_expiring", "clock_step", "safe_values")
 # (a saved events list is kept as it is: these are what a config without one gets)
 NOTIFY_DEFAULT_EVENTS = ("device_lost", "device_back", "start_failed", "link_lost", "link_back")
 WEBHOOK_FORMATS = ("json", "slack", "teams", "discord", "telegram")
@@ -3244,6 +3588,121 @@ class ApiToken:
         return bool(self.expires) and (time.time() if now is None else now) >= self.expires
 
 
+POOLS_MAX = 64
+
+
+@dataclass
+class PortPool:
+    """A port pool (classic ser2net's rotator): one listening TCP port that hands each new
+    client to the first mapping of the pool with a free connection, in the order of the
+    mappings. Its members are the mappings whose network.pool is its name (pool_member).
+    The port is plain TCP; the client then talks to the mapping as if it had connected to
+    the mapping's own port (its allow-list, protocol, banner, timers). With ``rotate`` the
+    search begins after the mapping that got the last client, as ser2net's rotator does
+    (ser2net.yaml(5): "The next connection will start after the last connection used"),
+    instead of at the first mapping every time."""
+    name: str = ""
+    bind_ip: str = "0.0.0.0"
+    port: int = 0
+    enabled: bool = True
+    rotate: bool = False
+
+    def problem(self) -> str:
+        """Why this pool can't be used ("" when it can): an edit refuses it, a stored one
+        is left out when the config is loaded (_pools)."""
+        if problem := pool_name_problem(self.name):
+            return problem
+        if problem := bind_ip_problem(self.bind_ip):
+            return problem
+        if not _is_int(self.port) or not 1 <= self.port <= 65535:
+            return _("TCP/UDP port must be between 1 and 65535.")
+        if not isinstance(self.enabled, bool) or not isinstance(self.rotate, bool):
+            return _("A pool's enabled and rotate must be true or false.")
+        return ""
+
+
+def _pools(raw: Any) -> tuple[list[PortPool], list[str]]:
+    """pools from a config file, and notes on what was left out: an entry that is no pool
+    (PortPool.problem), a name used before, entries past POOLS_MAX."""
+    if raw is None:
+        return [], []
+    if not isinstance(raw, list):
+        return [], ["port pools: pools is not a list, so it was ignored"]
+    pools: list[PortPool] = []
+    notes: list[str] = []
+    for i, item in enumerate(raw, 1):
+        if not isinstance(item, dict):
+            notes.append(f"port pools: entry #{i} is not a pool, so it was left out")
+            continue
+        known = {f.name for f in dataclasses.fields(PortPool)}
+        pool = PortPool(**{k: v for k, v in item.items() if k in known})
+        if isinstance(pool.bind_ip, str):
+            pool.bind_ip = canonical_ip(pool.bind_ip)
+        with _in_english():
+            problem = pool.problem()
+        if not problem and any(p.name == pool.name for p in pools):
+            problem = "its name is used by a pool before it"
+        if not problem and len(pools) >= POOLS_MAX:
+            problem = f"at most {POOLS_MAX} pools are kept"
+        if problem:
+            notes.append(f"port pools: entry #{i} ({_shown(item.get('name'))}) was left "
+                         f"out: {problem}")
+            continue
+        pools.append(pool)
+    return pools, notes
+
+
+def pools_from_text(text: str) -> list[PortPool]:
+    """The port pools of the Settings form: one per line, "name port" or "name IP:port"
+    ("name [IPv6]:port"), then "rotate" for one that begins after the mapping that got the
+    last client and "off" for one that does not listen. Raises ConfigError for a line that
+    is not that (what makes a pool usable: AppConfig.pools_problem)."""
+    pools = []
+    for n, line in enumerate(str(text).splitlines(), 1):
+        words = line.split()
+        if not words:
+            continue
+        flags = {w.lower() for w in words[2:]}
+        if flags <= {"off", "rotate"} and len(flags) == len(words[2:]):
+            words = words[:2]
+        enabled, rotate = "off" not in flags, "rotate" in flags
+        host, sep, port = (words[1] if len(words) == 2 else "").rpartition(":")
+        if host.startswith("[") and host.endswith("]"):
+            host = host[1:-1]
+        if len(words) != 2 or not port.isascii() or not port.isdigit() or (sep and not host):
+            raise ConfigError(_("Port pools, line {0}: write a name and a port, such as "
+                                "“lab 3000” or “lab 192.168.1.5:3000”, then “rotate” and / "
+                                "or “off” if wanted.").format(n))
+        pools.append(PortPool(name=words[0], bind_ip=canonical_ip(host) if host else "0.0.0.0",
+                              port=int(port), enabled=enabled, rotate=rotate))
+    return pools
+
+
+def pools_text(pools: list[PortPool]) -> str:
+    """The port pools as the Settings form shows them (pools_from_text reads it back)."""
+    return "\n".join(
+        f"{p.name} {p.port if p.bind_ip == '0.0.0.0' else host_port(p.bind_ip, p.port)}"
+        + (" rotate" if p.rotate else "") + ("" if p.enabled else " off") for p in pools)
+
+
+def pools_from_json(items: Any) -> list[PortPool]:
+    """The port pools of a REST request: a list of {"name", "port", "bind_ip", "enabled",
+    "rotate"} objects. Raises ConfigError for anything else (a key that is none of them, too)."""
+    if not isinstance(items, list):
+        raise ConfigError(_("pools must be a list of pools."))
+    known = {f.name for f in dataclasses.fields(PortPool)}
+    pools = []
+    for item in items:
+        if not isinstance(item, dict) or not item.keys() <= known:
+            raise ConfigError(_("A pool is an object with name, port, bind_ip, enabled and "
+                                "rotate, not {0}.").format(_shown(item)))
+        pool = PortPool(**item)
+        if isinstance(pool.bind_ip, str):
+            pool.bind_ip = canonical_ip(pool.bind_ip)
+        pools.append(pool)
+    return pools
+
+
 def new_api_token_id() -> str:
     return secrets.token_hex(8)
 
@@ -3308,6 +3767,8 @@ class AppConfig:
     api_token_role: str = "admin"  # noqa: S105 - role granted by the API token (viewer = read-only)
     # named API tokens besides that one (optional; written only when there are any)
     api_tokens: list[ApiToken] = field(default_factory=list)
+    # port pools (optional; written only when there are any): Settings -> Port pools
+    pools: list[PortPool] = field(default_factory=list)
     # lifetime of a web-UI sign-in (cookie + signed token); Settings -> Web UI access
     session_timeout_s: int = SESSION_TIMEOUT_DEFAULT_S
     # LDAP/OIDC accounts not signed in for this many days are removed (0: never, the
@@ -3356,7 +3817,7 @@ class AppConfig:
         d = dict(d or {})
         notes: list[FieldNote] = []
         # read elsewhere: the sections, the values with their own rules, what is never stored
-        own = ("admin_ui", "api_token_role", "api_tokens", "session_timeout_s",
+        own = ("admin_ui", "api_token_role", "api_tokens", "pools", "session_timeout_s",
                "external_users_expire_days", "users", "ldap", "oidc", "cluster",
                "notifications", "mappings", "load_notes", "ids_created", "tolerated",
                "unknown_keys", "newer_writer")
@@ -3376,10 +3837,12 @@ class AppConfig:
                           role="admin", pwd_version=int(d.get("pwd_version", 0)))]
         token_role, token_note = _api_token_role(d)
         api_tokens, token_notes = _api_tokens(d.get("api_tokens"))
+        pools, pool_notes = _pools(d.get("pools"))
         cfg = AppConfig(
             admin_ui=admin_ui,
             api_token_role=token_role,
             api_tokens=api_tokens,
+            pools=pools,
             session_timeout_s=_session_timeout(d.get("session_timeout_s")),
             external_users_expire_days=_expire_days(d.get("external_users_expire_days")),
             users=users,
@@ -3450,6 +3913,7 @@ class AppConfig:
         if token_note:
             cfg.load_notes.append(token_note)
         cfg.load_notes += token_notes
+        cfg.load_notes += pool_notes
         if cfg.ldap.enabled and cfg.ldap.uses_tls and "tls_verify" not in (d.get("ldap") or {}):
             cfg.load_notes.append(
                 "LDAP: the directory server's certificate is now checked (LDAPS / StartTLS): "
@@ -3559,6 +4023,8 @@ class AppConfig:
             "api_token_role": self.api_token_role,
             # only when there are any: a config.json without named tokens stays as it was
             **({"api_tokens": [asdict(t) for t in self.api_tokens]} if self.api_tokens else {}),
+            # the same for port pools (a release without them drops the key)
+            **({"pools": [asdict(p) for p in self.pools]} if self.pools else {}),
             "session_timeout_s": self.session_timeout_s,
             "external_users_expire_days": self.external_users_expire_days,
             "trace_max_age_days": self.trace_max_age_days,
@@ -3691,22 +4157,101 @@ class AppConfig:
 
     def admin_key_reuse(self, m: MappingConfig) -> str:
         """Why mapping ``m`` can't be saved with its TLS key ("" when it can): the key is the
-        admin UI's own key file, so the mapping would present the admin UI's certificate on
+        admin UI's own key, so the mapping would present the admin UI's certificate on
         another port of this host, and browsers send a site's cookies to every port of it.
-        Checked where a mapping is created or changed (the form, so also a cluster peer's
-        save on its own node, and the REST API), never by validate(): a stored one keeps
-        loading and saving."""
+        The same file, or another with the same key as an upload compares them
+        (web/tlsupload.same_pair: the certificates' public key, else the same key or
+        certificate block), so a copy or a key written another way counts too. Checked
+        where a mapping is created or changed (the form, so also a cluster peer's save on
+        its own node, and the REST API), never by validate(): a stored one keeps loading
+        and saving."""
         net, admin = m.network, self.admin_ui
         if not (m.kind == "net" and net.tls and net.tls_key and admin.tls_key):
             return ""
         try:
             same = os.path.samefile(data_path(net.tls_key), data_path(admin.tls_key))
         except (OSError, TypeError, ValueError):  # one of them is missing: not the same file
-            return ""
+            same = False
+        if not same:
+            from .web.tlsupload import same_pair_files  # (the web package imports this one)
+            same = same_pair_files(net.tls_cert, net.tls_key, admin.tls_cert, admin.tls_key)
         if not same:
             return ""
         return _("The TLS key {0} is the admin UI's own key. Give the mapping a certificate "
                  "and key of its own.").format(net.tls_key)
+
+    def pool_members(self, name: str) -> list[MappingConfig]:
+        """The mappings a pool hands clients to, in the order it tries them."""
+        return [m for m in self.mappings if name and pool_member(m) == name]
+
+    def pools_problem(self, pools: list[PortPool]) -> str:
+        """Why these port pools can't be saved ("" when they can): one that is no pool, a
+        name or a listening address used twice, a port a TCP server mapping or the admin UI
+        listens on. Checked where pools are changed (Settings, the REST API, an import),
+        never by validate(): a stored clash only keeps that listener from starting."""
+        if len(pools) > POOLS_MAX:
+            return _("At most {0} port pools can be set.").format(POOLS_MAX)
+        admin = self.admin_ui
+        admin_ips = {"": ["0.0.0.0", "::"], "localhost": ["127.0.0.1", "::1"]}.get(
+            admin.bind_ip, [admin.bind_ip])
+        for i, pool in enumerate(pools):
+            if problem := pool.problem():
+                return _("Port pool {0}: {1}").format(_shown(pool.name), problem)
+            for other in pools[:i]:
+                if other.name == pool.name:
+                    return _("Two port pools are named {0}.").format(_shown(pool.name))
+                if other.port == pool.port and _ip_overlaps(other.bind_ip, pool.bind_ip):
+                    return _("Port pools {0} and {1} both listen on TCP port {2}.").format(
+                        _shown(other.name), _shown(pool.name), pool.port)
+            for m in self.mappings:
+                net = m.network
+                if (m.kind == "net" and net.mode == "server" and net.port == pool.port
+                        and _ip_overlaps(pool.bind_ip, net.bind_ip, b_both=net.both_families)):
+                    return _("Port pool {0}: TCP port {1} is the listening port of mapping "
+                             "'{2}'. Pick another port.").format(_shown(pool.name), pool.port,
+                                                                 m.name)
+            if pool.port == admin.port and any(
+                    _ip_overlaps(ip, pool.bind_ip) for ip in admin_ips):
+                return _("Port pool {0}: TCP port {1} is the admin UI's port. Pick another "
+                         "port.").format(_shown(pool.name), pool.port)
+        return ""
+
+    def pool_exposures(self, member: Optional[MappingConfig] = None) -> list[str]:
+        """Warnings, never a refusal (repo rule: a stored setting keeps working): a port
+        pool that is on and listens on addresses where a member mapping's own port does
+        not (the mapping on 127.0.0.1 for an SSH tunnel, the pool on 0.0.0.0), so clients
+        reach that mapping through the pool from where it otherwise takes none (its
+        allow-list still applies). ``member``: only that mapping's. Said where the pools
+        or a mapping are saved (Settings, the mapping form, the REST API)."""
+        out = []
+        for pool in self.pools:
+            if pool.enabled is not True:
+                continue
+            for m in self.pool_members(pool.name):
+                net = m.network
+                if member is not None and m.id != member.id:
+                    continue
+                if _listens_wider(pool.bind_ip, net.bind_ip, b_both=net.both_families):
+                    out.append(_("Port pool {0} listens on {1}, more widely than its mapping "
+                                 "'{2}' listens ({3}): clients reach that mapping through the "
+                                 "pool from where its own port takes none (its allowed client "
+                                 "IPs still apply).").format(_shown(pool.name),
+                                                             shown_host(pool.bind_ip), m.name,
+                                                             net.bind_shown))
+        return out
+
+    def pool_port_conflict(self, m: MappingConfig) -> str:
+        """Why mapping ``m`` can't listen where it is set to next to the port pools ("" when
+        it can). Checked where own_port_conflict is."""
+        net = m.network
+        if m.kind != "net" or net.mode != "server":
+            return ""
+        for pool in self.pools:
+            if pool.port == net.port and _ip_overlaps(pool.bind_ip, net.bind_ip,
+                                                      b_both=net.both_families):
+                return _("Mapping '{0}': TCP port {1} is the port of the port pool {2}. Pick "
+                         "another port.").format(m.name, net.port, _shown(pool.name))
+        return ""
 
     def own_port_conflict(self, m: MappingConfig) -> str:
         """Why mapping ``m`` can't listen where it is set to next to ser2netweb's own
@@ -3730,7 +4275,7 @@ class AppConfig:
                 return _("Mapping '{0}': TCP port {1} on {2} is the admin UI's port ({3}:{4}), "
                          "so the mapping could not listen there. Pick another port.").format(
                     m.name, net.port, net.bind_shown, shown_host(admin.bind_ip), admin.port)
-            return ""
+            return self.pool_port_conflict(m)
         cluster = self.cluster
         try:
             discovery = int(cluster.discovery_port)
@@ -4003,6 +4548,22 @@ def _ip_overlaps(a: str, b: str, a_both: bool = False, b_both: bool = False) -> 
     return any(_address_overlaps(x, y) for x in xs for y in ys)
 
 
+def _listens_wider(a: str, b: str, b_both: bool = False) -> bool:
+    """Whether a TCP listener on bind IP ``a`` takes connections on an address that one on
+    ``b`` (``b_both``: of both families, NetworkSettings.both_families) does not: ``b``
+    is not ``a`` and not the wildcard of ``a``'s family. False when either is no address."""
+    if b_both:
+        return False
+    x, y = canonical_ip(a), canonical_ip(b)
+    if x == y:
+        return False
+    try:
+        ax, ay = ipaddress.ip_address(x), ipaddress.ip_address(y)
+    except ValueError:
+        return False
+    return not (ay.is_unspecified and ay.version == ax.version)
+
+
 def _address_overlaps(a: str, b: str) -> bool:
     x, y = canonical_ip(a), canonical_ip(b)
     if x == y:
@@ -4224,7 +4785,7 @@ class ConfigStore:
                 fh.flush()
                 os.fsync(fh.fileno())
                 written = _stat_key(os.fstat(fh.fileno()))
-            os.replace(tmp, self.path)
+            replace_when_free(tmp, self.path)
         finally:
             if os.path.exists(tmp):
                 os.unlink(tmp)
@@ -4296,7 +4857,7 @@ class ConfigStore:
                 fh.write(current)
                 fh.flush()
                 os.fsync(fh.fileno())
-            os.replace(tmp, os.path.join(self.backup_dir, name))
+            replace_when_free(tmp, os.path.join(self.backup_dir, name))
             for old in self.backup_names()[BACKUPS_KEPT:] if prune else ():
                 if old != name:  # (it sorts first; never the one just written)
                     with contextlib.suppress(OSError):
@@ -4485,7 +5046,7 @@ def _replace_file(directory: str, path: str, text: str) -> None:
             fh.write(text)
             fh.flush()
             os.fsync(fh.fileno())
-        os.replace(tmp, path)
+        replace_when_free(tmp, path)
     finally:
         if os.path.exists(tmp):
             os.unlink(tmp)
@@ -4513,3 +5074,32 @@ def _fsync_dir(directory: str) -> None:
             os.close(dfd)
     except (OSError, AttributeError):
         pass  # not supported on some platforms (e.g. Windows dirs)
+
+
+# Windows refuses to replace a file while it is open without FILE_SHARE_DELETE (which is
+# how Python's open() and most programs open one), and to rename one being written,
+# renamed or scanned: PermissionError (Access is denied; in use by another process) for as
+# long as that lasts. An antivirus scan of the file just written does it, a backup or sync
+# tool, a moment's read of config.json by ser2netweb itself (the look for an edit made
+# outside it, AppState.check_config_file, which runs next to a save), and two TLS uploads
+# of the same file (web/tlsupload.py). Such a rename is tried again for up to this long
+# before it fails. A POSIX rename replaces an open file: a PermissionError there is the
+# folder's own, and fails at once.
+REPLACE_WAIT_S = 5.0 if os.name == "nt" else 0.0
+
+
+def replace_when_free(src: str, dst: str,
+                      done: Optional[typing.Callable[[], bool]] = None) -> None:
+    """os.replace(src, dst), tried again while the file is in use (REPLACE_WAIT_S).
+    `done()`: whether a refused rename is not needed any more (dst holds what src does)."""
+    end = time.monotonic() + REPLACE_WAIT_S
+    while True:
+        try:
+            os.replace(src, dst)
+            return
+        except PermissionError:
+            if done is not None and done():
+                return
+            if time.monotonic() >= end:
+                raise
+            time.sleep(0.05)

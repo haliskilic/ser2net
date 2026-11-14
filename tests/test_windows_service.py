@@ -1245,6 +1245,9 @@ def test_real_service():
         assert wait_for(lambda: healthy(port), 60), "the SCM did not restart the service"
         print("killed: the SCM restarted it (failure actions)  OK")
 
+        # (its UI answers just before it reports RUNNING; until then it is START_PENDING,
+        # which takes no stop: ControlService FAILED 1052)
+        assert wait_for(lambda: "RUNNING" in sc("query", name).stdout, 60), sc("query", name).stdout
         r = sc("stop", name)
         assert r.returncode == 0, r.stdout + r.stderr
         assert wait_for(lambda: "STOPPED" in sc("query", name).stdout, 60), sc("query", name).stdout
@@ -1267,7 +1270,9 @@ def test_real_service():
         assert r.returncode == 0, r.stdout + r.stderr
         assert wait_for(lambda: healthy(port), 60), "the service did not start again"
         Browser(f"http://127.0.0.1:{port}").login("admin", "svc-pass-3")
+        assert wait_for(lambda: "RUNNING" in sc("query", name).stdout, 60), sc("query", name).stdout
         r = sc("stop", name)
+        assert r.returncode == 0, r.stdout + r.stderr
         assert wait_for(lambda: "STOPPED" in sc("query", name).stdout, 60), sc("query", name).stdout
         print("--set-password while it is stopped: config.json changed, the data directory "
               "still admin-only, the service starts with the new password  OK")

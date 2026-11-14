@@ -200,13 +200,27 @@ düzenlemeye gerek yok.
   atar. `"poll": false` yazılabilir bir noktayı, okunamayan bir komut register'ı için
   yalnızca yazılan bir nokta yapar: hiç okunmaz, yazıldıktan sonra geri okunmaz. Tamsayı
   tipleri ondalıklı bir değeri yuvarlar (eşitlikte çifte: `12.5` → 12) ve cevap yine `ok`
-  olur; yazmanın log satırı yazılan ham değeri gösterir (`raw value 12`). **Güvenli
-  çıkışlar:** ser2netweb, broker ya da host gidince kendiliğinden güvenli bir değer yazmaz.
+  olur; yazmanın log satırı yazılan ham değeri gösterir (`raw value 12`). **Darbeler
+  (pulse):** `"pulse_ms": 500` (50–600000) verilen yazılabilir bir coil, MQTT onu açtıktan o
+  kadar süre sonra kendi isteğiyle yeniden kapatılır; bu istek hatta sırasını bekler (poll
+  ve master'lar bu arada sürer). Darbe sırasında duran bir eşleme, portu kapatmadan önce
+  hemen false yazar; false yazılamazsa log coil'in hâlâ AÇIK olabileceğini söyler.
+  **Güvenli çıkışlar:** `"safe_value"` ve `"safe_after_s"` (1–86400) verilen yazılabilir bir
+  noktaya, broker bağlantısı (primary host'lu bir Sparkplug B düğümünde o host'un STATE'i)
+  o kadar saniye yok olunca bu değer yazılır; eşleme başladıktan sonra hiç gelmezse de
+  (kesinti ilk kopuştan sayılır ve bağlantı 10 sn boyunca, ya da daha kısaysa noktalarının
+  en uzun `safe_after_s` süresi boyunca, ayakta kalınca biter; istemciyi kabul edip yeniden düşüren bir
+  broker baştan sona yok sayılır).
+  Kesinti başına bir kez, yazma kuyruğu üzerinden ve noktanın sınırları içinde yazılır;
+  unit yanıt vermezse 10 sn'de bir yeniden denenir. Loga yazılır, panoda ve durumda
+  (`safe`) görünür, işaretlenmişse *Güvenli değerler yazıldı* bildirimi gönderilir; salt
+  okunur bir eşleme hiçbir zaman yazmaz. Bu ayarlar yoksa ser2netweb kendiliğinden güvenli
+  bir değer yazmaz; kendisi durmuşken ya da elektriği yokken de yazamaz.
   Bunun için heartbeat kullanın: host birkaç saniyede bir `/set` (ya da DCMD) ile bir
   holding register'a artan bir sayaç yazar, PLC'nin kendi mantığı (bir watchdog
   zamanlayıcısı) sayaç değişmez olunca çıkışları güvenli duruma alır. Cihazın kendi
   iletişim kaybı timeout'u tek başına yetmez, çünkü ser2netweb'in poll'u cihazla konuşmayı
-  sürdürür. Eşlemeyi durdurmak (onu değiştiren bir kayıt, yeniden başlatma ya da
+  sürdürür. İkisinin ayrıntıları: [docs/MODBUS-MQTT.md](docs/MODBUS-MQTT.md). Eşlemeyi durdurmak (onu değiştiren bir kayıt, yeniden başlatma ya da
   içe aktarma da) MQTT bağlantısı kapanmadan önce her yazmayı cevaplar: hattaki yazma
   bitebilir (en çok 2 sn; bitmezse `error: cancelled: mapping stopped (sent, outcome
   unknown)` ya da `(not sent)`), bekleyenler `error: cancelled: mapping stopped`, bu
@@ -382,6 +396,77 @@ düzenlemeye gerek yok.
   sürenin, `options.rfc2217_net_timeout_s`, ardından) reddedilir; böylece bir poller, bir
   SCADA master'ı ya da sanal COM yönlendiricisi kesintiyi görür. Dışarı bağlanan eşleme de
   o zaman yalnızca portu açıkken bağlanır.
+- **Cihazı paylaşma** (her biri eşleme başına, varsayılan kapalı):
+  - **Paketleme** (raw protokolü: TCP sunucu, dışarı bağlanma, UDP): cihazın çıktısı
+    okunduğu gibi değil, çerçeveler halinde iletilir. Bir çerçeve, cihazdan **Paketleme
+    boşluğu (ms)** kadar süre bayt gelmeyince (`options.pack_gap_ms`), **Paketleme
+    ayırıcısı** ile (`pack_delimiter`; baytlar sorgu dizesindeki gibi yazılır: `\r\n`,
+    `\x03`; ayırıcı kendi çerçevesinde kalır) ya da **Paketleme çerçeve boyutu**na
+    (`pack_max_bytes`; 0 ise 4096) ulaşınca biter; hangisi önce gelirse. Bir UDP eşlemesi
+    her çerçeve için tek datagram gönderir; böylece bir telgraf ya da bir NMEA cümlesi
+    bütün olarak ulaşır. Boşluk olmadan yalnızca ayırıcı ya da boyut ayarlıysa yarım
+    kalan çerçeve 1 sn bayt gelmeyince gönderilir; hiçbir şey sonsuza dek bekletilmez.
+    Konsol, hex görünümü, trace ve MQTT veriyi yine okunduğu gibi alır; kapatma dizesi
+    çerçevelerde aranır.
+  - **Tek yazan, salt okunur dinleyiciler:** **Yazabilen istemci IP'leri / CIDR'lar**
+    (`network.writer_client_ips`, TCP sunucu ve UDP) ayarlıyken cihaza yalnızca bu
+    adreslerden gelen istemciler gönderir; kabul edilen diğer her istemci yalnızca cihazın
+    çıktısını alır. Bir dinleyicinin gönderdiği atılır ve sayılır (`bytes_dropped`),
+    eşlemenin log'u bunu bağlantı başına bir kez (UDP'de adres başına bir kez) söyler ve
+    pano istemciyi işaretler (durumda `listen_only`). İzin listesi, öncelikli istemciler ve
+    **Salt okunur** (kimse yazmaz) eskisi gibi çalışır; yalnız **En fazla bağlantı**
+    dolduğunda bir dinleyici (**Eski istemciyi at** ile ya da öncelikli istemci olarak)
+    yalnızca başka bir dinleyicinin yerini alır, hiçbir zaman yazanınkini almaz; bir telnet / RFC 2217 dinleyicisi
+    BREAK de gönderemez, hat ayarlarını da değiştiremez. MQTT yazmaları ve web konsolu
+    istemci sayılmaz. UDP'de cihazın çıktısı son gönderen yazana (ya da yanıt adresine)
+    gider: bir dinleyicinin datagramı onu karşı taraf yapmaz, yani bir dinleyici çıktıyı
+    yazandan devralamaz; dinleyicilere de çıktı gitsin isterseniz onları UDP hedefi olarak
+    ekleyin.
+  - **Seri portu yalnızca bir istemci bağlıyken aç** (`network.open_on_connect`, TCP
+    sunucu, raw / telnet / rfc2217): eşleme port kapalıyken dinler (pano *istemci
+    bekleniyor* der, durumda `"waiting": true`), portu ilk istemci için açar (istemci port
+    açılınca kabul edilir, böylece ilk gönderdiği kaybolmaz; port
+    `options.rfc2217_net_timeout_s` içinde açılamazsa istemci geri çevrilir; eşleme o zaman
+    beklerken nedeniyle birlikte *cihaz yok* olarak kalır, bildirimler bir kez *cihaz
+    koptu*, *cihaz geri geldi*yi de ancak işe yarayan bir açılıştan sonra der) ve son
+    istemci ayrıldıktan **Son istemciden sonra portu açık tut (sn)** (`port_linger_s`,
+    varsayılan 2) kadar sonra kapatır; arada başka bir program cihazı kullanabilir. Açılış
+    dizgesi o zaman her açılışta gönderilir, RTS / DTR de her seferinde ayarlanır. Web
+    konsolu istemci sayılır; hex görünümü, MQTT ve sorgu dizesi portu açmaz.
+  - **Port havuzları** (klasik ser2net'in rotator'ları; **Ayarlar → Port havuzları**,
+    `config.json`'da `pools`): birkaç eşleme için dinlenen tek bir TCP portu. Bir eşleme
+    havuza havuzun adıyla katılır (**Port havuzu**, `network.pool`: TCP sunucu, raw /
+    telnet / rfc2217, TLS'siz — havuzun portu düz TCP'dir) ve kendi portunu korur. Havuzun
+    portuna gelen her istemci, eşlemelerin sırasıyla, boş bağlantısı olan ilk üyeye verilir
+    (`rotate` ile, ser2net'teki gibi son istemciyi alan üyeden sonra başlanarak) ve o
+    andan sonra o eşlemenin istemcisidir (izin listesi, protokolü, karşılama mesajı,
+    zamanlayıcıları). Bir üyenin seri portunun açılmasını bekleyen istemci (yalnızca
+    istemci bağlıyken açma, RFC 2217) beklerken o üyenin bağlantısını tutar; böylece aynı
+    anda bağlanan istemciler farklı üyelere gider. Portu zamanında açılamayan üye
+    istemciyi sıradakine bırakır. Havuzun istemcisi için kimse atılmaz; bütün üyeler
+    kullanımdaysa istemci `Busy: every port of the pool is in use.` satırını okur ve
+    bağlantısı kesilir;
+    havuz bunu sayar (`refused`) ve loglar. Ayarlar paneli ve `GET /api/v1/pools` her
+    havuzun durumunu, üyelerini ve kaçının kullanımda olduğunu gösterir. Havuz kendi
+    adresinde dinler: 127.0.0.1'deki bir üyeye (örneğin bir SSH tüneli için) 0.0.0.0'daki
+    bir havuz üzerinden ağdan ulaşılır. Böyle bir havuzu ya da üyeyi kaydetmek bunu söyler
+    (Ayarlar, eşleme formu, REST yanıtında `warnings`, all.log); kayıt reddedilmez ve
+    üyenin izin listesi yine geçerlidir.
+  - **Dışarı bağlanmada yedek hedefler:** **Diğer hedefler** (`network.remote_targets`, en
+    fazla 8 `sunucu:port` girdisi) uzak sunucuya ulaşılamayınca sırayla, her biri bağlantı
+    zaman aşımıyla denenir; bağlantı yanıt veren hedefte kalır, o da koparsa listede
+    devam edilir (sondan başa dönülür); hiçbiri yanıt vermezse alışılmış bekleme uygulanır.
+    **İlk hedefe dönüş (sn)** (`failover_return_s`, 5 ile 86400 arası) ayarlıyken bağlantı
+    başka bir hedefteyken ilk hedef bu aralıkla yeniden denenir ve yanıt verince bağlantı
+    ona geri döner (diğeri için kuyrukta bekleyen önce gönderilir). Pano ve durumdaki
+    `link_target` kullanılan hedefi gösterir. TLS'te her hedefin sertifikası o hedefin
+    adını taşımalıdır.
+
+  Eski bir sürüm bu ayarları yok sayar ve `config.json`'ı kaydederken onları (ve `pools`'u)
+  dışarıda bırakır (`backups/` dosyayı olduğu gibi saklar): sürüm düşürüldüğünde eşlemeler
+  bu ayarlar yokken olduğu gibi çalışır — veri geldiği gibi iletilir, her istemci yazar,
+  port açık tutulur, havuz portu yoktur, yalnızca uzak sunucuya bağlanılır. Filo görünümü,
+  eski sürüm çalıştıran bir düğümdeki eşleme için bu alanları sunmaz.
 - **Gözlemlenebilirlik:** per-mapping trafik trace (hex/timestamp, döner dosyalar,
   arayüzden indirilir), Prometheus `/metrics`, denetim kaydı ekranı, canlı log görüntüleyici,
   **tarayıcı-içi seri konsol** (xterm.js, WebSocket — trafiği izle veya cihaza yaz) ve
@@ -407,12 +492,16 @@ düzenlemeye gerek yok.
   **ser2netweb'in başlaması** (bir açılıştan 15 sn sonra: hangi eşlemelerin çalıştığı ve önceki
   çalışmayı event loop watchdog'unun sonlandırıp sonlandırmadığı) ve bir gateway'in periyodik
   okuduğu bir **Modbus unit'inin yanıt vermeyi kesmesi** (3 okuma üst üste hiçbir noktasına
-  yanıt vermemesi) ve yeniden yanıt vermesi, ve **süresi dolmak üzere olan bir TLS
+  yanıt vermemesi) ve yeniden yanıt vermesi, **süresi dolmak üzere olan bir TLS
   sertifikası** (yönetim arayüzününki ve etkin her TLS eşlemesininki, günde bir kez okunur:
   30, 7 ve 1 günden az kaldığında birer mesaj, süresi dolduğunda bir mesaj daha — sertifika
-  ve eşik başına bir kez, yeniden başlatmalardan sonra da; yenilenen sertifika baştan
-  başlar) ve ser2netweb çalışırken **sistem saatinin değiştirilmesi** (bkz. *Saat
-  senkronizasyonu*). Tekrarlar bastırılır, test mesajı gönderilebilir. Bu olaylar gönderilsin ya da gönderilmesin all.log'a yazılır.
+  ve eşik ve kanal başına bir kez, yeniden başlatmalardan sonra da: mesajın ulaşmadığı bir
+  kanal (örneğin çalışmayan bir posta sunucusu) onu ertesi günkü denetimde alır, yalnızca o
+  kanal; eşlemesi bir süre devre dışı kalan ya da yönetim arayüzünün TLS'i kapatılan bir
+  sertifika yeniden bildirilmez; yenilenen sertifika baştan başlar), ser2netweb çalışırken **sistem saatinin değiştirilmesi** (bkz. *Saat
+  senkronizasyonu*) ve **güvenli değerlerin yazılması** (bir gateway noktalarına
+  `safe_value` değerini yazdı: broker ya da Sparkplug primary host, `safe_after_s` süresince
+  yoktu). Tekrarlar bastırılır, test mesajı gönderilebilir. Bu olaylar gönderilsin ya da gönderilmesin all.log'a yazılır.
   Genel URL ayarlıysa (Ayarlar → Reverse proxy) her mesaj onunla biter, JSON biçiminde de
   bir `url` alanı olur. İstemci olayları istemcinin IP adresini, hatalı giriş hesap adını
   (ya da `(unknown user)`) ve IP adresini gönderir; *Kişisel verileri gönderme* seçeneği
@@ -517,6 +606,15 @@ düzenlemeye gerek yok.
   okumalar art arda gönderilmez). Bir eşlemeyi durdurmak ya da yeniden başlatmak,
   broker'ın son mesajı (`offline` ya da Sparkplug NDEATH) almasını en çok 3 s bekler
   (ötesinde aynısını Last-Will söyler); bu sırada diğer eşlemeler ve arayüz beklemez.
+  **MQTT sürümü** (`mqtt.protocol`) varsayılan olarak 3.1.1'dir; **5** seçilince bağlantı
+  MQTT 5 konuşur (paho-mqtt 1.6 ve 2.x): **Temiz başlangıç** (varsayılan açık; kapalıyken,
+  bir istemci kimliği ve **oturum süresi** ile broker abonelikleri saklar ve bağlantı
+  yokken gelen QoS 1 komutlarını sonradan teslim eder — tam olarak bunu istemiyorsanız
+  açık bırakın), **retained verinin ileti süresi** (varsayılan kapalı: broker retained bir
+  satırı ya da değeri yayınlandıktan o kadar süre sonra artık vermez) ve broker'ın reason
+  code'ları log'da ve durumda (`reason_code`: bağlantıyı neden reddettiği ya da bitirdiği;
+  `rejected`: reddettiği yayınlar, paho-mqtt 2.x ile). MQTT 5 üzerinde Sparkplug B,
+  spesifikasyonunun istediği gibi her zaman temiz başlangıçla ve oturumsuz bağlanır.
   **Verileri retained yayınla** (düz biçim) seri satırları ve periyodik okunan Modbus
   değerlerini retained yayınlar; böylece sonradan bağlanan bir abone (Home Assistant,
   Node-RED, Telegraf) bir sonraki okumayı ya da satırı beklemeden son değeri hemen alır
@@ -793,9 +891,16 @@ sudo systemctl enable --now ser2netweb             # kurulum servisi kendisi ba�
 Depolar `B587 60E7 C0B0 515E 81D2  50F9 8164 D694 711B B799` anahtarıyla imzalıdır
 (RSA 4096, 2031-11-12'ye kadar; sitede `ser2netweb-archive-keyring.asc` / `.gpg`, depoda
 [`packaging/ser2netweb-archive-keyring.asc`](packaging/ser2netweb-archive-keyring.asc)):
-dnf ilk kurulumda onu gösterir, yalnızca bu parmak iziyle onaylayın. `.rpm` dosyalarının kendisi imzalı değildir;
-dnf ve zypper her paketin SHA-256'sını taşıyan imzalı depo meta verisini denetler
-(`repo_gpgcheck=1`, `gpgcheck=0`).
+dnf ilk kurulumda onu gösterir, yalnızca bu parmak iziyle onaylayın. Depodaki `.rpm`
+dosyaları da bu anahtarla imzalıdır; dnf ve zypper ikisini de denetler: her paketin
+SHA-256'sını taşıyan depo meta verisini ve her paketin kendi imzasını (`repo_gpgcheck=1`;
+dnf için `gpgcheck=1`, zypper için `pkg_gpgcheck=1`: zypper bu olmadan, meta verinin imzası
+geçerliyse paketin imzasına bakmaz). Paketler imzalanmaya başlamadan önce indirilmiş bir
+`ser2netweb.repo` `gpgcheck=0` der ve çalışmaya devam eder (meta veri yine denetlenir);
+dosyayı yeniden indirmek (zypper'da depoyu kaldırıp yeniden eklemek) paket denetimini de
+açar.
+GitHub'daki sürümün `.rpm` dosyaları aynı paketlerin imzasız derlemesidir (`SHA256SUMS`,
+`gh attestation verify`); ayrıntılar [docs/PACKAGES.md](docs/PACKAGES.md)'de.
 
 ### pipx / pip
 PyPI paketi `ser2netweb`, Python 3.10 ya da daha yenisinin olduğu her işletim sistemi ve
@@ -897,7 +1002,7 @@ unit'ler ve script'ler değişiklik gerektirmez:
 
 | Seçenek | Ne yapar |
 |---|---|
-| `--data-dir KLASÖR` | `config.json`, yedekleri, log'lar ve trace'lerin yeri (varsayılan: `ser2netweb.py`'nin ya da binary'nin yanındaki `data/`, Scoop'unki için onun persist klasöründe; `.deb` / `.rpm` / AUR paketininki için `/var/lib/ser2netweb`; pip / pipx, winget ya da Chocolatey kurulumu için kullanıcının veri klasörü, bkz. *pipx / pip* ve *Windows paket yöneticileri*; Homebrew'unki için `$(brew --prefix)/var/ser2netweb` ya da 3.0.0'ın orada kullandığı kullanıcı veri klasörü, bkz. *Homebrew*; snap'inki için, root olarak, `/var/snap/ser2netweb/common/data`); ser2netweb'e kendine ait bir klasör verin |
+| `--data-dir KLASÖR` | `config.json`, yedekleri, log'lar ve trace'lerin yeri (varsayılan: `ser2netweb.py`'nin ya da binary'nin yanındaki `data/`, Scoop'unki için onun persist klasöründe; `.deb` / `.rpm` / AUR paketininki için `/var/lib/ser2netweb`; `packaging/` içindeki tariflerle derlenmiş bir dağıtım paketi için o paketin servisinin veri dizini (`/var/lib/ser2netweb`; FreeBSD'de `/var/db/ser2netweb`, MacPorts'ta `/opt/local/var/db/ser2netweb`; daha eski bir paketin bıraktığı gibi yalnızca kullanıcının veri klasöründe bir `config.json` varken o klasör; `--about` o zaman `Build: distribution package (<dağıtımın adı>)` der, bkz. [docs/PACKAGING.md](docs/PACKAGING.md)); pip / pipx, winget ya da Chocolatey kurulumu için kullanıcının veri klasörü, bkz. *pipx / pip* ve *Windows paket yöneticileri*; Homebrew'unki için `$(brew --prefix)/var/ser2netweb` ya da 3.0.0'ın orada kullandığı kullanıcı veri klasörü, bkz. *Homebrew*; snap'inki için, root olarak, `/var/snap/ser2netweb/common/data`); ser2netweb'e kendine ait bir klasör verin |
 | `--config DOSYA` | başka bir yerdeki `config.json`; veri klasörü o zaman onun klasörüdür |
 | `--reconfigure` | yönetim arayüzünün adresini ve portunu konsolda yeniden sorar, sonra başlar |
 | `--online` | bağımlılık kurulumu `vendor/wheels/`'te olmayan bir wheel için PyPI'ye başvurabilir (kaynak kurulum) |
@@ -986,7 +1091,7 @@ komutunu kullanın (hazır imaj, `--restart unless-stopped`, `--init`, eşleme p
 `/dev/serial/by-id` cihaz yolu, log sınırı).
 Hazır imaj (her sürümde; amd64, arm64 ve 32-bit Raspberry Pi OS gibi 32-bit ARM için
 arm/v7): `docker pull ghcr.io/haliskilic/ser2netweb:latest`
-(ya da `:3.0`, `:3.0.1`); `docker-compose.yml` bunu kullanır. 2.9.x'e kadar imaj
+(ya da `:3.1`, `:3.1.0`); `docker-compose.yml` bunu kullanır. 2.9.x'e kadar imaj
 `ghcr.io/haliskilic/ser2net` idi: o imaj artık yok (2026-11-13'ten beri `docker pull`
 başarısız olur, 2.x imajları da GHCR'da değildir); imajı `ghcr.io/haliskilic/ser2netweb`
 olarak değiştirin.
@@ -1027,7 +1132,13 @@ hangilerinin devre dışı geldiğini ve nedenini, neyin farklı çalıştığı
 - TLS / istemci sertifikası satırlarını ve devre dışı gelenleri kontrol edin.
 
 Bir eşleme seri cihazını açık tutar: açılış dizgesi (openstr) her istemci için değil, port
-açıldığında bir kez gönderilir ve oturumlar arasında başka programlar cihazı kullanamaz.
+açıldığında bir kez gönderilir ve oturumlar arasında başka programlar cihazı kullanamaz;
+klasik ser2net'in yaptığı gibi olsun isterseniz bir TCP sunucu eşlemesinde **Seri portu
+yalnızca bir istemci bağlıyken aç**'ı işaretleyin. Bir UDP bağlantısının sabit uzak
+adresleri (4.x `remaddr: !adres,port` ve `connback`, 3.x portlu `remaddr`) UDP hedefleri,
+dosyanın ayarladığı `chardelay` (`chardelay: true`, `chardelay-scale` / `-min` / `-max`,
+`sendon`; raw bağlantıda) paketleme, bir rotator da TCP bağlantıları üye olan, sırayla
+dağıtan bir port havuzu olur; her biri önizlemede bir notla gösterilir.
 Adımlar, farklar ve seçenek tablosu (İngilizce):
 [`docs/MIGRATING-FROM-SER2NET.md`](docs/MIGRATING-FROM-SER2NET.md).
 
@@ -1194,6 +1305,8 @@ Uç noktalar: `GET/POST /mappings`, `GET/PUT/PATCH/DELETE /mappings/{id}`,
 `POST /mappings/{id}/{start|stop|restart}`, `GET/DELETE /mappings/{id}/traces`,
 `GET/DELETE /mappings/{id}/traces/{name}`, `POST/DELETE /mappings/{id}/capture`,
 `POST /import`, `GET /status`, `GET /ports`,
+`GET/PUT /pools` (port havuzları ve durumları; `PUT` hepsinin yerine geçer:
+`{"pools": [{"name": "lab", "port": 3000}]}`, ayrıca `bind_ip`, `enabled`, `rotate`),
 `GET /metrics`, `GET /info` (ser2netweb'in sürümü, API'nin sürümü ve sunduğu `features`),
 `GET /health` ve `GET /openapi.json` (ikisi de kimlik doğrulamasız). Web arayüzünün kendi uç
 noktaları (`/api/status`: panonun tablosu; `X-Content-Hash`'ini geri gönderen sayfaya `204`
@@ -1242,7 +1355,7 @@ dosyanın içe aktarılması da. Elle düzenlenmiş bir `config.json`'da koruyuc
 (`read_only`, `tls`, `require_login`, `tls_verify`, `start_tls`, `mask_personal_data`,
 MQTT'nin `tls_check_hostname`'i) metin,
 2.9.0 öncesindeki gibi boş değilse onu açık tutar ve açılışta not düşülür. Yalnızca JSON `true` ile bir şeyi açan
-ayarlar (`dual_stack`, `udp_broadcast`, `disconnect_without_device`, `poll_with_clients`,
+ayarlar (`dual_stack`, `udp_broadcast`, `disconnect_without_device`, `open_on_connect`, `poll_with_clients`,
 MQTT'nin `tx_enabled`'ı, `proxy_hsts`, `email_separately`) de metni
 reddeder; elle düzenlenmiş bir `config.json`'da metin onları kapalı bırakır ve açılışta not
 düşülür. Ayar olmayan anahtarlar yok sayılır ve yanıttaki `warnings` listesinde
@@ -2187,7 +2300,8 @@ klasörünü verin:
   eşlemelerinkiler sonraki açılışa kadar kalır (geri alınan bir geri yükleme onları bulur),
   açılış onları siler ve kaç dosya olduğunu log'a yazar.
 - `tls/` — self-signed üretilirse sertifika/anahtar ve tarayıcıdan yüklenen TLS dosyaları
-  (`uploaded-<hash>-cert.pem`, `-key.pem`, `-ca.pem`). Göreli bir TLS yolu (yönetim arayüzü,
+  (`uploaded-<hash>-cert.pem`, `-key.pem`, `-ca.pem`; göreli `tls/uploaded-…` yollarıyla
+  ayarlanır). Göreli bir TLS yolu (yönetim arayüzü,
   bir eşleme ya da onun MQTT bağlantısı: sertifika, anahtar, CA dosyaları; LDAP CA dosyası
   değil) veri klasöründeki bir dosyadır, örneğin
   `tls/cert.pem`; böylece veri klasörü taşınınca da çalışır. Taşımadan ya da başka bir

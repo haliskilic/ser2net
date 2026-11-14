@@ -5,7 +5,10 @@ after its package manager installed the package:
     python3 -I tests/distro_smoke.py --version 3.0.0 [--group uucp] [--init openrc] [--service]
 
   * ser2netweb --version says the version; --about lists pyserial-asyncio-fast as
-    installed or as its built-in transport (most distributions don't package it);
+    installed or as its built-in transport (most distributions don't package it), and says
+    "Build: distribution package (<name>)": the recipe wrote ser2netweb/distro.json into
+    the package (ser2netweb/layout.py), which names the distribution and /var/lib/ser2netweb
+    as the data directory;
   * the package's files: systemd's unit (ExecStart=/usr/bin/ser2netweb --data-dir
     /var/lib/ser2netweb, User=ser2netweb, SupplementaryGroups= the group of the serial
     ports), the sysusers.d and tmpfiles.d entries; OpenRC's /etc/init.d/ser2netweb and
@@ -15,8 +18,8 @@ after its package manager installed the package:
     account's, when the package made it (systemd's tmpfiles do where they run);
   * the package names no package ser2net (Provides, Conflicts, Replaces, Breaks,
     Obsoletes): the classic C daemon is unrelated and installs beside it;
-  * as the account, in the group of the serial ports: --set-password admin into its data
-    directory, a start on a free port of 127.0.0.1 that answers /healthz and
+  * as the account, in the group of the serial ports: --set-password admin without
+    --data-dir, into the data directory (the package's default), a start on a free port of 127.0.0.1 that answers /healthz and
     --healthcheck, a clean stop on SIGTERM;
   * --service (OpenRC): rc-service ser2netweb start answers /healthz on the admin UI's port,
     rc-service ser2netweb stop ends it.
@@ -27,6 +30,7 @@ from __future__ import annotations
 
 import argparse
 import grp
+import importlib.util
 import json
 import os
 import pwd
@@ -70,6 +74,23 @@ def check_commands(version: str) -> None:
     if "not installed" in line and "built in" not in line:
         fail(f"--about: {line.strip()}")
     print(f"{got}; --about: {line.strip()}  OK")
+    # the installed package's distro.json, the recipe's (ser2netweb/layout.py, DISTRO)
+    spec = importlib.util.find_spec("ser2netweb")
+    if spec is None or not spec.origin:
+        fail("python3 doesn't find the package ser2netweb")
+    path = os.path.join(os.path.dirname(spec.origin), "distro.json")
+    try:
+        with open(path, encoding="utf-8") as fh:
+            info = json.load(fh)
+    except (OSError, ValueError) as e:
+        fail(f"{path}: {e}")
+    name = info.get("distribution") if isinstance(info, dict) else None
+    if not isinstance(name, str) or not name.strip() or info.get("data_dir") != DATA:
+        fail(f"{path} doesn't name the distribution and {DATA}: {info}")
+    build = f"Build: distribution package ({name})"
+    if build not in about.splitlines():
+        fail(f"--about doesn't say {build!r}")
+    print(f"{path}: {name}, {DATA}; --about: {build}  OK")
 
 
 def check_systemd_files(group: str) -> None:
@@ -195,10 +216,11 @@ def check_start(group: str) -> None:
     env = {"PATH": "/usr/bin:/bin", "HOME": DATA, "LANG": "C.UTF-8"}
     as_account: dict = {"user": ACCOUNT, "group": grp.getgrgid(pw.pw_gid).gr_name,
                         "extra_groups": [group], "cwd": DATA}
-    run([EXE, "--data-dir", DATA, "--set-password", "admin"], input="distro-smoke-pass-1\n",
-        env=env, **as_account)
+    # (without --data-dir: the package's data directory is the default)
+    run([EXE, "--set-password", "admin"], input="distro-smoke-pass-1\n", env=env,
+        **as_account)
     if not os.path.isfile(os.path.join(DATA, "config.json")):
-        fail(f"--set-password wrote no {DATA}/config.json")
+        fail(f"--set-password without --data-dir wrote no {DATA}/config.json")
     port = free_port()
     server_env = dict(env, SER2NETWEB_BIND_IP="127.0.0.1", SER2NETWEB_PORT=str(port))
     log_path = os.path.join("/tmp", "ser2netweb-smoke.log")
@@ -223,7 +245,7 @@ def check_start(group: str) -> None:
     st = os.stat(os.path.join(DATA, "config.json"))
     if st.st_uid != pw.pw_uid:
         fail("config.json doesn't belong to the account")
-    print(f"as {ACCOUNT} (+{group}): --set-password, a start on 127.0.0.1:{port} answering "
+    print(f"as {ACCOUNT} (+{group}): --set-password into {DATA} by default, a start on 127.0.0.1:{port} answering "
           f"/healthz and --healthcheck, stopped by SIGTERM (exit {code})  OK")
 
 

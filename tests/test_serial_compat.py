@@ -13,8 +13,10 @@ whole process any more). Checked here, without a serial device:
   - ports opened through serial_io.open_serial get this transport (POSIX PTY);
   - a baud rate without a termios constant (250000, 74880, ...) opens and can be switched
     to while termios refuses pyserial 3.5's BOTHER placeholder, as glibc 2.42+ does for
-    the standalone binary; a setting the OS refuses is a readable SerialException (Linux
-    PTY, rates read back with TCGETS2);
+    the standalone binary, with the input speed the same where tcsetattr leaves the input
+    speed's bits at 38400 (musl, Alpine), and set once where a driver reports the rate it
+    achieved for both (cp210x, pl2303); a setting the OS refuses is a readable
+    SerialException (Linux PTY, rates read back with TCGETS2);
   - Windows writes (serial_compat.OverlappedWrites, driven through a stand-in for
     pyserial's serial.win32 on any OS): each write has its own OVERLAPPED and keeps its data
     until it completed, at most the write window in flight (then BlockingIOError); purged
@@ -37,15 +39,25 @@ whole process any more). Checked here, without a serial device:
   - without pyserial-asyncio-fast (a distribution that doesn't package it), Transport
     builds on ser2netweb/engine/serial_transport.py: that copy is 0.16's transport, by a
     hash of its text and against an installed 0.16, and everything above runs once more
-    on it in a child process where pyserial-asyncio-fast doesn't import.
+    on it in a child process where pyserial-asyncio-fast doesn't import;
+  - in a distribution's build (its recipe wrote ser2netweb/distro.json into this tree, its
+    check step runs this file against the distribution's packages): upstream code that
+    differs from the pinned releases' (another release, the distribution's patch, as
+    Fedora's pyserial 3.5 has one for custom baud rates) is named, not failed, as
+    serial_compat runs on it with a start-up note; the Windows-only modules a package
+    leaves out off Windows (openSUSE's pyserial has no serialwin32) are skipped; a pyserial
+    that no longer hands BOTHER to termios skips the stand-in's own check. The built-in
+    copy's hash and every behaviour above stay strict there too.
 Runs on Windows too (the transport's timer-polled write path), the PTY parts on POSIX only.
 
 Run: python3 tests/test_serial_compat.py
 """
 import ast
 import asyncio
+import contextlib
 import hashlib
 import importlib.util
+import io
 import os
 import socket
 import sys
@@ -56,7 +68,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "lib"))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, os.path.dirname(__file__))
 
-from ser2netweb import envvars
+from ser2netweb import envvars, layout
 
 # test_without_pyserial_asyncio_fast's child: as if pyserial-asyncio-fast weren't installed
 WITHOUT_SAF_ENV = "SER2NETWEB_TEST_WITHOUT_SAF"
@@ -74,6 +86,11 @@ from ser2netweb.engine import serial_compat, serial_transport
 saf = serial_compat._saf
 
 ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
+# a distribution's build: its recipe wrote ser2netweb/distro.json into this tree (layout.DISTRO)
+# and the dependencies are the distribution's packages
+DISTRO_BUILD = layout.distro_info() is not None
+# pyserial's modules for Windows alone, which a distribution's package may leave out
+WINDOWS_ONLY = ("serial.serialwin32", "serial.win32")
 
 
 class FakePort:
@@ -346,6 +363,52 @@ def _bother_refused():
     return mock.patch.object(termios, "tcsetattr", tcsetattr)
 
 
+def _musl_input_bits():
+    """termios.tcsetattr as musl's leaves the port (Alpine): the input speed's bits
+    (CIBAUD) at the 38400 placeholder, where glibc's let the input follow the output."""
+    import array
+    import fcntl
+    import termios
+
+    from serial import serialposix
+    real, ioctl = termios.tcsetattr, fcntl.ioctl  # (its own writes aren't _set_calls')
+
+    def tcsetattr(fd, when, attrs):
+        real(fd, when, attrs)
+        buf = array.array("i", [0] * 64)
+        ioctl(fd, serialposix.TCGETS2, buf)
+        buf[2] = (buf[2] & ~termios.CIBAUD) | (0o17 << 16)  # (the kernel's B38400)
+        ioctl(fd, serialposix.TCSETS2, buf)
+
+    return mock.patch.object(termios, "tcsetattr", tcsetattr)
+
+
+def _set_calls(achieved=None):
+    """fcntl.ioctl, counting the TCSETS2 calls (the port's settings written) in the list
+    it yields; with `achieved` {asked: got}, a driver that reports the rate it achieved for
+    the output speed as both speeds (cp210x, pl2303: tty_encode_baud_rate(tty, baud,
+    baud)), whatever the C library left the input speed at."""
+    import fcntl
+
+    from serial import serialposix
+    real, calls = fcntl.ioctl, []
+
+    def ioctl(fd, request, arg=0, *rest):
+        if request == serialposix.TCSETS2:
+            calls.append((arg[9], arg[10]))
+        result = real(fd, request, arg, *rest)
+        if request == serialposix.TCGETS2 and achieved and arg[10] in achieved:
+            arg[9] = arg[10] = achieved[arg[10]]
+        return result
+
+    @contextlib.contextmanager
+    def patched():
+        with mock.patch.object(fcntl, "ioctl", ioctl):
+            yield calls
+
+    return patched()
+
+
 def _speeds(fd):
     """(input, output) baud rate the kernel has for ``fd`` (TCGETS2)."""
     import array
@@ -385,7 +448,7 @@ def test_custom_baud_rates_on_new_glibc():
             except termios.error:
                 pass
             else:
-                raise AssertionError("the stand-in must refuse BOTHER as glibc 2.42+ does")
+                stand_in_unused()
             ser = serial_compat.PosixSerial(pty.path, 250000, timeout=0, write_timeout=0)
             try:
                 assert _speeds(ser.fd) == (250000, 250000), _speeds(ser.fd)
@@ -396,6 +459,25 @@ def test_custom_baud_rates_on_new_glibc():
             finally:
                 ser.close()
             assert asyncio.run(_open_at(pty.path, 250000)) == (250000, 250000)
+        with _musl_input_bits():  # the input speed too, where tcsetattr left it at 38400
+            ser = serial_compat.PosixSerial(pty.path, 250000, timeout=0, write_timeout=0)
+            try:
+                assert _speeds(ser.fd) == (250000, 250000), _speeds(ser.fd)
+                with _set_calls() as calls:
+                    ser.baudrate = 74880
+                assert _speeds(ser.fd) == (74880, 74880), _speeds(ser.fd)
+                assert calls == [(74880, 74880), (74880, 74880)], calls  # pyserial's, ours
+            finally:
+                ser.close()
+        # a driver that reports the rate it achieved for both speeds (249600 for 250000):
+        # the input follows the output, so nothing more is written (the UART is set once)
+        with _set_calls({250000: 249600, 74880: 74843}) as calls:
+            ser = serial_compat.PosixSerial(pty.path, 250000, timeout=0, write_timeout=0)
+            try:
+                ser.baudrate = 74880
+            finally:
+                ser.close()
+        assert calls == [(250000, 250000), (74880, 74880)], calls  # pyserial's alone
         with mock.patch.object(termios, "tcsetattr",
                                side_effect=termios.error(22, "Invalid argument")):
             try:
@@ -408,8 +490,21 @@ def test_custom_baud_rates_on_new_glibc():
     finally:
         pty.close()
     print("PosixSerial: 250000 / 74880 / 31250 / 7200 / 100000 baud open and switch where "
-          "glibc 2.42+ refuses pyserial's BOTHER placeholder; a refused setting is a "
-          "readable SerialException  OK")
+          "glibc 2.42+ refuses pyserial's BOTHER placeholder, the input speed too where "
+          "tcsetattr left it at 38400 (musl), once only where a driver reports the rate it "
+          "achieved; a refused setting is a readable SerialException  OK")
+
+
+def stand_in_unused(distro_build=None):
+    """pyserial opened a custom rate under the stand-in: it no longer hands BOTHER to
+    termios.tcsetattr. pyserial 3.5's release does (the pins): an error, as the stand-in
+    must refuse what glibc 2.42+ refuses. In a distribution's build its package may be
+    patched not to (Fedora's): noted, and PosixSerial is checked on its own."""
+    if DISTRO_BUILD if distro_build is None else distro_build:
+        print("NOTE: this pyserial doesn't hand BOTHER to termios (the distribution's patch): "
+              "the stand-in's own check is skipped, PosixSerial is checked alone")
+        return
+    raise AssertionError("the stand-in must refuse BOTHER as glibc 2.42+ does")
 
 
 # ------------------------------------------------------------------ Windows writes
@@ -656,25 +751,84 @@ PINS = {
 }
 
 
-def test_upstream_pins():
-    changed, checked = [], 0
-    for module, pins in PINS.items():
+def pin_check(pins, distro_build, platform=sys.platform):
+    """(problems, notes, functions checked) of `pins` against the installed code. A
+    difference is a problem, except in a distribution's build, where code of the
+    distribution's package that differs from the pinned release's is a note, and so is a
+    Windows-only module it left out off Windows; ser2netweb's own copy of the transport
+    is held to its hashes everywhere."""
+    problems, notes, checked = [], [], 0
+    for module, wanted in pins.items():
         # (without pyserial-asyncio-fast: its copy in ser2netweb, the same code, which leaves
         # out connection_for_serial: what open_stream mirrors, not code that runs)
         name_here = saf.__name__ if module == "serial_asyncio_fast" else module
+        ours = name_here.startswith("ser2netweb.")
+        lenient = distro_build and not ours
+        if importlib.util.find_spec(name_here) is None:
+            if lenient and module in WINDOWS_ONLY and platform != "win32":
+                notes.append(f"{module} is not installed (the distribution's package leaves "
+                             "it out off Windows): its pins are skipped")
+            else:
+                problems.append(f"{module}: not installed")
+            continue
         found = upstream_functions(name_here)
-        for name, want in pins.items():
+        for name, want in wanted.items():
             if name_here != module and name not in found:
                 continue
             got = digest(found[name]) if name in found else "(gone)"
             checked += 1
             if got != want:
-                changed.append(f"{module} {name}: {got} (pinned {want})")
-    assert not changed, ("upstream code serial_compat builds on has changed; review the "
-                         "matching override, then update PINS:\n  " + "\n  ".join(changed))
-    print(f"{checked} upstream functions serial_compat builds on are the pinned ones"
+                (notes if lenient else problems).append(f"{module} {name}: {got} (pinned {want})")
+    return problems, notes, checked
+
+
+def test_upstream_pins():
+    problems, notes, checked = pin_check(PINS, DISTRO_BUILD)
+    assert not problems, ("upstream code serial_compat builds on has changed; review the "
+                          "matching override, then update PINS:\n  " + "\n  ".join(problems))
+    for note in notes:
+        print(f"NOTE (a distribution's build): {note}")
+    print(f"{checked} upstream functions serial_compat builds on are checked"
+          + (f", {len(notes)} not as pinned (the distribution's packages: the notes above)"
+             if notes else ", the pinned ones")
           + (" (pyserial-asyncio-fast's: in the built-in copy)" if serial_compat.BUILT_IN else "")
           + "  OK")
+
+
+def test_portable_in_a_distribution_build():
+    """What a distribution's build lets through (pin_check, stand_in_unused), and only
+    there: a function that differs, a Windows-only module left out off Windows. Code that
+    is gone or a module that is missing on its own platform, and the built-in copy's
+    hashes, fail in either."""
+    pins = {"serial.serialutil": {"SerialBase.rts": "0" * 16},
+            "serial.nonexistent_for_the_test": {"Serial.open": "0" * 16}}
+    problems, notes, _n = pin_check(pins, False)
+    assert len(problems) == 2 and not notes, (problems, notes)
+    windows_only = WINDOWS_ONLY + ("serial.nonexistent_for_the_test",)
+    saved = globals()["WINDOWS_ONLY"]
+    globals()["WINDOWS_ONLY"] = windows_only
+    try:
+        problems, notes, _n = pin_check(pins, True, platform="linux")
+        assert not problems and len(notes) == 2, (problems, notes)
+        problems, notes, _n = pin_check(pins, True, platform="win32")
+        assert problems == ["serial.nonexistent_for_the_test: not installed"], problems
+    finally:
+        globals()["WINDOWS_ONLY"] = saved
+    copy = {"serial_asyncio_fast": {"SerialTransport.write": "0" * 16}}
+    problems, _notes, _n = pin_check(copy, True)
+    assert bool(problems) == serial_compat.BUILT_IN, problems   # (ours: strict)
+    with contextlib.redirect_stdout(io.StringIO()) as out:
+        stand_in_unused(True)
+    assert out.getvalue().startswith("NOTE: this pyserial doesn't hand BOTHER"), out.getvalue()
+    try:
+        stand_in_unused(False)
+    except AssertionError:
+        pass
+    else:
+        raise AssertionError("outside a distribution's build the stand-in must refuse BOTHER")
+    print("a distribution's build: differing upstream code and the Windows-only modules a "
+          "package leaves out are named, not failed; the rest as everywhere "
+          f"({'this is one' if DISTRO_BUILD else 'this is none'})  OK")
 
 
 # ser2netweb/engine/serial_transport.py, the copy of pyserial-asyncio-fast 0.16's transport for
@@ -741,6 +895,7 @@ if __name__ == "__main__":
     test_windows_transport_branch()
     test_windows_serial_class()
     test_upstream_pins()
+    test_portable_in_a_distribution_build()
     test_built_in_copy()
     test_without_pyserial_asyncio_fast()
     print("\nPASS: serial_compat's transport and the upstream code it builds on")

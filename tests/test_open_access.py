@@ -35,19 +35,10 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "lib"))
 
 ROOT = os.path.join(os.path.dirname(__file__), "..")
 
-
-def free_port():
-    s = socket.socket()
-    s.bind(("127.0.0.1", 0))
-    p = s.getsockname()[1]
-    s.close()
-    return p
-
+from _server import free_port, refusal, ui_cookie
 
 UI = free_port()
 BASE = f"http://127.0.0.1:{UI}"
-
-from _server import ui_cookie
 
 
 def wait_port(port, timeout=15):
@@ -145,12 +136,12 @@ def main():
 
         # ---- the mapping form persists + re-renders the new connection fields ----
         mport = free_port()
-        st, _, _ = admin.post("/api/mappings/save", mapping_form(
+        st, body, _ = admin.post("/api/mappings/save", mapping_form(
             "plc", mport, "/dev/ttyOPEN1", network_tcp_keepalive="on",
             network_keepalive_idle_s="45", network_keepalive_interval_s="7",
             network_keepalive_count="5", opt_idle_timeout_s="300",
             opt_max_connection_time_s="86400"))
-        assert st == 200, f"mapping save -> {st}"
+        assert st == 200, f"mapping save -> {st}: {refusal(body)}"
         saved = config()["mappings"][0]
         mid = saved["id"]
         n, o = saved["network"], saved["options"]
@@ -186,7 +177,7 @@ def main():
 
         # ---- admin switches login off, visitors get 'viewer' ----
         st, body, loc = admin.post("/settings/access", {"anonymous_role": "viewer", "_csrf": admin.csrf()})
-        assert st == 303 and loc == "/settings#access", (st, loc)   # to the page, which says it
+        assert st == 303 and loc == "/settings#access", (st, loc, refusal(body))  # to the page, which says it
         st, body, _ = admin.get("/settings")
         assert st == 200 and "Open access enabled" in body, st
         assert config()["admin_ui"]["require_login"] is False
@@ -227,8 +218,8 @@ def main():
         # ---- operator role for visitors: mapping edits allowed ----
         assert admin.post("/settings/access", {"anonymous_role": "operator",
                                                "_csrf": admin.csrf()})[0] == 303
-        st, _, _ = anon.post("/api/mappings/save", mapping_form("by-anon", free_port(), "/dev/ttyOPEN2"))
-        assert st == 200, f"anonymous operator should save mappings, got {st}"
+        st, body, _ = anon.post("/api/mappings/save", mapping_form("by-anon", free_port(), "/dev/ttyOPEN2"))
+        assert st == 200, f"anonymous operator should save mappings, got {st}: {refusal(body)}"
         assert anon.get(f"/api/mappings/{mid}/form")[0] == 200, "operator may open the edit form"
         assert anon.post("/settings/users", {"username": "x", "role": "viewer", "password": "userpass123",
                                              "password2": "userpass123", "_csrf": anon.csrf()})[0] == 403

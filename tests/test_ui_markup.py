@@ -416,6 +416,31 @@ def test_mapping_form_modbus_fields():
     # the points' options marker is posted exactly when the points JSON is
     assert conditions("modbus_point_options_shown") == conditions("modbus_points") == [
         "network_protocol=modbus"], conditions("modbus_point_options_shown")
+    assert conditions("modbus_point_safety_shown") == ["network_protocol=modbus"]
+    # the MQTT version is offered for every mapping with a network side; MQTT 5's settings
+    # (and their marker) only while version 5 is selected
+    assert conditions("mqtt_protocol") == ["kind=net"], conditions("mqtt_protocol")
+    for name in ("mqtt_v5_shown", "mqtt_clean_start", "mqtt_session_expiry_s",
+                 "mqtt_message_expiry_s"):
+        assert conditions(name) == ["mqtt_protocol=5", "kind=net"], (name, conditions(name))
+    older = tpl.render(request=Req, mapping=m, is_new=False, modbus_points_json="", ports=[],
+                       ips=[], error=None, hide={"mqtt5", "point_safety"})
+    for gone in ("mqtt_protocol", "mqtt_v5_shown", "mqtt_clean_start", "\"pulse_ms\"</span>",
+                 "modbus_point_safety_shown"):
+        assert gone not in older, f"{gone} is in a form shown for a node before 3.1"
+    assert "modbus_point_options_shown" in older
+    assert '"pulse_ms"</span>' in tpl.render(request=Req, mapping=m, is_new=False, ports=[],
+                                             modbus_points_json="", ips=[], error=None)
+
+    def editor_texts(page):
+        editor = next(n for n in parse(page).walk() if "data-points-editor" in n.attrs)
+        return json.loads(editor.attrs["data-texts"])
+    # points.js shows the fields of 3.1 only when the form names them
+    assert editor_texts(older)["pulse_ms"] == "" and editor_texts(older)["name"] == "Name"
+    shown = editor_texts(tpl.render(request=Req, mapping=m, is_new=False, modbus_points_json="",
+                                    ports=[], ips=[], error=None))
+    assert (shown["pulse_ms"], shown["safe_value"], shown["safe_after_s"]) == (
+        "Pulse (ms)", "Safe value", "Safe after (s)"), shown
     field = next(n for n in root.walk() if n.attrs.get("name") == "opt_modbus_response_timeout_s")
     assert field.attrs.get("value") == "0.8" and field.attrs.get("type") == "number", field.attrs
     print("mapping form: banner/close-on/client buffer not offered for modbus; the retained "
@@ -552,7 +577,10 @@ def test_number_fields_required():
     blank_ok = {"network_udp_peer_port", "network_udp_peer_timeout_s", "modbus_poll_interval_s",
                 "opt_poll_interval_s", "opt_modbus_response_timeout_s", "modbus_block_gap",
                 "serial_rs485_delay_before_tx_ms", "serial_rs485_delay_after_tx_ms",
-                "serial_b_rs485_delay_before_tx_ms", "serial_b_rs485_delay_after_tx_ms"}
+                "serial_b_rs485_delay_before_tx_ms", "serial_b_rs485_delay_after_tx_ms",
+                # (blank: packing off, the default linger, no return to the first target)
+                "opt_pack_gap_ms", "opt_pack_max_bytes", "network_port_linger_s",
+                "network_failover_return_s"}
     numbers = [n for n in root.walk() if n.tag == "input" and n.attrs.get("type") == "number"]
     bad = [n.attrs["name"] for n in numbers if ("required" in n.attrs) == (n.attrs["name"] in blank_ok)]
     assert numbers and not bad, bad
@@ -761,6 +789,38 @@ def test_mqtt_not_connected():
         assert len(flagged) == 1 and html.escape(shown, quote=False) in out, out
         assert "the mapping’s log" in flagged[0].attrs["title"], flagged[0].attrs
     print("dashboard: an MQTT publisher without a broker connection says why  OK")
+
+
+def test_safe_values_written():
+    """A running gateway whose points were written to their safe value names them under
+    its state; not while none is written yet, nor for a status without safe (an older
+    peer's, a mapping without safe values)."""
+    tpl = make_templates().env.get_template("_mappings_body.html")
+    m = MappingConfig.from_dict({"id": "gw", "name": "gw", "serial": {"port": "COM3"},
+                                 "network": {"protocol": "modbus", "port": 502}})
+
+    def point(name, written):
+        return {"name": name, "value": 0, "after_s": 30, "written": written, "error": ""}
+    for safe, shown in (
+            ({"state": "applied", "points": [point("pump", 1767225600),
+                                             point("<b>", 1767225601)]},
+             "safe values written: pump, <b>"),
+            ({"state": "waiting", "points": [point("pump", 1767225600), point("valve", None)]},
+             "safe value written: pump"),
+            ({"state": "waiting", "points": [point("pump", None)]}, None),
+            ({"state": "ok", "points": [point("pump", None)]}, None), ({}, None), (None, None)):
+        st = {"state": "running"}
+        if safe is not None:
+            st["safe"] = safe
+        out = tpl.render(mappings=[m], statuses={"gw": st}, can_edit=False)
+        check_table_contract(out, f"mappings table (safe {safe})")
+        flagged = [n for n in parse(out).walk() if "data-safe-values" in n.attrs]
+        if shown is None:
+            assert not flagged, (safe, out)
+            continue
+        assert len(flagged) == 1 and html.escape(shown, quote=False) in out, out
+        assert "safe_after_s" in flagged[0].attrs["title"], flagged[0].attrs
+    print("dashboard: a gateway that wrote safe values names the points  OK")
 
 
 def test_mapping_form_kick_hint():
@@ -1199,6 +1259,7 @@ def main():
     test_mapping_form_unit_warnings()
     test_units_not_answering()
     test_mqtt_not_connected()
+    test_safe_values_written()
     print("\nPASS: UI markup contract")
 
 

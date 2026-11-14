@@ -21,6 +21,14 @@ the Will, retained messages and reconnects all run as they do in service. Checks
     link dropped: the broker publishes the NDEATH Will, the next session's Will and NBIRTH
     carry bdSeq 1; an NCMD rebirth gives a new NBIRTH; stop: NDEATH with the session's
     bdSeq.
+  * a coil with pulse_ms: a /set of 1 is written, then false after the pulse (the broker
+    gets 1, then 0); safe values: the broker refuses the reconnects after a dropped link,
+    and once that has lasted safe_after_s the points get their safe values, once (the
+    status says "applied"); the broker accepts again: "ok", the log says the broker is
+    back.
+The plain, the pulse / safe value and the Sparkplug B checks run once more with the
+mapping on MQTT 5 (mqtt.protocol "5"): the same topics, payloads, commands, Wills and
+reconnects.
 Needs paho-mqtt (skips without it; SER2NETWEB_OPTIONAL_TESTS=1 makes that a failure). Runs
 with paho-mqtt 2.x and 1.6.
 
@@ -40,6 +48,7 @@ from ser2netweb.config import MappingConfig
 from ser2netweb.engine import modbus, serial_io, sparkplug
 from ser2netweb.engine.modbus_gateway import ModbusGatewayRunner
 
+MQTT: dict = {}  # MQTT settings every gateway here gets on top of its own (the version)
 POINTS = [
     {"name": "temp", "unit": 1, "fn": 4, "address": 0, "dtype": "float32"},
     {"name": "setpoint", "unit": 1, "fn": 3, "address": 10, "dtype": "int16", "writable": True},
@@ -122,7 +131,7 @@ async def gateway(broker, slave, fmt="plain", logs=None, mqtt=None, points=POINT
                     "port": free_port()},
         "options": {"modbus_response_timeout_s": timeout},
         "mqtt": dict({"enabled": True, "host": "127.0.0.1", "port": broker.port,
-                      "base_topic": "plant/a", "payload_format": fmt}, **(mqtt or {})),
+                      "base_topic": "plant/a", "payload_format": fmt}, **MQTT, **(mqtt or {})),
         "modbus_poll": {"interval_s": 0.2, "points": points}})
     m.validate()
     m.validate_input()
@@ -266,6 +275,43 @@ async def flood_checks(broker):
     print("a DCMD over 256 KiB is ignored and logged  OK")
 
 
+async def pulse_safe_checks(broker):
+    logs = []
+    points = [dict(POINTS[1], safe_value=7, safe_after_s=1),
+              dict(POINTS[2], pulse_ms=300, safe_value=False, safe_after_s=1)]
+    async with Slave() as slave, gateway(broker, slave, logs=logs, points=points) as r:
+        assert await until(lambda: "plant/a/pump/set" in broker.subscriptions
+                           and r.status.safe.get("state") == "ok"), (r.status.safe, logs)
+        broker.publish("plant/a/pump/set", b"1")
+        assert await until(lambda: slave.coils[0] is True), logs
+        assert await until(lambda: slave.coils[0] is False and not r._pulses, 3.0), logs
+        assert await until(lambda: broker.payloads("plant/a/pump")[-2:] == [b"1", b"0"]), \
+            broker.payloads("plant/a/pump")
+        print("pulse: a /set of 1 through the broker, false after the pulse, 1 then 0 "
+              "published  OK")
+
+        slave.coils[0] = True
+        slave.regs[10] = 55
+        connects = len(broker.connects)
+        broker.connack = 0x87 if MQTT.get("protocol") == "5" else 5  # (not authorized)
+        broker.drop()
+        assert await until(lambda: len(broker.connects) > connects
+                           and r.status.mqtt.get("state") == "down"), r.status.mqtt
+        assert r.status.safe["state"] == "waiting", r.status.safe
+        assert await until(lambda: slave.regs[10] == 7 and slave.coils[0] is False, 5.0), logs
+        assert await until(lambda: r.status.safe["state"] == "applied")
+        writes = len(slave.writes())
+        await asyncio.sleep(0.8)
+        assert len(slave.writes()) == writes, "once per outage"
+        broker.connack = 0
+        assert await until(lambda: r.status.mqtt.get("state") == "connected"
+                           and r.status.safe["state"] == "ok"), (r.status.mqtt, r.status.safe)
+        assert any("safe values: the broker is back" in m for m in logs), logs
+        assert slave.regs[10] == 7, "the safe value stays"
+        print("safe values: the broker refuses the reconnects for safe_after_s: written once; "
+              "back: ok  OK")
+
+
 def node_topic(kind, dev=None):
     return sparkplug.topic("ser2net", kind, "edge", dev)
 
@@ -334,7 +380,22 @@ async def main():
     with MqttBroker() as broker:
         await flood_checks(broker)
     with MqttBroker() as broker:
+        await pulse_safe_checks(broker)
+    with MqttBroker() as broker:
         await sparkplug_checks(broker)
+    MQTT["protocol"] = "5"
+    try:
+        with MqttBroker() as broker:
+            await plain_checks(broker)
+            assert {c["protocol"] for c in broker.connects} == {5}, broker.connects
+        with MqttBroker() as broker:
+            await pulse_safe_checks(broker)
+        with MqttBroker() as broker:
+            await sparkplug_checks(broker)
+            assert {(c["protocol"], c["clean"]) for c in broker.connects} == {(5, True)}
+    finally:
+        MQTT.clear()
+    print("the plain, the pulse / safe value and the Sparkplug B checks again over MQTT 5  OK")
 
 
 if __name__ == "__main__":

@@ -96,6 +96,8 @@ def check_contents(dist: str) -> tuple[str, str]:
     licences = {f"{info}/licenses/{n}" for n in LICENCE_FILES + npm_licences()}
     own = {f"{info}/{n}" for n in ("METADATA", "WHEEL", "RECORD", "entry_points.txt",
                                    "top_level.txt")}
+    if "ser2netweb/distro.json" in files:  # (pip's layout: never a distribution's, layout.DISTRO)
+        fail("the wheel has ser2netweb/distro.json, which only a distribution's recipe writes")
     if {f for f in files if f.startswith("ser2netweb/")} != pkg:
         fail(f"the wheel's package differs from this tree's: missing "
              f"{sorted(pkg - files)}, extra {sorted(f for f in files - pkg if f.startswith('ser2netweb/'))}")

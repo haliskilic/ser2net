@@ -1,7 +1,7 @@
 """Fleet-view edits between nodes of different versions keep every setting.
 
-tests/fixtures/forms-<version>.json were made once with the code of 2.7.1, 2.8.0 and
-2.8.1 (tests/make_form_fixtures.py) for the kitchen-sink mappings of
+tests/fixtures/forms-<version>.json were made once with the code of 2.7.1, 2.8.0, 2.8.1
+and 3.0.1 (tests/make_form_fixtures.py) for the kitchen-sink mappings of
 tests/_form_cases.py. With them, without running the old code:
 
   * an older node edits a mapping on this one: what its fleet view forwards for an
@@ -80,13 +80,26 @@ BLOCK_FIELDS = {"usb_match": {"serial_usb_match_shown"}, "trace_rotation": {"opt
                 "block_reads": {"modbus_block_reads_shown", "modbus_block_gap"},
                 "point_options": {"modbus_point_options_shown"},
                 "value_format": {"mqtt_value_format"},
-                "unit_status": {"mqtt_unit_status_shown"}}
+                "unit_status": {"mqtt_unit_status_shown"},
+                "mqtt5": {"mqtt_protocol", "mqtt_v5_shown", "mqtt_clean_start",
+                          "mqtt_session_expiry_s", "mqtt_message_expiry_s"},
+                "point_safety": {"modbus_point_safety_shown"},
+                "packing": {"opt_pack_gap_ms", "opt_pack_delimiter", "opt_pack_max_bytes"},
+                "writer_ips": {"network_writer_client_ips"},
+                "open_on_connect": {"network_open_on_connect_shown", "network_open_on_connect",
+                                    "network_port_linger_s"},
+                "pool": {"network_pool"},
+                "failover": {"network_remote_targets", "network_failover_return_s"}}
 # fields of every older version's form that its own posts in the fixtures leave out
 # (boxes no kitchen-sink mapping ticks, a custom baud box not in use), and the MQTT
 # client ID, which every version's save reads although only 2.9.0's form shows it
 OLDER_FIELDS_NOT_POSTED = {"serial_exclusive", "serial_b_exclusive",
                            "serial_rs485_rts_level_for_tx", "serial_b_rs485_rts_level_for_tx",
-                           "serial_b_custom_baud", "mqtt_client_id"}
+                           "serial_b_custom_baud", "mqtt_client_id",
+                           # (2.9.0+: boxes of the TLS blocks a mapping without that TLS
+                           # leaves unticked)
+                           "mqtt_tls_check_hostname", "mqtt_client_key_password_clear",
+                           "network_tls_key_password_clear"}
 
 
 def same_value(a: str, b: str) -> bool:
@@ -120,7 +133,7 @@ def test_this_node_edits_an_older_one(fx: dict) -> None:
         sent = dict(fields)
         # a one-line field that can't show its stored value: the stored one is sent (that
         # node's own form loses its line breaks)
-        raw = {f: own[section][attr] for f, (section, attr) in forms._TEXT_INPUTS.items()}
+        raw = {f: own[section].get(attr) for f, (section, attr) in forms._TEXT_INPUTS.items()}
         problems = [f"{k}: {v!r} -> {sent.get(k, '<not sent>')!r}"
                     for k, v in fx["own_forms"][mid]
                     if not same_value(v, sent.get(k, "\0")) and sent.get(k) != raw.get(k)]

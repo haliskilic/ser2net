@@ -62,8 +62,11 @@ class Captures:
 
     def __init__(self, state: "AppState") -> None:
         self.state = state
-        # mapping id -> (the trace_until it was armed for, its end on the monotonic clock)
-        self._ends: dict[str, tuple[float, float]] = {}
+        # mapping id -> (the trace_until it was armed for, when on the monotonic clock, its
+        # length in seconds from then): what is left is the length minus the time passed
+        # since, so never more than the length (an end stored as start + length, read back
+        # as end - now, can round to a hair over it where the clock has not moved yet)
+        self._ends: dict[str, tuple[float, float, float]] = {}
         self._task: Optional[asyncio.Task] = None
 
     # ---------------- what the pages and the REST API ask ----------------
@@ -72,7 +75,8 @@ class Captures:
         until = mapping.options.trace_until
         if not until:
             return None
-        return max(0.0, self._arm(mapping.id, until) - time.monotonic())
+        start, length = self._arm(mapping.id, until)
+        return min(length, max(0.0, length - (time.monotonic() - start)))
 
     def until(self, mapping) -> Optional[float]:
         """When a mapping's capture ends as the system clock reads now (Unix seconds),
@@ -93,20 +97,25 @@ class Captures:
             if m.options.trace_both:
                 raise CaptureRefused("tracing")
             until = m.options.trace_until = time.time() + seconds
-            self._ends[m.id] = (until, time.monotonic() + seconds)
+            self._ends[m.id] = (until, time.monotonic(), float(seconds))
         await self.state.supervisor.retrace(mapping_id)
         return until
 
-    async def end(self, mapping_id: str) -> bool:
+    async def end(self, mapping_id: str, until: Optional[float] = None) -> bool:
         """End the mapping's capture now. Returns whether it had one. Its trace is closed
         (not one that is on by its trace file name) even when config.json can't be
-        written: ConfigError is raised then, and the next start ends it for good."""
-        self._ends.pop(mapping_id, None)
+        written: ConfigError is raised then, and the next start ends it for good.
+        `until`: the end the watcher found due; a capture begun again meanwhile (another
+        end) is left alone, and False returned."""
         try:
             async with self.state.edit_config(backup=False, keep_on_failure=True):
                 m = self.state.config.get_mapping(mapping_id)
                 if m is None or not m.options.trace_until:
+                    self._ends.pop(mapping_id, None)
                     return False
+                if until is not None and m.options.trace_until != until:
+                    return False  # (extended while this waited for the configuration)
+                self._ends.pop(mapping_id, None)
                 m.options.trace_until = 0.0
         finally:
             await self.state.supervisor.retrace(mapping_id)
@@ -132,14 +141,14 @@ class Captures:
             with contextlib.suppress(asyncio.CancelledError):
                 await task
 
-    def _arm(self, mapping_id: str, until: float) -> float:
-        """The end of a capture on the monotonic clock: counted from the first time this
-        process sees its trace_until, at most CAPTURE_MAX_S."""
+    def _arm(self, mapping_id: str, until: float) -> tuple[float, float]:
+        """When a capture's time began on the monotonic clock and how long it is: from the
+        first time this process sees its trace_until, at most CAPTURE_MAX_S."""
         armed = self._ends.get(mapping_id)
         if armed is None or armed[0] != until:
-            left = min(max(until - time.time(), 0.0), float(CAPTURE_MAX_S))
-            armed = self._ends[mapping_id] = (until, time.monotonic() + left)
-        return armed[1]
+            length = min(max(until - time.time(), 0.0), float(CAPTURE_MAX_S))
+            armed = self._ends[mapping_id] = (until, time.monotonic(), length)
+        return armed[1], armed[2]
 
     async def check(self) -> None:
         """End the captures whose time has come (the watcher's step)."""
@@ -149,7 +158,7 @@ class Captures:
             if not until:
                 continue
             seen.add(m.id)
-            if time.monotonic() >= self._arm(m.id, until):
+            if not self.left(m):
                 await self._expire(m, "")
         for gone in [mid for mid in self._ends if mid not in seen]:
             del self._ends[gone]
@@ -157,7 +166,7 @@ class Captures:
     async def _expire(self, mapping, why: str) -> None:
         name = mapping.name
         try:
-            ended = await self.end(mapping.id)
+            ended = await self.end(mapping.id, until=mapping.options.trace_until)
         except ConfigError as e:
             self.state.log(f"[{name}] timed capture ended, but config.json could not keep "
                            f"that ({e}): it ends again at the next start")

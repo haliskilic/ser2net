@@ -21,7 +21,7 @@
 # an application, built for the distribution's default Python only
 %define pythons python3
 Name:           ser2netweb
-Version:        3.0.1
+Version:        3.1.0
 Release:        0
 Summary:        Serial-to-network bridge with a web UI
 # ser2netweb: AGPL-3.0-only; copied code of pyserial-asyncio-fast and Starlette:
@@ -89,6 +89,12 @@ daemon (package ser2net), whose configuration files it can import.
 
 %prep
 %autosetup -p1
+# ser2netweb/distro.json (pyproject.toml takes it into the wheel): the distribution
+# ser2netweb names in --about, its service's data directory (the default without
+# --data-dir) and how an optional package is installed, for the hint about a missing one
+cat >ser2netweb/distro.json <<'EOF'
+{"distribution": "openSUSE", "data_dir": "%{_sharedstatedir}/ser2netweb", "optional": {"paho-mqtt": "sudo zypper install python3-paho-mqtt", "ldap3": "sudo zypper install python3-ldap3", "authlib": "sudo zypper install python3-Authlib", "cryptography": "sudo zypper install python3-cryptography"}}
+EOF
 
 %build
 %pyproject_wheel
@@ -111,6 +117,7 @@ for t in \
     test_config_types.py \
     test_config_validation.py \
     test_console_log.py \
+    test_dependency_internals.py \
     test_env_bind.py \
     test_explain.py \
     test_kept_names.py \
@@ -131,6 +138,7 @@ for t in \
     test_rfc2217_settings.py \
     test_secure_cookies.py \
     test_ser2net_import.py \
+    test_serial_compat.py \
     test_serial_mqtt.py \
     test_sparkplug.py \
     test_sparkplug_node.py \

@@ -60,6 +60,7 @@ PORTABLE = [
     "test_console_feed.py",   # console / hex-view feeds: bounds, batches, close, limits
     "test_mqtt_pub.py",
     "test_mqtt_link.py",      # MQTT connection log, status, /metrics; broker parts need paho
+    "test_mqtt5.py",          # MQTT 5: clean start, expiries, reason codes; broker parts need paho
     "test_mqtt_tls.py",       # MQTT TLS options; needs cryptography, broker parts paho
     "test_mqtt_identity.py",  # MQTT topics, client IDs, Sparkplug nodes apart; Copy
     "test_modbus_points.py",  # point types, the points JSON and its error path
@@ -120,6 +121,7 @@ PORTABLE = [
     "test_package_repo.py",     # APT / DNF repositories on Pages: releases, files, docs, workflow
     "test_distro_recipes.py",   # packaging/{debian,fedora,opensuse,arch,alpine}: versions, deps, units
     "test_distro_recipes_2.py",  # nixpkgs / Void / Gentoo / FreeBSD / MacPorts recipes agree
+    "test_conda_recipe.py",     # packaging/conda-forge: pyproject.toml's deps, licences, workflow
     "test_pyproject.py",        # the PyPI package: ranges hold the pins, package data, build tools
     "test_homebrew_formula.py",  # the Homebrew formula's generator (PyPI stand-ins, no network)
     "test_aur_package.py",      # the AUR package ser2netweb-bin: generator, PKGBUILD, aur.yml
@@ -132,6 +134,7 @@ PORTABLE = [
     "test_dashboard.py",
     "test_modbus_mqtt_write.py",
     "test_modbus_mqtt_broker.py",  # edge mode with real paho and a test broker; needs paho
+    "test_modbus_pulse_safe.py",   # a coil's pulse_ms, safe_value / safe_after_s
     "test_modbus_write.py",
     "test_sparkplug.py",
     "test_sparkplug_node.py",
@@ -149,6 +152,12 @@ PORTABLE = [
     "test_console_break.py",       # the web console's BREAK; POSIX PTYs, skips on Windows
     "test_device_unavailable.py",  # disconnect_without_device (stand-in port, loopback)
     "test_serial_mqtt.py",         # MQTT line ends, <topic>/tx writes, the poll string
+    "test_packing.py",             # pack_gap_ms / pack_delimiter / pack_max_bytes (raw TCP, UDP)
+    "test_writer_clients.py",      # writer_client_ips: one writer, read-only listeners
+    "test_open_on_connect.py",     # the serial port only while a client is connected
+    "test_connect_failover.py",    # connect-out: remote_targets, failover_return_s
+    "test_port_pools.py",          # port pools (rotators): config, engine, REST, Settings
+    "test_sharing_ui.py",          # the dashboard tags and form blocks of the five above
     "test_rfc2217_settings.py",
     "test_serial_fd_ceiling.py",  # POSIX PTYs (os.openpty); skips on Windows
     "test_serial_compat.py",      # PTY parts POSIX only; the transport parts run on Windows too

@@ -18,6 +18,14 @@ refuses descriptors at or above FD_SETSIZE (1024); on POSIX the client waits wit
 instead (``PollSelect``). The connection to the broker is logged when it changes
 (connecting, connected, refused, can't connect, lost; each reason once until it changes)
 and kept in ``MqttPublisher.state`` (the mapping status' ``mqtt``).
+
+MQTT 3.1.1 is the default; ``mqtt.protocol`` "5" speaks MQTT 5 (paho-mqtt 1.6 and 2.x both
+do): the CONNECT carries clean start (``mqtt.clean_start``) and, with
+``mqtt.session_expiry_s``, how long the broker keeps the session after the connection
+ends; retained data is published with a message expiry (``mqtt.message_expiry_s``, off by
+default), after which the broker no longer hands it out; and the broker's reason codes
+are named in the log and kept in the state: why it refused the connection or ended it,
+and (paho-mqtt 2.x) why it refused a publication.
 """
 from __future__ import annotations
 
@@ -36,6 +44,8 @@ from .. import optional
 
 MAX_LINE_BUFFER = 65536  # drop the oldest bytes if a line end never arrives (no unbounded growth)
 LINE_ENDS = ("lf", "cr", "any")  # (config.MQTT_LINE_ENDS)
+PROTOCOLS = ("3.1.1", "5")       # (config.MQTT_PROTOCOLS)
+MAX_EXPIRY_S = 0xFFFFFFFF        # an MQTT 5 expiry interval is a 32-bit number of seconds
 KEEPALIVE_S = 30
 # A broker publishes the Will of a connection that went quiet only once 1.5 x its keepalive
 # has passed: that of the previous connection (a link that broke, a power loss) can come
@@ -74,7 +84,16 @@ class MqttPublisher:
     waiting up to 2 minutes between attempts) or off (publishing could not start:
     paho-mqtt missing, a base topic with a wildcard); "broker" host:port; "since" (unix
     time of the last change); "dropped": messages not handed to the broker (published at
-    QoS 0 while it was away, or refused by paho: its queue full, an invalid topic).
+    QoS 0 while it was away, or refused by paho: its queue full, an invalid topic);
+    "protocol": "3.1.1" or "5"; and with MQTT 5 "reason_code": the reason code of the
+    CONNACK that refused the connection or of the DISCONNECT the broker ended it with
+    (None: none, or connected again), and "rejected": publications the broker answered
+    with a failure reason code (not authorized, quota exceeded, ...; paho-mqtt 2.x).
+
+    ``clean``: always start a clean session and keep none (Sparkplug B asks so), whatever
+    mqtt.clean_start and mqtt.session_expiry_s say. ``on_link``: called on the event loop
+    with True when the broker has accepted a connection and with False when that
+    connection is gone (lost, refused again, closed).
 
     QoS 1/2 while the broker is away: paho queues messages, at most MAX_QUEUED_MESSAGES
     (newer ones are dropped beyond that, logged once per outage), and sends them after the
@@ -84,7 +103,8 @@ class MqttPublisher:
     def __init__(self, settings, logger=None, client=None, *, will=None,
                  birth: bool = True, on_connect: Optional[Callable[[], None]] = None,
                  subscriptions: Optional[dict] = None, accept_retained: bool = False,
-                 state_topics: Collection[str] = ()) -> None:
+                 state_topics: Collection[str] = (), clean: bool = False,
+                 on_link: Optional[Callable[[bool], None]] = None) -> None:
         self._s = settings
         self._log = logger or (lambda _m: None)
         self._client = client            # injected in tests; otherwise built in connect()
@@ -108,8 +128,22 @@ class MqttPublisher:
         self._sessions = 0               # connects (CONNACKs) handled
         self._rebirth: Optional[asyncio.TimerHandle] = None  # see STALE_WILL_S
         self._broker = f"{settings.host}:{settings.port}"
+        protocol = str(getattr(settings, "protocol", PROTOCOLS[0]))
+        self._v5 = protocol == "5"
+        self._bad_protocol = "" if protocol in PROTOCOLS else protocol  # (a stored one)
+        # MQTT 5: clean start, the session expiry (s; 0: it ends with the connection) and
+        # the message expiry of retained data (s; 0: none)
+        self._clean_start = clean or getattr(settings, "clean_start", True) is not False
+        self._session_expiry = 0 if clean else _expiry(getattr(settings, "session_expiry_s", 0))
+        self._message_expiry = _expiry(getattr(settings, "message_expiry_s", 0))
+        self._on_link = on_link
+        self._link_up = False            # what on_link was last told
         self.state: dict[str, Any] = {"state": "connecting", "broker": self._broker,
-                                      "since": int(time.time()), "error": "", "dropped": 0}
+                                      "since": int(time.time()), "error": "", "dropped": 0,
+                                      "protocol": "5" if self._v5 else PROTOCOLS[0]}
+        if self._v5:
+            self.state.update(reason_code=None, rejected=0)
+        self._rejections: set[str] = set()  # publication refusals logged in this session
         self._said: Optional[str] = None  # the last problem logged (each is logged once)
         self._refused = False            # paho's thread: the CONNACK refused the connection
         self._sub_mids: dict[int, str] = {}  # this session's SUBSCRIBEs waiting for a SUBACK
@@ -137,11 +171,12 @@ class MqttPublisher:
                 return False
             self._paho = mqtt
             use_poll(mqtt)
+            version: dict[str, Any] = {"protocol": mqtt.MQTTv5} if self._v5 else {}
             try:  # paho-mqtt 2.x: the current callback API (no deprecation warning)
                 self._client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2,
-                                           client_id=self._s.client_id or "")
+                                           client_id=self._s.client_id or "", **version)
             except AttributeError:  # paho-mqtt 1.x
-                self._client = mqtt.Client(client_id=self._s.client_id or None)
+                self._client = mqtt.Client(client_id=self._s.client_id or None, **version)
             if self._s.username:
                 self._client.username_pw_set(self._s.username, self._s.password)
             if self._s.tls:
@@ -164,26 +199,73 @@ class MqttPublisher:
             self._client.on_message = self._paho_on_message
             self._client.on_disconnect = self._paho_on_disconnect
             self._client.on_subscribe = self._paho_on_subscribe
+            if self._v5:
+                self._client.on_publish = self._paho_on_publish
         if owned:
             with contextlib.suppress(Exception):
-                self._client.connect_async(self._s.host, self._s.port, keepalive=KEEPALIVE_S)
+                self._connect_async(self._client)
                 self._client.loop_start()
         # the "online" birth goes out once the broker has accepted the connection
         # (handle_connect): paho drops a QoS 0 message published before it has a socket
         self._connected = True
         self._set_state("connecting")
         topic = f", topic '{self._data_topic}'" if self._birth else ""
-        self._log(f"MQTT: connecting to {self._broker}{' (TLS)' if self._s.tls else ''}{topic}")
+        self._log(f"MQTT: connecting to {self._broker}{' (TLS)' if self._s.tls else ''}{topic}"
+                  + (self._v5_text() if self._v5 else ""))
+        if self._bad_protocol:
+            self._log(f"MQTT: protocol {shown(self._bad_protocol)} is neither 3.1.1 nor 5: "
+                      "MQTT 3.1.1 is used")
         return True
 
+    def _v5_text(self) -> str:
+        """For the log: what this MQTT 5 connection asks of the broker."""
+        session = ("clean start" if self._clean_start else "resumes its session")
+        if self._session_expiry:
+            session += f", the session kept for {self._session_expiry} s"
+        if self._message_expiry and self._birth:
+            session += f", retained data expires after {self._message_expiry} s"
+        return f" (MQTT 5: {session})"
+
+    def _connect_async(self, client: Any) -> None:
+        """connect_async(), with MQTT 5's clean start and session expiry."""
+        options: dict[str, Any] = {}
+        if self._v5:
+            options["clean_start"] = self._clean_start
+            properties = self._properties("CONNECT", "SessionExpiryInterval",
+                                          self._session_expiry)
+            if properties is not None:
+                options["properties"] = properties
+        client.connect_async(self._s.host, self._s.port, keepalive=KEEPALIVE_S, **options)
+
+    @staticmethod
+    def _properties(packet: str, name: str, value: int) -> Any:
+        """MQTT 5 properties with one set (None: ``value`` is 0, or paho can't make them)."""
+        if not value:
+            return None
+        try:
+            from paho.mqtt.packettypes import PacketTypes
+            from paho.mqtt.properties import Properties
+        except Exception:  # (an injected client without paho: tests)
+            return None
+        properties = Properties(getattr(PacketTypes, packet))
+        setattr(properties, name, value)
+        return properties
+
     def _publish(self, topic: str, payload: bytes, retain: bool = False,
-                 qos: Optional[int] = None) -> None:
+                 qos: Optional[int] = None, data: bool = False) -> None:
+        """``data``: a serial line or a polled value, which with MQTT 5 and
+        mqtt.message_expiry_s expires when it is published retained."""
         client = self._client
         if client is None:
             return
         qos = self._s.qos if qos is None else qos
+        options: dict[str, Any] = {}
+        if data and retain and self._v5 and self._message_expiry:
+            expiry = self._properties("PUBLISH", "MessageExpiryInterval", self._message_expiry)
+            if expiry is not None:
+                options["properties"] = expiry
         try:
-            info = client.publish(topic, payload, qos=qos, retain=retain)
+            info = client.publish(topic, payload, qos=qos, retain=retain, **options)
         except Exception as e:  # a topic paho refuses (a wildcard in it), a payload too large
             self.state["dropped"] += 1
             if topic not in self._bad_topics and len(self._bad_topics) < 100:
@@ -201,25 +283,38 @@ class MqttPublisher:
                           f"{self._broker}, the most kept; newer ones are dropped until it "
                           "takes them")
 
-    def _set_state(self, link: str, error: str = "") -> None:
+    def _set_state(self, link: str, error: str = "", code: Optional[int] = None) -> None:
         if link != self.state["state"]:
             self.state["state"], self.state["since"] = link, int(time.time())
         self.state["error"] = error
+        if self._v5:
+            self.state["reason_code"] = code
+        up = link == "connected"
+        if up != self._link_up:
+            self._link_up = up
+            if self._on_link is not None:
+                try:
+                    self._on_link(up)
+                except Exception as e:
+                    self._log(f"MQTT link handler failed: {e}")
 
-    def _down(self, problem: str) -> None:
-        """An attempt failed: logged once per problem, until connected again."""
+    def _down(self, problem: str, code: Optional[int] = None) -> None:
+        """An attempt failed: logged once per problem, until connected again; ``code``: the
+        broker's MQTT 5 reason code for it."""
         if not self._connected:  # a late callback after close()
             return
-        self._set_state("down", problem)
+        self._set_state("down", problem, code)
         if problem != self._said:
             self._said = problem
             self._log(f"MQTT: {problem}; trying again")
 
     def _text(self, rc, connack: bool = False) -> str:
-        """A CONNACK / disconnect code as text: paho 2's ReasonCode reads itself, paho 1.x
-        gives a number."""
+        """A CONNACK / disconnect code as text: paho 2's ReasonCode reads itself (as does
+        paho 1.x's for MQTT 5), paho 1.x gives a number for MQTT 3.1.1. An MQTT 5 reason
+        code is named with its number."""
         if not isinstance(rc, int):
-            return str(rc)
+            code = _reason_code(rc) if self._v5 else None
+            return str(rc) + (f" (reason code 0x{code:02X})" if code else "")
         describe = getattr(self._paho, "connack_string" if connack else "error_string", None)
         with contextlib.suppress(Exception):
             if describe is not None:
@@ -242,13 +337,11 @@ class MqttPublisher:
         if callable(self._will):  # paho reconnects with whatever will is set now
             self._set_will()
             self._renewals += 1
-        # paho 2: (flags, reason code, properties); paho 1.x: (rc,)
-        rc = args[1] if len(args) >= 2 else args[0] if args else 0
-        failed = getattr(rc, "is_failure", None)
-        if failed is None:
-            failed = isinstance(rc, int) and rc != 0
+        # paho 2: (flags, reason code, properties); paho 1.x: (rc,), MQTT 5: (rc, properties)
+        rc = args[1] if len(args) >= 3 else args[0] if args else 0
         refused, self._refused = self._refused, False
-        self._call_soon(self.handle_disconnect, self._text(rc), bool(failed), refused)
+        self._call_soon(self.handle_disconnect, self._text(rc), _failed(rc), refused,
+                        _reason_code(rc) if self._v5 else None)
 
     async def restart(self, final: Optional[tuple] = None) -> None:
         """End this MQTT session and begin a new one: send ``final`` (topic, payload, qos,
@@ -272,7 +365,7 @@ class MqttPublisher:
             if callable(self._will) and self._renewals == renewed:
                 self._set_will()  # no disconnect callback came (it was not connected)
             with contextlib.suppress(Exception):
-                client.connect_async(self._s.host, self._s.port, keepalive=KEEPALIVE_S)
+                self._connect_async(client)
                 client.loop_start()
             if self._closing:  # closed meanwhile: leave no connection behind
                 with contextlib.suppress(Exception):
@@ -289,10 +382,11 @@ class MqttPublisher:
             loop.call_soon_threadsafe(fn, *args)
 
     def _paho_on_connect(self, client, userdata, flags, rc, properties=None) -> None:
-        if getattr(rc, "is_failure", False) or (isinstance(rc, int) and rc != 0):
+        if _failed(rc):
             self._refused = True  # paho reports the disconnect that follows: not a loss
             self._call_soon(self._down, f"{self._broker} refused the connection: "
-                                        f"{self._text(rc, connack=True)}")
+                                        f"{self._text(rc, connack=True)}",
+                            _reason_code(rc) if self._v5 else None)
             return
         self._refused = False
         self._call_soon(self.handle_connect)
@@ -305,9 +399,18 @@ class MqttPublisher:
         self._call_soon(self._down, f"can't connect to {self._broker}: {why}")
 
     def _paho_on_subscribe(self, client, userdata, mid, codes, *args) -> None:
-        # paho 2: reason codes; paho 1.x (MQTT 3.1.1): granted QoS, 128 = refused
-        if any(getattr(c, "is_failure", False) or c == 128 for c in codes or ()):
-            self._call_soon(self._subscribe_refused, mid)
+        # paho 2 (and paho 1.x with MQTT 5): reason codes; paho 1.x with MQTT 3.1.1:
+        # granted QoS, 128 = refused
+        failed = [c for c in codes or () if (c >= 128 if isinstance(c, int) else _failed(c))]
+        if failed:
+            why = "" if isinstance(failed[0], int) or not self._v5 else self._text(failed[0])
+            self._call_soon(self._subscribe_refused, mid, why)
+
+    def _paho_on_publish(self, client, userdata, mid, *args) -> None:
+        """MQTT 5 with paho 2: the reason code of the broker's answer to a QoS 1/2
+        publication (paho 1.x passes none)."""
+        if args and _failed(args[0]):
+            self._call_soon(self._publish_rejected, self._text(args[0]))
 
     def _paho_on_message(self, client, userdata, msg) -> None:
         self._call_soon(self.handle_message, msg.topic, bytes(msg.payload),
@@ -322,6 +425,7 @@ class MqttPublisher:
         self._set_state("connected")
         self._said = None
         self._queue_full = False
+        self._rejections.clear()
         self._log(f"MQTT: connected to {self._broker}")
         if self._birth:
             self._publish(self._status_topic, b"online", retain=True)
@@ -343,26 +447,41 @@ class MqttPublisher:
                 self._log(f"MQTT on-connect handler failed: {e}")
         held, self._held = self._held, {}
         for topic, payload in held.items():
-            self._publish(topic, payload, retain=self._s.retain)
+            self._publish(topic, payload, retain=self._s.retain, data=True)
 
-    def handle_disconnect(self, reason: str, failed: bool, refused: bool = False) -> None:
+    def handle_disconnect(self, reason: str, failed: bool, refused: bool = False,
+                          code: Optional[int] = None) -> None:
         """The connection ended (on the event loop): ``failed`` — not because it was asked
-        to (close, restart); ``refused`` — it was the CONNACK's refusal, already reported."""
+        to (close, restart); ``refused`` — it was the CONNACK's refusal, already reported;
+        ``code``: the MQTT 5 reason code it ended with."""
         if not self._connected or refused:
             return
         if self.state["state"] == "connected":
             if failed:
-                self._down(f"lost the connection to {self._broker}: {reason}")
+                self._down(f"lost the connection to {self._broker}: {reason}", code)
             else:
                 self._set_state("connecting")
         elif failed:  # it ended before the broker accepted it (no CONNACK)
-            self._down(f"{self._broker} closed the connection before accepting it: {reason}")
+            self._down(f"{self._broker} closed the connection before accepting it: {reason}",
+                       code)
 
-    def _subscribe_refused(self, mid: int) -> None:
+    def _subscribe_refused(self, mid: int, why: str = "") -> None:
         topic = self._sub_mids.pop(mid, None)
         if self._connected and topic is not None:
-            self._log(f"MQTT: {self._broker} refused the subscription to {shown(topic, 120)}; "
+            self._log(f"MQTT: {self._broker} refused the subscription to {shown(topic, 120)}"
+                      f"{': ' + why if why else ''}; "
                       "messages on it won't arrive (the broker's access rules?)")
+
+    def _publish_rejected(self, why: str) -> None:
+        """MQTT 5: the broker took a QoS 1/2 publication off the wire but refused it
+        (counted; each reason logged once per connection)."""
+        if not self._connected:
+            return
+        self.state["rejected"] = self.state.get("rejected", 0) + 1
+        if why not in self._rejections and len(self._rejections) < 20:
+            self._rejections.add(why)
+            self._log(f"MQTT: {self._broker} refused a publication: {why} (each reason is "
+                      "logged once per connection; the status counts them)")
 
     def _birth_again(self, session: int) -> None:
         """STALE_WILL_S after a connect, still in that session: "online" again, over a Will
@@ -404,7 +523,7 @@ class MqttPublisher:
             self._held.pop(topic, None)  # (in the order they were last read)
             self._held[topic] = payload
             return
-        self._publish(topic, payload, retain=self._s.retain)
+        self._publish(topic, payload, retain=self._s.retain, data=True)
 
     def feed(self, data: bytes) -> None:
         """Buffer serial bytes and publish each complete line (line_end: LF, CR or either;
@@ -426,7 +545,7 @@ class MqttPublisher:
             # LF: a CR before it is not part of the line; CR: an LF next to it
             line = line.rstrip(b"\r") if mode == "lf" else line.strip(b"\n")
             if line:
-                self._publish(self._data_topic, line, retain=self._s.retain)
+                self._publish(self._data_topic, line, retain=self._s.retain, data=True)
         if len(self._buf) > MAX_LINE_BUFFER:  # no line end in sight — don't grow forever
             del self._buf[:-4096]
             if not self._cut_logged:
@@ -485,6 +604,11 @@ class MqttPublisher:
             return None
         self._closing = True
         self._connected = False
+        if self._link_up:
+            self._link_up = False
+            if self._on_link is not None:
+                with contextlib.suppress(Exception):
+                    self._on_link(False)
         if self._rebirth is not None:
             self._rebirth.cancel()
             self._rebirth = None
@@ -494,6 +618,34 @@ class MqttPublisher:
                 client.publish(topic, payload, qos=self._s.qos if qos is None else qos,
                                retain=retain)
         return client
+
+
+def _expiry(value: Any) -> int:
+    """An MQTT 5 expiry interval as the client can send it: whole seconds, 0 (none) for a
+    stored value the edits refuse."""
+    if isinstance(value, bool) or not isinstance(value, int) or not 0 <= value <= MAX_EXPIRY_S:
+        return 0
+    return value
+
+
+def _reason_code(rc: Any) -> Optional[int]:
+    """The number of a paho reason code object (None: a paho error number, not a code the
+    broker sent)."""
+    value = None if isinstance(rc, int) else getattr(rc, "value", None)
+    return value if isinstance(value, int) and not isinstance(value, bool) else None
+
+
+def _failed(rc: Any) -> bool:
+    """Whether a CONNACK / SUBACK / PUBACK / DISCONNECT code says failure: paho 2's
+    ReasonCode knows; paho 1.x gives a number for MQTT 3.1.1 (0 = fine) and a ReasonCodes
+    object for MQTT 5 (a failure from 0x80 on)."""
+    flag = getattr(rc, "is_failure", None)
+    if flag is not None:
+        return bool(flag)
+    if isinstance(rc, int):
+        return rc != 0
+    code = _reason_code(rc)
+    return code is not None and code >= 0x80
 
 
 def _stop_client(client: Any) -> None:

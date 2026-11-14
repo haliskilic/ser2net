@@ -115,8 +115,10 @@ include-package-data = false
 [tool.setuptools.packages.find]
 include = ["ser2netweb", "ser2netweb.*"]
 
+# (distro.json: none in this repository or on PyPI; a distribution's recipe in packaging/
+# writes it into ser2netweb/ before the build, ser2netweb/layout.py reads it)
 [tool.setuptools.package-data]
-ser2netweb = ["locale/*", "web/templates/*", "web/static/*"]
+ser2netweb = ["locale/*", "web/templates/*", "web/static/*", "distro.json"]
 
 # (named by its file: for "ser2netweb.__version__" setuptools would read ser2netweb.py, the
 # start script beside the package; it reads the assignment without importing anything)

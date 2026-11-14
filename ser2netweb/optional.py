@@ -13,6 +13,7 @@ import importlib
 import sys
 import types
 from dataclasses import dataclass
+from typing import Optional
 
 from . import envvars, layout
 
@@ -31,6 +32,8 @@ class Problem:
     frozen: bool = False  # a standalone executable, which bundles every optional package
     pip: bool = False    # a pip / pipx install: its extras bring them (layout.PIP)
     homebrew: bool = False  # the Homebrew formula, which installs every one of them
+    # a distribution's package: its recipe's layout.DISTRO_FILE (the distribution's command)
+    distro: Optional[dict] = None
     override: str = ""   # SER2NETWEB_LIB_OVERRIDE (a folder imported before the bundled copy)
     override_env: str = LIB_OVERRIDE_ENV  # the name it is set under (or SER2NET_LIB_OVERRIDE)
 
@@ -44,11 +47,29 @@ class Problem:
         if self.homebrew:
             return (f"the Homebrew formula installs {self.dist}: brew reinstall ser2netweb"
                     + ("" if self.missing else ", then restart ser2netweb"))
+        if self.distro is not None:
+            return self._distro_hint() + ("" if self.missing else ", then restart ser2netweb")
         if self.pip:
             extra = EXTRAS.get(self.dist, "all")
             return (f'pip install "ser2netweb[{extra}]", or pipx inject ser2netweb {self.dist}'
                     + ("" if self.missing else ", then restart ser2netweb"))
         return f"pip install -r {REQUIREMENTS}" + ("" if self.missing else ", then restart ser2netweb")
+
+    def _distro_hint(self) -> str:
+        """The recipe's command for this package ({dist}: its PyPI name, {extra}: the extra
+        that brings it); a recipe that lists the commands per package and not this one says
+        the distribution has none; else the distribution's package by name."""
+        info = self.distro or {}
+        name = str(info.get("distribution", "")).strip()
+        how = info.get("optional")
+        if isinstance(how, dict):
+            how = how.get(self.dist)
+            if not isinstance(how, str) or not how.strip():
+                return f"{name} has no package of it"
+        if isinstance(how, str) and how.strip():
+            return how.strip().replace("{dist}", self.dist).replace(
+                "{extra}", EXTRAS.get(self.dist, "all"))
+        return f"install the {name} package of {self.dist}"
 
     def __str__(self) -> str:
         what = (f"{self.dist} is not installed" if self.missing else
@@ -67,6 +88,8 @@ def problem(exc: BaseException, dist: str, root: str = "") -> Problem:
     return Problem(dist, missing, f"{type(exc).__name__}: {exc}",
                    frozen=bool(getattr(sys, "frozen", False)), pip=layout.kind() == layout.PIP,
                    homebrew=layout.kind() == layout.HOMEBREW,
+                   distro=(layout.distro_info() or {}) if layout.kind() == layout.DISTRO
+                   else None,
                    override=envvars.text(LIB_OVERRIDE_ENV),
                    override_env=envvars.source(LIB_OVERRIDE_ENV))
 

@@ -44,7 +44,7 @@ import urllib.request
 from collections import deque
 from email.message import EmailMessage
 from email.utils import formataddr, parseaddr
-from typing import Optional
+from typing import Awaitable, Callable, Optional
 
 from . import __version__, certwatch, i18n, storage, user_agent
 from .config import node_name as configured_name
@@ -87,6 +87,7 @@ def title(event: str) -> str:
         "unit_back": _("Modbus unit answering again"),
         "cert_expiring": _("TLS certificate about to expire"),
         "clock_step": _("system clock stepped"),
+        "safe_values": _("safe values written"),
         "test": _("test notification"),
     }.get(event, event)
 
@@ -109,8 +110,10 @@ def status_events(prev: dict, statuses: dict, names: dict) -> list[tuple[str, st
     it) goes through "connecting", not "down", so it is not reported.
 
     A Modbus unit is reported when it stops answering, and again once it answers (not
-    while its serial port is down: device_lost says that). An older snapshot (2-tuple:
-    no link, no units) still compares."""
+    while its serial port is down: device_lost says that). A Modbus gateway that wrote
+    points to their safe value (the broker, or the Sparkplug primary host, was away for
+    their safe_after_s) says so once per point and outage. An older snapshot (2-tuple:
+    no link, no units; 4-tuple: no safe values) still compares."""
     events = []
     for mid, st in statuses.items():
         name = names.get(mid)
@@ -149,7 +152,26 @@ def status_events(prev: dict, statuses: dict, names: dict) -> list[tuple[str, st
                 events.append(("unit_offline", f"{mid}:unit{unit}", name, f"unit {unit}"))
             elif was == _SILENT and now[0] == "online":
                 events.append(("unit_back", f"{mid}:unit{unit}", name, f"unit {unit}"))
+        new = [p for p in _safe_written(st) if p not in (old[4] if len(old) > 4 else ())]
+        if new:
+            safe = st.get("safe") or {}
+            rows = {p.get("name"): p for p in safe.get("points") or []}
+            longest = max((rows[n].get("after_s") or 0 for n, _t in new), default=0)
+            events.append(("safe_values", f"{mid}:safe", name, ", ".join(
+                f"{n} = {_safe_text(rows[n].get('value'))}" for n, _t in new)
+                + f" (no {safe.get('watching') or 'broker'} for {longest:g} s)"))
     return events
+
+
+def _safe_written(st: dict) -> tuple:
+    """The points a gateway wrote to their safe value in this outage: (name, when)."""
+    return tuple((p.get("name"), p.get("written"))
+                 for p in (st.get("safe") or {}).get("points") or [] if p.get("written"))
+
+
+def _safe_text(value) -> str:
+    return str(value).lower() if isinstance(value, bool) else f"{value:g}" if isinstance(
+        value, float) else str(value)
 
 
 def _client_host(peer: str) -> str:
@@ -297,8 +319,8 @@ def _units(st: dict) -> dict:
 
 
 def snapshot(statuses: dict, prev: Optional[dict] = None) -> dict:
-    """What status_events compares: each mapping's state, clients, connect-out link and
-    polled units. Given the previous snapshot, a unit that had stopped answering stays so
+    """What status_events compares: each mapping's state, clients, connect-out link,
+    polled units and the safe values written. Given the previous snapshot, a unit that had stopped answering stays so
     while it is "unknown" again (its mapping restarted, e.g. on a save), so its return is
     still reported."""
     snap = {}
@@ -310,7 +332,7 @@ def snapshot(statuses: dict, prev: Optional[dict] = None) -> dict:
                 if was == _SILENT and units.get(unit, ("",))[0] == "unknown":
                     units[unit] = _SILENT
         snap[mid] = (st.get("state"), {c.get("peer") for c in st.get("clients") or []},
-                     st.get("link") or "", units)
+                     st.get("link") or "", units, _safe_written(st))
     return snap
 
 
@@ -549,10 +571,15 @@ class Notifier:
                 await t
         self._tasks = []
 
-    def emit(self, event: str, key: str, mapping: str, detail: str = "") -> bool:
+    def emit(self, event: str, key: str, mapping: str, detail: str = "",
+             sent: Optional[Callable[[list[str], list[str]], Awaitable[None]]] = None,
+             channels: Optional[list[str]] = None) -> bool:
         """Queue an event if it is enabled and not a repeat; True when queued. A client
         event's address is masked here (mask_personal_data); its repeat key stays the
-        address itself."""
+        address itself. `channels`: send it only to those of CHANNELS (None: to every one
+        configured). `sent(tried, failed)` is awaited once the worker has tried it: the
+        channels it was sent to and those that did not take it (all of them when the rate
+        limit held it back)."""
         s = self.settings
         if not s.enabled or event not in s.events:
             return False
@@ -567,7 +594,8 @@ class Notifier:
         if s.mask_personal_data and event in CLIENT_EVENTS:
             detail = mask_address(detail)
         try:
-            self._queue.put_nowait((event, mapping, detail))
+            self._queue.put_nowait((event, mapping, detail)
+                                   + ((sent, channels) if sent or channels else ()))
         except asyncio.QueueFull:
             return False
         return True
@@ -673,53 +701,73 @@ class Notifier:
 
     async def _worker(self) -> None:
         while True:
-            event, mapping, detail = await self._queue.get()
+            # (event, mapping, detail[, sent, channels]): see emit
+            event, mapping, detail, *after = await self._queue.get()
+            sent, channels = (after + [None, None])[:2]
             try:
-                await self._send(event, mapping, detail)
+                tried, failed = await self._send(event, mapping, detail, channels)
+                if sent is not None:
+                    try:
+                        await sent(tried, failed)
+                    except Exception as e:  # (its own: never the worker's end)
+                        self.state.log(f"notifications: after {event}: {e}")
             finally:
                 self._queue.task_done()
 
-    async def _send(self, event: str, mapping: str, detail: str) -> None:
+    async def _send(self, event: str, mapping: str, detail: str,
+                    channels: Optional[list[str]] = None) -> tuple[list[str], list[str]]:
+        """Send one event now, to `channels` (None: every one configured); the channels
+        it was sent to and those that did not take it (each failure is logged)."""
+        tried = [c for c in configured_channels(self.settings)
+                 if channels is None or c in channels]
         now = time.monotonic()
         while self._sent and now - self._sent[0] > 60:
             self._sent.popleft()
         if len(self._sent) >= MAX_PER_MINUTE:
             self.state.log(f"notifications: rate limit ({MAX_PER_MINUTE}/min), "
                            f"not sent: {event} {mapping}")
-            return
+            return tried, tried
         self._sent.append(now)
         warnings: list[str] = []
-        errors = await self.deliver(event, mapping, detail, warnings=warnings)
+        # (channels only when some are asked for: a deliver of its own, a test's, need
+        # not know them)
+        errors = await self.deliver(event, mapping, detail, warnings=warnings,
+                                    **({} if channels is None else {"channels": channels}))
         what = f"{event}, mapping {mapping!r}" if mapping else event
         for err in [str(e) for e in errors] + warnings:
             self.state.log(f"notifications: {err} ({what})")
+        return tried, [f.channel for f in errors]
 
     async def deliver(self, event: str, mapping: str, detail: str,
-                      settings=None, warnings: Optional[list] = None) -> list["Failure"]:
+                      settings=None, warnings: Optional[list] = None,
+                      channels: Optional[list[str]] = None) -> list["Failure"]:
         """Send to every configured channel now; returns the channels that failed (empty
         = all sent), and adds to *warnings* what was sent but may not have arrived (a
         redirected webhook). Messages are in the UI's default language (Settings -> Web UI
         access), or English when that is "the browser's" (the test message too: an empty
         detail gives its text in that language), name the instance by its name (Settings ->
         Admin interface) or else the host name, and end with the UI's public URL when one is
-        set (Settings -> Reverse proxy)."""
+        set (Settings -> Reverse proxy). `channels`: only those of CHANNELS (None: every
+        one)."""
         s = settings or self.settings
         token = i18n.set_language(self.state.config.admin_ui.language)
         try:
             if event == "test" and not detail:
                 detail = _("If you can read this, ser2netweb can reach you.")
             return await self._deliver(s, event, mapping, detail,
-                                       [] if warnings is None else warnings)
+                                       [] if warnings is None else warnings, channels)
         finally:
             i18n.reset(token)
 
     async def _deliver(self, s, event: str, mapping: str, detail: str,
-                       warnings: list) -> list["Failure"]:
+                       warnings: list, channels: Optional[list[str]] = None) -> list["Failure"]:
         errors = []
         cfg = self.state.config
         url = proxy.public_url(cfg.admin_ui)
         name = configured_name(cfg.admin_ui)   # '' = the host name
-        if s.webhook_url.strip():
+        use = configured_channels(s) if channels is None else [
+            c for c in configured_channels(s) if c in channels]
+        if "webhook" in use:
             try:
                 if warning := await asyncio.to_thread(send_webhook, s, event, mapping, detail,
                                                       url, name=name,
@@ -727,13 +775,23 @@ class Notifier:
                     warnings.append(warning)
             except Exception as e:
                 errors.append(Failure("webhook", s.webhook_format, e, s.webhook_url.strip()))
-        if s.recipients:
+        if "e-mail" in use:
             try:
                 await asyncio.to_thread(send_email, s, event, mapping, detail, url, name=name)
             except Exception as e:
                 errors.append(Failure("e-mail", f"{s.smtp_host}:{s.smtp_port}", e,
                                       s.smtp_username + s.smtp_password))
         return errors
+
+
+CHANNELS = ("webhook", "e-mail")  # (as Failure.channel names them)
+
+
+def configured_channels(s) -> list[str]:
+    """The CHANNELS notification settings `s` send to: the webhook when it has a URL,
+    e-mail when it has recipients."""
+    return [c for c, on in (("webhook", bool(s.webhook_url.strip())),
+                            ("e-mail", bool(s.recipients))) if on]
 
 
 class Failure:

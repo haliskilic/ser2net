@@ -4,7 +4,7 @@ PortSystem          1.0
 PortGroup           github 1.0
 PortGroup           python 1.0
 
-github.setup        haliskilic ser2netweb 3.0.1 v
+github.setup        haliskilic ser2netweb 3.1.0 v
 github.tarball_from archive
 revision            0
 
@@ -22,9 +22,9 @@ long_description    ser2netweb shares serial ports over the network: raw TCP, te
                     UI or over a REST API. It is an independent project, unrelated to \
                     Corey Minyard's ser2net.
 
-checksums           rmd160  72f4e6a61e162e6a13008a204a12f16babd135aa \
-                    sha256  23dce72d41f2dddba7793aed0b31721c0608b2b3d8ce2e8347f2ee26e1a4c20b \
-                    size    6492570
+checksums           rmd160  5b5ca7b94bafd6aa60f1850cecbaa1835b3619d7 \
+                    sha256  1638340224391ec52566e254ecdb34d09ef89b32fe0983add6b5d6c1f7165a7e \
+                    size    6752385
 
 python.default_version 314
 
@@ -46,6 +46,15 @@ add_users           _${name} group=_${name} realname=ser2netweb home=${datadir} 
                     shell=/usr/bin/false
 
 destroot.keepdirs   ${destroot}${datadir}
+
+# ser2netweb/distro.json (pyproject.toml takes it into the wheel): the distribution
+# ser2netweb names in --about, its service's data directory (the default without
+# --data-dir) and how an optional package is installed, for the hint about a missing one
+post-patch {
+    set fd [open ${worksrcpath}/ser2netweb/distro.json w]
+    puts $fd "{\"distribution\": \"MacPorts\", \"data_dir\": \"${datadir}\", \"optional\": {\"ldap3\": \"sudo port install ${name} +ldap\", \"cryptography\": \"sudo port install ${name} +tls\"}}"
+    close $fd
+}
 
 post-destroot {
     xinstall -d -m 0700 -o _${name} -g _${name} ${destroot}${datadir}

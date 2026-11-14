@@ -13,7 +13,8 @@ Checks:
   * a capture whose end time is stored goes on after a restart and ends by itself (the
     file is closed, trace_until cleared, audited as trace_capture_end); one whose time
     passed while the server was down is ended before the mapping starts (no file); the
-    end of a capture never turns off a trace that is on by its trace file name;
+    end of a capture never turns off a trace that is on by its trace file name; a capture
+    extended just as its end comes (the watcher waiting for the configuration) goes on;
   * a config.json without trace_until loads as before; it is no setting: an edit form
     saved while a capture runs, a REST PUT (of what a GET answered, without it or with
     another value) and a PATCH that names it keep the stored one (and the runner), a REST
@@ -398,7 +399,7 @@ def test_units():
             assert caps.left(far) <= CAPTURE_MAX_S
         finally:
             time.time = real
-        caps._ends["far"] = (far.options.trace_until, time.monotonic() - 1)  # its time has come
+        caps._ends["far"] = (far.options.trace_until, time.monotonic() - 2, 1.0)  # its time has come
         await caps.check()
         assert far.options.trace_until == 0 and st.retraced == ["far"], st.retraced
         assert st.audited == [("trace_capture_end", "far")], st.audited
@@ -418,6 +419,54 @@ def test_units():
             raise AssertionError("a traced mapping was captured")
 
     asyncio.run(clocks())
+
+    async def extended_while_ending():
+        # an operator extends a capture while the watcher, at its end, waits for the
+        # configuration: the extension stands (compare-and-clear), nothing is ended
+        m = MappingConfig.from_dict({"id": "race", "name": "race",
+                                     "options": {"trace_until": time.time() + 600}})
+        st = State([m])
+        lock = asyncio.Lock()
+
+        @contextlib.asynccontextmanager
+        async def edit_config(**_kw):
+            async with lock:
+                yield
+
+        st.edit_config = edit_config
+        caps = capture.Captures(st)
+        caps._ends["race"] = (m.options.trace_until, time.monotonic() - 2, 1.0)  # its time has come
+        async with lock:  # (another edit holds the configuration meanwhile)
+            extend = asyncio.create_task(caps.begin("race", 3600))
+            await asyncio.sleep(0.05)
+            watcher = asyncio.create_task(caps.check())
+            await asyncio.sleep(0.05)
+        until = await extend
+        await watcher
+        assert m.options.trace_until == until > time.time() + 3500, m.options.trace_until
+        assert not st.audited and not any("ended" in ln for ln in st.logged), st.logged
+        assert 3500 < caps.left(m) <= 3600, caps.left(m)
+        # an operator's stop (no `until`) still ends it whatever its end
+        assert await caps.end("race") and m.options.trace_until == 0
+
+    asyncio.run(extended_while_ending())
+
+    async def frozen_clock():
+        # where the monotonic clock has not moved since the start (a coarse one, as on
+        # Windows), the time left is the length itself, never a hair over it
+        m = MappingConfig.from_dict({"id": "exact", "name": "exact"})
+        caps = capture.Captures(State([m]))
+        real = time.monotonic
+        try:
+            time.monotonic = lambda: 1000.1  # ((1000.1 + 3600) - 1000.1 > 3600 in floats)
+            await caps.begin("exact", 3600)
+            assert caps.left(m) == 3600.0, caps.left(m)
+            time.monotonic = lambda: 1000.1 + 1800
+            assert caps.left(m) == 1800.0, caps.left(m)
+        finally:
+            time.monotonic = real
+
+    asyncio.run(frozen_clock())
 
     async def hot_swap():
         # bridge.retrace opens and closes a runner's trace as its options ask for now
