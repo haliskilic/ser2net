@@ -77,6 +77,14 @@ _check_tests=(test_access_policy.py
               test_ui_contrast.py
               test_ui_markup.py)
 
+prepare() {
+  cd "$pkgname-$pkgver"
+  # ser2netweb/distro.json (pyproject.toml takes it into the wheel): the distribution
+  # ser2netweb names in --about, its service's data directory (the default without
+  # --data-dir) and how an optional package is installed, for the hint about a missing one
+  printf '%s\n' '{"distribution": "Arch Linux", "data_dir": "/var/lib/ser2netweb", "optional": "sudo pacman -S --asdeps python-{dist}"}' >ser2netweb/distro.json
+}
+
 build() {
   cd "$pkgname-$pkgver"
   python -m build --wheel --no-isolation

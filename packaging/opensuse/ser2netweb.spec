@@ -89,6 +89,12 @@ daemon (package ser2net), whose configuration files it can import.
 
 %prep
 %autosetup -p1
+# ser2netweb/distro.json (pyproject.toml takes it into the wheel): the distribution
+# ser2netweb names in --about, its service's data directory (the default without
+# --data-dir) and how an optional package is installed, for the hint about a missing one
+cat >ser2netweb/distro.json <<'EOF'
+{"distribution": "openSUSE", "data_dir": "%{_sharedstatedir}/ser2netweb", "optional": {"paho-mqtt": "sudo zypper install python3-paho-mqtt", "ldap3": "sudo zypper install python3-ldap3", "authlib": "sudo zypper install python3-Authlib", "cryptography": "sudo zypper install python3-cryptography"}}
+EOF
 
 %build
 %pyproject_wheel

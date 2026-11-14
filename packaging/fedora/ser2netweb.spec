@@ -59,6 +59,12 @@ daemon (package ser2net), whose configuration files it can import.
 # not packaged in Fedora: ser2netweb runs on its built-in copy of that library's
 # serial transport (ser2netweb/engine/serial_transport.py)
 sed -i '/"pyserial-asyncio-fast>=/d' pyproject.toml
+# ser2netweb/distro.json (pyproject.toml takes it into the wheel): the distribution
+# ser2netweb names in --about, its service's data directory (the default without
+# --data-dir) and how an optional package is installed, for the hint about a missing one
+cat >ser2netweb/distro.json <<'EOF'
+{"distribution": "%{?fedora:Fedora}%{?rhel:EPEL}", "data_dir": "%{_sharedstatedir}/ser2netweb", "optional": "sudo dnf install python3-{dist}"}
+EOF
 
 %generate_buildrequires
 %pyproject_buildrequires

@@ -21,6 +21,10 @@ containers: .github/workflows/distro-packages.yml):
     directory, 0700;
   * the check steps run the same tests, each one of run_all.py's portable ones and none
     that starts a server;
+  * each recipe writes ser2netweb/distro.json before its build (ser2netweb/layout.py,
+    DISTRO): JSON that layout takes, naming the distribution, the data directory of the
+    package's service and, for every extra's package, the distribution's command with its
+    name of it (Debian removes the file again in its clean step);
   * tools/bump_recipes.py --check finds nothing to change: the Arch and Alpine checksums of
     the files beside the recipes, the .SRCINFO, the browser libraries' versions;
   * debian/copyright: DEP-5 with the repacking's Files-Excluded, LICENSE's text as the
@@ -37,18 +41,23 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 sys.path.insert(0, os.path.join(ROOT, "tools"))
 sys.path.insert(0, os.path.join(ROOT, "packaging", "debian"))
+sys.path.insert(0, ROOT)
 
+import _distro_files
 import build_packages
 import bump_recipes as br
 import missing_sources
 import run_all
 from _workflows import jobs, permissions, read as read_workflow, steps
 from test_systemd_units import parse
+
+from ser2netweb import layout, optional
 
 try:
     import tomllib
@@ -400,6 +409,29 @@ def test_check_steps():
     print(f"every check step runs the same {len(first)} tests (portable, no server)  OK")
 
 
+def test_distro_file():
+    # (Fedora's and Alpine's names of the extras' packages: python3-<name>, py3-<name>)
+    names = dict(NAMES, fedora={d: f"python3-{d}" for d in optional.EXTRAS},
+                 alpine={d: f"py3-{d}" for d in optional.EXTRAS})
+    for name in ("debian", "fedora", "opensuse", "arch", "alpine"):
+        _text, info = _distro_files.distro_file(name)
+        assert set(info) == {"distribution", "data_dir", "optional"}, (name, info)
+        assert info["data_dir"] == "/var/lib/ser2netweb", (name, info)
+        with tempfile.TemporaryDirectory() as tmp:
+            with open(os.path.join(tmp, layout.DISTRO_FILE), "w", encoding="utf-8") as fh:
+                json.dump(info, fh)
+            assert layout.distro_info(tmp) == info, name
+        for dist in optional.EXTRAS:
+            hint = optional.Problem(dist, True, "", distro=info).hint
+            assert hint.startswith(("sudo ", "doas ")) and hint.split()[-1] == \
+                names[name][dist], (name, dist, hint)
+    raw, _info = _distro_files.distro_file("fedora")
+    assert '"%{?fedora:Fedora}%{?rhel:EPEL}"' in raw, "EPEL's build names EPEL"
+    assert "ser2netweb/distro.json" in _entries(read("debian", "debian", "clean"))
+    print("every recipe writes ser2netweb/distro.json: its distribution, /var/lib/ser2netweb, "
+          "the command for each extra's package  OK")
+
+
 def test_bump_check():
     now = dt.datetime(2026, 11, 13, tzinfo=dt.timezone.utc)
     recipes = br.debian_version(read("debian", "debian", "changelog"))  # (the recipes' release)
@@ -534,6 +566,7 @@ if __name__ == "__main__":
     test_no_ser2net()
     test_units()
     test_check_steps()
+    test_distro_file()
     test_bump_check()
     test_debian_copyright()
     test_debian_layout()

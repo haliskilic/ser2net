@@ -80,6 +80,14 @@ _check_tests="
 	test_ui_markup.py
 	"
 
+prepare() {
+	default_prepare
+	# ser2netweb/distro.json (pyproject.toml takes it into the wheel): the distribution
+	# ser2netweb names in --about, its service's data directory (the default without
+	# --data-dir) and how an optional package is installed, for the hint about a missing one
+	printf '%s\n' '{"distribution": "Alpine Linux", "data_dir": "/var/lib/ser2netweb", "optional": "doas apk add py3-{dist}"}' >ser2netweb/distro.json
+}
+
 build() {
 	gpep517 build-wheel \
 		--wheel-dir .dist \

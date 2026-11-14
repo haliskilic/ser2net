@@ -1,3 +1,5 @@
 # what setuptools leaves in the source tree
 *.egg-info/
 build/
+# what debian/rules writes before the build
+ser2netweb/distro.json

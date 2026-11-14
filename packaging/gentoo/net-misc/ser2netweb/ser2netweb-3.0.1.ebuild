@@ -41,6 +41,15 @@ BDEPEND="
 	)
 "
 
+python_prepare_all() {
+	# ser2netweb/distro.json (pyproject.toml takes it into the wheel): the distribution
+	# ser2netweb names in --about, its service's data directory (the default without
+	# --data-dir) and how an optional package is installed, for the hint about a missing one
+	printf '%s\n' '{"distribution": "Gentoo", "data_dir": "/var/lib/ser2netweb", "optional": "emerge --ask dev-python/{dist}"}' \
+		> ser2netweb/distro.json || die
+	distutils-r1_python_prepare_all
+}
+
 python_test() {
 	# The whole suite (tests/run_all.py) also compares the pinned versions of the release
 	# files; these run on the installed dependencies: the configuration, sign-in and the
