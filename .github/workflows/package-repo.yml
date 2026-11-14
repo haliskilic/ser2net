@@ -11,19 +11,23 @@ name: Package repositories
 # tested before it is deployed: each signature checked (gpgv, rpmkeys -K), then, served on
 # 127.0.0.1, it is added in clean Debian, Ubuntu, Fedora, AlmaLinux and openSUSE
 # containers (x64; Debian and Fedora on arm64 too) with the commands docs/PACKAGES.md gives
-# (dnf and zypper with repo_gpgcheck=1 and gpgcheck=1), ser2netweb installed from it, its
-# signature named, updated and removed, and a copy whose InRelease and repomd.xml were
-# changed after signing must be refused. After the deployment the published site gets the
-# same test.
+# (dnf and zypper with repo_gpgcheck=1, gpgcheck=1 and pkg_gpgcheck=1), ser2netweb
+# installed from it, its signature named, updated and removed, and a copy whose InRelease
+# and repomd.xml were changed after signing must be refused. After the deployment the
+# published site gets the same test.
 # Started by release.yml once a release is out (GitHub starts no workflow for a release
 # that GITHUB_TOKEN created), by a release published by hand, and by Actions -> Package
 # repositories -> Run workflow (tag: the newest release to include, for a rebuild or a
-# rollback; empty: the newest release). A pull request that changes it builds and tests a
-# tree signed with a throwaway key made in the job, its .rpm files too (rpmkeys -K checks
-# them against that key), and deploys nothing; so do a run started on another branch than
-# main (the key goes to a release's run and runs on main or a v* tag only) and a run
-# without the signing key (with a notice). The environment github-pages must allow main
-# and the v* tags.
+# rollback; empty: the newest release). Run it from main with that tag, a rollback too,
+# never from an old tag's copy of this workflow: that runs the old tool, which before the
+# packages were signed deploys unsigned .rpm files that gpgcheck=1 refuses. A pull request
+# that changes it builds and tests a tree signed with a throwaway key made in the job, its
+# .rpm files too (rpmkeys -K checks them against that key), and deploys nothing; so do a
+# run started on another branch than main (the key goes to a release's run and runs on
+# main or a v* tag only) and a run without the signing key (with a notice). The
+# environment github-pages must allow main and the v* tags.
+# Each .rpm's signature is made at its package's build time (tools/package_repo.py), so a
+# package signed again is the same file and cached repodata keeps matching it.
 on:
   release:
     types: [published]
@@ -85,6 +89,11 @@ jobs:
               --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/release.yml" >/dev/null
             echo "$f: build provenance OK"
           done
+      # (tests/test_package_repo.py's real-tools part: rpmsign, rpmkeys and a release's rpm)
+      - name: Signing an .rpm twice gives the same file
+        run: |
+          rpm=$(ls packages/*/ser2netweb-*.x86_64.rpm | head -1)
+          SER2NETWEB_TEST_RPM="$rpm" python3 tests/test_package_repo.py
       - name: The repository tree
         run: python3 tools/package_repo.py build packages site
       - name: Sign it (the .rpm files, InRelease, Release.gpg, repomd.xml.asc)

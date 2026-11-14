@@ -13,7 +13,8 @@
 #         - against the tree as built they install ser2netweb with no signature warning,
 #           `ser2netweb --version` says VERSION, it comes from this repository (dnf prints
 #           the key it imports; dnf and zypper check the package's signature too,
-#           gpgcheck=1, and rpm names the key that made it), the update commands run, and
+#           gpgcheck=1 and pkg_gpgcheck=1, as zypper's repository list says, and rpm names
+#           the key that made it), the update commands run, and
 #           the remove commands remove the package and the repository, after which the
 #           package manager works as before.
 #   tests/package_repo_smoke.sh --live SITE IMAGE VERSION
@@ -122,6 +123,18 @@ inside() {  # inside FAMILY VERSION BASE FINGERPRINT [live]
             [ "$family" = dnf ] || repo=/etc/zypp/repos.d/ser2netweb.repo
             grep -q '^gpgcheck *= *1$' "$repo" || { cat "$repo"; fail "$repo has no gpgcheck=1"; }
             echo "OK: the package is signed: $sig"
+            if [ "$family" = zypper ]; then
+                # zypper checks a package's signature as well as the metadata's: its
+                # "GPG Check" column says (rp) (pkg_gpgcheck=1; without it, "(r )")
+                zypper --non-interactive repos | tee /tmp/repos.txt
+                grep -Eq '\| ser2netweb +\|.*\(.p\) Yes' /tmp/repos.txt ||
+                    fail "zypper doesn't check the packages' signatures"
+                echo "OK: zypper checks the packages' signatures too"
+            else
+                # (pkg_gpgcheck: dnf 5 reads it as gpgcheck, dnf 4 passes over it quietly)
+                ! grep -i 'unknown configuration option' /tmp/install.log ||
+                    fail "dnf doesn't know an option of ser2netweb.repo"
+            fi
             ;;
     esac
     echo "OK: ser2netweb $version from the repository"

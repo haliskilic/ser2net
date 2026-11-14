@@ -41,7 +41,7 @@ sudo curl -fsSLo /etc/yum.repos.d/ser2netweb.repo https://haliskilic.github.io/s
 sudo dnf install ser2netweb
 ```
 This adds `/etc/yum.repos.d/ser2netweb.repo` (`baseurl=https://haliskilic.github.io/ser2netweb/rpm/$basearch`,
-`repo_gpgcheck=1`, `gpgcheck=1`, see [below](#how-the-rpm-packages-are-checked)).
+`repo_gpgcheck=1`, `gpgcheck=1`, `pkg_gpgcheck=1`, see [below](#how-the-rpm-packages-are-checked)).
 On the first install dnf fetches the key named by `gpgkey=` and asks before it imports it
 (`Importing GPG key 0x711BB799` … `Fingerprint: B587 60E7 C0B0 515E 81D2  50F9 8164 D694 711B B799`): answer `y` only when it shows this
 fingerprint.
@@ -119,8 +119,10 @@ put into the RPM database stays there: `rpm -qa gpg-pubkey --qf '%{NAME}-%{VERSI
 names it, `sudo rpm -e <that name>` removes it.
 
 ## How the RPM packages are checked
-Two signatures by the key above, and dnf and zypper check both (`repo_gpgcheck=1`,
-`gpgcheck=1` in `ser2netweb.repo`):
+Two signatures by the key above, and dnf and zypper check both, as `ser2netweb.repo` tells
+them (`repo_gpgcheck=1` the repository's; `gpgcheck=1` the packages' for dnf, and
+`pkg_gpgcheck=1` for zypper, which with a good repository signature otherwise skips the
+packages'; dnf 5 reads `pkg_gpgcheck` as its name for `gpgcheck`, dnf 4 passes over it):
 - the repository's: dnf and zypper verify `repodata/repomd.xml` against `repomd.xml.asc`
   before they use it; `repomd.xml` holds the SHA-256 of the package list (`primary.xml.gz`),
   and that list the SHA-256 and size of every package, which they compare with what they
@@ -132,11 +134,16 @@ Two signatures by the key above, and dnf and zypper check both (`repo_gpgcheck=1
   (`sudo rpm --import https://haliskilic.github.io/ser2netweb/ser2netweb-archive-keyring.asc`):
   `rpm -K ser2netweb-X.Y.Z-1.x86_64.rpm` says `digests signatures OK`, and once installed
   `rpm -q --qf '%{RSAHEADER:pgpsig}\n' ser2netweb` names the key (`Key ID 8164d694711bb799`).
+  `zypper repos` shows both checks as `(rp) Yes` in its *GPG Check* column.
 
 The packages are signed when the repository is built, not when they are released: the
 signature is added to the release's file, whose header, payload and their digests stay as
 they are (`rpm -K` shows the same `Header SHA256 digest` and `Payload SHA256 digest` for
-both), so every release in the repository, older ones included, is signed. The `.rpm`
+both), so every release in the repository, older ones included, is signed. Each signature
+is made at its package's build time (or at the key's creation, if that is later), so a
+package signed again on the next deployment is the same file, and one that has a good
+signature by the key already is left as it is: what a dnf or zypper cache holds of the
+repository keeps matching the files. The `.rpm`
 assets on GitHub Releases stay the unsigned build that `SHA256SUMS` and the build provenance
 are about (`gh attestation verify ser2netweb-X.Y.Z-1.x86_64.rpm -R haliskilic/ser2netweb`);
 the repository's copy differs from them by its signature header only, so check that one with
@@ -146,7 +153,14 @@ own).
 
 A `ser2netweb.repo` fetched before the packages were signed says `gpgcheck=0`: it keeps
 working, with the signed metadata checked as before. Fetch it again (the install command
-above) to have each package checked as well.
+above) to have each package checked as well; for zypper, remove the repository and add it
+again (`zypper removerepo ser2netweb`, then the commands above), as `addrepo` reads the file
+once.
+
+The first deployment with signed packages changes each `.rpm` once (its signature header):
+a dnf or zypper that cached the repository's metadata before it says the package doesn't
+match what it downloaded until the metadata is read again: `sudo dnf clean metadata` (or
+`dnf … --refresh`), `sudo zypper refresh`.
 
 ## How the repositories are built (maintainers)
 `.github/workflows/package-repo.yml` runs `tools/package_repo.py`:
@@ -183,6 +197,10 @@ It runs when release.yml has published a release (its job *start the release cha
 starts it on `main`: GitHub starts no workflow for a release its own token created), for a
 release published by hand, and from *Actions → Package repositories → Run workflow*, whose
 `tag` builds the repositories as of that release (it and the two before it; a rollback).
+Run it **from `main`** (the default) **with `tag`**, for a rollback or a redeployment too,
+never from an old tag's or branch's copy of the workflow: that runs the old
+`tools/package_repo.py`, and one from before the packages were signed deploys unsigned
+`.rpm` files, which a `gpgcheck=1` system refuses.
 A pull request that changes the workflow, `packaging/`, the tool or the smoke test builds
 and tests a tree signed with a throwaway key made in the job (the `.rpm` files too, checked
 with `rpmkeys -K` against that key and installed with `gpgcheck=1`) and deploys nothing; so

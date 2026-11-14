@@ -30,6 +30,7 @@ import hashlib
 import os
 import re
 import shutil
+import struct
 import subprocess
 import sys
 import tempfile
@@ -154,11 +155,12 @@ def test_repository_files():
     repo = pr.REPO_FILE.format(base=pr.SITE_URL)
     lines = repo.splitlines()
     want = {"[ser2netweb]", "name=ser2netweb", f"baseurl={pr.SITE_URL}/rpm/$basearch",
-            "type=rpm-md", "enabled=1", "repo_gpgcheck=1", "gpgcheck=1",
+            "type=rpm-md", "enabled=1", "repo_gpgcheck=1", "gpgcheck=1", "pkg_gpgcheck=1",
             f"gpgkey={pr.SITE_URL}/ser2netweb-archive-keyring.asc"}
     assert want == {line for line in lines if not line.startswith("#")}, lines
     reason = repo.split("[ser2netweb]", 1)[1].split("repo_gpgcheck=1", 1)[0]
     assert "SHA-256 of every package" in reason and "and of every package" in reason, reason
+    assert "zypper by pkg_gpgcheck" in reason, "zypper skips packages without it"
     print("ser2netweb.sources pins the keyring; ser2netweb.repo checks the signed metadata "
           "and every package's signature  OK")
 
@@ -316,26 +318,39 @@ def test_rpm_signatures():
         "a.rpm: Payload SHA256 digest: NOT OK"]
     assert pr.rpm_signature_problems("a.rpm", RPM4_GOOD, 1, keys) == [
         "a.rpm: rpmkeys -K exits 1"]
-    # sign: rpmsign with the key, the passphrase in a file of gpg's home, then the repodata
+    # sign: rpmsign with the key, the passphrase in a file of gpg's home, each package at
+    # its BUILDTIME (at least the key's creation); one signed by the key already is kept
+    created = 1_700_000_000
     with tempfile.TemporaryDirectory() as tmp:
         site = os.path.join(tmp, "site")
-        for arch in pr.RPM_ARCHES:
-            _put(os.path.join(site, "rpm", arch, f"ser2netweb-3.0.1-1.{arch}.rpm"), b"rpm")
+        times = {"ser2netweb-3.0.0-1.x86_64.rpm": 1_600_000_000,   # before the key: clamped
+                 "ser2netweb-3.0.1-1.x86_64.rpm": 1_800_000_000,
+                 "ser2netweb-3.0.1-1.aarch64.rpm": 1_800_000_000}  # (signed already)
+        for name, when in times.items():
+            arch = name.rsplit(".", 2)[1]
+            _put(os.path.join(site, "rpm", arch, name), _fake_rpm(when))
         home = os.path.join(tmp, "g")
         os.mkdir(home, 0o700)
-        seen, indexed = {}, []
+        signs, indexed = [], []
 
         class Gpg:
             gpg = "/usr/bin/gpg"
 
+            def created(self, key):
+                assert key == pr.FINGERPRINT
+                return created
+
         Gpg.home = home
 
         def run(cmd, **_kw):
+            if cmd[0].endswith("rpmkeys"):
+                signed = cmd[-1].endswith(".aarch64.rpm")
+                return subprocess.CompletedProcess(cmd, 0, RPM4_GOOD if signed else UNSIGNED, "")
             arg = next(a for a in cmd if a.startswith("_gpg_sign_cmd_extra_args "))
-            secret = arg.rsplit("--passphrase-file ", 1)[1]
+            secret = arg.split("--passphrase-file ", 1)[1].split()[0]
             with open(secret, "rb") as fh:
-                seen.update(cmd=cmd, file=secret, passphrase=fh.read(),
-                            mode=os.stat(secret).st_mode & 0o777)
+                signs.append(dict(cmd=cmd, file=secret, passphrase=fh.read(),
+                                  mode=os.stat(secret).st_mode & 0o777))
             return subprocess.CompletedProcess(cmd, 0, "", "")
 
         saved = pr.subprocess.run, pr.program, pr.index_rpm
@@ -343,24 +358,96 @@ def test_rpm_signatures():
         pr.program = lambda name: f"/usr/bin/{name}"
         pr.index_rpm = indexed.append
         try:
-            files = pr.sign_rpms(site, Gpg(), pr.FINGERPRINT, b"s3cret")
+            signed, kept = pr.sign_rpms(site, Gpg(), pr.FINGERPRINT, b"s3cret", b"public key")
         finally:
             pr.subprocess.run, pr.program, pr.index_rpm = saved
-        cmd = seen["cmd"]
-        assert cmd[:2] == ["/usr/bin/rpmsign", "--addsign"] and cmd[-2:] == files, cmd
-        assert sorted(os.path.basename(f) for f in files) == [
-            "ser2netweb-3.0.1-1.aarch64.rpm", "ser2netweb-3.0.1-1.x86_64.rpm"], files
-        for define in (f"_gpg_name {pr.FINGERPRINT}", f"_gpg_path {home}",
-                       "__gpg /usr/bin/gpg", "_gpg_digest_algo sha512"):
-            assert define in cmd, define
-        assert seen["passphrase"] == b"s3cret", seen
-        assert os.name != "posix" or seen["mode"] == 0o600, seen  # (Windows has no such modes)
-        assert os.path.dirname(seen["file"]) == home and not os.path.exists(seen["file"])
-        assert not any("s3cret" in a for a in cmd), "the passphrase is never an argument"
+        assert [os.path.basename(f) for f in kept] == ["ser2netweb-3.0.1-1.aarch64.rpm"], kept
+        assert [os.path.basename(f) for f in signed] == [
+            "ser2netweb-3.0.0-1.x86_64.rpm", "ser2netweb-3.0.1-1.x86_64.rpm"], signed
+        assert [x["cmd"][-1] for x in signs] == signed, "one rpmsign per package"
+        for seen, when in zip(signs, (created, 1_800_000_000)):
+            cmd = seen["cmd"]
+            assert cmd[:2] == ["/usr/bin/rpmsign", "--addsign"], cmd
+            for define in (f"_gpg_name {pr.FINGERPRINT}", f"_gpg_path {home}",
+                           "__gpg /usr/bin/gpg", "_gpg_digest_algo sha512"):
+                assert define in cmd, define
+            extra = next(a for a in cmd if a.startswith("_gpg_sign_cmd_extra_args "))
+            assert extra.endswith(f" --faked-system-time {when}!"), (extra, when)
+            assert seen["passphrase"] == b"s3cret", seen
+            assert os.name != "posix" or seen["mode"] == 0o600, seen  # (no such modes on Windows)
+            assert os.path.dirname(seen["file"]) == home and not os.path.exists(seen["file"])
+            assert not any("s3cret" in a for a in cmd), "the passphrase is never an argument"
         assert indexed == [os.path.join(site, "rpm", a) for a in pr.RPM_ARCHES], indexed
+        assert pr.rpm_buildtime(os.path.join(site, "rpm", "x86_64",
+                                             "ser2netweb-3.0.1-1.x86_64.rpm")) == 1_800_000_000
+        _put(os.path.join(tmp, "not.rpm"), b"\0" * 200)
+        assert "not an rpm" in raises(pr.rpm_buildtime, os.path.join(tmp, "not.rpm"))
     print("verify takes an .rpm only with a good signature by the site's key (rpm 4 / 6); "
-          "sign signs each with rpmsign (the passphrase in a file of gpg's home), then makes "
-          "the repodata again  OK")
+          "sign signs each with rpmsign (the passphrase in a file of gpg's home) at its "
+          "BUILDTIME or the key's creation, keeps one signed by the key, then makes the "
+          "repodata again  OK")
+
+
+def _fake_rpm(buildtime: int) -> bytes:
+    """A lead, an empty signature header and a main header with BUILDTIME, as
+    rpm_buildtime reads them (no payload)."""
+    def header(entries):
+        index, store = b"", b""
+        for tag, kind, value in entries:
+            index += struct.pack(">iiii", tag, kind, len(store), 1)
+            store += value
+        return pr.RPM_HEADER_MAGIC + b"\0" * 4 + struct.pack(">II", len(entries), len(store)) \
+            + index + store
+    sig = header([])
+    main = header([(1000, 6, b"ser2netweb\0"), (pr.RPMTAG_BUILDTIME, 4,
+                                                  struct.pack(">I", buildtime))])
+    return pr.RPM_LEAD_MAGIC + b"\0" * 92 + sig + b"\0" * (-len(sig) % 8) + main
+
+
+def test_signing_twice_is_the_same_file():
+    """Signing a package twice gives the same bytes (a cached primary.xml keeps matching
+    the file), and one signed by the key already is left alone. With rpmsign, rpmkeys and
+    gpg on PATH and SER2NETWEB_TEST_RPM naming a release's .rpm (package-repo.yml's build
+    job sets it); elsewhere a SKIP."""
+    rpm = os.environ.get("SER2NETWEB_TEST_RPM", "")
+    tools = [shutil.which(t) for t in ("rpmsign", "rpmkeys", "gpg")]
+    if not (rpm and os.path.isfile(rpm) and all(tools)):
+        print("SKIP (part): signing twice needs rpmsign, rpmkeys, gpg and SER2NETWEB_TEST_RPM "
+              "(package-repo.yml's build job)")
+        return
+    import time
+    gpg = pr.GnuPG()
+    saved = pr.index_rpm
+    pr.index_rpm = lambda folder: None  # (createrepo_c isn't needed here)
+    try:
+        gpg.run("--pinentry-mode", "loopback", "--passphrase", "", "--quick-generate-key",
+                "ser2netweb test of deterministic signing", "rsa3072", "sign", "1d")
+        (key,) = gpg.secret_fingerprints()
+        public = gpg.run("--armor", "--export", key)
+        with tempfile.TemporaryDirectory() as tmp:
+            digests = []
+            for n in (1, 2):
+                site = os.path.join(tmp, f"site{n}")
+                os.makedirs(os.path.join(site, "rpm", "x86_64"))
+                shutil.copy(rpm, os.path.join(site, "rpm", "x86_64"))
+                signed, kept = pr.sign_rpms(site, gpg, key, b"", public)
+                assert len(signed) == 1 and not kept, (signed, kept)
+                digests.append(_sha(open(signed[0], "rb").read()))
+                time.sleep(1.5)  # (another second on the clock: the signature mustn't follow it)
+            assert digests[0] == digests[1], f"signed twice, two files: {digests}"
+            assert digests[0] != _sha(open(rpm, "rb").read()), "not signed"
+            # signed by the key already: kept as it is
+            signed, kept = pr.sign_rpms(site, gpg, key, b"", public)
+            assert not signed and len(kept) == 1, (signed, kept)
+            assert _sha(open(kept[0], "rb").read()) == digests[0]
+            _put(os.path.join(site, f"{pr.KEYRING}.asc"), public)
+            assert pr.check_rpms(site, [key]) == []
+            assert pr.rpm_buildtime(kept[0]) == pr.rpm_buildtime(rpm), "the main header stays"
+    finally:
+        pr.index_rpm = saved
+        gpg.close()
+    print(f"rpmsign twice on {os.path.basename(rpm)}: the same file ({digests[0][:12]}...), "
+          "signed by the key; a third time it is kept as it is  OK")
 
 
 # --- the workflows ---------------------------------------------------------------------------
@@ -414,6 +501,9 @@ def test_workflow():
     assert '--signer-workflow "$GITHUB_REPOSITORY/.github/workflows/release.yml"' in build
     # rpmsign (sign) and rpmkeys (verify) come with the runner's rpm package
     assert "--no-install-recommends apt-utils createrepo-c rpm >/dev/null" in build
+    # signing twice gives the same file, with the real tools and a release's rpm
+    twice = next(s for s in steps(build) if "Signing an .rpm twice" in s)
+    assert 'SER2NETWEB_TEST_RPM="$rpm" python3 tests/test_package_repo.py' in twice, twice
     assert "      deploy: ${{ steps.sign.outputs.deploy }}" in build
     # every tree is tested in the containers before it is deployed, never from a PR
     assert needs(test) == ["build"] and needs(deploy) == ["build", "test"], needs(deploy)
@@ -500,6 +590,7 @@ if __name__ == "__main__":
     test_documented_commands()
     test_verify_finds_mismatches()
     test_rpm_signatures()
+    test_signing_twice_is_the_same_file()
     test_workflow()
     test_release_starts_it()
     print("\nPASS: package repositories")
