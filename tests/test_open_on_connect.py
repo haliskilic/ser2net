@@ -169,7 +169,7 @@ async def _console_and_rfc2217():
             await until(lambda: device.is_open)
             runner.discard_monitor(console)
             await until(lambda: not device.is_open)
-            assert runner.status.waiting
+            await until(lambda: runner.status.waiting)  # (once the close has ended)
         async with running(mapping(protocol="rfc2217"), device, logs, wait_open=False) as runner:
             assert not device.is_open
             r, w = await asyncio.open_connection("127.0.0.1", port_of(runner))
