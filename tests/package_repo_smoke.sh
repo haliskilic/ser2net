@@ -115,8 +115,8 @@ inside() {  # inside FAMILY VERSION BASE FINGERPRINT [live]
         dnf | zypper)
             # the package's own signature (gpgcheck=1), by the repository's key
             sig=$(rpm -q --qf '%{RSAHEADER:pgpsig}' ser2netweb)
-            id=$(printf '%s' "$fingerprint" | cut -c25-40 | tr 'A-F' 'a-f')
-            printf '%s' "$sig" | tr 'A-F' 'a-f' | grep -q "key id $id" ||
+            id=$(printf '%s' "$fingerprint" | cut -c25-40)
+            printf '%s' "$sig" | grep -qi "key id $id" ||
                 fail "the installed package isn't signed by $fingerprint: $sig"
             repo=/etc/yum.repos.d/ser2netweb.repo
             [ "$family" = dnf ] || repo=/etc/zypp/repos.d/ser2netweb.repo
