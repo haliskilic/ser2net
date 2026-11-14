@@ -383,6 +383,8 @@ async def test_safe_values_primary_host(port):
         assert await wait(lambda: r.status.as_dict()["safe"]["state"] == "waiting")
         await connack(fake)  # the new session's CONNACK: the broker is there, the host is not
         assert await wait(lambda: REGS[10] == 7, 3.0), logs
+        # (the device has the value before the gateway has its answer, logs and shows it)
+        assert await wait(lambda: r.status.as_dict()["safe"]["state"] == "applied", 3.0)
         assert any("from its safe value: no primary host 'scada' for 1 s" in m for m in logs)
         events = notify.status_events({"m": ("running", set(), "", {}, ())},
                                       {"m": r.status.as_dict()}, {"m": "Line 3"})
