@@ -166,14 +166,14 @@ def trace_path(trace_dir: str, mapping: MappingConfig) -> str:
     prefix keeps two mappings with the same file name apart (and makes a mapping's
     files easy to find); the name is already sanitised by config.trace_file_name.
     Raises ValueError if that would not be a file in trace_dir (config.mapping_file)."""
-    return mapping_file(trace_dir, mapping.id, f"-{mapping.options.trace_both}")
+    return mapping_file(trace_dir, mapping.id, f"-{mapping.options.trace_file}")
 
 
 def open_tracer(mapping: MappingConfig, trace_dir: Optional[str], log,
                 status: Optional["RunnerStatus"] = None) -> Optional["Tracer"]:
     """The mapping's tracer when tracing is on (None when off or unavailable). `status`:
     the runner's, whose trace_error the tracer keeps up to date."""
-    if not mapping.options.trace_both:
+    if not mapping.options.trace_file:
         return None
     if not trace_dir:
         log("trace not written: no data directory to keep it in")
@@ -187,6 +187,28 @@ def open_tracer(mapping: MappingConfig, trace_dir: Optional[str], log,
     if not tracer.error:  # else it said why, and keeps trying
         log(f"tracing traffic to {tracer.path}")
     return tracer
+
+
+async def retrace(runner, trace_dir: Optional[str], log) -> bool:
+    """Open or close a running runner's trace as its mapping's options ask for now (a
+    timed capture begun or ended: MappingOptions.trace_file), leaving its clients, serial
+    port and listener as they are. Returns whether anything changed. Called in the
+    mapping's turn (Supervisor.retrace)."""
+    mapping = runner.mapping
+    want = ""
+    if mapping.options.trace_file and trace_dir:
+        with contextlib.suppress(ValueError):
+            want = trace_path(trace_dir, mapping)
+    old = runner._tracer
+    if (old.path if old is not None else "") == want:
+        return False
+    runner._tracer = None  # nothing is traced from here on
+    if old is not None:
+        await old.aclose()
+        log(f"tracing to {old.path} ended")
+    if want:
+        runner._tracer = open_tracer(mapping, trace_dir, log, runner.status)
+    return True
 
 
 def remove_files(paths) -> dict[str, Optional[OSError]]:
@@ -297,6 +319,18 @@ class Tracer:
             self._queued += len(data)
         self._q.put((time.time(), direction, bytes(data)))
 
+    def annotate(self, text: str) -> None:
+        """Put a note into the trace, in turn with the traffic: a "!!" line like the one
+        that says how many bytes are missing (not while the trace is paused or closing)."""
+        data = text.encode("utf-8", "replace")
+        if self._closing:
+            return
+        with self._lock:
+            if self.error:
+                return
+            self._queued += len(data)
+        self._q.put((time.time(), "!!", data))
+
     def remove_files(self, paths) -> Optional[concurrent.futures.Future]:
         """Delete some of this trace's files in the writer thread, in turn with the lines
         queued before (so never in the middle of a rotation). The file it writes is
@@ -355,7 +389,7 @@ class Tracer:
 
     def _format(self, ts: float, direction: str, data: bytes) -> bytes:
         prefix = time.strftime("%Y-%m-%d %H:%M:%S ", time.localtime(ts)) if self._ts else ""
-        if self._hex:
+        if self._hex and direction != "!!":  # (a note of the trace's own stays text)
             return f"{prefix}{direction} [{len(data)}] {data.hex(' ')}\n".encode()
         return prefix.encode() + direction.encode() + b" " + data + b"\n"
 
@@ -370,7 +404,8 @@ class Tracer:
         if dropped:
             lines.append((self._format(ts, "!!", f"{dropped} bytes not traced "
                                        f"({reason})".encode()), dropped))
-        lines.append((self._format(ts, direction, data), len(data)))
+        # (a note (annotate) stands for no traffic: one not written is not counted)
+        lines.append((self._format(ts, direction, data), 0 if direction == "!!" else len(data)))
         return lines
 
     def _run(self) -> None:
@@ -1018,6 +1053,10 @@ class MappingRunner:
     def tracer(self) -> Optional[Tracer]:
         """The trace writer while the mapping runs with tracing on."""
         return self._tracer
+
+    async def retrace(self) -> bool:
+        """Open or close the trace as the options ask for now (bridge.retrace)."""
+        return await retrace(self, self.trace_dir, self._log)
 
     @property
     def listener(self) -> Optional[netguard.Listener]:

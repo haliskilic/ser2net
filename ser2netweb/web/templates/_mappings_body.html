@@ -130,7 +130,7 @@
           <div class="btn-group">
             <button class="btn sm" id="{{ rid }}-log" aria-describedby="{{ rid }}-name" hx-get="{{ base }}/api/mappings/{{ m.id }}/log" hx-target="#form-panel" hx-swap="innerHTML show:top">{{ t.log }}</button>
             <button class="btn sm" id="{{ rid }}-monitor" aria-describedby="{{ rid }}-name" hx-get="{{ base }}/api/mappings/{{ m.id }}/console-view" hx-target="#form-panel" hx-swap="innerHTML show:top">{{ t.monitor }}</button>
-            {% if can_edit and (m.options.trace_both or m.id in traced) %}<button class="btn sm" id="{{ rid }}-trace" aria-describedby="{{ rid }}-name" hx-get="{{ base }}/api/mappings/{{ m.id }}/traces" hx-target="#form-panel" hx-swap="innerHTML show:top">{{ t.trace }}</button>{% endif %}
+            {% if can_edit %}<button class="btn sm" id="{{ rid }}-trace" aria-describedby="{{ rid }}-name" hx-get="{{ base }}/api/mappings/{{ m.id }}/traces" hx-target="#form-panel" hx-swap="innerHTML show:top">{{ t.trace }}</button>{% endif %}
             {% if can_edit %}
             <button class="btn sm" id="{{ rid }}-copy" aria-describedby="{{ rid }}-name" hx-post="{{ base }}/api/mappings/{{ m.id }}/duplicate" hx-swap="none" hx-disabled-elt="this">{{ t.duplicate }}</button>
             <button class="btn sm danger" id="{{ rid }}-delete" aria-describedby="{{ rid }}-name" hx-delete="{{ base }}/api/mappings/{{ m.id }}"

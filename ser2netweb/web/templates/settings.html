@@ -468,6 +468,8 @@
         'service_started': _("ser2netweb started (which mappings run)"),
         'unit_offline': _("Modbus unit stopped answering (a gateway's polling: no reply to any of its points in 3 polls in a row)"),
         'unit_back': _("Modbus unit answering again"),
+        'cert_expiring': _("TLS certificate about to expire (the admin UI’s and each TLS mapping’s: 30, 7 and 1 days before, and once it has ended; checked daily)"),
+        'clock_step': _("System clock stepped while ser2netweb runs (set by hand or by time sync, by 1 s or more: the times in logs and traces jump there)"),
       } %}
       {% set event_hints = {
         'client_connected': _("sends the client’s IP address"),
@@ -565,6 +567,19 @@
     <input type="hidden" name="_csrf" value="{{ request.state.csrf_token }}">
     <button class="btn" type="submit">{{ _("Generate a self-signed certificate") }}</button>
   </form>
+  <details class="mt-sm" id="tls-upload">
+    <summary>{{ _("Upload a certificate and key from this computer…") }}</summary>
+    <form method="post" action="{{ base }}/settings/tls/upload" enctype="multipart/form-data" class="authform"{% if admin.tls_cert %}
+          data-confirm="{{ _('Replace the certificate %(cert)s with the uploaded one? New connections to this UI use it at once.', cert=admin.tls_cert) }}"{% endif %}>
+      <input type="hidden" name="_csrf" value="{{ request.state.csrf_token }}">
+      <p class="muted">{{ _('PEM files, up to %(kb)s KB each (the certificate file may hold its chain). They are checked first (the key must be the certificate’s), then kept in the data folder’s <span class="mono">tls/</span>, private to ser2netweb, and set above; the paths of files already on the server keep working as before.', kb=tls_upload_kb) }}</p>
+      <label>{{ _("Certificate file") }} <input type="file" name="cert_file" accept=".pem,.crt,.cer,.cert,.txt" required></label>
+      <label>{{ _("Key file") }} <input type="file" name="key_file" accept=".pem,.key,.txt" required></label>
+      <label>{{ _("Key password") }} <span class="muted">({{ _("only for an encrypted key") }})</span>
+        <input type="password" name="tls_key_password" autocomplete="new-password" data-1p-ignore data-lpignore="true" data-bwignore placeholder="{{ _('optional') }}"></label>
+      <button class="btn" type="submit">{{ _("Upload and use") }}</button>
+    </form>
+  </details>
 </section>
 
 <section class="panel panel-narrow" id="reverse-proxy">

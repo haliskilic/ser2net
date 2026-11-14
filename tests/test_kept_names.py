@@ -78,7 +78,8 @@ def test_cluster_protocol():
     print("cluster: signing labels, headers, auth scheme, beacon envelope, UDP 41750  OK")
 
 
-# every series /metrics answers, as 2.9 named them: OLD + "_" + one of these
+# every series /metrics answers, as 2.9 named them (the last line: added in 3.1):
+# OLD + "_" + one of these
 METRICS = [f"{OLD}_{name}" for name in """
 up build_info start_time_seconds event_loop_lag_seconds event_loop_stalls_total
 mappings_total open_fds fd_limit data_free_bytes data_size_bytes traces_bytes logs_bytes
@@ -89,6 +90,7 @@ mapping_bytes_dropped_total mapping_reconnects_total mapping_open_failures_total
 mapping_device_lost_total mapping_dropped_clients_total mapping_link_up
 mapping_connect_failures_total modbus_unit_up modbus_unit_poll_errors_total mqtt_connected
 mqtt_messages_dropped_total
+tls_certificate_expiry_seconds clock_steps_total
 """.split()]
 
 
@@ -126,7 +128,9 @@ def test_stored_and_sent_names():
     assert auth._payload_secret(secret) == want
     m = MappingConfig(name="m1")
     key = hmac.new(secret.encode(), f"{OLD} mapping revision".encode(), hashlib.sha256).digest()
-    body = json.dumps(m.to_dict(), sort_keys=True, separators=(",", ":"), default=str)
+    content = m.to_dict()
+    del content["options"]["trace_until"]  # (3.1: a timed capture's end is no setting)
+    body = json.dumps(content, sort_keys=True, separators=(",", ":"), default=str)
     assert mapping_revision(secret, m) == _hmac(key, body.encode())[:24]
     static = os.path.join(ROOT, "ser2netweb", "web", "static")
     with open(os.path.join(static, "app.js"), encoding="utf-8") as fh:

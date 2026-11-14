@@ -11,9 +11,10 @@ made from another site:
            peer         a signed-in operator or admin: acts on other cluster nodes
            admin        admin only
            cluster-key  other cluster nodes, with the shared cluster key; never a session
-           token-public, token-read, token-write
-                        the REST API: no token / any token / an operator or admin token;
-                        never a session cookie
+           token-public, token-read, token-write, token-operator
+                        the REST API: no token / any token / an operator or admin token
+                        (token-operator: a GET only they may make, refused by its
+                        handler); never a session cookie
   csrf     form    the _csrf form field, checked by the handler
            header  the X-CSRF-Token header, checked by GuardMiddleware for /api/
            origin  a WebSocket: a browser's Origin must be this server
@@ -61,6 +62,8 @@ PUBLIC, SETUP, VIEWER, ACCOUNT = "public", "setup", "viewer", "account"
 OPERATOR, PEER, ADMIN = "operator", "peer", "admin"
 CLUSTER_KEY = "cluster-key"
 TOKEN_PUBLIC, TOKEN_READ, TOKEN_WRITE = "token-public", "token-read", "token-write"
+TOKEN_OPERATOR = "token-operator"
+TOKEN_CLASSES = (TOKEN_PUBLIC, TOKEN_READ, TOKEN_WRITE, TOKEN_OPERATOR)
 FORM, HEADER, ORIGIN, NONE = "form", "header", "origin", "none"
 
 ROUTES = {
@@ -84,6 +87,7 @@ ROUTES = {
     ("POST", "/settings/sessions/signout-others"): (ACCOUNT, FORM),
     ("POST", "/settings/tls"): (ADMIN, FORM),
     ("POST", "/settings/tls/generate"): (ADMIN, FORM),
+    ("POST", "/settings/tls/upload"): (ADMIN, FORM),
     ("POST", "/settings/access"): (ADMIN, FORM),
     ("POST", "/settings/proxy"): (ADMIN, FORM),
     ("POST", "/settings/node-name"): (ADMIN, FORM),
@@ -136,12 +140,20 @@ ROUTES = {
     ("PUT", "/api/v1/mappings/{mid}"): (TOKEN_WRITE, NONE),
     ("PATCH", "/api/v1/mappings/{mid}"): (TOKEN_WRITE, NONE),
     ("DELETE", "/api/v1/mappings/{mid}"): (TOKEN_WRITE, NONE),
+    # traces hold what is sent to the device: not for a viewer token (nor in the web UI)
+    ("GET", "/api/v1/mappings/{mid}/traces"): (TOKEN_OPERATOR, NONE),
+    ("DELETE", "/api/v1/mappings/{mid}/traces"): (TOKEN_WRITE, NONE),
+    ("GET", "/api/v1/mappings/{mid}/traces/{name}"): (TOKEN_OPERATOR, NONE),
+    ("DELETE", "/api/v1/mappings/{mid}/traces/{name}"): (TOKEN_WRITE, NONE),
+    ("POST", "/api/v1/mappings/{mid}/capture"): (TOKEN_WRITE, NONE),
+    ("DELETE", "/api/v1/mappings/{mid}/capture"): (TOKEN_WRITE, NONE),
     ("POST", "/api/v1/mappings/{mid}/{action}"): (TOKEN_WRITE, NONE),
     # ---- routes/mappings.py ----
     ("GET", "/"): (VIEWER, NONE),
     ("POST", "/api/mappings/{mid}/duplicate"): (OPERATOR, HEADER),
     ("GET", "/api/status"): (VIEWER, NONE),
     ("POST", "/api/mappings/bulk"): (OPERATOR, HEADER),
+    ("POST", "/api/mappings/tls-upload"): (ADMIN, HEADER),  # TLS files for a mapping
     ("GET", "/api/mappings/form"): (OPERATOR, NONE),  # the form renders stored secrets
     ("GET", "/api/mappings/{mid}/form"): (OPERATOR, NONE),
     ("POST", "/api/mappings/{mid}/modbus-read"): (OPERATOR, HEADER),  # a test read on the bus
@@ -151,6 +163,8 @@ ROUTES = {
     ("GET", "/api/mappings/{mid}/traces/{name}"): (OPERATOR, NONE),
     ("DELETE", "/api/mappings/{mid}/traces"): (OPERATOR, HEADER),
     ("DELETE", "/api/mappings/{mid}/traces/{name}"): (OPERATOR, HEADER),
+    ("POST", "/api/mappings/{mid}/capture"): (OPERATOR, HEADER),  # a timed capture
+    ("DELETE", "/api/mappings/{mid}/capture"): (OPERATOR, HEADER),
     ("POST", "/api/mappings/save"): (OPERATOR, HEADER),
     ("DELETE", "/api/mappings/{mid}"): (OPERATOR, HEADER),
     ("POST", "/api/mappings/{mid}/{action}"): (OPERATOR, HEADER),
@@ -258,10 +272,10 @@ def test_inventory():
             assert access in SESSION_CLASSES and csrf == ORIGIN, where
             continue
         if path.startswith("/api/v1"):  # token auth in the middleware, no cookies, no CSRF
-            assert access in (TOKEN_PUBLIC, TOKEN_READ, TOKEN_WRITE) and csrf == NONE, where
+            assert access in TOKEN_CLASSES and csrf == NONE, where
             assert (access == TOKEN_WRITE) == (method in WRITE_METHODS), where
             continue
-        assert access not in (TOKEN_PUBLIC, TOKEN_READ, TOKEN_WRITE), where
+        assert access not in TOKEN_CLASSES, where
         assert gate_public(path) == (access in (PUBLIC, SETUP, CLUSTER_KEY)), \
             f"{where}: the session gate {'skips' if gate_public(path) else 'guards'} it"
         assert (path in CLUSTER_PEER_PATHS) == (access == CLUSTER_KEY), where
@@ -518,7 +532,7 @@ def _live(srv) -> None:
 
     # ---- a page of another site: every state-changing browser route refuses it ----
     writes = [(m, p) for (m, p), (a, _c) in ROUTES.items() if m in WRITE_METHODS
-              and a not in (CLUSTER_KEY, TOKEN_PUBLIC, TOKEN_READ, TOKEN_WRITE)]
+              and a not in (CLUSTER_KEY, *TOKEN_CLASSES)]
     for method, path in writes:
         for who in (anon, admin):
             for headers in ({"Origin": "http://attacker.example"},
@@ -564,7 +578,7 @@ def _live(srv) -> None:
 
     def check_token(token, may_write):
         for (method, path), (access, _c) in ROUTES.items():
-            if access not in (TOKEN_PUBLIC, TOKEN_READ, TOKEN_WRITE):
+            if access not in TOKEN_CLASSES:
                 continue
             probe = probe_path(method, path)
             if access == TOKEN_PUBLIC:
@@ -575,7 +589,7 @@ def _live(srv) -> None:
                 assert st == 401 and json.loads(text)["error"] == "unauthorized", \
                     f"{method} {probe} token={bad} cookie={who and who.name} -> {st}"
             st, text = api(method, probe, token)
-            if access == TOKEN_WRITE and not may_write:
+            if access in (TOKEN_WRITE, TOKEN_OPERATOR) and not may_write:
                 assert st == 403 and json.loads(text)["error"] == "forbidden", f"{method} {probe} -> {st}"
             else:  # past the token check: the handler answers (404, 400 for the bad body)
                 assert st not in (401, 403) and st < 500, f"{method} {probe} -> {st} {text[:80]}"

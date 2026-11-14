@@ -393,8 +393,12 @@ everything from a **password-protected web UI** — no CLI or hand-edited config
   peer that misses two answers a minute apart) and back, and **ser2netweb started** (15 s
   after a start: which mappings run, and whether the previous run was ended by the event
   loop watchdog), and a **Modbus unit** that a gateway polls **stops answering** (no reply
-  to any of its points in 3 polls in a row) or answers again. Repeats are suppressed, and a
-  test message can be sent. The same events are logged in all.log whether or not they are
+  to any of its points in 3 polls in a row) or answers again, and a **TLS certificate about
+  to expire** (the admin UI's and each enabled TLS mapping's, read once a day: one message
+  when fewer than 30, 7 and 1 days are left and one once it has ended — once per
+  certificate and threshold, also across restarts; a renewed certificate starts afresh),
+  and the **system clock stepped** while ser2netweb runs (see *Time synchronisation*).
+  Repeats are suppressed, and a test message can be sent. The same events are logged in all.log whether or not they are
   sent.
   With a public URL (Settings → Reverse proxy) each message ends with it, and the JSON
   format has a `url` field. The client events send the client's IP address, a failed
@@ -1029,10 +1033,16 @@ what differs and an option table: [`docs/MIGRATING-FROM-SER2NET.md`](docs/MIGRAT
   what is typed with it, and the hex view's text column too. The bridge passes the bytes
   unchanged either way.
 - **Trace** (operators): the mapping's trace files, to list, download and delete (one
-  file or all, audited) — while tracing is on, and after it was switched off as long as
-  files are left.
+  file or all, audited). **Timed recording:** for a mapping whose trace is off, *Record*
+  traces it for 15 minutes, 1 hour or 24 hours and then turns the trace off by itself —
+  for catching a fault without leaving a trace on that fills the disk. Clients stay
+  connected (the mapping is not restarted), the traffic goes to
+  `traces/<id>-capture.log`, *Stop now* ends it early, and the end time is stored
+  (`options.trace_until` in `config.json`), so a restart neither loses nor prolongs it. A
+  mapping whose *Trace file name* is set is traced all the time and is never turned off
+  by this. Starts, stops and the automatic end are in the audit log.
 - **Settings:** change password, **two-factor sign-in**, **web UI access** (login required /
-  open access with a role), admin TLS (provide paths or generate self-signed; a previous
+  open access with a role), admin TLS (provide paths, upload the files or generate self-signed; a previous
   generated pair is kept as `*.bak`; new connections get it at once, no restart),
   generate/revoke **REST API tokens** or change the first token's role only (a one-time
   token has a Copy button), **Mappings export / import** (JSON), **Configuration backups**
@@ -1063,11 +1073,15 @@ what differs and an option table: [`docs/MIGRATING-FROM-SER2NET.md`](docs/MIGRAT
   connections, TLS handshakes in progress and waiting for one to end, the connections
   refused right after accept (`ser2net_connections_refused_total`, by reason), the data
   folder's disk (`ser2net_data_free_bytes`, `ser2net_data_size_bytes`) and what traces and
-  logs take there (`ser2net_traces_bytes`, `ser2net_logs_bytes`); for a Modbus gateway's
+  logs take there (`ser2net_traces_bytes`, `ser2net_logs_bytes`); when the TLS
+  certificates in use end (`ser2net_tls_certificate_expiry_seconds`, Unix time: the admin
+  UI's and each enabled TLS mapping's; also `certificates` in `/api/v1/status`, with the
+  days left); for a Modbus gateway's
   polled units whether each answers (`ser2net_modbus_unit_up`) and its failed reads
   (`ser2net_modbus_unit_poll_errors_total`); for a mapping that publishes to MQTT whether
   it is connected to its broker (`ser2net_mqtt_connected`) and the messages it could not
-  hand to it (`ser2net_mqtt_messages_dropped_total`); also `ser2net_up`, the number of
+  hand to it (`ser2net_mqtt_messages_dropped_total`); also `ser2net_up`, the steps of the system clock seen since the start
+  (`ser2net_clock_steps_total`), the number of
   mappings (`ser2net_mappings_total`), whether a mapping is past its no-data alarm
   (`ser2net_mapping_no_data`) and the event loop's late heartbeats
   (`ser2net_event_loop_stalls_total`, its lag `ser2net_event_loop_lag_seconds`). Every
@@ -1125,9 +1139,16 @@ curl -X PATCH -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/me
   -d '{"network":{"port":4002}}' http://HOST:8080/api/v1/mappings/<id>
 # start / stop / restart
 curl -X POST -H "Authorization: Bearer $TOKEN" http://HOST:8080/api/v1/mappings/<id>/stop
+# record the traffic for 15 minutes, then list and fetch the trace files
+curl -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"minutes":15}' http://HOST:8080/api/v1/mappings/<id>/capture
+curl -H "Authorization: Bearer $TOKEN" http://HOST:8080/api/v1/mappings/<id>/traces
+curl -H "Authorization: Bearer $TOKEN" -O http://HOST:8080/api/v1/mappings/<id>/traces/<id>-capture.log
 ```
 Endpoints: `GET/POST /mappings`, `GET/PUT/PATCH/DELETE /mappings/{id}`,
-`POST /mappings/{id}/{start|stop|restart}`, `POST /import`, `GET /status`, `GET /ports`,
+`POST /mappings/{id}/{start|stop|restart}`, `GET/DELETE /mappings/{id}/traces`,
+`GET/DELETE /mappings/{id}/traces/{name}`, `POST/DELETE /mappings/{id}/capture`,
+`POST /import`, `GET /status`, `GET /ports`,
 `GET /metrics`, `GET /info` (ser2netweb's version, the API's version and its `features`),
 `GET /health` and `GET /openapi.json` (both unauthenticated). The web UI's own endpoints
 (`/api/status`, the dashboard's table, which answers `204` or only the changed counters to a
@@ -1143,6 +1164,17 @@ that changes only what the body names. An object merges into the stored one
 replaces it, and `null` resets a field to its default (`{"network":{"allowed_client_ips":null}}`).
 The result is checked like any edit; a refused patch changes nothing (HTTP 400). The
 previous configuration of every change stays in `backups/`.
+**Trace files:** `GET /mappings/{id}/traces` lists a mapping's trace files (`name`, `size`
+in bytes, `time` last written as Unix time; also `tracing`, the `file` written now and
+`capture_until`). Listing them and downloading one (`GET .../traces/{name}`, recorded in
+the audit log) need an **operator or admin token** — traces hold what is sent to the device
+too, and a viewer gets no Trace panel in the web UI either (`403` for a viewer token). `DELETE .../traces/{name}` deletes one file, `DELETE .../traces` all of them (a trace
+that is on goes on in a new file). `POST /mappings/{id}/capture` with `{"minutes": n}`
+(1 to 1440) starts a timed recording as the Trace panel does, again while one runs sets a
+new end, `DELETE .../capture` ends it; a mapping that is traced by its `trace_both` answers
+`409`. `options.trace_until` (when the capture ends) is read-only: a `PUT`, `PATCH` or
+`POST /mappings` ignores what its body has there (a `PUT` without it keeps the capture),
+and so do imports; a copy of a mapping has no capture.
 `GET /mappings/{id}` answers the mapping's revision in `ETag`: send it back in `If-Match`
 with a `PUT` or `DELETE` to change the mapping only if nobody changed it since (else `412`,
 `precondition_failed`); without `If-Match` they work as before.
@@ -1248,7 +1280,23 @@ ser2netweb never
 asks for one on the console, and without it the mapping, or the start for the admin UI's
 key, fails with an error that says so. The form and the REST API load a mapping's files when
 it is saved and refuse a key that is the admin UI's own; the form never shows the stored
-key password, and the REST API masks it for a viewer token. Where certificates can't be managed, a VPN
+key password, and the REST API masks it for a viewer token.
+**Uploading the files in the browser** (admins): instead of copying files onto the host,
+*Upload a certificate and key from this computer…* under Settings → Admin TLS takes the
+admin UI's pair, sets it and serves it to new connections at once; in a mapping's form,
+*Upload TLS files from this computer…* takes a certificate with its key and / or the CA
+file of the field it stands next to, and puts their paths into the form's fields (they
+apply when the form is saved). PEM files of at most 256 KB each (a CA file may be DER).
+Before anything is kept they are loaded as ser2netweb will load them: a key that is not the
+certificate's, an encrypted key without its password or a CA file without a certificate
+is refused, and so is the admin UI's key for a mapping (or a mapping's for the admin UI),
+also as a copy written another way or with another certificate (the public keys are
+compared). They are kept in the data folder's `tls/` as `uploaded-<hash>-cert.pem` /
+`-key.pem` / `-ca.pem`, each named by its own hash (an upload never replaces a key in use),
+readable only by the account ser2netweb runs as, and every upload is in the
+audit log (`admin_tls_upload`, `tls_upload`). Files uploaded earlier stay there until you
+delete them (a configuration backup may still name them); the path fields work as before
+for files that are already on the host. Where certificates can't be managed, a VPN
 (WireGuard) or an stunnel in front of an untrusted network is the alternative.
 
 **HSTS:** with admin TLS, pages and REST API answers carry `Strict-Transport-Security` with
@@ -1927,6 +1975,17 @@ codes, SSO, and TLS certificates (MQTT, SMTP, webhooks, SSO, and a self-signed c
 made while the clock was wrong). How long something has been running (uptime, connection
 times, the cluster's peer list) is measured with a clock that no clock step changes.
 
+**A clock set while ser2netweb runs** (by hand, by time sync catching up, by a VM host) is
+noticed: every 5 seconds the system clock is compared with a clock no step changes, and a
+jump of 1 second or more is written to `all.log` with its direction and size, recorded in
+the audit log (`clock_step`; at most one line a minute, which says how many more there
+were), marked in every running trace with a `!!` line where its times jump, counted in
+`/metrics` (`ser2net_clock_steps_total`; `clock_steps` in `/api/v1/status`) and sent as the
+optional **System clock stepped** notification. NTP's gradual slewing is not a step, and
+neither is a resume from suspend or hibernation: the comparison clock counts the time
+asleep (`CLOCK_BOOTTIME` on Linux, `CLOCK_MONOTONIC` on macOS, `GetTickCount64` on
+Windows).
+
 - **Linux:** keep `systemd-timesyncd` or `chrony` running, pointed at an NTP server the
   machine can reach; on an offline plant network a local one (a router, a domain
   controller, a GPS time server): `NTP=10.0.0.1` in `/etc/systemd/timesyncd.conf`, or
@@ -2045,7 +2104,8 @@ when other accounts can use the folder — give ser2netweb a folder of its own:
   too, that many days after its last write). Deleting a
   mapping deletes its traces; those of mappings a replace import or a restore removed stay until
   the next start (an undone restore finds them), which deletes them and logs how many.
-- `tls/` — certificate/key if self-signed is generated. A relative TLS path (admin UI, a
+- `tls/` — certificate/key if self-signed is generated, and the TLS files uploaded in the
+  browser (`uploaded-<hash>-cert.pem`, `-key.pem`, `-ca.pem`). A relative TLS path (admin UI, a
   mapping or its MQTT connection: certificate, key, CA files; not the LDAP CA file) is a file
   in the data directory, e.g. `tls/cert.pem`,
   so it keeps working when the data directory moves. An absolute path that is no longer
@@ -2055,6 +2115,9 @@ when other accounts can use the folder — give ser2netweb a folder of its own:
   path); backups and imports from before the move are handled the same way.
 - `setup-code.txt` — the one-time code for first-run setup through a host name; it exists
   only until the first admin account does.
+- `cert-notices.json` — which *TLS certificate about to expire* notifications were sent
+  (per certificate file: its end date and the threshold), so a restart does not send them
+  again. Deleted, they are sent once more.
 - `sparkplug-bdseq.json` — the `bdSeq` of each Sparkplug B edge node's (group/node) last
   session; after a restart the numbering goes on from there. Deleted, the next start begins
   at 0.

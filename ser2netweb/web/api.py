@@ -18,13 +18,14 @@ from starlette.exceptions import HTTPException
 from starlette.requests import Request
 from starlette.responses import JSONResponse, PlainTextResponse
 
-from .. import __version__, config, importer
+from .. import __version__, capture, config, importer
 from ..config import (REDACTED, ROLE_RANK, ConfigError, ConfigWriteError, MappingConfig,
                       mapping_revision, valid_mapping_id)
 from . import proxy
 from .starlette_compat import Route
 from .routes import ops
 from .routes.common import client_ip as _client_ip
+from .routes.mappings import snapshot_response
 from .routes.system import METRICS_TYPE, metrics_text
 
 if TYPE_CHECKING:
@@ -36,14 +37,28 @@ _BOOLEANS = {"true": True, "1": True, "yes": True, "false": False, "0": False, "
 
 # The REST API's own version (OpenAPI info.version, GET /info) and what it offers beyond
 # 1.0.0, so a client can tell what it may use without parsing the software version.
-API_VERSION = "1.1.0"
-API_FEATURES = ("warnings", "changed", "if-match")
+API_VERSION = "1.2.0"
+API_FEATURES = ("warnings", "changed", "if-match", "traces", "capture")
 
 def _caller(request) -> str:
     """Who calls, for the audit log: the token's name (api-token:<name>), 'api-token' for
     the token of api_token_hash."""
     token = getattr(request.state, "api_token", None)
     return token.audit_label if token is not None else "api-token"
+
+
+def _operator_token(request, state) -> bool:
+    """Is the calling token an operator's or an admin's? (GuardMiddleware refuses a viewer
+    token's POST, PUT, PATCH and DELETE itself; a GET that only they may make asks here.)"""
+    token = getattr(request.state, "api_token", None)
+    role = token.role if token is not None else state.config.api_token_role
+    return ROLE_RANK.get(role, 0) >= ROLE_RANK["operator"]
+
+
+_NOT_FOUND = {"error": "not_found"}
+# a viewer token's GET of trace files, which the web UI shows operators only too
+_TRACES_FORBIDDEN = {"error": "forbidden", "detail": "trace files hold what is sent to the "
+                     "device: an operator or admin token is needed"}
 
 
 def _mapping_view(mapping: MappingConfig, state: AppState,
@@ -157,6 +172,7 @@ def build_api_routes(state: AppState) -> list[Route]:
         body.pop("id", None)         # the server assigns the id
         try:
             mapping = MappingConfig.from_dict(body)
+            mapping.options.trace_until = 0.0  # (no setting: POST .../capture begins one)
             mapping.validate()
             mapping.validate_input()
             await _check_tls_files(mapping)
@@ -212,6 +228,8 @@ def build_api_routes(state: AppState) -> list[Route]:
                     raise ops.StaleRevision(mid)
                 if existing and mapping.mqtt.password == REDACTED:  # what a viewer token reads
                     mapping.mqtt.password = existing.mqtt.password
+                if existing:  # a timed capture's end is no setting: .../capture changes it
+                    mapping.options.trace_until = existing.options.trace_until
                 # the same settings again: nothing to save, its runner stays as it is
                 if existing and existing.to_dict() != mapping.to_dict():
                     state.config.mappings[state.config.mappings.index(existing)] = mapping
@@ -267,6 +285,8 @@ def build_api_routes(state: AppState) -> list[Route]:
                         mapping.network.tls_key_password = existing.network.tls_key_password
                     if mapping.mqtt.client_key_password == REDACTED:
                         mapping.mqtt.client_key_password = existing.mqtt.client_key_password
+                    # a timed capture's end is no setting: .../capture changes it
+                    mapping.options.trace_until = existing.options.trace_until
                     mapping.validate()
                     mapping.validate_input()
                     await _check_tls_files(mapping)
@@ -321,6 +341,127 @@ def build_api_routes(state: AppState) -> list[Route]:
             out["warning"] = res.warning
         return JSONResponse(out)
 
+    # ---------------- trace files, timed capture ----------------
+    async def _trace_view(m) -> dict:
+        """A mapping's trace files and whether it is traced now: what GET .../traces
+        answers (and the capture calls, with the capture as it is then)."""
+        files = await asyncio.to_thread(state.trace_list, m.id)
+        o = m.options
+        return {"id": m.id, "tracing": bool(o.trace_file),
+                "file": f"{m.id}-{o.trace_file}" if o.trace_file else None,
+                "capture_until": state.captures.until(m),
+                "traces": [{"name": f["name"], "size": f["size"], "time": f["mtime"]}
+                           for f in files]}
+
+    async def list_traces(request):
+        """A mapping's trace files. Operator and admin tokens only, as the web UI's Trace
+        panel: listing, downloading and deleting traces is for operators and up."""
+        if not _operator_token(request, state):
+            return JSONResponse(_TRACES_FORBIDDEN, status_code=403)
+        m = state.config.get_mapping(request.path_params["mid"])
+        if not m:
+            return JSONResponse(_NOT_FOUND, status_code=404)
+        return JSONResponse(await _trace_view(m))
+
+    async def get_trace(request):
+        """Download one trace file, as it is now. Traces hold what is sent to the device
+        too (what a viewer does not see in the web UI either): operator and admin tokens
+        only. Audited."""
+        if not _operator_token(request, state):
+            return JSONResponse(_TRACES_FORBIDDEN, status_code=403)
+        mid, name = request.path_params["mid"], request.path_params["name"]
+        m = state.config.get_mapping(mid)
+        f = next((f for f in await asyncio.to_thread(state.trace_list, mid)
+                  if f["name"] == name), None) if m else None
+        if m is None or f is None:
+            return JSONResponse(_NOT_FOUND, status_code=404)
+        try:  # the file it is now, as it is now: the trace may go on writing it
+            fh = await asyncio.to_thread(open, f["path"], "rb")
+        except OSError:  # rotated or deleted meanwhile
+            return JSONResponse(_NOT_FOUND, status_code=404)
+        state.audit(_client_ip(request), "api_trace_download", f"{m.name}/{name}",
+                    user=_caller(request))
+        return snapshot_response(fh, name, "text/plain; charset=utf-8",
+                                 head=request.method == "HEAD")
+
+    async def delete_traces(request):
+        """DELETE .../traces: all of the mapping's trace files; .../traces/{name}: that
+        one (404 when the mapping has none of that name). A trace that is on goes on in a
+        new file. Audited."""
+        m = state.config.get_mapping(request.path_params["mid"])
+        if not m:
+            return JSONResponse(_NOT_FOUND, status_code=404)
+        name = request.path_params.get("name")
+        if name is not None and name not in {
+                f["name"] for f in await asyncio.to_thread(state.trace_list, m.id)}:
+            return JSONResponse(_NOT_FOUND, status_code=404)
+        deleted, failed = await state.delete_trace_files(m.id, None if name is None else [name])
+        if deleted:
+            detail = f"{m.name}/{deleted[0]}" if name is not None else \
+                f"{m.name}: {len(deleted)} file(s): {', '.join(deleted)}"
+            state.log(f"api: trace file(s) deleted: {detail}")
+            state.audit(_client_ip(request), "api_trace_delete", detail, user=_caller(request))
+        answer = {"id": m.id, "deleted": deleted,
+                  "failed": [{"name": n, "detail": why} for n, why in failed]}
+        # one file that could not be deleted (Windows: it is open for a download)
+        return JSONResponse(answer, status_code=409 if name is not None and failed else 200)
+
+    async def start_capture(request):
+        """POST .../capture {"minutes": n}: trace the mapping for that long from now (a
+        capture under way gets the new end), then stop by itself."""
+        mid = request.path_params["mid"]
+        try:
+            body = await request.json()
+        except HTTPException:  # a body over the size limit: 413
+            raise
+        except Exception:
+            return JSONResponse({"error": "invalid_json"}, status_code=400)
+        minutes = body.get("minutes") if isinstance(body, dict) else None
+        if isinstance(minutes, bool) or not isinstance(minutes, (int, float)):
+            return JSONResponse({"error": "validation", "detail": "minutes: a number from 1 to "
+                                 f"{config.CAPTURE_MAX_S // 60} is expected"}, status_code=400)
+        try:
+            until = await state.captures.begin(mid, minutes * 60)
+        except capture.CaptureRefused as e:
+            if e.code == "not_found":
+                return JSONResponse(_NOT_FOUND, status_code=404)
+            if e.code == "tracing":
+                return JSONResponse({"error": "conflict", "detail": "the mapping is traced "
+                                     "already (options.trace_both): nothing to time"},
+                                    status_code=409)
+            return JSONResponse({"error": "validation", "detail": "minutes must be 1 to "
+                                 f"{config.CAPTURE_MAX_S // 60}"}, status_code=400)
+        except ConfigError as e:
+            return _not_saved(e)
+        m = state.config.get_mapping(mid)
+        name = m.name if m is not None else mid
+        detail = f"{name}: {capture.describe(until, minutes * 60)}"
+        state.log(f"api: timed capture started: {detail}")
+        state.audit(_client_ip(request), "api_trace_capture_start", detail, user=_caller(request))
+        return JSONResponse(await _trace_view(m) if m is not None else _NOT_FOUND)
+
+    async def stop_capture(request):
+        """DELETE .../capture: end the mapping's timed capture now (`changed`: false when
+        it had none). A trace that is on by options.trace_both is not touched."""
+        mid = request.path_params["mid"]
+        m = state.config.get_mapping(mid)
+        if not m:
+            return JSONResponse(_NOT_FOUND, status_code=404)
+        warning = ""
+        try:
+            ended = await state.captures.end(mid)
+        except ConfigError as e:  # ended, but config.json could not keep it
+            ended, warning = True, str(e)
+        if ended:
+            state.log(f"api: timed capture stopped: {m.name}")
+            state.audit(_client_ip(request), "api_trace_capture_stop", m.name,
+                        user=_caller(request))
+        view = await _trace_view(m)
+        view["changed"] = ended
+        if warning:
+            view["warning"] = warning
+        return JSONResponse(view)
+
     async def import_mappings(request):
         """POST /import: many mappings in one change. The body is a mappings export
         ({"mappings": [...]}, which is also what GET /mappings answers), a whole
@@ -371,7 +512,10 @@ def build_api_routes(state: AppState) -> list[Route]:
         return PlainTextResponse(await metrics_text(state), media_type=METRICS_TYPE)
 
     async def status(request):
-        return JSONResponse({"mappings": state.supervisor.all_status()})
+        certificates = [c.view() for c in await state.certwatch.current()]
+        return JSONResponse({"mappings": state.supervisor.all_status(),
+                             "certificates": certificates,
+                             "clock_steps": state.clockwatch.steps})
 
     async def ports(request):
         return JSONResponse({"ports": await state.ports.current()})
@@ -401,6 +545,14 @@ def build_api_routes(state: AppState) -> list[Route]:
         Route(f"{API_PREFIX}/mappings/{{mid}}", update_mapping, methods=["PUT"]),
         Route(f"{API_PREFIX}/mappings/{{mid}}", patch_mapping, methods=["PATCH"]),
         Route(f"{API_PREFIX}/mappings/{{mid}}", delete_mapping, methods=["DELETE"]),
+        Route(f"{API_PREFIX}/mappings/{{mid}}/traces", list_traces, methods=["GET"]),
+        Route(f"{API_PREFIX}/mappings/{{mid}}/traces", delete_traces, methods=["DELETE"]),
+        Route(f"{API_PREFIX}/mappings/{{mid}}/traces/{{name}}", get_trace, methods=["GET"]),
+        Route(f"{API_PREFIX}/mappings/{{mid}}/traces/{{name}}", delete_traces,
+              methods=["DELETE"]),
+        # (before {action}: "capture" is not one)
+        Route(f"{API_PREFIX}/mappings/{{mid}}/capture", start_capture, methods=["POST"]),
+        Route(f"{API_PREFIX}/mappings/{{mid}}/capture", stop_capture, methods=["DELETE"]),
         Route(f"{API_PREFIX}/mappings/{{mid}}/{{action}}", mapping_action, methods=["POST"]),
     ]
 
@@ -438,6 +590,10 @@ _NOTES = {
     ("MappingConfig", "id"): "Assigned by the server (1-64 letters, digits or _); "
                              "ignored in a request body.",
     ("MappingConfig", "enabled"): "Run the mapping. Left out of a POST or PUT: true.",
+    ("MappingOptions", "trace_until"): "When a timed capture ends (Unix time; 0 = none). "
+                                       "Read-only: POST and DELETE /mappings/{mid}/capture "
+                                       "change it; a value in a POST, PUT or PATCH body is "
+                                       "ignored (the stored one stays).",
     ("MappingConfig", "serial_b"): "The second serial port of a serialbridge mapping.",
     ("MappingConfig", "network"): "The network side of a net mapping.",
     ("SerialSettings", "port"): "The serial device (COM3, /dev/ttyUSB0, ...); required. "
@@ -458,6 +614,8 @@ _NOTES = {
                                              "******** for a viewer token; sent back so in a "
                                              "PUT or PATCH, the stored one stays.",
 }
+# fields the server sets: what a request body has for them is ignored
+_READ_ONLY = {("MappingOptions", "trace_until")}
 _JSON_TYPES = {str: "string", int: "integer", float: "number", bool: "boolean"}
 
 
@@ -484,6 +642,8 @@ def _field_schema(cls, f, hint) -> dict:
         out["enum"] = list(_ENUMS[cls.__name__, f.name])
     if (cls.__name__, f.name) in _NOTES:
         out["description"] = _NOTES[cls.__name__, f.name]
+    if (cls.__name__, f.name) in _READ_ONLY:
+        out["readOnly"] = True
     return out
 
 
@@ -569,7 +729,27 @@ def openapi_spec(admin, base: str = "") -> dict:
             "mappings": {"type": "array", "items": {"$ref": "#/components/schemas/Mapping"}}}},
         "StatusMap": {"type": "object", "properties": {"mappings": {
             "type": "object", "description": "mapping id -> its live state",
-            "additionalProperties": {"$ref": "#/components/schemas/MappingStatus"}}}},
+            "additionalProperties": {"$ref": "#/components/schemas/MappingStatus"}},
+            "clock_steps": {"type": "integer",
+                            "description": "steps of the system clock of 1 s or more seen "
+                                           "since the start"},
+            "certificates": {
+                "type": "array", "description": "the TLS certificates in use: the admin UI's "
+                                                "and each enabled TLS mapping's (read at "
+                                                "most every 5 minutes)",
+                "items": {"type": "object", "properties": {
+                    "use": {"type": "string", "enum": ["admin", "mapping"]},
+                    "id": {"type": "string", "description": "the mapping (use mapping)"},
+                    "mapping": {"type": "string", "description": "its name"},
+                    "path": {"type": "string"},
+                    "subject": {"type": "string"},
+                    "not_after": {"type": "number", "description": "its end (Unix time)"},
+                    "days_left": {"type": "integer",
+                                  "description": "whole days left (negative: ended)"},
+                    "state": {"type": "string", "enum": [
+                        "valid", "expiring", "expired", "not_yet_valid", "unreadable"]},
+                    "detail": {"type": "string",
+                               "description": "why it is unreadable"}}}}}},
         "PortList": {"type": "object", "properties": {"ports": {
             "type": "array", "items": {"type": "object", "additionalProperties": True}}}},
         "Health": {"type": "object", "properties": {"status": {"type": "string"},
@@ -588,6 +768,34 @@ def openapi_spec(admin, base: str = "") -> dict:
             "features": {"type": "array", "items": {"type": "string"},
                          "description": "what it offers beyond 1.0.0"}}},
         "Deleted": {"type": "object", "properties": {"deleted": {"type": "string"}}},
+        "TraceList": {"type": "object", "properties": {
+            "id": {"type": "string", "description": "the mapping"},
+            "tracing": {"type": "boolean", "description": "its traffic is traced now"},
+            "file": {"type": "string", "nullable": True,
+                     "description": "the trace file written now (null: none)"},
+            "capture_until": {"type": "number", "nullable": True,
+                              "description": "when its timed capture ends (Unix time; null: "
+                                             "no timed capture)"},
+            "changed": {"type": "boolean",
+                        "description": "DELETE .../capture: a capture was ended"},
+            "warning": {"type": "string",
+                        "description": "DELETE .../capture: ended, but config.json could "
+                                       "not keep it"},
+            "traces": {"type": "array", "description": "newest first", "items": {
+                "type": "object", "properties": {
+                    "name": {"type": "string"},
+                    "size": {"type": "integer", "description": "bytes"},
+                    "time": {"type": "number",
+                             "description": "last written (Unix time)"}}}}}},
+        "TracesDeleted": {"type": "object", "properties": {
+            "id": {"type": "string"},
+            "deleted": {"type": "array", "items": {"type": "string"}},
+            "failed": {"type": "array", "items": {"type": "object", "properties": {
+                "name": {"type": "string"}, "detail": {"type": "string"}}}}}},
+        "Capture": {"type": "object", "required": ["minutes"], "properties": {
+            "minutes": {"type": "number", "minimum": 1, "maximum": config.CAPTURE_MAX_S // 60,
+                        "description": "how long from now (15, 60 and 1440 are what the "
+                                       "web UI offers)"}}},
         "ImportResult": {"type": "object", "additionalProperties": True, "properties": {
             "mode": {"type": "string", "enum": list(importer.MODES)},
             "dry_run": {"type": "boolean"},
@@ -620,7 +828,11 @@ def openapi_spec(admin, base: str = "") -> dict:
                                      "body that is nothing importable (invalid_import)."),
         "Unauthorized": _json("Error", "No token, a wrong or expired one (unauthorized), or no API "
                                        "token configured (api_token_not_configured)."),
-        "Forbidden": _json("Error", "The token's role may only read (forbidden)."),
+        "Forbidden": _json("Error", "The token's role may only read (forbidden); trace files "
+                                    "are for operator and admin tokens only."),
+        "Conflict": _json("Error", "Not possible as things are (conflict): a timed capture "
+                                   "of a mapping that is traced already; a trace file that "
+                                   "can't be deleted now."),
         "NotFound": _json("Error", "No mapping has this id (not_found)."),
         "TooLarge": {"description": "The request body is larger than the server accepts.",
                      "content": {"text/plain": {"schema": {"type": "string"}}}},
@@ -636,16 +848,18 @@ def openapi_spec(admin, base: str = "") -> dict:
         return {"$ref": f"#/components/responses/{name}"}
 
     def op(summary: str, ok: tuple, *errors: str, write: bool = False, body=None,
-           description: str = "", parameters=None) -> dict:
+           description: str = "", parameters=None, operator: bool = False) -> dict:
         """One operation: its 2xx answer, the errors it can give, and the token errors
-        every authenticated call can (403 for a call that changes something)."""
+        every authenticated call can (403 for a call that changes something, or
+        `operator`: one only operator and admin tokens may make)."""
         resp = {ok[0]: _json(ok[1], ok[2])}
         for name in errors:
-            code = {"BadRequest": "400", "NotFound": "404", "PreconditionFailed": "412",
+            code = {"BadRequest": "400", "NotFound": "404", "Conflict": "409",
+                    "PreconditionFailed": "412",
                     "TooLarge": "413", "SaveFailed": "500"}[name]
             resp[code] = ref(name)
         resp["401"] = ref("Unauthorized")
-        if write:
+        if write or operator:
             resp["403"] = ref("Forbidden")
         resp["503"] = ref("SetupIncomplete")
         out = {"summary": summary, "security": bearer, "responses": resp}
@@ -701,7 +915,8 @@ def openapi_spec(admin, base: str = "") -> dict:
                                             "version (info.version here); `features`: what it "
                                             "offers beyond 1.0.0 (`warnings` and `changed` in "
                                             "create / update / action answers, `if-match` on "
-                                            "PUT / DELETE).")},
+                                            "PUT / DELETE, `traces`: the trace file calls, "
+                                            "`capture`: timed capture).")},
             "/status": {"get": op("Live status of all mappings", ("200", "StatusMap", "status map"))},
             "/ports": {"get": op("Detected serial ports", ("200", "PortList", "port list"))},
             "/metrics": {"get": {
@@ -769,6 +984,56 @@ def openapi_spec(admin, base: str = "") -> dict:
                 "delete": op("Delete a mapping", ("200", "Deleted", "deleted"), "NotFound",
                              "PreconditionFailed", "SaveFailed", write=True,
                              parameters=[if_match]),
+            },
+            "/mappings/{mid}/traces": {
+                "parameters": [mid],
+                "get": op("List a mapping's trace files (operator and admin tokens)",
+                          ("200", "TraceList", "its trace files, newest first, and whether "
+                                               "it is traced now"), "NotFound",
+                          operator=True, description="A viewer token gets 403, as a viewer "
+                                                     "gets no Trace panel in the web UI."),
+                "delete": op("Delete all trace files of a mapping",
+                             ("200", "TracesDeleted", "what was deleted, and what could not "
+                                                      "be"), "NotFound", write=True,
+                             description="A trace that is on goes on in a new file."),
+            },
+            "/mappings/{mid}/traces/{name}": {
+                "parameters": [mid, {"name": "name", "in": "path", "required": True,
+                                     "schema": {"type": "string"},
+                                     "description": "a name of the mapping's own list"}],
+                "get": {
+                    "summary": "Download a trace file (operator and admin tokens)",
+                    "description": "The file as it is now. Trace files hold the traffic in "
+                                   "both directions, what is sent to the device included: a "
+                                   "viewer token gets 403. Recorded in the audit log.",
+                    "security": bearer,
+                    "responses": {"200": {"description": "the trace file",
+                                          "content": {"text/plain": {
+                                              "schema": {"type": "string"}}}},
+                                  "401": ref("Unauthorized"), "403": ref("Forbidden"),
+                                  "404": ref("NotFound"), "503": ref("SetupIncomplete")}},
+                "delete": op("Delete a trace file", ("200", "TracesDeleted", "deleted"),
+                             "NotFound", "Conflict", write=True),
+            },
+            "/mappings/{mid}/capture": {
+                "parameters": [mid],
+                "post": op("Trace a mapping for a while (timed capture)",
+                           ("200", "TraceList", "the capture runs (capture_until)"),
+                           "BadRequest", "NotFound", "Conflict", "SaveFailed", write=True,
+                           body={"required": True, "content": {"application/json": {
+                               "schema": {"$ref": "#/components/schemas/Capture"}}}},
+                           description="The mapping's traffic is traced to "
+                                       "traces/<id>-capture.log from now for that long, then "
+                                       "the trace turns itself off; clients stay connected. "
+                                       "The end time is stored (options.trace_until): a "
+                                       "restart does not lose it. Again while one runs: the "
+                                       "new end replaces the old. 409 for a mapping that is "
+                                       "traced already (options.trace_both)."),
+                "delete": op("End a mapping's timed capture now",
+                             ("200", "TraceList", "ended (`changed`: false when it had none)"),
+                             "NotFound", write=True,
+                             description="Never turns off a trace that is on by "
+                                         "options.trace_both."),
             },
             "/mappings/{mid}/{action}": {
                 "parameters": [

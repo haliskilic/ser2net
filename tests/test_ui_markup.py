@@ -153,7 +153,8 @@ def test_mappings_table():
         assert "<img" not in out and "&lt;img" in out, "mapping name/path must be escaped"
         assert "by-<wbr>id/" in out, "device paths should get soft line breaks"
         n_btn = sum(1 for n in root.walk() if n.tag == "button")
-        assert n_btn == (7 + 6 + 7 if can_edit else 2 * 3), f"unexpected button count {n_btn}"
+        # (with Trace for every mapping: a timed capture is started there)
+        assert n_btn == (8 + 7 + 8 if can_edit else 2 * 3), f"unexpected button count {n_btn}"
         err = next(n for n in root.walk() if "err-small" in n.classes())
         assert err.attrs.get("title", "").endswith(BY_ID), "full error belongs in the tooltip"
         # the counters say what they count; dropped data is flagged in the same cell

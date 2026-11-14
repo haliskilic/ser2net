@@ -116,6 +116,14 @@ async def metrics_text(state) -> str:
     guard = getattr(state, "admin_guard", None)
     if guard is not None:
         lines.append(f"ser2net_admin_connections {len(guard.connections)}")
+    # when the TLS certificates in use end (the admin UI's, each enabled TLS mapping's)
+    watch = getattr(state, "certwatch", None)
+    for c in (await watch.current() if watch is not None else ()):
+        if c.info is not None:
+            who = (f'use="mapping",mapping="{_metric_label(c.mapping)}",'
+                   f'id="{_metric_label(c.key)}"' if c.mapping else 'use="admin"')
+            lines.append(f"ser2net_tls_certificate_expiry_seconds{{{who}}} "
+                         f"{int(c.info.not_after)}")
     budget = netguard.BUDGET
     lines.append(f"ser2net_tls_handshakes_in_progress {len(budget.handshakes)}")
     lines.append(f"ser2net_tls_handshakes_waiting {len(budget.waiting)}")  # for a slot
@@ -187,6 +195,8 @@ METRIC_INFO = {
                                                 "was (a loop that is held up)"),
     "ser2net_event_loop_stalls_total": ("counter", "Heartbeats of the event loop 2 s or more "
                                                    "late"),
+    "ser2net_clock_steps_total": ("counter", "Steps of the system clock of 1 s or more seen "
+                                             "since the start"),
     "ser2net_mappings_total": ("gauge", "Mappings configured"),
     "ser2net_open_fds": ("gauge", "Files the process has open (POSIX)"),
     "ser2net_fd_limit": ("gauge", "The process's open-file limit (POSIX)"),
@@ -195,6 +205,9 @@ METRIC_INFO = {
     "ser2net_traces_bytes": ("gauge", "What the trace files take in the data folder"),
     "ser2net_logs_bytes": ("gauge", "What the logs take in the data folder"),
     "ser2net_admin_connections": ("gauge", "Connections to the admin UI"),
+    "ser2net_tls_certificate_expiry_seconds": ("gauge", "When a TLS certificate in use ends "
+                                                        "(Unix time): the admin UI's, an "
+                                                        "enabled TLS mapping's"),
     "ser2net_tls_handshakes_in_progress": ("gauge", "TLS handshakes under way"),
     "ser2net_tls_handshakes_waiting": ("gauge", "Connections waiting for a TLS handshake slot"),
     "ser2net_connections_refused_total": ("counter", "Connections refused right after accept, "
@@ -247,6 +260,9 @@ def process_metrics(state) -> list[str]:
     if dog is not None:
         lines.append(f"ser2net_event_loop_lag_seconds {dog.lag:.3f}")
         lines.append(f"ser2net_event_loop_stalls_total {dog.slow_beats}")
+    watch = getattr(state, "clockwatch", None)  # (ser2netweb/clockwatch.py)
+    if watch is not None:
+        lines.append(f"ser2net_clock_steps_total {watch.steps}")
     return lines
 
 

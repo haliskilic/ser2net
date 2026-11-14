@@ -17,6 +17,20 @@
 {% else %}
 <p class="muted mb-sm">{{ _("Tracing is off for this mapping (set a trace file name in its options). Files recorded earlier are listed below.") }}</p>
 {% endif %}
+{% if capture_until %}
+<div class="banner notice" id="capture-running">{{ _("Timed recording: stops by itself at %(time)s.", time=capture_until) }}
+  <button class="btn sm" id="capture-stop" hx-delete="{{ base }}/api/mappings/{{ mid }}/capture" hx-target="#form-panel" hx-swap="innerHTML">{{ _("Stop now") }}</button></div>
+{% endif %}
+{% if not permanent %}
+<form class="toolbar" id="capture-form" hx-post="{{ base }}/api/mappings/{{ mid }}/capture" hx-target="#form-panel" hx-swap="innerHTML">
+  <label>{{ _("Record for") if not capture_until else _("Record on for") }}
+    <select name="minutes" id="capture-minutes">
+      {% for n in capture_choices %}<option value="{{ n }}">{% if n < 60 %}{{ ngettext("%(num)s minute", "%(num)s minutes", n) }}{% else %}{{ ngettext("%(num)s hour", "%(num)s hours", n // 60) }}{% endif %}</option>{% endfor %}
+    </select></label>
+  <button class="btn sm" id="capture-start">{{ _("● Record") }}</button>
+  <span class="muted">{{ _("then recording turns itself off; clients stay connected") }}{% if not running %} · {{ _("the mapping is not running: nothing is recorded until it is started") }}{% endif %}</span>
+</form>
+{% endif %}
 <p class="muted mb-sm">{{ _("Traces hold the raw traffic in both directions, personal data and passwords typed to the device included: delete them once they are no longer needed.") }}{% if trace_days %} {{ _("Trace files not written for %(days)s days are deleted every hour (Settings → Retention).", days=trace_days) }}{% endif %}</p>
 {% if files %}
 <p class="muted mb-sm">{{ _("Times in trace files are the server’s local time (now %(zone)s).", zone=server_zone()) }}</p>

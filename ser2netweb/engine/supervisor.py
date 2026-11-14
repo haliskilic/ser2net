@@ -468,6 +468,26 @@ class Supervisor:
                 return await asyncio.wrap_future(done)
             return await asyncio.to_thread(remove_files, paths)
 
+    async def retrace(self, mapping_id: str) -> bool:
+        """In the mapping's turn: its running runner opens or closes its trace as the
+        options ask for now (a timed capture begun or ended), keeping its clients and its
+        serial port. A runner that is not running opens its trace when it starts.
+        Returns whether a trace was opened or closed."""
+        async with self._turn(mapping_id):
+            runner = self._runners.get(mapping_id)
+            change = getattr(runner, "retrace", None)
+            if runner is None or change is None:
+                return False
+            # a runner kept across a merge import was built from an equal mapping that is
+            # no longer the configuration's object: it takes the capture's end from that
+            built = getattr(runner, "mapping", None)
+            current = self._lookup(mapping_id) if self._lookup is not None else None
+            if current is not None and built is not None and built is not current:
+                built.options.trace_until = current.options.trace_until
+            if runner.status.state not in ALIVE_STATES:
+                return False
+            return bool(await change())
+
     async def renew_tls(self, mapping_id: str, build: Callable[[], Any]) -> Optional[str]:
         """In the mapping's turn: its running TLS listener gets a context made by build()
         (tlsreload.prepare) for the connections it accepts from now on; those open keep
@@ -482,6 +502,17 @@ class Supervisor:
                 return prepared.error or prepared.later or "no TLS context"
             listener.ssl = prepared.context
             return ""
+
+    def annotate_traces(self, text: str) -> int:
+        """Put a "!!" note into every running trace (bridge.Tracer.annotate): where the
+        system clock was stepped. Returns how many traces got it."""
+        count = 0
+        for runner in list(self._runners.values()):
+            tracer = getattr(runner, "tracer", None)
+            if tracer is not None and tracer.active:
+                tracer.annotate(text)
+                count += 1
+        return count
 
     async def renew_traces(self, begun_before: float) -> int:
         """Have every running trace whose file holds traffic from before `begun_before`

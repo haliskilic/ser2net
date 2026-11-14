@@ -13,7 +13,10 @@ import urllib.parse
 from starlette.responses import PlainTextResponse, Response, StreamingResponse
 from starlette.routing import Route
 
-from ... import clock
+from .. import tlsupload
+from ..starlette_compat import Route as LimitedRoute
+
+from ... import capture, clock
 from ...config import (ConfigError, MappingConfig, ModbusPoll, console_charset, console_encoding,
                        mapping_revision)
 from ...engine import netinfo, portlist
@@ -178,16 +181,13 @@ def routes(ctx: Ctx) -> list:
         # snapshot: an edit replaces a mapping object, a delete removes it from the list.
         mappings, statuses = list(state.config.mappings), state.supervisor.all_status()
         edit = can_edit(request)
-        # Trace is offered while tracing is on, and after that as long as files are left
-        traced = await asyncio.to_thread(state.traced_mapping_ids) if edit else set()
 
         def snapshot():
-            return ((edit, sorted(traced), [_row_shape(m, statuses.get(m.id)) for m in mappings]),
+            return ((edit, [_row_shape(m, statuses.get(m.id)) for m in mappings]),
                     {f"m-{m.id}-bytes": _in_out(statuses.get(m.id)) for m in mappings})
         # the server's clock: the browser counts the clients' connection times on from it
         return await table.answer(request, snapshot, headers={"X-Server-Time": f"{time.time():.3f}"},
-                                  mappings=mappings, statuses=statuses, can_edit=edit,
-                                  traced=traced)
+                                  mappings=mappings, statuses=statuses, can_edit=edit)
 
     async def mapping_bulk(request):
         """Start / stop / restart several mappings at once (the dashboard's selection)."""
@@ -256,6 +256,44 @@ def routes(ctx: Ctx) -> list:
             links=portlist.links(portlist.visible(ports), (m.serial.port, m.serial_b.port)),
             mqtt_stored=m.mqtt.password))
 
+    async def mapping_tls_upload(request):
+        """TLS files uploaded in the mapping form (admins; tlsupload.py): a certificate
+        with its key, and / or a CA file for the field it stands next to. Checked and kept
+        in the data folder's tls/; the answer names their paths (HX-Trigger: tlsUploaded),
+        which the page puts into the form's path fields - saved with the form, like paths
+        that were typed. `mid`: the mapping being edited, for its stored key password when
+        none is typed."""
+        if deny := require_role(request, "admin"):
+            return deny
+        form = await request.form(max_files=4)  # certificate, key, CA, client CA
+        m = state.config.get_mapping(str(form.get("mid") or ""))
+        password = str(form.get("network_tls_key_password") or "") or (
+            m.network.tls_key_password if m is not None else "")
+        admin = state.config.admin_ui
+        try:
+            paths = await asyncio.to_thread(
+                tlsupload.store, state.data_dir,
+                cert=await tlsupload.read_file(form, "cert"),
+                key=await tlsupload.read_file(form, "key"), password=password,
+                cas={"ca": await tlsupload.read_file(form, "ca"),
+                     "client_ca": await tlsupload.read_file(form, "client_ca")},
+                others=((admin.tls_cert, admin.tls_key),), reuse_message=_(
+                    "This certificate and key are the admin UI's own. Give the mapping a "
+                    "certificate and key of its own."))
+        except tlsupload.UploadError as e:
+            return PlainTextResponse(str(e), status_code=400)
+        except OSError as e:
+            return PlainTextResponse(_("The uploaded files could not be stored: {0}").format(
+                e.strerror or e), status_code=500)
+        names = ", ".join(os.path.basename(p) for p in paths.values())
+        state.log(f"TLS files uploaded for mapping {m.name if m else '(new)'!r}: {names}")
+        ctx.audit(request, "tls_upload", f"{m.name if m else '(new)'}: {names}")
+        fields = {"network_tls_" + what: path for what, path in paths.items()}
+        return Response(status_code=204, headers={
+            "HX-Trigger": json.dumps({"tlsUploaded": fields}),  # (ASCII: \u escapes)
+            **notice(_("Uploaded and checked. The paths are in the form: save it to use "
+                       "them."))})
+
     async def mapping_modbus_read(request):
         """The mapping form's test read: the points in the posted points JSON, as typed (not
         saved), read once now through the mapping's running gateway (its turn on the bus
@@ -305,26 +343,24 @@ def routes(ctx: Ctx) -> list:
                                  lines=lines, content_hash=digest)
 
     def _trace_files(mid):
-        out = []
-        for path in state.trace_files(mid):
-            try:
-                st = os.stat(path)
-            except OSError:
-                continue
-            out.append({"name": os.path.basename(path), "path": path,
-                        "size_text": bytesize(st.st_size), "time": clock.stamp(st.st_mtime)})
-        return out
+        return [{**f, "size_text": bytesize(f["size"]), "time": clock.stamp(f["mtime"])}
+                for f in state.trace_list(mid)]
 
     async def _traces_panel(request, m, ok="", error=""):
         files = await asyncio.to_thread(_trace_files, m.id)
         o = m.options
         st = state.supervisor.status(m.id) or {}
+        until = state.captures.until(m)
         return render(request, "_mapping_traces.html", status_code=400 if error else 200,
                       mid=m.id, mapping_name=m.name, files=files,
-                      tracing=bool(o.trace_both), current=f"{m.id}-{o.trace_both}",
+                      tracing=bool(o.trace_file), current=f"{m.id}-{o.trace_file}",
                       max_mb="%g" % o.trace_max_mb, keep=o.trace_keep, hexdump=o.trace_hexdump,
                       trace_error=st.get("trace_error", ""), ok=ok, error=error,
-                      trace_days=state.config.trace_max_age_days)
+                      trace_days=state.config.trace_max_age_days,
+                      # a timed capture: offered while the trace is off, shown while one runs
+                      permanent=bool(o.trace_both), capture_choices=capture.CHOICES_MIN,
+                      capture_until=clock.stamp(until) if until and not o.trace_both else "",
+                      running=st.get("state") in ("running", "reconnecting", "device-missing"))
 
     # Traces record both directions, what clients type to the device included (see
     # common.sees_to_device): listing, downloading and deleting them needs operator+.
@@ -354,12 +390,60 @@ def routes(ctx: Ctx) -> list:
             ctx.audit(request, "trace_delete", detail)
         ok = ngettext("Deleted {0} trace file.", "Deleted {0} trace files.",
                       len(deleted)).format(len(deleted)) if deleted else ""
-        if ok and m.options.trace_both and f"{m.id}-{m.options.trace_both}" in deleted:
+        if ok and m.options.trace_file and f"{m.id}-{m.options.trace_file}" in deleted:
             ok += " " + _("Tracing is still on: new traffic begins a new file.")
         error = "; ".join(_("Could not delete {0}: {1}").format(n, why) for n, why in failed)
         if not deleted and not failed:
             ok = _("No trace files to delete.")
         return await _traces_panel(request, m, ok=ok, error=error)
+
+    async def mapping_capture_start(request):
+        """Trace the mapping for 15 minutes, 1 hour or 24 hours from now (capture.py);
+        audited. Answers the trace panel."""
+        if deny := require_role(request, "operator"):
+            return deny
+        m = state.config.get_mapping(request.path_params["mid"])
+        if not m:
+            return PlainTextResponse(_("Mapping not found"), status_code=404)
+        form = await read_form(request)
+        try:
+            minutes = int(form.get("minutes", ""))
+        except ValueError:
+            minutes = 0
+        if minutes not in capture.CHOICES_MIN:
+            return await _traces_panel(request, m, error=_(
+                "Choose how long to record: 15 minutes, 1 hour or 24 hours."))
+        try:
+            until = await state.captures.begin(m.id, minutes * 60)
+        except capture.CaptureRefused:  # (traced already; deleted meanwhile)
+            return await _traces_panel(request, m, error=_(
+                "This mapping is traced already (its trace file name is set): there is "
+                "nothing to time."))
+        except ConfigError as e:
+            return await _traces_panel(request, m, error=str(e))
+        detail = f"{m.name}: {capture.describe(until, minutes * 60)}"
+        state.log(f"timed capture started: {detail}")
+        ctx.audit(request, "trace_capture_start", detail)
+        return await _traces_panel(request, m, ok=_(
+            "Recording until {0}; it then stops by itself.").format(clock.stamp(until)))
+
+    async def mapping_capture_stop(request):
+        """End the mapping's timed capture now; audited. Answers the trace panel."""
+        if deny := require_role(request, "operator"):
+            return deny
+        m = state.config.get_mapping(request.path_params["mid"])
+        if not m:
+            return PlainTextResponse(_("Mapping not found"), status_code=404)
+        error = ""
+        try:
+            ended = await state.captures.end(m.id)
+        except ConfigError as e:  # ended, but config.json could not keep it
+            ended, error = True, str(e)
+        if ended:
+            state.log(f"timed capture stopped: {m.name}")
+            ctx.audit(request, "trace_capture_stop", m.name)
+        return await _traces_panel(request, m, error=error,
+                                   ok=_("Recording stopped.") if ended and not error else "")
 
     async def mapping_trace_file(request):
         """Download one of a mapping's trace files — only a name from its own list."""
@@ -455,6 +539,8 @@ def routes(ctx: Ctx) -> list:
         Route("/api/mappings/{mid}/duplicate", mapping_duplicate, methods=["POST"]),
         Route("/api/status", api_status),
         Route("/api/mappings/bulk", mapping_bulk, methods=["POST"]),
+        LimitedRoute("/api/mappings/tls-upload", mapping_tls_upload, methods=["POST"],
+                     max_body_size=tlsupload.MAX_BODY_BYTES),
         Route("/api/mappings/form", mapping_form_new),
         Route("/api/mappings/{mid}/form", mapping_form_edit),
         Route("/api/mappings/{mid}/modbus-read", mapping_modbus_read, methods=["POST"]),
@@ -464,6 +550,9 @@ def routes(ctx: Ctx) -> list:
         Route("/api/mappings/{mid}/traces", mapping_traces_delete, methods=["DELETE"]),
         Route("/api/mappings/{mid}/traces/{name}", mapping_trace_file),
         Route("/api/mappings/{mid}/traces/{name}", mapping_traces_delete, methods=["DELETE"]),
+        # before /api/mappings/{mid}/{action}: "capture" is not a start/stop action
+        Route("/api/mappings/{mid}/capture", mapping_capture_start, methods=["POST"]),
+        Route("/api/mappings/{mid}/capture", mapping_capture_stop, methods=["DELETE"]),
         Route("/api/mappings/save", mapping_save, methods=["POST"]),
         Route("/api/mappings/{mid}", mapping_delete, methods=["DELETE"]),
         Route("/api/mappings/{mid}/{action}", mapping_action, methods=["POST"]),

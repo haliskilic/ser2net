@@ -214,7 +214,7 @@ def fd_estimate(config: Any) -> int:
         if not m.enabled:
             continue
         need += len(m.serial_sides())
-        need += 1 if m.options.trace_both else 0
+        need += 1 if m.options.trace_file else 0
         need += 3 if m.mqtt.enabled else 0
         if m.kind == "net":
             need += 1 + (m.network.max_connections if m.network.mode == "server" else 0)

@@ -112,6 +112,7 @@ _OPTIONS = {
     "banner": "Hello \\N on \\p", "openstr": "INIT\r\n", "closestr": "BYE\r",
     "closeon": "logout\r\n", "idle_timeout_s": 300, "max_connection_time_s": 86400,
     "trace_both": "plc1.trace", "trace_hexdump": True, "trace_timestamp": False,
+    "trace_until": 4102444800.0,
     "trace_max_mb": 2.5, "trace_keep": 7, "rfc2217_poll_modem_interval_s": 2.0,
     "rfc2217_net_timeout_s": 9.0, "rfc2217_restore_on_disconnect": True,
     "modbus_response_timeout_s": 2.5, "no_data_alarm_s": 300, "no_data_reply_only": True,
