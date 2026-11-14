@@ -9,8 +9,42 @@ files and translations inside it), built with setuptools from `pyproject.toml` (
 `python -m build` or a distribution's pyproject macros), and the command `ser2netweb`
 (`ser2netweb.cli:main`, also `python -m ser2netweb`). It needs Python 3.10 or newer. A
 package of it keeps its data where the distribution's service unit points `--data-dir`
-(a `pip` install defaults to the user's data folder, `ser2netweb/layout.py`). The release's
+(a `pip` install defaults to the user's data folder, `ser2netweb/layout.py`; a package that
+writes `ser2netweb/distro.json`, below, to its service's data directory). The release's
 git tag tarball has the tests; the sdist on PyPI doesn't.
+
+## Telling ser2netweb it is a distribution's package
+
+Installed into the system's `site-packages` with its `.dist-info`, a distribution's package
+looks like a pip install to ser2netweb: without `--data-dir` it would keep its data in the
+user's data folder, `--about` would say `Build: Python package (pip / pipx)`, and the hint
+for a missing optional package would name `pip install "ser2netweb[mqtt]"`. Every recipe in
+`packaging/` therefore writes `ser2netweb/distro.json` into the source tree before the build
+(`pyproject.toml`'s package data takes it into the wheel, so the distribution's own tooling
+packages it with the rest, and the check step's tests see it too):
+
+```json
+{"distribution": "Debian", "data_dir": "/var/lib/ser2netweb", "optional": "sudo apt install python3-{dist}"}
+```
+
+- `distribution` (required): the name `--about` gives, `Build: distribution package (Debian)`;
+- `data_dir`: the data directory of the package's service, the default without `--data-dir`
+  (`sudo -u ser2netweb ser2netweb --set-password admin` then works on the service's data);
+  while it has no `config.json` and the user's data folder has one (a package built from a
+  recipe before the file was taken for a pip install, and a copy run by hand kept its data
+  there), that folder stays the default, as for the Homebrew formula;
+  left out, the user's data folder, as for pip (nixpkgs, whose package also runs outside
+  NixOS);
+- `optional`: how the distribution installs an optional package, for the hint about a missing
+  one: a command with `{dist}` (the PyPI name: `paho-mqtt`, `ldap3`, `authlib`,
+  `cryptography`) or `{extra}` (`mqtt`, `ldap`, `oidc`, `tls`), or an object with a command per
+  PyPI name, where a name left out means the distribution has no package of it.
+
+Without the file (a package of another recipe, or one that can't be read) ser2netweb keeps
+pip's layout. A marker in the package was chosen over the `.dist-info`'s `INSTALLER`: not
+every build tool writes one (`python -m installer`, which Arch, Alpine, FreeBSD and MacPorts
+use, doesn't; Fedora writes `rpm`, conda `conda`), and none of it says which distribution it
+is, where the package's service keeps its data or how the distribution names a package.
 
 ## The dependencies and their floors
 
@@ -221,7 +255,7 @@ side.
 | Distribution | Recipe | Built in CI in | Linter |
 |---|---|---|---|
 | Debian, Ubuntu | `packaging/debian/debian/` (source and binary package `ser2netweb`) | `debian:unstable`, `debian:trixie`, `ubuntu:26.04` | lintian; autopkgtest runs `debian/tests` |
-| Fedora, EPEL | `packaging/fedora/ser2netweb.spec` | `fedora:rawhide`, `fedora:latest`; `almalinux:10` with EPEL (may fail) | rpmlint |
+| Fedora, EPEL | `packaging/fedora/ser2netweb.spec` | `fedora:rawhide`, `fedora:latest`; `almalinux:10` with EPEL and CRB | rpmlint |
 | openSUSE | `packaging/opensuse/ser2netweb.spec`, `ser2netweb.changes` | `opensuse/tumbleweed` | rpmlint |
 | Arch Linux | `packaging/arch/ser2netweb/PKGBUILD`, `.SRCINFO` | `archlinux:latest` | namcap |
 | Alpine | `packaging/alpine/ser2netweb/APKBUILD` with an OpenRC service | `alpine:edge` | apkbuild-lint |
@@ -259,9 +293,15 @@ changed dependency or unit fails there until the recipes follow. **3.0.1 is the 
 release to submit:** 3.0.0's tag still had the old, narrow dependency ranges and no
 built-in transport, so no distribution can build it with its own packages.
 
-What a recipe's check step leaves out: `tests/test_dependency_internals.py` and
-`tests/test_serial_compat.py` ask for pyserial's Windows backend, which openSUSE's package
-doesn't ship, and the latter for a glibc detail a Fedora builder answers differently.
+The check steps also run `tests/test_dependency_internals.py` and
+`tests/test_serial_compat.py`, which check the dependencies' code ser2netweb builds on. In a
+distribution's build (the recipe's `ser2netweb/distro.json` in the tree) they name instead
+of failing what only a distribution's packages do: pyserial code that differs from the
+pinned release's (Fedora's pyserial 3.5 carries upstream's later fixes for custom baud
+rates, so the stand-in for glibc 2.42's refusal has nothing to refuse there), and
+pyserial's Windows-only modules a package leaves out (openSUSE's has no `serialwin32`).
+Everything else, the built-in transport's hash and every behaviour they check, is as strict
+as in ser2netweb's own CI, where a changed pin still fails.
 
 ### Debian and Ubuntu
 
@@ -300,11 +340,15 @@ doesn't ship, and the latter for a glibc detail a Fedora builder answers differe
   `bundled(js-xterm-addon-fit)`, `bundled(python3dist(pyserial-asyncio-fast))`; the npm
   releases of the browser libraries are `Source4`–`Source6`, so the SRPM carries their
   sources.
-- **EPEL 10 is blocked:** RHEL 10's `python3-setuptools` is 69, and `pyproject.toml` needs
-  setuptools 77 (its licence fields, PEP 639): `%pyproject_buildrequires` finds no
-  `python3dist(setuptools) >= 77` (the CI leg on AlmaLinux 10 shows it and may fail).
-  `python3-authlib` 1.3.2 there is also below the OIDC extra's 1.4.0, a `Recommends` only.
-  RHEL 10 machines use the release's `.rpm` or the DNF repository meanwhile.
+- **EPEL 10:** RHEL 10's `python3-setuptools` is 69, older than the licence fields of
+  `pyproject.toml` (PEP 639's `license = "AGPL-3.0-only"` and `license-files`, setuptools
+  77). On RHEL 10 and older (`%bcond old_setuptools`) `%prep` takes them out of the build's
+  copy, as FreeBSD's port does (`license = {text = …}`, no `license-files`, `setuptools`
+  without a version), and `%install` puts the licence texts into the `.dist-info`'s
+  `licenses/`, where setuptools 77 would and the web UI's `/licenses` page reads them. The
+  PyPI files keep the PEP 639 metadata; `tests/test_distro_recipes.py` checks that the patch
+  changes nothing else. The AlmaLinux 10 leg has to pass like the others.
+  `python3-authlib` 1.3.2 there is below the OIDC extra's 1.4.0, a `Recommends` only.
 - **To submit:** a Fedora account (FAS), `fedora-review -b <bug>` locally, a review request
   in Red Hat Bugzilla (product Fedora, component Package Review) with links to
   the spec and SRPM (a Copr build or fedorapeople space), and a sponsor into the `packager`
@@ -526,3 +570,38 @@ paho-mqtt 2.1.0 only up to Python 3.13, and no Authlib. FreeBSD's `devel/py-setu
   `ser2netweb: new port, version 3.0.1`, with the Portfile at the same path; the pull request's template asks for the
   macOS and Xcode versions tested on and `port lint --nitpick` / `sudo port -vst install`.
   The maintainer is given by GitHub handle (`@haliskilic`) with `openmaintainer`.
+
+## conda-forge
+
+`packaging/conda-forge/recipe.yaml` is the recipe in rattler-build's v1 format that
+conda-forge's staged-recipes takes (`recipes/ser2netweb/recipe.yaml` there, with its patch),
+for the newest release on PyPI. Unlike the recipes above it builds PyPI's sdist, which is
+the official source conda-forge prefers (it has no tests; the recipe's own run instead).
+
+- **Files:** `recipe.yaml` (`noarch: python` on conda-forge's `python_min`, the console
+  script `ser2netweb` as an entry point, the dependencies of `pyproject.toml` with their
+  floors, the extras' packages as `run_constraints` with theirs, every licence file of
+  `pyproject.toml`'s `license-files`, the maintainer `haliskilic`) and
+  `0001-Leave-out-pyserial-asyncio-fast.patch`, which takes that dependency out of
+  `pyproject.toml`: conda-forge doesn't have it, ser2netweb runs on its built-in copy of the
+  transport, and `pip check` then agrees. conda-forge's `python_min` is 3.11, so the
+  Python 3.10 backports (exceptiongroup, taskgroup) aren't needed. A conda install keeps its
+  data in the user's data folder, as a pip install does.
+- **Its tests:** the imports and `pip check` on the oldest and the newest Python,
+  `ser2netweb --version`, `--about` and `--help`.
+- **CI:** `.github/workflows/conda-forge.yml`, in a Miniforge container pinned by digest:
+  conda-forge's linter (`conda-smithy recipe-lint --conda-forge`), `rattler-build build`
+  against conda-forge with conda-forge's pinning (`conda-forge-pinning`), which runs the
+  tests above, then the built package installed into a fresh environment, `--set-password`
+  and a start answering `/healthz`. For a pull request that changes the recipe, by hand and
+  every Tuesday; not a merge condition. `tests/test_conda_recipe.py` (in the suite) checks
+  the recipe against `pyproject.toml`.
+- **Build it locally:** `rattler-build build --recipe packaging/conda-forge/recipe.yaml
+  --variant-config <conda-forge-pinning's conda_build_config.yaml>` (the pinning's channel is
+  conda-forge).
+- **Submit:** a pull request to conda-forge/staged-recipes from a fork, adding
+  `recipes/ser2netweb/` with both files; its template's checklist, then a comment asking the
+  Python team (`@conda-forge/help-python, ready for review!`, which a first-time contributor
+  asks the bot to send: `@conda-forge-admin, please ping team`). Once merged, conda-forge
+  makes the feedstock `conda-forge/ser2netweb-feedstock` with the maintainer in it; its bot
+  opens a pull request for each new PyPI release. Copy what changes there back here.

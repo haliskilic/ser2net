@@ -208,8 +208,8 @@ düzenlemeye gerek yok.
   **Güvenli çıkışlar:** `"safe_value"` ve `"safe_after_s"` (1–86400) verilen yazılabilir bir
   noktaya, broker bağlantısı (primary host'lu bir Sparkplug B düğümünde o host'un STATE'i)
   o kadar saniye yok olunca bu değer yazılır; eşleme başladıktan sonra hiç gelmezse de
-  (kesinti ilk kopuştan sayılır ve bağlantı 10 sn boyunca, ya da daha kısaysa en kısa
-  `safe_after_s` boyunca, ayakta kalınca biter; istemciyi kabul edip yeniden düşüren bir
+  (kesinti ilk kopuştan sayılır ve bağlantı 10 sn boyunca, ya da daha kısaysa noktalarının
+  en uzun `safe_after_s` süresi boyunca, ayakta kalınca biter; istemciyi kabul edip yeniden düşüren bir
   broker baştan sona yok sayılır).
   Kesinti başına bir kez, yazma kuyruğu üzerinden ve noktanın sınırları içinde yazılır;
   unit yanıt vermezse 10 sn'de bir yeniden denenir. Loga yazılır, panoda ve durumda
@@ -495,8 +495,10 @@ düzenlemeye gerek yok.
   yanıt vermemesi) ve yeniden yanıt vermesi, **süresi dolmak üzere olan bir TLS
   sertifikası** (yönetim arayüzününki ve etkin her TLS eşlemesininki, günde bir kez okunur:
   30, 7 ve 1 günden az kaldığında birer mesaj, süresi dolduğunda bir mesaj daha — sertifika
-  ve eşik başına bir kez, yeniden başlatmalardan sonra da; ulaşamayan bir mesaj ertesi günkü
-  denetimde yeniden gönderilir; yenilenen sertifika baştan başlar), ser2netweb çalışırken **sistem saatinin değiştirilmesi** (bkz. *Saat
+  ve eşik ve kanal başına bir kez, yeniden başlatmalardan sonra da: mesajın ulaşmadığı bir
+  kanal (örneğin çalışmayan bir posta sunucusu) onu ertesi günkü denetimde alır, yalnızca o
+  kanal; eşlemesi bir süre devre dışı kalan ya da yönetim arayüzünün TLS'i kapatılan bir
+  sertifika yeniden bildirilmez; yenilenen sertifika baştan başlar), ser2netweb çalışırken **sistem saatinin değiştirilmesi** (bkz. *Saat
   senkronizasyonu*) ve **güvenli değerlerin yazılması** (bir gateway noktalarına
   `safe_value` değerini yazdı: broker ya da Sparkplug primary host, `safe_after_s` süresince
   yoktu). Tekrarlar bastırılır, test mesajı gönderilebilir. Bu olaylar gönderilsin ya da gönderilmesin all.log'a yazılır.
@@ -889,9 +891,16 @@ sudo systemctl enable --now ser2netweb             # kurulum servisi kendisi ba�
 Depolar `B587 60E7 C0B0 515E 81D2  50F9 8164 D694 711B B799` anahtarıyla imzalıdır
 (RSA 4096, 2031-11-12'ye kadar; sitede `ser2netweb-archive-keyring.asc` / `.gpg`, depoda
 [`packaging/ser2netweb-archive-keyring.asc`](packaging/ser2netweb-archive-keyring.asc)):
-dnf ilk kurulumda onu gösterir, yalnızca bu parmak iziyle onaylayın. `.rpm` dosyalarının kendisi imzalı değildir;
-dnf ve zypper her paketin SHA-256'sını taşıyan imzalı depo meta verisini denetler
-(`repo_gpgcheck=1`, `gpgcheck=0`).
+dnf ilk kurulumda onu gösterir, yalnızca bu parmak iziyle onaylayın. Depodaki `.rpm`
+dosyaları da bu anahtarla imzalıdır; dnf ve zypper ikisini de denetler: her paketin
+SHA-256'sını taşıyan depo meta verisini ve her paketin kendi imzasını (`repo_gpgcheck=1`;
+dnf için `gpgcheck=1`, zypper için `pkg_gpgcheck=1`: zypper bu olmadan, meta verinin imzası
+geçerliyse paketin imzasına bakmaz). Paketler imzalanmaya başlamadan önce indirilmiş bir
+`ser2netweb.repo` `gpgcheck=0` der ve çalışmaya devam eder (meta veri yine denetlenir);
+dosyayı yeniden indirmek (zypper'da depoyu kaldırıp yeniden eklemek) paket denetimini de
+açar.
+GitHub'daki sürümün `.rpm` dosyaları aynı paketlerin imzasız derlemesidir (`SHA256SUMS`,
+`gh attestation verify`); ayrıntılar [docs/PACKAGES.md](docs/PACKAGES.md)'de.
 
 ### pipx / pip
 PyPI paketi `ser2netweb`, Python 3.10 ya da daha yenisinin olduğu her işletim sistemi ve
@@ -993,7 +1002,7 @@ unit'ler ve script'ler değişiklik gerektirmez:
 
 | Seçenek | Ne yapar |
 |---|---|
-| `--data-dir KLASÖR` | `config.json`, yedekleri, log'lar ve trace'lerin yeri (varsayılan: `ser2netweb.py`'nin ya da binary'nin yanındaki `data/`, Scoop'unki için onun persist klasöründe; `.deb` / `.rpm` / AUR paketininki için `/var/lib/ser2netweb`; pip / pipx, winget ya da Chocolatey kurulumu için kullanıcının veri klasörü, bkz. *pipx / pip* ve *Windows paket yöneticileri*; Homebrew'unki için `$(brew --prefix)/var/ser2netweb` ya da 3.0.0'ın orada kullandığı kullanıcı veri klasörü, bkz. *Homebrew*; snap'inki için, root olarak, `/var/snap/ser2netweb/common/data`); ser2netweb'e kendine ait bir klasör verin |
+| `--data-dir KLASÖR` | `config.json`, yedekleri, log'lar ve trace'lerin yeri (varsayılan: `ser2netweb.py`'nin ya da binary'nin yanındaki `data/`, Scoop'unki için onun persist klasöründe; `.deb` / `.rpm` / AUR paketininki için `/var/lib/ser2netweb`; `packaging/` içindeki tariflerle derlenmiş bir dağıtım paketi için o paketin servisinin veri dizini (`/var/lib/ser2netweb`; FreeBSD'de `/var/db/ser2netweb`, MacPorts'ta `/opt/local/var/db/ser2netweb`; daha eski bir paketin bıraktığı gibi yalnızca kullanıcının veri klasöründe bir `config.json` varken o klasör; `--about` o zaman `Build: distribution package (<dağıtımın adı>)` der, bkz. [docs/PACKAGING.md](docs/PACKAGING.md)); pip / pipx, winget ya da Chocolatey kurulumu için kullanıcının veri klasörü, bkz. *pipx / pip* ve *Windows paket yöneticileri*; Homebrew'unki için `$(brew --prefix)/var/ser2netweb` ya da 3.0.0'ın orada kullandığı kullanıcı veri klasörü, bkz. *Homebrew*; snap'inki için, root olarak, `/var/snap/ser2netweb/common/data`); ser2netweb'e kendine ait bir klasör verin |
 | `--config DOSYA` | başka bir yerdeki `config.json`; veri klasörü o zaman onun klasörüdür |
 | `--reconfigure` | yönetim arayüzünün adresini ve portunu konsolda yeniden sorar, sonra başlar |
 | `--online` | bağımlılık kurulumu `vendor/wheels/`'te olmayan bir wheel için PyPI'ye başvurabilir (kaynak kurulum) |

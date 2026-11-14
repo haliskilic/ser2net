@@ -146,6 +146,11 @@ def test_form():
     assert "checked" in box.attrs and "network_open_on_connect_shown" in fields
     assert [r for r in shown_when(box) if r != "kind=net"] == \
         ["network_protocol=raw,telnet,rfc2217", "network_mode=server"]
+    # a delimiter stored as real CR LF is shown escaped, not as an empty box
+    raw = MappingConfig.from_dict({"id": "f2", "name": "g", "serial": {"port": "/dev/ttyS0"},
+                                   "options": {"pack_delimiter": "\r\n"}})
+    box = next(n for n in form(raw)[0].walk() if n.attrs.get("name") == "opt_pack_delimiter")
+    assert box.attrs.get("value") == r"\r\n", box.attrs
     fresh = next(n for n in form(MappingConfig(name="n"))[0].walk()
                  if n.attrs.get("name") == "network_open_on_connect")
     assert "checked" not in fresh.attrs, "off for a new mapping"

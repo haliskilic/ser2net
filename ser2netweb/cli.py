@@ -51,7 +51,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=None,  # see below: whether it was given matters to --install-service
         help="Directory for config.json, its backups, the logs and traces (default: data/ "
              "next to ser2netweb.py or the executable (Scoop's: in its persist folder); "
-             "/var/lib/ser2netweb for the .deb / .rpm / AUR package's; the user's application "
+             "/var/lib/ser2netweb for the .deb / .rpm / AUR package's; the data directory of "
+             "its service for a distribution's package built from ser2netweb's recipes; the "
+             "user's application "
              "data folder for a pip / pipx, winget or Chocolatey install; "
              "$(brew --prefix)/var/ser2netweb for the Homebrew formula's; "
              "/var/snap/ser2netweb/common/data for the snap's as root; here: "
@@ -236,7 +238,7 @@ def print_about() -> int:
              f"Python {platform.python_version()} ({platform.python_implementation()}), "
              f"{ssl.OPENSSL_VERSION}",
              f"Platform: {platform.platform()} ({platform.machine()})",
-             f"Build: {layout.LABELS[layout.kind()]}"]
+             f"Build: {layout.label()}"]
     components = (("pyserial", "serial"), ("pyserial-asyncio-fast", "serial_asyncio_fast"),
                   ("starlette", "starlette"), ("uvicorn", "uvicorn"), ("anyio", "anyio"),
                   ("psutil", "psutil"), ("paho-mqtt", "paho.mqtt"), ("ldap3", "ldap3"), ("pyasn1", "pyasn1"),

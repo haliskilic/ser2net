@@ -1,5 +1,7 @@
 #!/usr/bin/make -f
 
+include /usr/share/dpkg/vendor.mk
+
 export PYBUILD_NAME = ser2netweb
 # pyserial-asyncio-fast (in the upstream dependencies) is not in Debian: ser2netweb runs on
 # its built-in copy of that library's serial transport, so dh_python3's note that no
@@ -14,6 +16,7 @@ CHECK_TESTS = \
 	test_config_types.py \
 	test_config_validation.py \
 	test_console_log.py \
+	test_dependency_internals.py \
 	test_env_bind.py \
 	test_explain.py \
 	test_kept_names.py \
@@ -34,6 +37,7 @@ CHECK_TESTS = \
 	test_rfc2217_settings.py \
 	test_secure_cookies.py \
 	test_ser2net_import.py \
+	test_serial_compat.py \
 	test_serial_mqtt.py \
 	test_sparkplug.py \
 	test_sparkplug_node.py \
@@ -47,6 +51,12 @@ CHECK_TESTS = \
 
 %:
 	dh $@ --buildsystem=pybuild
+
+# ser2netweb/distro.json (pyproject.toml takes it into the wheel): the distribution
+# ser2netweb names in --about, its service's data directory (the default without
+# --data-dir) and how an optional package is installed, for the hint about a missing one
+execute_before_dh_auto_build:
+	printf '%s\n' '{"distribution": "$(DEB_VENDOR)", "data_dir": "/var/lib/ser2netweb", "optional": "sudo apt install python3-{dist}"}' >ser2netweb/distro.json
 
 override_dh_auto_test:
 ifeq (,$(filter nocheck,$(DEB_BUILD_OPTIONS)))

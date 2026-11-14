@@ -408,6 +408,32 @@ jobs:
         timeout-minutes: 10
         run: tests/systemd_smoke.sh
 
+  # docs/REVERSE-PROXY.md's two nginx blocks as the page has them (tests/nginx_proxy.py takes
+  # them from it, so a change to the page is tested here): ser2netweb behind the
+  # distribution's nginx over HTTPS, at / and under a path, the web UI, sign-in, the console
+  # and hex view WebSockets, the REST API, and the client's address before and after
+  # Settings -> Reverse proxy -> Trusted proxies
+  nginx:
+    name: reverse proxy (nginx, docs/REVERSE-PROXY.md)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7.1.0
+        with:
+          python-version: "3.12"
+      - name: nginx (the distribution's; its own service stopped, the test runs its own)
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends nginx >/dev/null
+          sudo systemctl stop nginx
+          nginx -v
+      - run: pip install -r requirements.txt
+      - name: ser2netweb behind the page's nginx configurations
+        run: python tests/nginx_proxy.py --nginx /usr/sbin/nginx
+
   # The offline first start of a source checkout where vendor/wheels has no psutil wheel for
   # the machine (bootstrap.py installs the set without it): bootstrap.py with pip
   # --no-index, the app from ./lib, --about, a start answering /healthz
@@ -552,7 +578,7 @@ jobs:
   ci-ok:
     name: ci-ok
     if: always()
-    needs: [lint, typecheck, workflows, audit, vendor, ui, test, paho1, coverage, systemd, offline, offline-armv7, docker, standalone, pypi-build, pypi-install]
+    needs: [lint, typecheck, workflows, audit, vendor, ui, test, paho1, coverage, systemd, nginx, offline, offline-armv7, docker, standalone, pypi-build, pypi-install]
     runs-on: ubuntu-latest
     steps:
       - name: Every job passed

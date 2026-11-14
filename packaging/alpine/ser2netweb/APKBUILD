@@ -48,6 +48,7 @@ _check_tests="
 	test_config_types.py
 	test_config_validation.py
 	test_console_log.py
+	test_dependency_internals.py
 	test_env_bind.py
 	test_explain.py
 	test_kept_names.py
@@ -68,6 +69,7 @@ _check_tests="
 	test_rfc2217_settings.py
 	test_secure_cookies.py
 	test_ser2net_import.py
+	test_serial_compat.py
 	test_serial_mqtt.py
 	test_sparkplug.py
 	test_sparkplug_node.py
@@ -79,6 +81,14 @@ _check_tests="
 	test_ui_contrast.py
 	test_ui_markup.py
 	"
+
+prepare() {
+	default_prepare
+	# ser2netweb/distro.json (pyproject.toml takes it into the wheel): the distribution
+	# ser2netweb names in --about, its service's data directory (the default without
+	# --data-dir) and how an optional package is installed, for the hint about a missing one
+	printf '%s\n' '{"distribution": "Alpine Linux", "data_dir": "/var/lib/ser2netweb", "optional": "doas apk add py3-{dist}"}' >ser2netweb/distro.json
+}
 
 build() {
 	gpep517 build-wheel \

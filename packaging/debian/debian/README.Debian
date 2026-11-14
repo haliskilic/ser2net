@@ -8,8 +8,12 @@ backups) in /var/lib/ser2netweb.
 
 Set the first admin password, then start it now and at every boot:
 
-  sudo -u ser2netweb ser2netweb --data-dir /var/lib/ser2netweb --set-password admin
+  sudo -u ser2netweb ser2netweb --set-password admin
   sudo systemctl enable --now ser2netweb
+
+Without --data-dir, the packaged ser2netweb works on /var/lib/ser2netweb, the
+service's data directory ("ser2netweb --about" says "Build: distribution
+package" with the distribution's name).
 
 The web UI listens on 127.0.0.1:8080 until you choose otherwise. To reach it
 from the network, add a drop-in with "sudo systemctl edit ser2netweb":

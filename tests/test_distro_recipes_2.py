@@ -16,6 +16,10 @@ tools/bump_recipes_2.py and .github/workflows/distro-packages-2.yml, which build
   * the checksums agree: the SHA-256 of Void, FreeBSD and MacPorts, the size of FreeBSD,
     MacPorts and Gentoo; given these checksums, tools/bump_recipes_2.py writes the recipes
     unchanged, and for another release it moves each one (version, checksums, revision);
+  * each writes ser2netweb/distro.json before its build (ser2netweb/layout.py, DISTRO):
+    JSON that layout takes, the distribution, the data directory of its service (nixpkgs:
+    none, its package runs outside NixOS too), and for each extra's package the command
+    with the distribution's name of it, or that the distribution has none;
   * the workflow: pull requests touching the recipes, by hand with a tag, weekly; a
     read-only token; one job per target after the checksum job; images, trees and
     downloads pinned; not run by any other workflow.
@@ -26,6 +30,7 @@ from __future__ import annotations
 
 import base64
 import io
+import json
 import os
 import re
 import shutil
@@ -37,8 +42,12 @@ from _workflows import jobs, names, read, steps
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 sys.path.insert(0, os.path.join(ROOT, "tools"))
+sys.path.insert(0, ROOT)
 
+import _distro_files
 import bump_recipes_2 as bump
+
+from ser2netweb import layout, optional
 
 try:
     import tomllib
@@ -174,6 +183,47 @@ RECIPES = {"nix": nix, "void": void, "gentoo": gentoo, "freebsd": freebsd,
            "macports": macports}
 
 
+# what each recipe's ser2netweb/distro.json says: its service's data directory, and the
+# distribution's package of each extra's (MISSING_EXTRAS: none)
+DISTRO_FILES = {
+    "freebsd": ("/var/db/ser2netweb", "pkg install py311-{}"),
+    "macports": ("/opt/local/var/db/ser2netweb", None),
+    "void": ("/var/lib/ser2netweb", None),
+    "gentoo": ("/var/lib/ser2netweb", "emerge --ask dev-python/{}"),
+    "nix": (None, None),
+}
+
+
+def test_distro_file():
+    for name, (data_dir, command) in DISTRO_FILES.items():
+        _text, info = _distro_files.distro_file(name)
+        assert info.get("data_dir") == data_dir, (name, info)
+        with tempfile.TemporaryDirectory() as tmp:
+            with open(os.path.join(tmp, layout.DISTRO_FILE), "w", encoding="utf-8") as fh:
+                json.dump(info, fh)
+            assert layout.distro_info(tmp) == info, name
+        missing = MISSING_EXTRAS.get(name, set())
+        for dist, extra in optional.EXTRAS.items():
+            hint = optional.Problem(dist, True, "", distro=info).hint
+            if dist in missing:
+                assert hint == f"{info['distribution']} has no package of it", (name, hint)
+            elif command:
+                assert hint == command.format(dist), (name, hint)
+            elif name == "macports":  # its variants
+                assert hint == f"sudo port install ser2netweb +{extra}", hint
+            elif name == "void":
+                assert hint == f"sudo xbps-install python3-{dist.replace('-', '_')}", hint
+            else:
+                assert f"optional-dependencies.{extra}" in hint and f".{dist})" in hint, hint
+    # (the service's data directory in the recipe itself)
+    assert ': ${ser2netweb_dir:="/var/db/ser2netweb"}' in text(
+        FREEBSD, "net", "ser2netweb", "files", "ser2netweb.in")
+    assert "set datadir         ${prefix}/var/db/${name}" in text(MACPORTS, "net", "ser2netweb",
+                                                                  "Portfile")
+    print("every recipe writes ser2netweb/distro.json: its distribution, its service's data "
+          "directory, the command for each extra's package or that there is none  OK")
+
+
 def test_one_release_from_its_tag():
     versions = {target: read_recipe()[0] for target, read_recipe in RECIPES.items()}
     assert len(set(versions.values())) == 1, f"the recipes name different releases: {versions}"
@@ -237,7 +287,7 @@ def test_dependencies_are_pyprojects():
     # Void's build checks the installed metadata's dependencies against depends (strict in
     # its CI): its template takes the line out of pyproject.toml, as Fedora's %prep does
     assert re.search(r"(?m)^post_patch\(\) \{\n\tvsed -i '/\"pyserial-asyncio-fast>=/d' "
-                     r"pyproject\.toml\n\}$", text(LEFT_OUT_IN["void"])), "void: post_patch"
+                     r"pyproject\.toml\n", text(LEFT_OUT_IN["void"])), "void: post_patch"
     assert one(r'(?m)^ *"(pyserial-asyncio-fast>=[^"]*)",', text(ROOT, "pyproject.toml"),
                "pyproject.toml"), "the line Void's vsed takes out"
     # Void's python-multipart (0.0.9) is below every floor: the update comes with them
@@ -508,6 +558,7 @@ if __name__ == "__main__":
     test_dependencies_are_pyprojects()
     test_nothing_of_ser2net()
     test_freebsd_user_and_group()
+    test_distro_file()
     test_checksums_agree()
     test_bump_moves_every_recipe()
     test_nar_hash()

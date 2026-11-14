@@ -121,6 +121,7 @@ PORTABLE = [
     "test_package_repo.py",     # APT / DNF repositories on Pages: releases, files, docs, workflow
     "test_distro_recipes.py",   # packaging/{debian,fedora,opensuse,arch,alpine}: versions, deps, units
     "test_distro_recipes_2.py",  # nixpkgs / Void / Gentoo / FreeBSD / MacPorts recipes agree
+    "test_conda_recipe.py",     # packaging/conda-forge: pyproject.toml's deps, licences, workflow
     "test_pyproject.py",        # the PyPI package: ranges hold the pins, package data, build tools
     "test_homebrew_formula.py",  # the Homebrew formula's generator (PyPI stand-ins, no network)
     "test_aur_package.py",      # the AUR package ser2netweb-bin: generator, PKGBUILD, aur.yml

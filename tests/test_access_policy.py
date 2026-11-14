@@ -216,6 +216,17 @@ def test_listener_never_evicts_a_writer():
     assert a.admitted and writer.kicked and not listener.kicked
     print("admit: a client that only listens never evicts a writer (kick_old_user, "
           "priority); it may evict another listener  OK")
+    # a Modbus gateway does not use the writer list (ignored_settings says so): its masters
+    # all write, so kick_old_user and priority masters make room as without the list
+    for ip, how in (("10.0.0.8", "new client"), ("10.0.0.9", "priority client")):
+        p = policy(protocol="modbus", kick_old_user=True, writer_client_ips=["10.0.0.5"],
+                   priority_client_ips=["10.0.0.9"])
+        assert not p.writers_only and p.may_write("10.0.0.8")
+        master = FakeClient("10.0.0.7:1", 1.0)
+        a = p.admit(ip, f"{ip}:2", {master}, logs.append)
+        assert a.admitted and master.kicked == f"kicked for {how} {ip}:2", (ip, a, logs[-1])
+    print("admit: a Modbus gateway's stored writer list changes nothing: masters make room "
+          "as before  OK")
 
 
 # ---- the runners' accept handlers, with stand-in streams ----

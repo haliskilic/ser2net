@@ -9,10 +9,12 @@ data_file = ${SER2NETWEB_COV_DATA-.coverage}
 
 [paths]
 # tests/test_install_layout.py runs a copy of the package laid out as pip installs it, in a
-# temporary site-packages folder that is gone by the report: its lines are the package's
+# temporary site-packages folder (and as a distribution's package, in dist-packages) that is
+# gone by the report: its lines are the package's
 source =
     ser2netweb/
     */site-packages/ser2netweb/
+    */dist-packages/ser2netweb/
 
 [report]
 precision = 1

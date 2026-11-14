@@ -13,8 +13,9 @@ name: Distribution packages
 # with "tag" (Actions -> Distribution packages -> Run workflow) that tag's tarball from
 # GitHub; the recipes get its checksums (tools/bump_recipes.py, in the job only). It runs
 # for a pull request that changes a recipe, by hand, and every week, so a distribution's
-# new releases of the dependencies show up. Not a merge condition: ci.yml doesn't run it,
-# and EPEL 10 lacks what ser2netweb needs (it may fail, docs/PACKAGING.md says why).
+# new releases of the dependencies show up. Not a merge condition: ci.yml doesn't run it.
+# Every target has to pass (EPEL 10 too: its setuptools 69 builds the spec's patched
+# pyproject.toml, docs/PACKAGING.md).
 on:
   pull_request:
     paths:
@@ -83,8 +84,6 @@ jobs:
     name: ${{ matrix.target }} (${{ matrix.image }})
     runs-on: ubuntu-latest
     timeout-minutes: 60
-    # EPEL 10 lacks what ser2netweb needs to build (docs/PACKAGING.md)
-    continue-on-error: ${{ matrix.target == 'epel' }}
     strategy:
       fail-fast: false
       matrix:
