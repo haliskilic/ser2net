@@ -107,8 +107,8 @@ def test_rest_traces():
     traces = os.path.join(srv.data, "traces")
     os.makedirs(traces)
     for name in (f"{A}-a.log.1", f"{A}-old.log", f"{B}-b.log"):
-        with open(os.path.join(traces, name), "w", encoding="utf-8") as fh:
-            fh.write(f"content of {name}\n")
+        with open(os.path.join(traces, name), "w", encoding="utf-8", newline="") as fh:
+            fh.write(f"content of {name}\n")  # byte-exact (no \r\n on Windows)
     with srv:
         wait(lambda: os.path.isfile(os.path.join(traces, f"{A}-a.log")), "A's trace opened")
         st, _, body = api(srv, "GET", f"/mappings/{A}/traces", VIEW)
