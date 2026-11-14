@@ -1,7 +1,7 @@
 """Fleet-view edits between nodes of different versions keep every setting.
 
-tests/fixtures/forms-<version>.json were made once with the code of 2.7.1, 2.8.0 and
-2.8.1 (tests/make_form_fixtures.py) for the kitchen-sink mappings of
+tests/fixtures/forms-<version>.json were made once with the code of 2.7.1, 2.8.0, 2.8.1
+and 3.0.1 (tests/make_form_fixtures.py) for the kitchen-sink mappings of
 tests/_form_cases.py. With them, without running the old code:
 
   * an older node edits a mapping on this one: what its fleet view forwards for an
@@ -95,7 +95,11 @@ BLOCK_FIELDS = {"usb_match": {"serial_usb_match_shown"}, "trace_rotation": {"opt
 # client ID, which every version's save reads although only 2.9.0's form shows it
 OLDER_FIELDS_NOT_POSTED = {"serial_exclusive", "serial_b_exclusive",
                            "serial_rs485_rts_level_for_tx", "serial_b_rs485_rts_level_for_tx",
-                           "serial_b_custom_baud", "mqtt_client_id"}
+                           "serial_b_custom_baud", "mqtt_client_id",
+                           # (2.9.0+: boxes of the TLS blocks a mapping without that TLS
+                           # leaves unticked)
+                           "mqtt_tls_check_hostname", "mqtt_client_key_password_clear",
+                           "network_tls_key_password_clear"}
 
 
 def same_value(a: str, b: str) -> bool:
