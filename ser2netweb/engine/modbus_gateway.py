@@ -40,7 +40,11 @@ any other (the bus is free during the pulse), and a mapping that stops during a 
 writes it at once, before the port closes. A writable point with "safe_value" and
 "safe_after_s" is written to that value once whoever commands it has been away that long
 (_safe_watch): the broker connection, or for a Sparkplug B node with a primary host that
-host (its STATE); never by a read-only mapping.
+host (its STATE); never by a read-only mapping. An outage is counted from its first loss:
+a connection that comes back ends it only once it has stayed up for SAFE_STEADY_S (at most
+the points' shortest safe_after_s), so a broker that takes the client and drops it again
+(another client with its ID, an ACL plugin, a broker in a crash loop) is away all along;
+nothing is written while the connection is up.
 """
 from __future__ import annotations
 
@@ -116,6 +120,9 @@ PULSE_STOP_WAIT_S = 10.0
 # A safe value that could not be written (the unit does not answer, the port is down) is
 # tried again this often, until it is written or whoever commands the point is back.
 SAFE_RETRY_S = 10.0
+# An outage of whoever commands the points ends once it is back for this long (at most
+# the shortest safe_after_s of the mapping's points); a shorter session doesn't end it.
+SAFE_STEADY_S = 10.0
 # The mapping form's test read (read_now): at most this many points, for at most this long.
 READ_NOW_MAX = 32
 READ_NOW_S = 10.0
@@ -290,6 +297,8 @@ class ModbusGatewayRunner:
             if (usable := _safe(p)) is not None and not mapping.network.read_only]
         self._supervised = False
         self._safe_task: Optional[asyncio.Task] = None
+        self._safe_away = asyncio.Event()  # set while whoever commands them is not there
+        self._safe_steady: Optional[asyncio.TimerHandle] = None  # (see _supervision)
         self._cycle: Optional[_Reads] = None  # the reads of the unit being polled (see _Reads.drop)
 
     def _log(self, msg: str) -> None:
@@ -415,6 +424,9 @@ class ModbusGatewayRunner:
             except Exception as e:  # it had died: say why, and still send NDEATH etc. below
                 self._log(f"polling had stopped: {e!r}")
             self._poll_task = None
+        if self._safe_steady is not None:
+            self._safe_steady.cancel()
+            self._safe_steady = None
         if self._safe_task is not None:
             self._safe_task.cancel()
             self._safe_task = None
@@ -971,14 +983,33 @@ class ModbusGatewayRunner:
 
     def _supervision(self, up: bool) -> None:
         """MqttPublisher / SparkplugNode, on the event loop: whoever commands the points
-        (the broker connection; the Sparkplug primary host) is there / is gone."""
+        (the broker connection; the Sparkplug primary host) is there / is gone. An outage
+        goes on from its first loss until the link has stayed up for SAFE_STEADY_S (at most
+        the shortest safe_after_s): a session shorter than that doesn't end it."""
         if self._closing or up == self._supervised:
             return
         self._supervised = up
         if not self._safe_points:
             return
+        if self._safe_steady is not None:
+            self._safe_steady.cancel()
+            self._safe_steady = None
         if not up:
-            self._watch_safe()
+            self._safe_away.set()
+            if self._safe_task is None:
+                self._watch_safe()  # (else the outage goes on: that session was too short)
+            return
+        self._safe_away.clear()  # (no safe value is written while it is there)
+        if self._safe_task is None:
+            self._safe_status("ok", None)
+            return
+        steady = min([SAFE_STEADY_S] + [after for _p, _value, after in self._safe_points])
+        self._safe_steady = asyncio.get_running_loop().call_later(steady, self._safe_back)
+
+    def _safe_back(self) -> None:
+        """Whoever commands the points has been back for long enough: the outage is over."""
+        self._safe_steady = None
+        if self._closing or not self._supervised:
             return
         if self._safe_task is not None:
             self._safe_task.cancel()
@@ -1002,6 +1033,7 @@ class ModbusGatewayRunner:
             return
         if self._safe_task is not None:
             self._safe_task.cancel()
+        self._safe_away.set()
         self._safe_status("waiting", time.time())
         self._safe_task = asyncio.create_task(
             self._safe_watch(), name=f"modbus-safe:{self.mapping.name}")
@@ -1009,8 +1041,10 @@ class ModbusGatewayRunner:
     async def _safe_watch(self) -> None:
         """Write each point's safe value once its safe_after_s has passed (in that order;
         through the write queue, so within the point's limits and in turn with the other
-        writes), and try a failed one again every SAFE_RETRY_S. Cancelled when whoever
-        commands the points is back, and when the mapping stops."""
+        writes), and try a failed one again every SAFE_RETRY_S. A point whose time comes
+        while whoever commands it is back for a moment (not yet for SAFE_STEADY_S) is
+        written when it is gone again. Cancelled once it is back for good, and when the
+        mapping stops."""
         loop = asyncio.get_running_loop()
         start, watching = loop.time(), self._watching()
         rows = {row["name"]: row for row in self.status.safe["points"]}
@@ -1020,6 +1054,7 @@ class ModbusGatewayRunner:
             name = min(due, key=lambda n: due[n])
             if (wait := due[name] - loop.time()) > 0:
                 await asyncio.sleep(wait)
+            await self._safe_away.wait()
             p, value, after = points[name]
             outcome: asyncio.Future = loop.create_future()
 
