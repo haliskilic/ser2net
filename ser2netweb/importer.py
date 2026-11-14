@@ -357,9 +357,11 @@ def apply_import(current: list[MappingConfig], incoming: list[MappingConfig],
     are not modified. An update in merge mode keeps what the file doesn't say: `classic`
     (a classic ser2net file) what such a file can't say (_overlay); else `absent`, per
     incoming mapping the settings its file didn't have (ImportPlan.absent), keep their
-    current values (_keep_absent)."""
+    current values (_keep_absent). A timed capture's end (options.trace_until) is no
+    setting a file brings: a mapping keeps its own, a new one has none."""
     if mode not in MODES:
         raise ConfigError(_("Import mode must be one of {0}.").format(", ".join(MODES)))
+    capturing = {m.id: m.options.trace_until for m in current}
     if mode == "replace":
         seen: set[str] = set()
         out = []
@@ -368,15 +370,18 @@ def apply_import(current: list[MappingConfig], incoming: list[MappingConfig],
             if m.id in seen:
                 m.id = _new_id()
             seen.add(m.id)
+            m.options.trace_until = capturing.get(m.id, 0.0)
             out.append(m)
         return out, list(out)
     result = [MappingConfig.from_dict(m.to_dict()) for m in current]
     touched = []
     for i, m in enumerate(incoming):
         m = MappingConfig.from_dict(m.to_dict())
+        m.options.trace_until = 0.0
         target = _match(result, m)
         if target is not None:
             m = _merged(target, m, classic, absent[i] if absent and i < len(absent) else [])
+            m.options.trace_until = target.options.trace_until
             if m.to_dict() == target.to_dict():
                 continue  # identical: nothing to restart
             result[result.index(target)] = m

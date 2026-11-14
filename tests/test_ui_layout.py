@@ -56,7 +56,9 @@ in Turkish, whose texts are longer:
     shows no note while the clocks agree;
   * the mapping form of every kitchen-sink mapping (tests/_form_cases.py), on this node
     and on the peer, posts what tests/_formsubmit.py says a browser posts, and saving
-    it unchanged keeps every setting of the mapping.
+    it unchanged keeps every setting of the mapping;
+  * the Trace panel starts and stops a timed recording, and TLS files uploaded from the
+    mapping form are checked, their paths put into the form's fields (now unsaved).
 
 Opt-in: needs `pip install playwright && python -m playwright install chromium`.
 Skipped when Playwright or its browser is missing, unless SER2NETWEB_UI_TESTS=1 (the
@@ -793,6 +795,91 @@ def import_round_trip(browser, base, problems, config_path):
     ctx.close()
 
 
+def ops_checks(browser, base, problems, config_path):
+    """A timed recording started and stopped in the Trace panel, and TLS files uploaded
+    from the mapping form: their paths go into the form's fields, which is then unsaved."""
+    from ser2netweb.web import selfsigned
+
+    ctx = browser.new_context(viewport={"width": 1280, "height": 900})
+    page = ctx.new_page()
+    errors = []
+    page.on("console", lambda m: m.type == "error" and errors.append(m.text))
+    page.on("pageerror", lambda e: errors.append(str(e)))
+    page.goto(f"{base}/login")
+    page.fill("input[name=username]", USER)
+    page.fill("input[name=password]", PASSWORD)
+    page.click("button[type=submit]")
+    page.wait_for_url(f"{base}/")
+    page.wait_for_selector("#mappings table")
+    row = page.locator("#mappings tr", has_text=LONG_WORDS).first
+
+    def until():
+        with open(config_path, encoding="utf-8") as fh:
+            m = next(m for m in json.load(fh)["mappings"] if m["name"] == LONG_WORDS)
+        return m["options"].get("trace_until", 0)
+
+    row.get_by_role("button", name="Trace", exact=True).click()
+    page.wait_for_selector("#form-panel #capture-form")
+    page.select_option("#capture-minutes", "60")
+    page.click("#capture-start")
+    page.wait_for_selector("#form-panel #capture-stop")
+    if not until() > time.time() + 3500:
+        problems.append(f"timed recording: trace_until is {until()!r} after Record (1 hour)")
+    if "capture.log" not in page.locator("#form-panel").inner_text():
+        problems.append("timed recording: the panel doesn't name the capture file")
+    page.click("#capture-stop")
+    page.wait_for_selector("#form-panel #capture-stop", state="detached")
+    if until():
+        problems.append(f"timed recording: trace_until is {until()!r} after Stop now")
+
+    row.get_by_role("button", name="Edit", exact=True).click()
+    page.wait_for_selector("#form-panel form.mform")
+    form = page.locator("#form-panel form.mform")
+    if form.get_attribute("data-dirty") == "1":
+        problems.append("TLS upload: the form is unsaved before anything was done")
+    with tempfile.TemporaryDirectory() as tmp:
+        cert, key = os.path.join(tmp, "up.pem"), os.path.join(tmp, "up.key")
+        try:
+            selfsigned.generate(cert, key, common_name="ui-upload")
+        except selfsigned.CertError as e:  # neither cryptography nor openssl here
+            print(f"(TLS upload not checked: {e})")
+            ctx.close()
+            return
+        page.locator("#tls-upload-box summary").click()
+        page.set_input_files("input[name=cert][form=tls-upload]", cert)
+        page.set_input_files("input[name=key][form=tls-upload]", cert)   # not its key
+        with page.expect_response(lambda r: r.url.endswith("/api/mappings/tls-upload")) as got:
+            page.click("#tls-upload-send")
+        if got.value.status != 400:
+            problems.append(f"TLS upload: a certificate as its own key answered {got.value.status}")
+        page.wait_for_selector("#ui-alert .banner.error")
+        if form.locator("input[name=network_tls_cert]").input_value():
+            problems.append("TLS upload: a refused upload filled in the path")
+        page.set_input_files("input[name=key][form=tls-upload]", key)
+        with page.expect_response(lambda r: r.url.endswith("/api/mappings/tls-upload")) as got:
+            page.click("#tls-upload-send")
+        if got.value.status != 204:
+            problems.append(f"TLS upload: answered {got.value.status}")
+        page.wait_for_function(
+            "document.querySelector('#form-panel input[name=network_tls_cert]').value"
+            ".indexOf('uploaded-') !== -1")
+    paths = [form.locator(f"input[name={n}]").input_value()
+             for n in ("network_tls_cert", "network_tls_key")]
+    if not (paths[0].endswith("-cert.pem") and paths[1].endswith("-key.pem")):
+        problems.append(f"TLS upload: the path fields hold {paths!r}")
+    if form.get_attribute("data-dirty") != "1":
+        problems.append("TLS upload: the form with the new paths doesn't count as unsaved")
+    if page.locator("input[name=cert][form=tls-upload]").input_value():
+        problems.append("TLS upload: the file input was not emptied")
+    with open(config_path, encoding="utf-8") as fh:
+        saved = next(m for m in json.load(fh)["mappings"] if m["name"] == LONG_WORDS)
+    if saved["network"]["tls_cert"]:
+        problems.append("TLS upload: the upload changed the stored mapping before a save")
+    problems.extend(f"ops: browser error: {e}" for e in errors
+                    if not e.startswith(("Failed to load resource", "Response Status Error Code")))
+    ctx.close()
+
+
 def settings_checks(browser, base, problems, config_path):
     """The Settings forms in a browser (a context of its own): a refused form comes back
     filled in, at its own address (a reload loads the page, it doesn't post the form
@@ -1184,6 +1271,11 @@ def main():
             n = len(problems)
             import_round_trip(browser, base, problems, os.path.join(nodes[0][1], "config.json"))
             print(f"an imported close-on string through the mapping form and back: "
+                  f"{'OK' if len(problems) == n else f'{len(problems) - n} problem(s)'}")
+
+            n = len(problems)
+            ops_checks(browser, base, problems, os.path.join(nodes[0][1], "config.json"))
+            print(f"a timed recording in the Trace panel, TLS files uploaded from the form: "
                   f"{'OK' if len(problems) == n else f'{len(problems) - n} problem(s)'}")
 
             # (the feedback checks' bulk restart of "short" closed its clients: the client

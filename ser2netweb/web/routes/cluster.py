@@ -126,11 +126,12 @@ def not_kept(sent: MappingConfig, stored: dict) -> list[str]:
     """The settings of the mapping a peer stores after a fleet-view save (its mapping-data
     *stored*, in the peer's own schema) that differ from what this node sent (*sent*: the
     forwarded fields as this node's save parses them). Only settings the peer has are
-    compared; the trace (stored as the peer's own value) and the id are left out."""
+    compared; the trace (stored as the peer's own value), a timed capture's end (the peer's
+    own too) and the id are left out."""
     mine = dict(_leaves(sent.to_dict()))
     theirs = dict(_leaves(MappingConfig.from_dict(stored).to_dict()))
     have = {p for p, _v in _leaves(stored)}
-    return [p for p in sorted(have) if p not in ("id", "options.trace_both")
+    return [p for p in sorted(have) if p not in ("id", "options.trace_both", "options.trace_until")
             and p in mine and mine[p] != theirs.get(p)]
 
 

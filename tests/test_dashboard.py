@@ -9,10 +9,9 @@ Checks:
   * POST /api/mappings/bulk applies start/stop/restart to every selected mapping
     (operator+; viewers 403; bad input 400) and audits each;
   * the trace panel lists a mapping's files and downloads only those (no other
-    mapping's file, no path tricks); the table offers Trace while tracing is on and
-    afterwards as long as the mapping has trace files (none for a mapping that never
-    traced); traces record what is sent to the device, so viewers neither get the
-    button nor the files (403);
+    mapping's file, no path tricks); the table offers operators Trace for every
+    mapping (a timed capture is started there); traces record what is sent to the
+    device, so viewers neither get the button nor the files (403);
   * the dashboard has the search / filter / sort / bulk toolbar;
   * a trace that can't be written (here: a file where the traces folder should be) is
     named in the table and in the trace panel.
@@ -51,7 +50,7 @@ def main():
         st, h, body = b.get("/api/status")
         digest = h.get("X-Content-Hash")
         assert st == 200 and digest and 'data-mid="aaaaaaaaaaa1"' in body and 'class="row-select"' in body
-        assert body.count(">Trace</button>") == 1, "Trace only for the mapping that traces"
+        assert body.count(">Trace</button>") == len(maps), "Trace for every mapping"
         b.op.addheaders = [("X-Content-Hash", digest)]
         st, h, body = b.get("/api/status")
         assert st == 204 and body == "", (st, body[:80])
@@ -118,9 +117,7 @@ def main():
             with open(os.path.join(tdir, name), "w", encoding="utf-8", newline="") as fh:
                 fh.write(text)  # byte-exact (no \r\n on Windows): the download must match
         st, _, body = b.get("/api/status")  # Beta doesn't trace (any more), but has a file
-        assert body.count(">Trace</button>") == 2, "Trace also for a mapping with trace files"
         assert 'hx-get="/api/mappings/aaaaaaaaaaa2/traces"' in body
-        assert 'hx-get="/api/mappings/aaaaaaaaaaa3/traces"' not in body
         st, _, page = b.get("/api/mappings/aaaaaaaaaaa2/traces")
         assert st == 200 and "Tracing is off for this mapping" in page and \
             "aaaaaaaaaaa2-secret.log" in page, page[:600]
@@ -132,7 +129,7 @@ def main():
         for bad in ("aaaaaaaaaaa2-secret.log", "..%2Fconfig.json", "%2E%2E%2F%2E%2E%2Fall.log"):
             assert b.get(f"/api/mappings/aaaaaaaaaaa1/traces/{bad}")[0] == 404, bad
         print("traces: listed per mapping, downloadable, other files / traversal 404; Trace "
-              "offered while tracing and while files are left  OK")
+              "offered for every mapping  OK")
         st, _, body = v.get("/api/status")
         assert st == 200 and ">Trace</button>" not in body and ">Monitor</button>" in body
         for path in ("/api/mappings/aaaaaaaaaaa1/traces",

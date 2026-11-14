@@ -35,7 +35,7 @@ from ...engine.cluster import KEY_OVERLAP_S, key_bytes
 from ...explain import explain
 from ...i18n import _, ngettext
 from ...textfold import search_key
-from .. import auth, certinfo, ldap_auth, oidc_auth, proxy, selfsigned
+from .. import auth, certinfo, ldap_auth, oidc_auth, proxy, selfsigned, tlsupload
 from ..starlette_compat import Route
 from . import ops
 from .common import Ctx, client_ip, csrf_failed, read_form
@@ -506,6 +506,51 @@ def routes(ctx: Ctx) -> list:
                     "clock, then generate the certificate again.").format(
                         clock.utc_text(time.time())) if behind else None
         return await _tls_answer(request, "tls", switched, ok=ok, error=warning)
+
+    async def settings_tls_upload(request):
+        """A certificate and its key uploaded for the admin UI (tlsupload.py): checked,
+        kept in the data folder's tls/, set as the admin UI's pair and used for new
+        connections at once, as *Save TLS* with their paths would."""
+        if deny := require_role(request, "admin"):
+            return deny
+        form = await request.form(max_files=2)  # the certificate and the key
+        if not auth.csrf_token_matches(request, form.get("_csrf")):
+            return csrf_failed()
+        password = str(form.get("tls_key_password") or "")
+        # (their key must not become the admin UI's: AppConfig.admin_key_reuse)
+        mappings = tuple((m.network.tls_cert, m.network.tls_key)
+                         for m in state.config.mappings if m.kind == "net" and m.network.tls)
+        try:
+            cert = await tlsupload.read_file(form, "cert_file")
+            key = await tlsupload.read_file(form, "key_file")
+            if cert is None or key is None:
+                raise tlsupload.UploadError(_("Choose a certificate file and its key file."))
+            paths = await asyncio.to_thread(
+                tlsupload.store, state.data_dir, cert=cert, key=key, password=password,
+                others=mappings, reuse_message=_(
+                    "This certificate and key are a mapping's: give the admin UI a pair of "
+                    "its own."))
+        except tlsupload.UploadError as e:
+            return await _failed(request, "tls", str(e) + _typed_again(form, "tls_key_password"))
+        except OSError as e:
+            return await _failed(request, "tls", _("The uploaded files could not be stored: "
+                                                   "{0}").format(explain(e, "file") or e))
+        try:
+            async with state.edit_config():
+                admin = state.config.admin_ui
+                admin.tls_cert, admin.tls_key = paths["cert"], paths["key"]
+                admin.tls_key_password = password
+                prepared = await _admin_tls(admin)
+        except ConfigError as e:
+            return await _failed(request, "tls", _("The files were uploaded, but not set up: "
+                                                   "{0}").format(e))
+        names = ", ".join(os.path.basename(paths[k]) for k in ("cert", "key"))
+        state.log(f"admin TLS: certificate and key uploaded ({names})")
+        ctx.audit(request, "admin_tls_upload", names)
+        applied, switched = _tls_applied(request, prepared)
+        return await _tls_answer(request, "tls", switched, ok=_(
+            "Certificate and key uploaded and set (kept in the data folder’s tls/).")
+            + " " + applied)
 
     # ---------------- web-UI access (login requirement) ----------------
     async def settings_access_post(request):
@@ -1921,6 +1966,8 @@ def routes(ctx: Ctx) -> list:
         Route("/settings/sessions/signout-others", settings_signout_others, methods=["POST"]),
         Route("/settings/tls", settings_tls_post, methods=["POST"]),
         Route("/settings/tls/generate", settings_tls_generate, methods=["POST"]),
+        Route("/settings/tls/upload", settings_tls_upload, methods=["POST"],
+              max_body_size=tlsupload.MAX_BODY_BYTES),
         Route("/settings/access", settings_access_post, methods=["POST"]),
         Route("/settings/proxy", settings_proxy_post, methods=["POST"]),
         Route("/settings/node-name", settings_node_name_post, methods=["POST"]),

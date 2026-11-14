@@ -129,11 +129,13 @@ def copy_of(config, m: MappingConfig) -> MappingConfig:
     (AppConfig.own_port_conflict; searched down from ``m``'s once 65535 is reached), no
     MQTT client ID (a broker keeps one connection per ID), the base
     topic "<topic>-copy" ("-copy-2", …) so a /set is not written by both, and a Sparkplug
-    B edge node ID made from the new name. Raises ConfigError when no port is free."""
+    B edge node ID made from the new name; not ``m``'s timed capture. Raises ConfigError
+    when no port is free."""
     d = m.to_dict()
     d.pop("id", None)
     d["enabled"] = False  # don't auto-start a duplicate
     dup = MappingConfig.from_dict(d)
+    dup.options.trace_until = 0.0  # (a timed capture of m is m's own)
     names = {x.name for x in config.mappings}
     dup.name, k = f"{m.name} (copy)", 1
     while dup.name in names:

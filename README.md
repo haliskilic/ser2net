@@ -407,8 +407,12 @@ düzenlemeye gerek yok.
   **ser2netweb'in başlaması** (bir açılıştan 15 sn sonra: hangi eşlemelerin çalıştığı ve önceki
   çalışmayı event loop watchdog'unun sonlandırıp sonlandırmadığı) ve bir gateway'in periyodik
   okuduğu bir **Modbus unit'inin yanıt vermeyi kesmesi** (3 okuma üst üste hiçbir noktasına
-  yanıt vermemesi) ve yeniden yanıt vermesi. Tekrarlar bastırılır, test mesajı
-  gönderilebilir. Bu olaylar gönderilsin ya da gönderilmesin all.log'a yazılır.
+  yanıt vermemesi) ve yeniden yanıt vermesi, ve **süresi dolmak üzere olan bir TLS
+  sertifikası** (yönetim arayüzününki ve etkin her TLS eşlemesininki, günde bir kez okunur:
+  30, 7 ve 1 günden az kaldığında birer mesaj, süresi dolduğunda bir mesaj daha — sertifika
+  ve eşik başına bir kez, yeniden başlatmalardan sonra da; yenilenen sertifika baştan
+  başlar) ve ser2netweb çalışırken **sistem saatinin değiştirilmesi** (bkz. *Saat
+  senkronizasyonu*). Tekrarlar bastırılır, test mesajı gönderilebilir. Bu olaylar gönderilsin ya da gönderilmesin all.log'a yazılır.
   Genel URL ayarlıysa (Ayarlar → Reverse proxy) her mesaj onunla biter, JSON biçiminde de
   bir `url` alanı olur. İstemci olayları istemcinin IP adresini, hatalı giriş hesap adını
   (ya da `(unknown user)`) ve IP adresini gönderir; *Kişisel verileri gönderme* seçeneği
@@ -1062,10 +1066,17 @@ Adımlar, farklar ve seçenek tablosu (İngilizce):
   gösterir, yazılanı bununla gönderir; hex görünümünün metin sütunu da. Köprü baytları her
   durumda değiştirmeden iletir.
 - **Trace** (operator): eşlemenin trace dosyaları; listelenir, indirilir ve silinir (tek
-  dosya ya da tümü, denetim kaydına yazılır). Tracing açıkken ve kapatıldıktan sonra da
-  dosya kaldığı sürece görünür.
+  dosya ya da tümü, denetim kaydına yazılır). **Süreli kayıt:** trace'i kapalı bir eşlemede
+  *Kaydet*, trafiği 15 dakika, 1 saat ya da 24 saat boyunca kaydeder ve sonra trace'i
+  kendiliğinden kapatır — diski dolduran bir trace'i açık bırakmadan bir arızayı yakalamak
+  için. İstemciler bağlı kalır (eşleme yeniden başlatılmaz), trafik
+  `traces/<id>-capture.log` dosyasına yazılır, *Şimdi durdur* kaydı erken bitirir ve bitiş
+  zamanı saklanır (`config.json` içinde `options.trace_until`): yeniden başlatma kaydı ne
+  kaybettirir ne de uzatır. *Trace dosya adı* ayarlı bir eşleme sürekli kaydedilir ve bu
+  özellik onu asla kapatmaz. Başlatma, durdurma ve kendiliğinden bitiş denetim kaydına
+  yazılır.
 - **Ayarlar:** *Parolanı değiştir*, **iki adımlı giriş**, **web arayüzü erişimi** (giriş zorunlu /
-  parolasız rol), admin TLS (yol ver veya self-signed üret; daha önce üretilen çift `*.bak`
+  parolasız rol), admin TLS (yol ver, dosyaları yükle veya self-signed üret; daha önce üretilen çift `*.bak`
   olarak saklanır; yeni bağlantılar hemen kullanır, yeniden başlatma gerekmez), **REST API
   token'ları** üret/iptal et ya da ilk token'ın yalnızca rolünü değiştir (tek seferlik
   token'ın Kopyala düğmesi var), **Eşlemeleri dışa / içe aktar** (JSON), **Yapılandırma
@@ -1099,11 +1110,15 @@ Adımlar, farklar ve seçenek tablosu (İngilizce):
   sıra bekleyen TLS el sıkışmaları, kabulden hemen sonra reddedilen bağlantılar
   (`ser2net_connections_refused_total`, nedene göre), veri klasörünün diski
   (`ser2net_data_free_bytes`, `ser2net_data_size_bytes`) ve orada trace'lerle log'ların
-  kapladığı yer (`ser2net_traces_bytes`, `ser2net_logs_bytes`); bir Modbus gateway'in
+  kapladığı yer (`ser2net_traces_bytes`, `ser2net_logs_bytes`); kullanılan TLS
+  sertifikalarının bitiş zamanı (`ser2net_tls_certificate_expiry_seconds`, Unix zamanı:
+  yönetim arayüzününki ve etkin her TLS eşlemesininki; kalan gün sayısıyla birlikte
+  `/api/v1/status` içinde `certificates`); bir Modbus gateway'in
   periyodik okuduğu her unit için yanıt verip vermediği (`ser2net_modbus_unit_up`) ve
   başarısız okumaları (`ser2net_modbus_unit_poll_errors_total`); MQTT'ye yayın yapan bir
   eşlemenin broker'ına bağlı olup olmadığı (`ser2net_mqtt_connected`) ve broker'a teslim
-  edemediği mesajlar (`ser2net_mqtt_messages_dropped_total`); ayrıca `ser2net_up`, eşleme
+  edemediği mesajlar (`ser2net_mqtt_messages_dropped_total`); ayrıca `ser2net_up`, açılıştan beri görülen sistem saati atlamaları
+  (`ser2net_clock_steps_total`), eşleme
   sayısı (`ser2net_mappings_total`), bir eşlemenin veri yok alarmında olup olmadığı
   (`ser2net_mapping_no_data`) ve event loop'un geciken kalp atışları
   (`ser2net_event_loop_stalls_total`, gecikmesi `ser2net_event_loop_lag_seconds`). Her
@@ -1169,9 +1184,16 @@ curl -X PATCH -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/me
   -d '{"network":{"port":4002}}' http://HOST:8080/api/v1/mappings/<id>
 # başlat / durdur / yeniden başlat
 curl -X POST -H "Authorization: Bearer $TOKEN" http://HOST:8080/api/v1/mappings/<id>/stop
+# trafiği 15 dakika kaydet, sonra trace dosyalarını listele ve indir
+curl -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"minutes":15}' http://HOST:8080/api/v1/mappings/<id>/capture
+curl -H "Authorization: Bearer $TOKEN" http://HOST:8080/api/v1/mappings/<id>/traces
+curl -H "Authorization: Bearer $TOKEN" -O http://HOST:8080/api/v1/mappings/<id>/traces/<id>-capture.log
 ```
 Uç noktalar: `GET/POST /mappings`, `GET/PUT/PATCH/DELETE /mappings/{id}`,
-`POST /mappings/{id}/{start|stop|restart}`, `POST /import`, `GET /status`, `GET /ports`,
+`POST /mappings/{id}/{start|stop|restart}`, `GET/DELETE /mappings/{id}/traces`,
+`GET/DELETE /mappings/{id}/traces/{name}`, `POST/DELETE /mappings/{id}/capture`,
+`POST /import`, `GET /status`, `GET /ports`,
 `GET /metrics`, `GET /info` (ser2netweb'in sürümü, API'nin sürümü ve sunduğu `features`),
 `GET /health` ve `GET /openapi.json` (ikisi de kimlik doğrulamasız). Web arayüzünün kendi uç
 noktaları (`/api/status`: panonun tablosu; `X-Content-Hash`'ini geri gönderen sayfaya `204`
@@ -1189,6 +1211,19 @@ adresini ve izin listesini korur), bir liste ya da değer eskisinin yerine geçe
 alanı varsayılanına döndürür (`{"network":{"allowed_client_ips":null}}`). Sonuç her düzenleme
 gibi denetlenir; reddedilen bir patch hiçbir şeyi değiştirmez (HTTP 400). Her değişiklikten
 önceki yapılandırma `backups/` içinde kalır.
+**Trace dosyaları:** `GET /mappings/{id}/traces` bir eşlemenin trace dosyalarını listeler
+(`name`, bayt olarak `size`, son yazılma zamanı Unix zamanı olarak `time`; ayrıca `tracing`,
+şu an yazılan `file` ve `capture_until`). Listelemek ve bir dosyayı indirmek
+(`GET .../traces/{name}`, denetim kaydına yazılır) **operator ya da admin token'ı** ister —
+trace'ler cihaza gönderileni de içerir, viewer web arayüzünde de Trace panelini görmez
+(viewer token'ına `403`). `DELETE .../traces/{name}` tek dosyayı, `DELETE .../traces` hepsini
+siler (açık bir trace yeni bir dosyada sürer). `{"minutes": n}` (1 - 1440) gövdeli
+`POST /mappings/{id}/capture`, Trace panelindeki gibi süreli bir kayıt başlatır; kayıt
+sürerken yeniden gönderilirse yeni bitiş zamanı geçerli olur, `DELETE .../capture` kaydı
+bitirir; `trace_both` ile zaten kaydedilen bir eşleme `409` yanıtı verir.
+`options.trace_until` (kaydın bitiş zamanı) salt okunurdur: `PUT`, `PATCH` ya da
+`POST /mappings` gövdesindeki değeri yok sayar (onu içermeyen bir `PUT` kaydı korur), içe
+aktarmalar da öyle; bir eşlemenin kopyasında süreli kayıt olmaz.
 `GET /mappings/{id}` eşlemenin revizyonunu `ETag` olarak verir: bunu bir `PUT` ya da
 `DELETE` ile `If-Match` olarak geri gönderirsen eşleme yalnızca o zamandan beri kimse
 değiştirmediyse değişir (yoksa `412`, `precondition_failed`); `If-Match` olmadan eskisi gibi
@@ -1302,7 +1337,24 @@ parolası*, `admin_ui.tls_key_password`): ser2netweb
 konsolda asla parola sormaz; parola yoksa eşleme, yönetim arayüzünün anahtarındaysa açılış,
 bunu söyleyen bir hatayla durur. Form ve REST API bir eşlemenin dosyalarını kaydederken
 yükler ve yönetim arayüzünün kendi anahtarını reddeder; form kayıtlı anahtar parolasını hiç
-göstermez, REST API de viewer token'ına maskeli verir. Sertifika yönetilemeyen yerlerde güvenilmeyen
+göstermez, REST API de viewer token'ına maskeli verir.
+**Dosyaları tarayıcıdan yükleme** (admin): dosyaları sunucuya kopyalamak yerine, Ayarlar →
+*Yönetim arayüzü için TLS (HTTPS)* altındaki *Bu bilgisayardan sertifika ve anahtar yükle…*
+yönetim arayüzünün sertifika ve anahtarını alır, ayarlar ve yeni bağlantılara hemen sunar;
+bir eşlemenin formundaki *Bu bilgisayardan TLS dosyaları yükle…* ise bir sertifikayı
+anahtarıyla ve/veya yanında durduğu alanın CA dosyasını alır ve yollarını formun alanlarına
+yazar (form kaydedilince geçerli olurlar). Her biri en fazla 256 KB olan PEM dosyaları (CA
+dosyası DER de olabilir). Saklanmadan önce ser2netweb'in yükleyeceği gibi yüklenirler:
+sertifikaya ait olmayan bir anahtar, parolası verilmemiş şifreli bir anahtar ya da
+sertifika içermeyen bir CA dosyası reddedilir; yönetim arayüzünün anahtarı bir eşleme için
+(ya da bir eşlemeninki yönetim arayüzü için) de reddedilir, başka biçimde yazılmış bir
+kopyası ya da başka bir sertifikayla da (açık anahtarlar karşılaştırılır). Dosyalar veri
+klasörünün `tls/` dizininde `uploaded-<hash>-cert.pem` / `-key.pem` / `-ca.pem` adlarıyla,
+her biri kendi özetiyle adlandırılarak (bir yükleme kullanılan bir anahtarın yerine geçmez),
+yalnızca ser2netweb'in çalıştığı hesabın okuyabileceği şekilde saklanır ve her yükleme
+denetim kaydına yazılır (`admin_tls_upload`, `tls_upload`). Daha önce yüklenen dosyalar siz
+silene kadar orada kalır (bir yapılandırma yedeği onları hâlâ gösteriyor olabilir); sunucuda
+zaten bulunan dosyalar için yol alanları eskisi gibi çalışır. Sertifika yönetilemeyen yerlerde güvenilmeyen
 ağın önünde bir VPN (WireGuard) ya da stunnel seçenektir.
 
 **HSTS:** admin TLS açıkken sayfalar ve REST API yanıtları bir yıllık `max-age` ile
@@ -1997,6 +2049,17 @@ tarih kontrollerini de bozar: oturumlar, iki adımlı giriş kodları, SSO ve TL
 şeyin ne kadar süredir çalıştığı (uptime, bağlantı süreleri, cluster'ın eş listesi) hiçbir
 saat atlamasından etkilenmeyen bir saatle ölçülür.
 
+**ser2netweb çalışırken ayarlanan saat** (elle, geç yetişen saat senkronizasyonuyla, bir VM
+ana makinesi tarafından) fark edilir: sistem saati 5 saniyede bir, hiçbir atlamadan
+etkilenmeyen bir saatle karşılaştırılır; 1 saniye ya da daha büyük bir sıçrama yönü ve
+büyüklüğüyle `all.log`'a yazılır, denetim kaydına işlenir (`clock_step`; dakikada en fazla
+bir satır, kaç tane daha olduğunu da söyler), çalışan her trace'te zamanların sıçradığı yere
+bir `!!` satırıyla işaretlenir, `/metrics`'te sayılır (`ser2net_clock_steps_total`;
+`/api/v1/status` içinde `clock_steps`) ve isteğe bağlı **Sistem saati değiştirildi**
+bildirimi olarak gönderilir. NTP'nin saati yavaşça kaydırması atlama sayılmaz, uykudan ya
+da hazırda bekletmeden uyanma da: karşılaştırma saati uykuda geçen süreyi de sayar (Linux'ta
+`CLOCK_BOOTTIME`, macOS'te `CLOCK_MONOTONIC`, Windows'ta `GetTickCount64`).
+
 - **Linux:** `systemd-timesyncd` ya da `chrony` çalışsın ve makinenin ulaşabildiği bir NTP
   sunucusuna baksın; internete kapalı bir tesis ağında yerel bir sunucuya (bir router, bir
   domain controller, bir GPS zaman sunucusu): `/etc/systemd/timesyncd.conf` içinde
@@ -2123,7 +2186,8 @@ klasörünü verin:
   Bir eşleme silinince trace'leri de silinir; değiştirerek içe aktarma (replace) ya da geri yüklemeyle kaldırılan
   eşlemelerinkiler sonraki açılışa kadar kalır (geri alınan bir geri yükleme onları bulur),
   açılış onları siler ve kaç dosya olduğunu log'a yazar.
-- `tls/` — self-signed üretilirse sertifika/anahtar. Göreli bir TLS yolu (yönetim arayüzü,
+- `tls/` — self-signed üretilirse sertifika/anahtar ve tarayıcıdan yüklenen TLS dosyaları
+  (`uploaded-<hash>-cert.pem`, `-key.pem`, `-ca.pem`). Göreli bir TLS yolu (yönetim arayüzü,
   bir eşleme ya da onun MQTT bağlantısı: sertifika, anahtar, CA dosyaları; LDAP CA dosyası
   değil) veri klasöründeki bir dosyadır, örneğin
   `tls/cert.pem`; böylece veri klasörü taşınınca da çalışır. Taşımadan ya da başka bir
@@ -2133,6 +2197,9 @@ klasörünü verin:
   yolla kaydedilir); taşımadan önceki yedekler ve içe aktarmalar da aynı şekilde ele alınır.
 - `setup-code.txt` — ilk kurulumun bir host adıyla yapılması için tek kullanımlık kod; yalnızca
   ilk admin hesabı oluşana kadar durur.
+- `cert-notices.json` — hangi *TLS sertifikasının süresi dolmak üzere* bildirimlerinin
+  gönderildiği (sertifika dosyası başına: bitiş tarihi ve eşik); böylece yeniden başlatma
+  bunları tekrar göndermez. Silinirse bir kez daha gönderilirler.
 - `sparkplug-bdseq.json` — her Sparkplug B edge node'unun (grup/düğüm) son oturumunun
   `bdSeq`'i; yeniden başlatmadan sonra numara buradan devam eder. Silinirse sonraki
   açılış 0'dan başlar.

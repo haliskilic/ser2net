@@ -1,7 +1,8 @@
 """Event notifications: tell someone when a serial device disappears or comes back,
 a mapping fails to start, clients come and go, a sign-in fails, the data disk is almost
 full, a device sends nothing, a cluster node goes offline, a Modbus unit that a gateway
-polls stops answering or answers again, or ser2netweb has started.
+polls stops answering or answers again, a TLS certificate is about to end, the system
+clock is stepped (clockwatch.py reports that itself), or ser2netweb has started.
 
 The Notifier watches the supervisor's status snapshot (every POLL_S seconds) and
 turns state changes into events; the login route reports failed sign-ins itself. Every
@@ -13,7 +14,9 @@ again (silence_events). Cluster nodes heard from in this run that are not heard 
 cluster.PEER_TTL, and configured peers that stop answering, are logged and send
 peer_offline, peer_back when they return (PeerWatch). SERVICE_STARTED_S after the start
 service_started sums up which mappings run (and whether the previous run was ended by
-the event loop watchdog).
+the event loop watchdog). Once a day (certwatch.CHECK_S) the TLS certificates in use are
+read: one with fewer than 30, 7 or 1 days left, or that has ended, is logged and sends
+cert_expiring, once per certificate and threshold (ser2netweb/certwatch.py).
 Each enabled event is sent to the configured webhook (generic JSON, Slack, Microsoft
 Teams Workflows, Discord or Telegram) and/or by e-mail (SMTP), from a worker task so
 a slow endpoint never holds anything up. The same event for the same mapping (client
@@ -43,7 +46,7 @@ from email.message import EmailMessage
 from email.utils import formataddr, parseaddr
 from typing import Optional
 
-from . import __version__, i18n, storage, user_agent
+from . import __version__, certwatch, i18n, storage, user_agent
 from .config import node_name as configured_name
 from .engine.cluster import PEER_TTL, peer_addr
 from .explain import explain
@@ -82,6 +85,8 @@ def title(event: str) -> str:
         "service_started": _("ser2netweb started"),
         "unit_offline": _("Modbus unit not answering"),
         "unit_back": _("Modbus unit answering again"),
+        "cert_expiring": _("TLS certificate about to expire"),
+        "clock_step": _("system clock stepped"),
         "test": _("test notification"),
     }.get(event, event)
 
@@ -516,6 +521,7 @@ class Notifier:
         self.silent: set[str] = set()  # mappings past their no-data alarm (silence_events)
         self.peers = PeerWatch()
         self._started: Optional[float] = None  # time.monotonic() of start(); None once sent
+        self._certs_checked: Optional[float] = None  # time.monotonic() of the last look
 
     @property
     def settings(self):
@@ -593,6 +599,9 @@ class Notifier:
                     await self.check_disk()
                 await self.check_peers()
                 self.check_started(statuses)
+                if self._certs_checked is None or now - self._certs_checked >= certwatch.CHECK_S:
+                    self._certs_checked = now
+                    await self.check_certificates()
             except Exception as e:  # never let the watcher die
                 self.state.log(f"notifications: watcher error: {e}")
 
@@ -636,6 +645,13 @@ class Notifier:
         if hang:
             detail += "\n" + hang.removeprefix("WARNING: ")
         self.emit("service_started", "service", "", detail)
+
+    async def check_certificates(self) -> None:
+        """The TLS certificates in use past a threshold (certwatch.CertWatch.check): logged
+        and sent (cert_expiring), once per certificate and threshold."""
+        watch = getattr(self.state, "certwatch", None)
+        if watch is not None:
+            await watch.check(self.emit)
 
     async def check_disk(self) -> None:
         """Look at the data folder's free space: going below storage.floor() is logged and

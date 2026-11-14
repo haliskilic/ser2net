@@ -29,7 +29,7 @@ from ..config import ROLE_RANK, node_name
 from ..engine import netguard
 from ..explain import explain
 from ..textfold import search_key
-from . import auth, proxy
+from . import auth, proxy, tlsupload
 from .routes import build_routes
 from .routes.common import bytesize, client_ip, domid, duration, since
 from .routes.forms import in_text_box
@@ -451,6 +451,7 @@ def make_templates() -> Jinja2Templates:
     templates.env.add_extension("jinja2.ext.i18n")
     templates.env.install_gettext_callables(i18n.gettext, i18n.ngettext, newstyle=True)  # type: ignore[attr-defined]
     templates.env.globals["languages"] = i18n.LANGUAGES
+    templates.env.globals["tls_upload_kb"] = tlsupload.MAX_FILE_BYTES // 1024
     templates.env.globals.update(base_path=proxy.base, route_path=proxy.route_path)
     return templates
 

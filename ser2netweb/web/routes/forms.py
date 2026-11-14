@@ -286,8 +286,9 @@ _POINT_OPTIONS = {
 _UNMANAGED_FIELDS = {
     "serial.advanced": ("hangup_when_done", "nobreak"),
     "serial_b.advanced": ("hangup_when_done", "nobreak"),
-    "options": ("openstr", "closestr", "trace_timestamp", "rfc2217_poll_modem_interval_s",
-                "rfc2217_net_timeout_s"),
+    # (trace_until: a timed capture's end, set in the Trace panel)
+    "options": ("openstr", "closestr", "trace_timestamp", "trace_until",
+                "rfc2217_poll_modem_interval_s", "rfc2217_net_timeout_s"),
 }
 
 # One-line text inputs that can hold a stored value they can't show: a browser drops

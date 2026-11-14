@@ -78,6 +78,10 @@ EXPIRE_DAYS_MAX = 3650
 # trace files not written for this many days are deleted by the hourly maintenance
 # (AppConfig.trace_max_age_days, AppState.run_trace_maintenance); 0 = kept, the default
 TRACE_DAYS_MAX = 3650
+# A timed capture (MappingOptions.trace_until): the file a mapping without a trace file
+# name of its own is traced to meanwhile, and how long one may last
+CAPTURE_TRACE_NAME = "capture.log"
+CAPTURE_MAX_S = 24 * 3600
 # log and audit records and configuration backups older than this many days are deleted by
 # the hourly maintenance (AppConfig.log_max_age_days, AppState.run_retention); 0 = only
 # their size and count limits, the default
@@ -221,9 +225,11 @@ def _icacls_private(path: str, grants: list[str]) -> None:
 # adds to any folder.
 OWN_NAMES = frozenset({"backups", "logs", "traces", "tls", "admin-requests", "ser2net.lock",
                        "setup-code.txt", "sparkplug-bdseq.json", "hang.log", "service.log",
+                       "cert-notices.json",  # (ser2netweb/certwatch.py)
                        "lost+found", ".DS_Store", "Thumbs.db", "desktop.ini"})
 _OWN_NAME = re.compile(r"(?:all|audit)\.log(?:\.\d+|\.tmp)?|(?:hang|service)\.log\.1|"
-                       r"\.cfg\..+\.tmp|setup-code\.txt\.tmp|sparkplug-bdseq\.json\.tmp")
+                       r"\.cfg\..+\.tmp|setup-code\.txt\.tmp|sparkplug-bdseq\.json\.tmp|"
+                       r"cert-notices\.json\.tmp")
 
 
 def foreign_entries(directory: str, config_name: str = "config.json") -> Optional[list[str]]:
@@ -1210,6 +1216,11 @@ class MappingOptions:
     trace_timestamp: bool = True
     trace_max_mb: float = 10.0
     trace_keep: int = 3
+    # A timed capture (the Trace panel, POST /api/v1/mappings/{id}/capture): the traffic
+    # is traced until this time (Unix seconds; 0 = none), to trace_both or, without one, to
+    # CAPTURE_TRACE_NAME. Its end only clears this: a trace_both that is set goes on (see
+    # trace_file). A release without it drops the key: the capture is then off.
+    trace_until: float = 0.0
     # the web console's and hex view's text encoding (CONSOLE_ENCODINGS); display and typing
     # only: what the bridge passes stays the same bytes
     console_encoding: str = "utf-8"
@@ -1255,6 +1266,9 @@ class MappingOptions:
         opts = MappingOptions(**_read_fields(MappingOptions, d, notes, path))
         opts.idle_timeout_s = _legacy_seconds(opts.idle_timeout_s)
         opts.trace_both = trace_file_name(opts.trace_both)
+        if not (_is_number(opts.trace_until) and math.isfinite(opts.trace_until)
+                and opts.trace_until > 0):
+            opts.trace_until = 0.0  # (never a reason to refuse a stored config)
         opts._limit_no_data_alarm(notes, path)
         if isinstance(opts.modbus_unit_map, dict):  # (JSON keys are text)
             opts.modbus_unit_map = {str(k): v for k, v in opts.modbus_unit_map.items()}
@@ -1274,6 +1288,12 @@ class MappingOptions:
             warning=_("The no-data alarm must be 0 (off) or {0} to {1} seconds: {2} is "
                       "used.").format(NO_DATA_MIN_S, NO_DATA_MAX_S, used)))
         self.no_data_alarm_s = used
+
+    @property
+    def trace_file(self) -> str:
+        """The file name the traffic is traced to now ("" = not traced): trace_both, or
+        while a timed capture runs on a mapping without one, CAPTURE_TRACE_NAME."""
+        return self.trace_both or (CAPTURE_TRACE_NAME if self.trace_until else "")
 
     @property
     def modbus_unit_map_text(self) -> str:
@@ -3025,7 +3045,7 @@ class ClusterSettings:
 NOTIFY_EVENTS = ("device_lost", "device_back", "start_failed", "link_lost", "link_back",
                  "client_connected", "client_disconnected", "login_failed", "disk_low",
                  "no_data", "data_back", "peer_offline", "peer_back", "service_started",
-                 "unit_offline", "unit_back")
+                 "unit_offline", "unit_back", "cert_expiring", "clock_step")
 # (a saved events list is kept as it is: these are what a config without one gets)
 NOTIFY_DEFAULT_EVENTS = ("device_lost", "device_back", "start_failed", "link_lost", "link_back")
 WEBHOOK_FORMATS = ("json", "slack", "teams", "discord", "telegram")
@@ -3894,7 +3914,11 @@ def mapping_revision(secret_key: str, m: "MappingConfig") -> str:
     secret key, so it tells nothing about the settings (the MQTT password a viewer token
     doesn't get), and another node's revision is its own."""
     key = hmac.new(secret_key.encode(), b"ser2net mapping revision", hashlib.sha256).digest()
-    body = json.dumps(m.to_dict(), sort_keys=True, separators=(",", ":"), default=str)
+    content = m.to_dict()
+    # not a setting someone edits: a timed capture that begins or ends must not make an
+    # open edit form, or a REST client's If-Match, stale
+    content.get("options", {}).pop("trace_until", None)
+    body = json.dumps(content, sort_keys=True, separators=(",", ":"), default=str)
     return hmac.new(key, body.encode(), hashlib.sha256).hexdigest()[:24]
 
 
