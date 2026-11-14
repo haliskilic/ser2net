@@ -7,6 +7,8 @@
   writes all of it from the npm releases);
 * xterm comes from the maintained @xterm/* packages (the unscoped xterm / xterm-addon-fit
   ones are deprecated upstream), with the globals app.js uses (Terminal, FitAddon);
+* xterm.js and its fit addon are one release (published from one commit, which the record
+  names): one of them bumped alone is reported, by the offline check and by a refresh;
 * the pages link the assets with ?v=<hash of ser2netweb/web/static>, and a request carrying the
   current one gets an immutable Cache-Control (other requests are revalidated as before).
 
@@ -42,7 +44,12 @@ def test_record_matches_the_files():
     assert "xterm" not in doc["dependencies"] and "xterm-addon-fit" not in doc["dependencies"], \
         "the unscoped xterm packages are deprecated"
     assert pkgs["@xterm/xterm"]["purl"] == f"pkg:npm/%40xterm/xterm@{pkgs['@xterm/xterm']['version']}"
-    assert pkgs["@xterm/xterm"]["version"].startswith("5."), "6.x changes the console: plan it"
+    # the console (app.js, app.css, tests/test_ui_layout.py) is written for this pair: a
+    # major of xterm.js changes its options, its DOM and what the addon reads from it
+    assert pkgs["@xterm/xterm"]["version"].startswith("6."), "a new major changes the console: plan it"
+    assert pkgs["@xterm/addon-fit"]["version"].startswith("0."), pkgs["@xterm/addon-fit"]["version"]
+    assert pkgs["@xterm/xterm"]["commit"] and \
+        pkgs["@xterm/xterm"]["commit"] == pkgs["@xterm/addon-fit"]["commit"], "one xterm.js release"
     assert {p["license"] for p in pkgs.values()} == {"0BSD", "MIT"}
     with open(os.path.join(ROOT, pkgs["@xterm/xterm"]["license_file"]), encoding="utf-8") as fh:
         assert "The xterm.js authors" in fh.read()
@@ -73,6 +80,44 @@ def test_a_changed_file_is_reported():
     print("an altered file and a version bump without a refresh are reported  OK")
 
 
+def test_xterm_and_its_addons_are_one_release():
+    """@xterm/xterm and @xterm/addon-* are published together, from one commit; an addon
+    with another xterm.js than its own (fit 0.11 with xterm.js 5.5: it takes the
+    scrollbar's width from an option 5.5 doesn't have) is refused, whichever was bumped."""
+    one, other = "f447274f430fd22513f6adbf9862d19524471c04", "9ba6c00a195c95fcf8292a2b9084d91450e5daae"
+    assert ra.unpaired({"@xterm/xterm": one, "@xterm/addon-fit": one, "htmx.org": "x"}) == ""
+    assert ra.unpaired({"htmx.org": ""}) == "", "only xterm.js's packages are paired"
+    for commits in ({"@xterm/xterm": other, "@xterm/addon-fit": one},
+                    {"@xterm/xterm": one, "@xterm/addon-fit": other}):
+        why = ra.unpaired(commits)
+        assert "not of one release" in why and "bump them together" in why, why
+    assert "no commit known for @xterm/addon-fit" in ra.unpaired(
+        {"@xterm/xterm": one, "@xterm/addon-fit": ""})
+    # the offline check reads the record's commits
+    doc = ra.load()
+    assert ra.unpaired({p["name"]: p["commit"] for p in ra.packages(doc)}) == ""
+    doc["ser2net"]["packages"]["@xterm/addon-fit"]["commit"] = "0" * 40
+    assert any("not of one release" in p for p in ra.check(doc=doc)), ra.check(doc=doc)
+
+    # a refresh of such a set stops before it writes anything
+    def fake(name, version):
+        return None, "sha512-x", other if name == "@xterm/addon-fit" else one
+
+    real, ra.tarball = ra.tarball, fake
+    try:
+        try:
+            ra.refresh()
+        except SystemExit as e:
+            assert "not of one release" in str(e), e
+        else:
+            raise AssertionError("a refresh took an addon of another xterm.js release")
+    finally:
+        ra.tarball = real
+    assert ra.check() == [], "the refused refresh changed nothing"
+    print("xterm.js and its addons: one release (one commit), or the refresh and the "
+          "check refuse  OK")
+
+
 def test_console_globals():
     with open(os.path.join(ROOT, "ser2netweb/web/static/xterm.js"), encoding="utf-8") as fh:
         xterm = fh.read()
@@ -82,6 +127,10 @@ def test_console_globals():
         app_js = fh.read()
     # UMD bundles: Terminal is copied onto the global object, FitAddon set as e.FitAddon
     assert "e.Terminal=" in xterm and "e.FitAddon=t()" in fit
+    # the scrollbar: xterm.js 6 draws its own and the addon leaves room for it, both as
+    # wide as the option says (app.js passes none: 14 px in both)
+    assert "verticalScrollbarSize:this._optionsService.rawOptions.overviewRuler?.width||14" in xterm
+    assert "this._terminal.options.overviewRuler?.width||14" in fit
     assert "new Terminal(" in app_js and "new FitAddon.FitAddon()" in app_js
     print("xterm.js / addon-fit export the Terminal and FitAddon globals app.js uses  OK")
 
@@ -117,6 +166,7 @@ if __name__ == "__main__":
     else:
         test_record_matches_the_files()
         test_a_changed_file_is_reported()
+        test_xterm_and_its_addons_are_one_release()
     test_console_globals()
     test_cache_headers()
     print("\nPASS: vendored browser assets")

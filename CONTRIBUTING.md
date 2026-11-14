@@ -153,7 +153,9 @@ together (`tests/test_pyproject.py` checks the first two agree), or works withou
 in `ser2netweb/web/static/` (htmx, xterm.js) are pinned in `vendor/npm/package.json`; change a
 version there and run `python tools/refresh_assets.py`, which copies the files out of the npm
 release and records their sha256 (Dependabot proposes minor updates, `refresh-pins.yml`
-copies them in; test the console by hand before a major one). GitHub's dependency graph (and so the
+copies them in; test the console by hand before a major one). xterm.js and its addons
+(`@xterm/xterm`, `@xterm/addon-fit`) are bumped together: they are published from one commit,
+which the refresh records and checks, and it refuses one without the other. GitHub's dependency graph (and so the
 Dependabot alerts) reads `requirements.txt` for its newest Python only, without the pins
 only Python 3.10 installs; `.github/workflows/dependency-graph.yml`
 (`tools/dependency_snapshot.py`) submits the whole file from `main` instead, so those get
@@ -417,7 +419,9 @@ alt sınırı tam olarak içerir ve CI'ın "minimum dependencies" işi test tak�
 kütüphaneleri (htmx, xterm.js) `vendor/npm/package.json`'da sabitlenir; oradaki sürümü
 değiştirip `python tools/refresh_assets.py` çalıştırın: dosyaları npm sürümünden kopyalar ve
 sha256'larını kaydeder (Dependabot minor güncellemeleri önerir, `refresh-pins.yml` onları
-kopyalar; major bir güncellemeden önce konsolu elle deneyin). GitHub'ın bağımlılık grafiği (dolayısıyla Dependabot uyarıları) `requirements.txt`'i
+kopyalar; major bir güncellemeden önce konsolu elle deneyin). xterm.js ve eklentileri
+(`@xterm/xterm`, `@xterm/addon-fit`) birlikte yükseltilir: aynı commit'ten yayımlanırlar,
+yenileme bunu kaydedip denetler ve birini diğeri olmadan kabul etmez. GitHub'ın bağımlılık grafiği (dolayısıyla Dependabot uyarıları) `requirements.txt`'i
 yalnızca en yeni Python için okur, yalnızca Python 3.10'un kurduğu pin'ler eksik kalır;
 `.github/workflows/dependency-graph.yml` (`tools/dependency_snapshot.py`) bunun yerine dosyanın
 tamamını `main`'den grafiğe gönderir, böylece onlar için de uyarı çıkar.
