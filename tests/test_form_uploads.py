@@ -10,6 +10,9 @@ none (routes.common.read_form: 400 while the body is read), the mappings import 
   2. a real server: a file part named like a field gets 400 on mapping save, the
      access and notification settings and a cluster action; nothing is saved and the
      server keeps running; the same fields as multipart text are still accepted
+  3. the sign-in, two-factor, sign-out and first-run setup forms (read_form with their
+     field limits): a file part gets 400 before anything else - no failed sign-in is
+     counted, the session stays, no account is made
 
 Run: python3 tests/test_form_uploads.py
 """
@@ -63,7 +66,7 @@ def test_every_form_read_bounds_files():
                          for k in node.keywords)
                 if not ok:
                     unbounded.append(f"{os.path.relpath(path, ROOT)}:{node.lineno}")
-    assert seen >= 3, seen  # read_form, the import, the sign-in forms
+    assert seen >= 3, seen  # read_form, the mappings import, the TLS uploads
     assert not unbounded, ("request.form() without max_files (use routes.common.read_form):\n  "
                            + "\n  ".join(unbounded))
     print(f"every request.form() in ser2netweb/web bounds its file parts ({seen} calls)  OK")
@@ -98,6 +101,36 @@ def test_file_parts_refused():
           "text fields still accepted  OK")
 
 
+def test_sign_in_file_parts_refused():
+    config = {"users": [{"username": "admin", "password_hash": hash_password(PASSWORD),
+                         "role": "admin", "pwd_version": 1}]}
+    upload = ("x.txt", b"30")
+    with Server(config) as srv:
+        b = Browser(srv.base)
+        # more than the sign-in limits allow (8 per address, 10 per name): none is counted
+        for _ in range(12):
+            st, _h, body = b.post("/login", {"username": "admin"}, files={"password": upload})
+            assert st == 400, ("/login", st, body[:300])
+        st, _h, body = b.post("/auth/totp", {}, files={"code": upload})
+        assert st == 400, ("/auth/totp", st, body[:300])
+        b.login("admin", PASSWORD)   # (asserts it works: no failed sign-in was counted)
+        st, _h, body = b.post("/logout", {}, files={"note": upload})
+        assert st == 400, ("/logout", st, body[:300])
+        st, _h, body = b.get("/")
+        assert st == 200 and "/logout" in body, ("still signed in", st)
+        assert "Traceback" not in srv.output(), srv.output()[-2000:]
+    with Server({}) as srv:   # first-run setup: no account yet
+        b = Browser(srv.base)
+        st, _h, body = b.post("/setup", {"username": "admin", "password2": PASSWORD},
+                              files={"password": upload})
+        assert st == 400, ("/setup", st, body[:300])
+        assert not srv.saved_config().get("users"), "no account may be made"
+        b.setup("admin", PASSWORD)
+        assert [u["username"] for u in srv.saved_config()["users"]] == ["admin"]
+    print("sign-in, two-factor, sign-out and setup forms: a file part is 400; no failed "
+          "sign-in counted, the session kept, no account made  OK")
+
+
 def _post_multipart_text(b: Browser, path: str, fields: dict):
     """A multipart/form-data post with text parts only (what curl -F name=value sends)."""
     import urllib.request
@@ -115,6 +148,7 @@ def _post_multipart_text(b: Browser, path: str, fields: dict):
 def main():
     test_every_form_read_bounds_files()
     test_file_parts_refused()
+    test_sign_in_file_parts_refused()
     print("\nPASS: form posts take text fields only (a file part is refused)")
 
 
