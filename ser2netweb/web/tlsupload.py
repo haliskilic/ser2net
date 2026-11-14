@@ -27,6 +27,7 @@ import hashlib
 import os
 import re
 import tempfile
+import time
 from typing import Optional
 
 from ..config import data_path, lock_down_dir
@@ -188,13 +189,44 @@ def store(data_dir: str, *, cert: Optional[bytes] = None, key: Optional[bytes] =
                 tls.tls_context(server_side=False, ca=aside[name], verify=True)
         except tls.TlsFileError as e:
             raise UploadError(_problem(e)) from None
-        for what, (path, _data) in files.items():
-            os.replace(aside[what], path)
+        for what, (path, data) in files.items():
+            _keep(aside[what], path, data)
     finally:
         for tmp in aside.values():
             with contextlib.suppress(OSError):
                 os.remove(tmp)
     return {what: path for what, (path, _data) in files.items()}
+
+
+# Windows refuses to replace a file while another upload of the same file is replacing it
+# or reading it (PermissionError), and while an antivirus scans it: tried again for up to
+# this long. A POSIX rename has no such refusal (a PermissionError there is the folder's).
+REPLACE_WAIT_S = 5.0 if os.name == "nt" else 0.0
+
+
+def _keep(tmp: str, path: str, data: bytes) -> None:
+    """Move the checked file `tmp` to `path`. A file is named by its hash, so one that is
+    there with these bytes already (the same file uploaded before, or at the same time) is
+    kept as it is."""
+    end = time.monotonic() + REPLACE_WAIT_S
+    while True:
+        try:
+            os.replace(tmp, path)
+            return
+        except PermissionError:
+            if _holds(path, data):
+                return
+            if time.monotonic() >= end:
+                raise
+            time.sleep(0.05)
+
+
+def _holds(path: str, data: bytes) -> bool:
+    try:
+        with open(path, "rb") as fh:
+            return fh.read(len(data) + 1) == data
+    except OSError:
+        return False
 
 
 def _path(folder: str, data: bytes, what: str) -> str:
