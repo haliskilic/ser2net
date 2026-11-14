@@ -316,7 +316,8 @@ _UNMANAGED_FIELDS = {
 # One-line text inputs that can hold a stored value they can't show: a browser drops
 # its line breaks (CR, LF) and turns a NUL into U+FFFD, so posted back unchanged it
 # differs (close-on strings imported from a ser2netweb configuration have them; a packing
-# delimiter set over the REST API, by an import or by hand can be a real CR LF).
+# delimiter set over the REST API, by an import or by hand can be a real CR LF, which its
+# box shows escaped instead: text_shown).
 #   form field -> (config section, attribute)
 _TEXT_INPUTS = {
     "opt_banner": ("options", "banner"),
@@ -651,6 +652,27 @@ def in_text_box(value: str) -> str:
     return value.replace("\0", "\ufffd").replace("\r", "").replace("\n", "")
 
 
+_ESCAPES = {"\r": "\\r", "\n": "\\n", "\t": "\\t"}
+
+
+def escaped_text(value: str) -> str:
+    r"""A text of escapes (config.poll_bytes: \r \n \t \\ \xHH; the packing delimiter) as
+    its box shows it: a control character stored as it is (by the REST API, an import or
+    by hand) written as its escape, which reads back as the same bytes; the rest as it
+    is."""
+    return "".join(_ESCAPES.get(ch) or (f"\\x{ord(ch):02x}" if ord(ch) < 0x20 or ord(ch) == 0x7F
+                                         else ch) for ch in value)
+
+
+# what the box of a _TEXT_INPUTS field shows (and a browser posts back unchanged)
+_TEXT_SHOWN = {"opt_pack_delimiter": escaped_text}
+
+
+def text_shown(field: str, value: str) -> str:
+    """What saving the form unchanged posts for a _TEXT_INPUTS `field` holding `value`."""
+    return _TEXT_SHOWN.get(field, in_text_box)(value)
+
+
 def apply_usb_match(mapping: MappingConfig, form, ports: list, existing=None,
                     strict: bool = True) -> None:
     """Set each serial side's stable USB identity (serial.match) from the form's
@@ -825,7 +847,7 @@ def _preserve_unmanaged_fields(new_map, existing, form=None) -> None:
             setattr(cur, attr, copy.deepcopy(getattr(old, attr)))
     for field, (section, attr) in _TEXT_INPUTS.items():
         cur, old = _section(new_map, section), _section(existing, section)
-        if field in form and getattr(cur, attr) == in_text_box(getattr(old, attr)):
+        if field in form and getattr(cur, attr) == text_shown(field, getattr(old, attr)):
             setattr(cur, attr, getattr(old, attr))
     if "modbus_point_options_shown" not in form and "modbus_points" in form:
         _keep_point_options(new_map, existing)

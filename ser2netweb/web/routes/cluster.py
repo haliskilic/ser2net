@@ -37,8 +37,8 @@ from .common import (
 )
 from .forms import (
     _TEXT_INPUTS, MQTT_PASSWORD_CLEAR, MQTT_PASSWORD_WRITE_ONLY, _build_mapping_dict,
-    _parse_modbus_points, blocks_not_read, form_context, in_text_box, mapping_for_rerender,
-    mqtt_password_from_form,
+    _parse_modbus_points, blocks_not_read, form_context, mapping_for_rerender,
+    mqtt_password_from_form, text_shown,
 )
 
 # The mapping form's own field names (bare ones + these prefixes). cluster_peer_save
@@ -179,7 +179,7 @@ def _peer_save_fields(form, peer_mapping, peer_version):
     stored_password = str(mqtt.get("password") or "") if isinstance(mqtt, dict) else ""
     unchanged = {field: value for field, (section, attr) in _TEXT_INPUTS.items()
                  if isinstance(value := stored(section, attr), str)
-                 and form.get(field) == in_text_box(value)}
+                 and form.get(field) == text_shown(field, value)}
     fields = [(k, unchanged.get(k, v)) for k, v in form.multi_items()
               if k != "opt_trace_both" and k not in _PEER_PASSWORD_FIELDS
               and (k in _PEER_FORM_FIELDS or k.startswith(_PEER_FORM_PREFIXES))]

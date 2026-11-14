@@ -309,7 +309,7 @@
       <label>{{ _("Packing gap (ms)") }} <span class="muted">({{ _("forward the device’s output as one frame once it has sent nothing for this long; one datagram per frame over UDP · 0 = off") }})</span>
         <input type="number" name="opt_pack_gap_ms" min="0" max="60000" value="{{ mapping.options.pack_gap_ms }}"></label>
       <label>{{ _("Packing delimiter") }} <span class="muted">({{ _("a frame ends with these bytes:") }} <span class="mono">\r \n \t \\ \xHH</span> · {{ _("blank = none") }})</span>
-        <input type="text" name="opt_pack_delimiter" value="{{ mapping.options.pack_delimiter }}" placeholder="{{ _('e.g. %(example)s', example='\\r\\n') }}" autocapitalize="none" autocorrect="off" spellcheck="false"></label>
+        <input type="text" name="opt_pack_delimiter" value="{{ mapping.options.pack_delimiter | escaped_text }}" placeholder="{{ _('e.g. %(example)s', example='\\r\\n') }}" autocapitalize="none" autocorrect="off" spellcheck="false"></label>
       <label>{{ _("Packing frame size (bytes)") }} <span class="muted">({{ _("a frame is sent once it has this many bytes · 0 = 4096 while packing is on") }})</span>
         <input type="number" name="opt_pack_max_bytes" min="0" max="65507" value="{{ mapping.options.pack_max_bytes }}"></label>
     </div>
