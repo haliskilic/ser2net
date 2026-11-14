@@ -20,6 +20,11 @@
     so in --about; winget's and Chocolatey's keep the data in the user's data folder (a
     data\\config.json next to the executable, as 3.0.0 made it there, stays in use), Scoop's
     in data\\ next to it (the folder its manifest persists);
+  * a distribution's package built from a recipe in packaging/ (pip's layout with the file
+    the recipe wrote into the package, layout.DISTRO_FILE): its service's data directory
+    as the file says, the distribution named in --about, the distribution's command in the
+    hint for a missing optional package; a file that isn't a recipe's (or a build tree
+    with one) changes nothing;
   * --data-dir and --config still choose the folder;
   * a pip install skips the bootstrap into ./lib (pip installed the dependencies), says
     "Python package (pip / pipx)" in --about, reads its licence texts from its .dist-info,
@@ -28,10 +33,12 @@
     folder with its .dist-info): --version, --about and --set-password without
     --data-dir, which writes config.json into the user data folder and nothing next to
     the package; laid out as the Homebrew formula installs it: --about and --set-password
-    into <prefix>/var/ser2netweb.
+    into <prefix>/var/ser2netweb; laid out as a distribution's recipe installs it: --about
+    and --set-password into the data directory its file names.
 
 Run: python3 tests/test_install_layout.py   (binds nothing)
 """
+import json
 import os
 import shutil
 import subprocess
@@ -179,7 +186,7 @@ def test_windows_package_managers():
             assert layout.default_data_dir(tools, k) == os.path.join(tools, "data"), k
     assert set(layout.LABELS) == {layout.SOURCE, layout.STANDALONE, layout.PACKAGE, layout.PIP,
                                   layout.HOMEBREW, layout.SNAP, layout.WINGET, layout.SCOOP,
-                                  layout.CHOCOLATEY}
+                                  layout.CHOCOLATEY, layout.DISTRO}
     # no kind shadows another: Linux's (the package's path, the snap) and Windows' (the
     # package managers' folders) only on their own platform
     snap = {"SNAP_NAME": "ser2netweb", "SNAP": "/snap/ser2netweb/42"}
@@ -447,6 +454,124 @@ def test_homebrew_end_to_end():
           "licence texts  OK")
 
 
+DEBIAN = {"distribution": "Debian", "data_dir": "/var/lib/ser2netweb",
+          "optional": "sudo apt install python3-{dist}"}
+
+
+def _distro_file(site: str, info) -> str:
+    path = os.path.join(site, "ser2netweb", layout.DISTRO_FILE)
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write(info if isinstance(info, str) else json.dumps(info))
+    return path
+
+
+def test_distribution_package():
+    """A distribution's package built from a recipe in packaging/: pip's layout (the package
+    in site-packages or dist-packages with its .dist-info) and the file the recipe wrote
+    into the package (layout.DISTRO_FILE), which names the distribution, its service's data
+    directory and how its optional packages are installed."""
+    with tempfile.TemporaryDirectory() as tmp:
+        site = os.path.join(tmp, "usr", "lib", "python3", "dist-packages")
+        pkg = os.path.join(site, "ser2netweb")
+        os.makedirs(pkg)
+        assert layout.detect(False, sys.executable, pkg) == layout.PIP, "no file: pip's"
+        _distro_file(site, DEBIAN)
+        assert layout.distro_info(pkg) == DEBIAN
+        assert layout.detect(False, sys.executable, pkg) == layout.DISTRO
+        assert layout.detect(True, "/opt/x/ser2netweb", pkg, "linux") == layout.STANDALONE
+        # what isn't a recipe's file is pip's layout as before (and never fails)
+        for bad in ("", "not json", "[]", '{"data_dir": "/var/lib/ser2netweb"}',
+                    '{"distribution": ""}', '{"distribution": 3}', "\udcff"):
+            path = _distro_file(site, bad) if bad != "\udcff" else None
+            if path is None:
+                with open(os.path.join(pkg, layout.DISTRO_FILE), "wb") as fh:
+                    fh.write(b'{"distribution": "\xff"}')
+            assert layout.distro_info(pkg) is None, bad
+            assert layout.detect(False, sys.executable, pkg) == layout.PIP, bad
+        # (a build tree with the file, as a recipe's check step runs the tests: a source
+        # checkout still)
+        tree = os.path.join(tmp, "build", "ser2netweb-3.1.0")
+        os.makedirs(os.path.join(tree, "ser2netweb"))
+        _distro_file(tree, DEBIAN)
+        assert layout.detect(False, sys.executable, os.path.join(tree, "ser2netweb")) == \
+            layout.SOURCE
+    assert layout.distro_info() is None, "this checkout has no such file"
+    saved = layout.distro_info
+    try:
+        for info, want in ((DEBIAN, "/var/lib/ser2netweb"),
+                           ({"distribution": "FreeBSD", "data_dir": "/var/db/ser2netweb"},
+                            "/var/db/ser2netweb"),
+                           ({"distribution": "X", "data_dir": "relative/dir"},
+                            layout.user_data_dir()),
+                           ({"distribution": "X"}, layout.user_data_dir())):
+            layout.distro_info = lambda *_a, info=info: info
+            assert layout.default_data_dir("/usr/bin", layout.DISTRO) == want, info
+            with _Kind(layout.DISTRO):
+                assert cli.parse_args([]).data_dir == want, info
+                assert cli.parse_args(["--data-dir", "/srv/s2n"]).data_dir == "/srv/s2n"
+                assert layout.label() == f"distribution package ({info['distribution']})"
+                # pip's layout otherwise: no bootstrap, the ser2netweb command in hints
+                saved_path, had = list(sys.path), "bootstrap" in sys.modules
+                cli.load_dependencies(cli.parse_args([]), refresh=True)
+                assert sys.path == saved_path and ("bootstrap" in sys.modules) == had
+                assert console.reconfigure_hint("/d", environ={})[1] == \
+                    "ser2netweb --reconfigure --data-dir /d"
+                assert dict(cli._known_roots({}))["<ser2netweb>"] == layout.PACKAGE_DIR
+        # the hint for a missing optional package: the recipe's command, else the
+        # distribution's package by name
+        layout.distro_info = lambda *_a: DEBIAN
+        with _Kind(layout.DISTRO):
+            p = optional.problem(ModuleNotFoundError("x", name="paho"), "paho-mqtt", "paho.mqtt")
+            assert not p.pip and not p.homebrew and p.distro == DEBIAN, p
+            assert p.hint == "sudo apt install python3-paho-mqtt", p.hint
+            p = optional.problem(ImportError("broken"), "ldap3")
+            assert p.hint == "sudo apt install python3-ldap3, then restart ser2netweb", p.hint
+        for template, want in (("sudo port install ser2netweb +{extra}",
+                                "sudo port install ser2netweb +oidc"),
+                               ({"authlib": "sudo xbps-install python3-Authlib"},
+                                "sudo xbps-install python3-Authlib"),
+                               ({"ldap3": "x"}, "Void has no package of it"),
+                               ("", "install the Void package of authlib"),
+                               ("{nothing} {dist}", "{nothing} authlib")):
+            info = {"distribution": "Void", "optional": template}
+            assert optional.Problem("authlib", True, "", distro=info).hint == want, template
+    finally:
+        layout.distro_info = saved
+    print("a distribution's package (the recipe's file in pip's layout): its name in --about, "
+          "its service's data directory, the distribution's command in hints; anything else "
+          "pip's layout as before  OK")
+
+
+def test_distribution_package_end_to_end():
+    """The package as a recipe in packaging/ installs it (pip's layout with the recipe's
+    file): --about names the distribution, --set-password without --data-dir writes into
+    its service's data directory, nothing next to the package."""
+    with tempfile.TemporaryDirectory() as tmp:
+        site = _pip_copy(tmp, os.path.join(tmp, "usr", "lib", "python3", "dist-packages"))
+        data = os.path.join(tmp, "var", "lib", "ser2netweb")
+        _distro_file(site, dict(DEBIAN, data_dir=data))
+        home = os.path.join(tmp, "home")
+        env = dict(os.environ, HOME=home, USERPROFILE=home, XDG_DATA_HOME=os.path.join(tmp, "xdg"),
+                   LOCALAPPDATA=os.path.join(tmp, "local"))
+        for k in ("SER2NETWEB_LIB_OVERRIDE", "SER2NET_LIB_OVERRIDE"):
+            env.pop(k, None)
+        p = _run(site, env, "--about")
+        assert p.returncode == 0 and "Build: distribution package (Debian)" in \
+            p.stdout.splitlines(), p
+        p = _run(site, dict(env, COLUMNS="500"), "--help")
+        assert data in " ".join(p.stdout.split()), p.stdout
+        p = _run(site, env, "--set-password", "admin", stdin=PW + "\n")
+        assert p.returncode == 0, p
+        assert os.path.isfile(os.path.join(data, "config.json")), os.listdir(tmp)
+        assert not os.path.exists(os.path.join(tmp, "xdg")), "not the user data folder"
+        assert sorted(os.listdir(site)) == ["ser2netweb", f"ser2netweb-{__version__}.dist-info"]
+        p = _run(site, env, "--licenses")
+        assert os.path.join(f"ser2netweb-{__version__}.dist-info", "licenses",
+                            "THIRD-PARTY-NOTICES.md") in p.stdout, p
+    print("a copy laid out as a distribution's recipe installs it: --about, --set-password "
+          "into its service's data directory, its licence texts  OK")
+
+
 if __name__ == "__main__":
     test_detect()
     test_windows_package_managers()
@@ -454,4 +579,6 @@ if __name__ == "__main__":
     test_command_line()
     test_pip_install_end_to_end()
     test_homebrew_end_to_end()
+    test_distribution_package()
+    test_distribution_package_end_to_end()
     print("\nPASS: install layout")

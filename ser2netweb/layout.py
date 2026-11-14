@@ -10,6 +10,14 @@
               folder, or wherever --target put it next to its .dist-info): the platform's
               folder for a user's application data, never next to the package, which pip
               owns (and may replace or delete on the next upgrade)
+  distro      a distribution's package built from a recipe in packaging/ (Debian, Fedora,
+              openSUSE, Arch, Alpine, FreeBSD ports, MacPorts, ...): pip's layout, the
+              package in the system's site-packages, with the file DISTRO_FILE the recipe
+              wrote into it before the build (pyproject.toml takes it into the wheel). It
+              names the distribution, the data directory of the package's service
+              (/var/lib/ser2netweb, FreeBSD's /var/db/ser2netweb, ...), the default, and how
+              the distribution installs an optional package (the hint for a missing one).
+              Without that file (a package of someone else's recipe) it is pip's layout
   homebrew    the Homebrew formula (haliskilic/tap/ser2netweb): pip's layout too, in the
               virtual environment of the formula's keg (<prefix>/Cellar/ser2netweb/<version>/
               libexec): <prefix>/var/ser2netweb, the data directory of its service
@@ -33,13 +41,14 @@
               keeps the data there, as a standalone executable does
 
 --data-dir and --config choose another folder in every case. A pip install (and the Homebrew
-formula's) gets its dependencies from pip, so the offline bootstrap into ./lib (bootstrap.py)
-is not used there.
+formula's) gets its dependencies from pip, a distribution's package from the distribution, so
+the offline bootstrap into ./lib (bootstrap.py) is not used there.
 Standard library only (the command line reads this before the dependencies load).
 """
 from __future__ import annotations
 
 import functools
+import json
 import ntpath
 import os
 import posixpath
@@ -49,7 +58,7 @@ from typing import Optional
 
 NAME = "ser2netweb"
 SOURCE, STANDALONE, PACKAGE, PIP = "source", "standalone", "package", "pip"
-HOMEBREW, SNAP = "homebrew", "snap"
+HOMEBREW, SNAP, DISTRO = "homebrew", "snap", "distro"
 WINGET, SCOOP, CHOCOLATEY = "winget", "scoop", "chocolatey"
 # --about's "Build:" line
 LABELS = {SOURCE: "source", STANDALONE: "standalone executable",
@@ -58,11 +67,20 @@ LABELS = {SOURCE: "source", STANDALONE: "standalone executable",
           SNAP: "standalone executable, snap",
           WINGET: "standalone executable, winget package",
           SCOOP: "standalone executable, Scoop package",
-          CHOCOLATEY: "standalone executable, Chocolatey package"}
-# the installations whose package pip put into a site-packages folder (pip, pipx, the
-# Homebrew formula's virtual environment): pip installed the dependencies, the licence
-# texts are in the .dist-info, and the command is ser2netweb
-PIP_KINDS = (PIP, HOMEBREW)
+          CHOCOLATEY: "standalone executable, Chocolatey package",
+          DISTRO: "distribution package"}
+# the installations whose package an installer put into a site-packages folder (pip, pipx,
+# the Homebrew formula's virtual environment, a distribution's package): the dependencies
+# are installed beside it, the licence texts are in the .dist-info, and the command is
+# ser2netweb
+PIP_KINDS = (PIP, HOMEBREW, DISTRO)
+# what a recipe in packaging/ writes into the package before the build, as a JSON object:
+#   "distribution"  its name ("Debian", "FreeBSD ports"), for --about
+#   "data_dir"      the data directory of the package's service, the default (absolute)
+#   "optional"      how to install an optional package (paho-mqtt, ldap3, authlib,
+#                   cryptography): a command with {dist} (that PyPI name) or {extra} (the
+#                   extra that brings it: mqtt, ldap, oidc, tls), or {PyPI name: command}
+DISTRO_FILE = "distro.json"
 # the package's PackageIdentifier in winget (packaging/winget), which names the folder winget
 # puts a portable package in: <root>\<PackageIdentifier>_<source>
 WINGET_ID = "haliskilic.ser2netweb"
@@ -109,10 +127,10 @@ def _in_snap(executable: str, env: Mapping[str, str]) -> bool:
 def detect(frozen: bool, executable: str, package_dir: str,
            platform: str = sys.platform, environ: Optional[Mapping[str, str]] = None) -> str:
     """The kind of installation (SOURCE, STANDALONE, PACKAGE, PIP, HOMEBREW, SNAP, WINGET,
-    SCOOP or CHOCOLATEY) of a copy whose package is `package_dir`, run by `executable`. No
-    two can match: a frozen executable is PACKAGE or SNAP only on Linux and a package
-    manager's only on Windows; HOMEBREW and PIP are never frozen, and HOMEBREW is pip's
-    layout in a keg."""
+    SCOOP, CHOCOLATEY or DISTRO) of a copy whose package is `package_dir`, run by
+    `executable`. No two can match: a frozen executable is PACKAGE or SNAP only on Linux
+    and a package manager's only on Windows; HOMEBREW, DISTRO and PIP are never frozen,
+    HOMEBREW is pip's layout in a keg, DISTRO pip's layout with a recipe's DISTRO_FILE."""
     if frozen:
         # (a Linux path, compared as one whatever OS this runs on; a frozen executable's
         # sys.executable is absolute)
@@ -126,7 +144,9 @@ def detect(frozen: bool, executable: str, package_dir: str,
         return STANDALONE
     parent = os.path.dirname(os.path.abspath(package_dir))
     if os.path.basename(parent).lower() in _SITE_FOLDERS or _dist_infos(parent):
-        return HOMEBREW if homebrew_prefix(package_dir) else PIP
+        if homebrew_prefix(package_dir):
+            return HOMEBREW
+        return DISTRO if distro_info(package_dir) else PIP
     # a source checkout (an editable install `pip install -e .` too: the package stays in
     # the checkout, so its data does as well)
     return SOURCE
@@ -157,6 +177,31 @@ def windows_package_manager(executable: str) -> Optional[str]:
 def kind() -> str:
     """The kind of this installation (detect() for the running copy; found once)."""
     return detect(bool(getattr(sys, "frozen", False)), sys.executable, PACKAGE_DIR)
+
+
+def distro_info(package_dir: str = PACKAGE_DIR) -> Optional[dict]:
+    """The DISTRO_FILE a distribution's recipe wrote into the package `package_dir`, when
+    it is a JSON object that names the distribution; else None (no such file, or one that
+    can't be read: pip's layout then, as without it)."""
+    try:
+        with open(os.path.join(package_dir, DISTRO_FILE), encoding="utf-8") as fh:
+            info = json.load(fh)
+    except (OSError, ValueError):  # (UnicodeDecodeError and JSONDecodeError are ValueErrors)
+        return None
+    if not isinstance(info, dict) or not isinstance(info.get("distribution"), str) \
+            or not info["distribution"].strip():
+        return None
+    return info
+
+
+def label(kind_: Optional[str] = None) -> str:
+    """--about's "Build:" text: LABELS', with the distribution's name for its package."""
+    k = kind() if kind_ is None else kind_
+    if k == DISTRO:
+        info = distro_info()
+        if info:
+            return f"{LABELS[k]} ({info['distribution'].strip()})"
+    return LABELS[k]
 
 
 def user_data_dir(platform: str = sys.platform, environ: Optional[Mapping[str, str]] = None,
@@ -197,13 +242,17 @@ def snap_data_dir(environ: Optional[Mapping[str, str]] = None,
 def default_data_dir(app_dir: str, kind_: Optional[str] = None) -> str:
     """The data directory without --data-dir / --config: data/ in `app_dir` (a source
     checkout, or the folder of a standalone executable, also Scoop's), the package's
-    service's data directory, the user data folder (a pip install; winget's and
+    service's data directory (also a distribution's package's, as its recipe says), the
+    user data folder (a pip install; winget's and
     Chocolatey's executable, unless `app_dir` has a data/ with a config.json already), the
     Homebrew formula's <prefix>/var/ser2netweb (unless only the user data folder has a
     config.json: 3.0.0's default there) or the snap's (snap_data_dir)."""
     k = kind() if kind_ is None else kind_
     if k == PIP:
         return user_data_dir()
+    if k == DISTRO:
+        folder = (distro_info() or {}).get("data_dir")
+        return folder if isinstance(folder, str) and os.path.isabs(folder) else user_data_dir()
     if k == HOMEBREW:
         prefix, user = homebrew_prefix(), user_data_dir()
         if not prefix:

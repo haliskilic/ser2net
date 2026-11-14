@@ -9,8 +9,39 @@ files and translations inside it), built with setuptools from `pyproject.toml` (
 `python -m build` or a distribution's pyproject macros), and the command `ser2netweb`
 (`ser2netweb.cli:main`, also `python -m ser2netweb`). It needs Python 3.10 or newer. A
 package of it keeps its data where the distribution's service unit points `--data-dir`
-(a `pip` install defaults to the user's data folder, `ser2netweb/layout.py`). The release's
+(a `pip` install defaults to the user's data folder, `ser2netweb/layout.py`; a package that
+writes `ser2netweb/distro.json`, below, to its service's data directory). The release's
 git tag tarball has the tests; the sdist on PyPI doesn't.
+
+## Telling ser2netweb it is a distribution's package
+
+Installed into the system's `site-packages` with its `.dist-info`, a distribution's package
+looks like a pip install to ser2netweb: without `--data-dir` it would keep its data in the
+user's data folder, `--about` would say `Build: Python package (pip / pipx)`, and the hint
+for a missing optional package would name `pip install "ser2netweb[mqtt]"`. Every recipe in
+`packaging/` therefore writes `ser2netweb/distro.json` into the source tree before the build
+(`pyproject.toml`'s package data takes it into the wheel, so the distribution's own tooling
+packages it with the rest, and the check step's tests see it too):
+
+```json
+{"distribution": "Debian", "data_dir": "/var/lib/ser2netweb", "optional": "sudo apt install python3-{dist}"}
+```
+
+- `distribution` (required): the name `--about` gives, `Build: distribution package (Debian)`;
+- `data_dir`: the data directory of the package's service, the default without `--data-dir`
+  (`sudo -u ser2netweb ser2netweb --set-password admin` then works on the service's data);
+  left out, the user's data folder, as for pip (nixpkgs, whose package also runs outside
+  NixOS);
+- `optional`: how the distribution installs an optional package, for the hint about a missing
+  one: a command with `{dist}` (the PyPI name: `paho-mqtt`, `ldap3`, `authlib`,
+  `cryptography`) or `{extra}` (`mqtt`, `ldap`, `oidc`, `tls`), or an object with a command per
+  PyPI name, where a name left out means the distribution has no package of it.
+
+Without the file (a package of another recipe, or one that can't be read) ser2netweb keeps
+pip's layout. A marker in the package was chosen over the `.dist-info`'s `INSTALLER`: not
+every build tool writes one (`python -m installer`, which Arch, Alpine, FreeBSD and MacPorts
+use, doesn't; Fedora writes `rpm`, conda `conda`), and none of it says which distribution it
+is, where the package's service keeps its data or how the distribution names a package.
 
 ## The dependencies and their floors
 
