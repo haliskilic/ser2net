@@ -4739,7 +4739,7 @@ class ConfigStore:
                 fh.flush()
                 os.fsync(fh.fileno())
                 written = _stat_key(os.fstat(fh.fileno()))
-            _replace(tmp, self.path)
+            replace_when_free(tmp, self.path)
         finally:
             if os.path.exists(tmp):
                 os.unlink(tmp)
@@ -4811,7 +4811,7 @@ class ConfigStore:
                 fh.write(current)
                 fh.flush()
                 os.fsync(fh.fileno())
-            _replace(tmp, os.path.join(self.backup_dir, name))
+            replace_when_free(tmp, os.path.join(self.backup_dir, name))
             for old in self.backup_names()[BACKUPS_KEPT:] if prune else ():
                 if old != name:  # (it sorts first; never the one just written)
                     with contextlib.suppress(OSError):
@@ -5000,7 +5000,7 @@ def _replace_file(directory: str, path: str, text: str) -> None:
             fh.write(text)
             fh.flush()
             os.fsync(fh.fileno())
-        _replace(tmp, path)
+        replace_when_free(tmp, path)
     finally:
         if os.path.exists(tmp):
             os.unlink(tmp)
@@ -5031,24 +5031,29 @@ def _fsync_dir(directory: str) -> None:
 
 
 # Windows refuses to replace a file while it is open without FILE_SHARE_DELETE (which is
-# how Python's open() and most programs open one), and to rename one being written or
-# scanned: PermissionError (Access is denied; in use by another process) for as long as
-# that lasts. An antivirus scan of the file just written does it, a backup or sync tool,
-# and a moment's read of config.json by ser2netweb itself (the look for an edit made
-# outside it, AppState.check_config_file, which runs next to a save). Such a rename is
-# tried again for up to this long before the save fails. A POSIX rename replaces an open
-# file: a PermissionError there is the folder's own, and fails at once.
+# how Python's open() and most programs open one), and to rename one being written,
+# renamed or scanned: PermissionError (Access is denied; in use by another process) for as
+# long as that lasts. An antivirus scan of the file just written does it, a backup or sync
+# tool, a moment's read of config.json by ser2netweb itself (the look for an edit made
+# outside it, AppState.check_config_file, which runs next to a save), and two TLS uploads
+# of the same file (web/tlsupload.py). Such a rename is tried again for up to this long
+# before it fails. A POSIX rename replaces an open file: a PermissionError there is the
+# folder's own, and fails at once.
 REPLACE_WAIT_S = 5.0 if os.name == "nt" else 0.0
 
 
-def _replace(src: str, dst: str) -> None:
-    """os.replace(src, dst), tried again while the file is in use (REPLACE_WAIT_S)."""
+def replace_when_free(src: str, dst: str,
+                      done: Optional[typing.Callable[[], bool]] = None) -> None:
+    """os.replace(src, dst), tried again while the file is in use (REPLACE_WAIT_S).
+    `done()`: whether a refused rename is not needed any more (dst holds what src does)."""
     end = time.monotonic() + REPLACE_WAIT_S
     while True:
         try:
             os.replace(src, dst)
             return
         except PermissionError:
+            if done is not None and done():
+                return
             if time.monotonic() >= end:
                 raise
             time.sleep(0.05)

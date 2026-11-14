@@ -40,6 +40,7 @@ import urllib.request
 from _pki import TestCA
 from _server import Browser, Server, free_port
 
+import ser2netweb.config as config_module
 from ser2netweb.web import selfsigned, tlsupload
 from ser2netweb.web.auth import hash_password, hash_token
 
@@ -129,7 +130,7 @@ def test_store(src):
         assert all(r == results[0] for r in results) and sorted(os.listdir(tdir)) == kept
         # Windows refuses a rename onto a file another upload is renaming or reading
         # (PermissionError): a file there with the same bytes is kept, else tried again
-        real_replace, real_wait = os.replace, tlsupload.REPLACE_WAIT_S
+        real_replace, real_wait = os.replace, config_module.REPLACE_WAIT_S
         refusals = []
 
         def in_use(src, dst):
@@ -139,25 +140,25 @@ def test_store(src):
             return real_replace(src, dst)
 
         try:
-            os.replace, tlsupload.REPLACE_WAIT_S = in_use, 0.0
+            os.replace, config_module.REPLACE_WAIT_S = in_use, 0.0
             assert tlsupload.store(data, cert=cert_a, key=key_a) == {
                 "cert": got["cert"], "key": got["key"]}, "kept: the same bytes are there"
             assert len(refusals) == 2 and sorted(os.listdir(tdir)) == kept, refusals
             refusals.clear()
             os.remove(got["key"])  # (not there: refused, then tried again until it can)
-            tlsupload.REPLACE_WAIT_S = 5.0
+            config_module.REPLACE_WAIT_S = 5.0
             assert tlsupload.store(data, cert=cert_a, key=key_a)["key"] == got["key"]
             assert len(refusals) == 3 and read(got["key"]) == key_a, refusals
             refusals.clear()
             os.remove(got["key"])
-            tlsupload.REPLACE_WAIT_S = 0.0
+            config_module.REPLACE_WAIT_S = 0.0
             try:
                 tlsupload.store(data, cert=cert_a, key=key_a)
                 raise AssertionError("a refused rename was not raised")
             except PermissionError:
                 pass
         finally:
-            os.replace, tlsupload.REPLACE_WAIT_S = real_replace, real_wait
+            os.replace, config_module.REPLACE_WAIT_S = real_replace, real_wait
         assert tlsupload.store(data, cert=cert_a, key=key_a)["key"] == got["key"]
         assert sorted(os.listdir(tdir)) == kept, "nothing left aside"
         print("store: kept in tls/ with private permissions, each file named by its own "

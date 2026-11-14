@@ -27,10 +27,9 @@ import hashlib
 import os
 import re
 import tempfile
-import time
 from typing import Optional
 
-from ..config import data_path, lock_down_dir
+from ..config import data_path, lock_down_dir, replace_when_free
 from ..engine import tls
 from ..i18n import _
 
@@ -198,27 +197,11 @@ def store(data_dir: str, *, cert: Optional[bytes] = None, key: Optional[bytes] =
     return {what: path for what, (path, _data) in files.items()}
 
 
-# Windows refuses to replace a file while another upload of the same file is replacing it
-# or reading it (PermissionError), and while an antivirus scans it: tried again for up to
-# this long. A POSIX rename has no such refusal (a PermissionError there is the folder's).
-REPLACE_WAIT_S = 5.0 if os.name == "nt" else 0.0
-
-
 def _keep(tmp: str, path: str, data: bytes) -> None:
     """Move the checked file `tmp` to `path`. A file is named by its hash, so one that is
-    there with these bytes already (the same file uploaded before, or at the same time) is
-    kept as it is."""
-    end = time.monotonic() + REPLACE_WAIT_S
-    while True:
-        try:
-            os.replace(tmp, path)
-            return
-        except PermissionError:
-            if _holds(path, data):
-                return
-            if time.monotonic() >= end:
-                raise
-            time.sleep(0.05)
+    there with these bytes already (the same file uploaded before, or at the same time)
+    is kept as it is when Windows refuses the rename (config.replace_when_free)."""
+    replace_when_free(tmp, path, done=lambda: _holds(path, data))
 
 
 def _holds(path: str, data: bytes) -> bool:
