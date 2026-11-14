@@ -7,7 +7,9 @@ Checks:
     as ser2netweb will load it: a key that is another certificate's, an encrypted key
     without or with a wrong password, a file that is not PEM, a file over the size limit,
     a certificate without its key and a CA file without a certificate are refused and
-    leave nothing behind; uploads at the same time don't get in each other's way; the
+    leave nothing behind; uploads at the same time don't get in each other's way (also
+    where Windows refuses to rename onto a file another one is renaming: it holds the same
+    bytes, or the rename is tried again); the
     admin UI's pair is refused for a mapping and a mapping's for the admin UI, also as
     another certificate for the same key written another way (public key compared);
   * the mapping form (admins): POST /api/mappings/tls-upload stores the files and answers
@@ -125,8 +127,41 @@ def test_store(src):
             results = list(pool.map(lambda _i: tlsupload.store(data, cert=cert_a, key=key_a),
                                     range(16)))
         assert all(r == results[0] for r in results) and sorted(os.listdir(tdir)) == kept
+        # Windows refuses a rename onto a file another upload is renaming or reading
+        # (PermissionError): a file there with the same bytes is kept, else tried again
+        real_replace, real_wait = os.replace, tlsupload.REPLACE_WAIT_S
+        refusals = []
+
+        def in_use(src, dst):
+            if os.path.dirname(dst) == tdir and len(refusals) < 3:
+                refusals.append(os.path.basename(dst))
+                raise PermissionError(13, "Access is denied", dst)
+            return real_replace(src, dst)
+
+        try:
+            os.replace, tlsupload.REPLACE_WAIT_S = in_use, 0.0
+            assert tlsupload.store(data, cert=cert_a, key=key_a) == {
+                "cert": got["cert"], "key": got["key"]}, "kept: the same bytes are there"
+            assert len(refusals) == 2 and sorted(os.listdir(tdir)) == kept, refusals
+            refusals.clear()
+            os.remove(got["key"])  # (not there: refused, then tried again until it can)
+            tlsupload.REPLACE_WAIT_S = 5.0
+            assert tlsupload.store(data, cert=cert_a, key=key_a)["key"] == got["key"]
+            assert len(refusals) == 3 and read(got["key"]) == key_a, refusals
+            refusals.clear()
+            os.remove(got["key"])
+            tlsupload.REPLACE_WAIT_S = 0.0
+            try:
+                tlsupload.store(data, cert=cert_a, key=key_a)
+                raise AssertionError("a refused rename was not raised")
+            except PermissionError:
+                pass
+        finally:
+            os.replace, tlsupload.REPLACE_WAIT_S = real_replace, real_wait
+        assert tlsupload.store(data, cert=cert_a, key=key_a)["key"] == got["key"]
+        assert sorted(os.listdir(tdir)) == kept, "nothing left aside"
         print("store: kept in tls/ with private permissions, each file named by its own "
-              "hash; side by side uploads  OK")
+              "hash; side by side uploads (Windows: a refused rename onto the same file)  OK")
 
         refused("can't be used with the uploaded key", data_dir=data, cert=cert_a, key=key_b)
         refused("password-protected", data_dir=data, cert=enc_cert, key=enc_key)
