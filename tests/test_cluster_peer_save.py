@@ -139,6 +139,25 @@ def test_older_peer_keeps_what_the_form_leaves_out():
           "an unchanged close-on keeps its line breaks  OK")
 
 
+def test_odd_peer_mapping():
+    # a peer's mapping-data answer whose mapping, or a section of it, is not an object (a
+    # damaged answer, another version's): the form gets an error, or that section counts
+    # as empty - the save is not ended by an exception (an HTTP 500 for the fleet view)
+    for peer in (["odd"], "odd", 5):
+        fields, err = _peer_save_fields(form(), peer, "2.8.0")
+        assert fields is None and err == "Could not load the peer's mapping.", (peer, err)
+    for peer in ({"options": "odd"}, {"options": {}, "network": ["odd"]},
+                 {"options": ["odd"], "network": "odd", "mqtt": 5}):
+        fields, err = _peer_save_fields(form(opt_trace_both="plc1.trace", opt_closeon="BYE"),
+                                        peer, "2.8.0")
+        assert err is None, (peer, err)
+        sent = dict(fields)
+        assert sent["opt_trace_both"] == "plc1.trace" and sent["opt_closeon"] == "BYE", sent
+        assert "network_client_queue_max" not in sent, sent   # (none stored to send)
+    print("a peer mapping, or a section of it, that is not an object: an error or an "
+          "empty section, never an exception  OK")
+
+
 def test_not_kept():
     # what a fleet-view save sent, against what the peer stores afterwards (read back):
     # only the settings the peer has are compared, the trace and the id never
@@ -167,6 +186,7 @@ def main():
     test_unchanged_trace_kept_as_stored()
     test_mqtt_password_sent_to_store()
     test_older_peer_keeps_what_the_form_leaves_out()
+    test_odd_peer_mapping()
     test_not_kept()
     print("\nPASS: fleet-view edit proxy forwards only known, validated fields")
 

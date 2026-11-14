@@ -180,7 +180,7 @@ def _peer_below_2_8(version: str) -> bool:
     return _peer_older(version, (2, 8, 0))
 
 
-def _peer_save_fields(form: ImmutableMultiDict[str, str], peer_mapping: dict | None,
+def _peer_save_fields(form: ImmutableMultiDict[str, str], peer_mapping: object,
                       peer_version: str) -> tuple[list[tuple[str, str]] | None, str | None]:
     """The fields cluster_peer_save forwards to a peer's key-guarded mapping-save, or an
     error to show instead. Only the known mapping-form fields are forwarded (never a raw
@@ -192,9 +192,17 @@ def _peer_save_fields(form: ImmutableMultiDict[str, str], peer_mapping: dict | N
     A one-line field posted back unchanged keeps the peer's stored value (line breaks
     the field can't show), and a peer before 2.8.1 gets its stored values for the fields
     it reads from every form but this form leaves out (_READ_BEFORE_2_8_1).
-    Returns (fields, None) or (None, error)."""
+    `peer_mapping`: the mapping of the peer's mapping-data answer, as it came (a section
+    of it that is not an object counts as empty). Returns (fields, None) or (None, error)."""
     if not peer_mapping:
         return None, _("This mapping no longer exists on the peer; reload the fleet view.")
+    if not isinstance(peer_mapping, dict):
+        return None, _("Could not load the peer's mapping.")
+
+    def stored(section: str, attr: str) -> Any:
+        values = peer_mapping.get(section)
+        return values.get(attr) if isinstance(values, dict) else None
+
     try:
         # the points as strictly as the peer reads them: an older peer would store a
         # top-level object as no points
@@ -202,7 +210,7 @@ def _peer_save_fields(form: ImmutableMultiDict[str, str], peer_mapping: dict | N
         MappingConfig.from_dict(_build_mapping_dict(form, strict=False)).validate_input()
     except (ValueError, ConfigError) as e:
         return None, str(e)
-    peer_raw = str(((peer_mapping.get("options") or {}).get("trace_both")) or "").strip()
+    peer_raw = str(stored("options", "trace_both") or "").strip()
     submitted = form.get("opt_trace_both", "").strip()
     if submitted == trace_file_name(peer_raw):
         out_trace = peer_raw  # unchanged: keep the peer's own stored value (legacy path too)
@@ -212,11 +220,7 @@ def _peer_save_fields(form: ImmutableMultiDict[str, str], peer_mapping: dict | N
             return None, _("This cluster node is older than 2.8 and would store a trace file "
                            "name as a path. Upgrade it to 2.8 or newer before setting a trace "
                            "file for it here.")
-    def stored(section: str, attr: str) -> Any:
-        return (peer_mapping.get(section) or {}).get(attr)
-
-    mqtt = peer_mapping.get("mqtt")
-    stored_password = str(mqtt.get("password") or "") if isinstance(mqtt, dict) else ""
+    stored_password = str(stored("mqtt", "password") or "")
     unchanged = {field: value for field, (section, attr) in _TEXT_INPUTS.items()
                  if isinstance(value := stored(section, attr), str)
                  and form.get(field) == text_shown(field, value)}
