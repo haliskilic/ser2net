@@ -120,6 +120,8 @@ def _field_label(name: str) -> str:
         "opt_max_connection_time_s": _("Max connection time (s)"),
         "opt_trace_max_mb": _("Trace file size (MB)"), "opt_trace_keep": _("Rotated trace files kept"),
         "mqtt_port": _("MQTT broker port"), "mqtt_qos": "QoS",
+        "mqtt_session_expiry_s": _("MQTT session expiry"),
+        "mqtt_message_expiry_s": _("MQTT message expiry"),
     }.get(key, key)
     return _("{0} (serial port B)").format(label) if side_b else label
 
@@ -233,6 +235,10 @@ _OPTIONAL_FORM_FIELDS = {
     # Modbus value format (shown for plain-format points; the select is its own marker)
     "mqtt_retain_shown": ("mqtt", ("retain",)),
     "mqtt_value_format": ("mqtt", ("value_format",)),
+    # the MQTT version (3.1: the select is its own marker) and MQTT 5's settings, shown
+    # (and posted) for version 5 only: a clean start checkbox is absent when unticked
+    "mqtt_protocol": ("mqtt", ("protocol",)),
+    "mqtt_v5_shown": ("mqtt", ("clean_start", "session_expiry_s", "message_expiry_s")),
     # MQTT over TLS: CA file, client certificate (mutual TLS), host name check (2.9)
     "mqtt_ca_file": ("mqtt", ("ca_file", "client_cert", "client_key", "client_key_password",
                               "tls_check_hostname")),
@@ -278,6 +284,12 @@ _POINT_OPTIONS = {
     "word_order": lambda p: p.dtype != "bool",
     "bit": lambda p: p.dtype == "bool" and p.fn in (3, 4),
     "length": lambda p: p.dtype == "string",
+}
+# ... and the ones a form from before 3.1 drops (see "modbus_point_safety_shown")
+_POINT_OPTIONS_3_1 = {
+    "pulse_ms": lambda p: p.fn == 1 and p.writable is True,
+    "safe_value": lambda p: p.writable is True,
+    "safe_after_s": lambda p: p.writable is True,
 }
 
 
@@ -467,6 +479,12 @@ def _build_mapping_dict(form, strict: bool) -> dict:
                if "mqtt_retain_shown" in form else {}),
             **({"value_format": form.get("mqtt_value_format", "text")}
                if "mqtt_value_format" in form else {}),
+            **({"protocol": form.get("mqtt_protocol", "3.1.1")}
+               if "mqtt_protocol" in form else {}),
+            **({"clean_start": _checkbox(form, "mqtt_clean_start"),
+                "session_expiry_s": _num(form, "mqtt_session_expiry_s", 0, strict=strict),
+                "message_expiry_s": _num(form, "mqtt_message_expiry_s", 0, strict=strict)}
+               if "mqtt_v5_shown" in form else {}),
             **({"ca_file": form.get("mqtt_ca_file", "").strip(),
                 "client_cert": form.get("mqtt_client_cert", "").strip(),
                 "client_key": form.get("mqtt_client_key", "").strip(),
@@ -494,7 +512,8 @@ def _modbus_points_json(mapping) -> str:
             **{k: getattr(p, k) for k in ("min", "max", "allowed") if getattr(p, k) is not None},
             **({"poll": p.poll} if p.poll is not True else {}),
             **({"word_order": p.word_order} if p.word_order != "ABCD" else {}),
-            **{k: getattr(p, k) for k in ("bit", "length") if getattr(p, k) is not None}}
+            **{k: getattr(p, k) for k in ("bit", "length", "pulse_ms", "safe_value",
+                                          "safe_after_s") if getattr(p, k) is not None}}
            for p in mapping.modbus_poll.points]
     return json_text(pts, indent=2) if pts else ""
 
@@ -511,13 +530,13 @@ def json_text(value, **kwargs) -> str:
     return text
 
 
-def _keep_point_options(new_map, existing) -> None:
+def _keep_point_options(new_map, existing, options=None) -> None:
     """A form that can't carry the points' options (an older peer's): each point keeps the
-    stored ones of the point with its name."""
+    stored ones of the point with its name. ``options``: which (_POINT_OPTIONS)."""
     stored = {p.name: p for p in existing.modbus_poll.points}
     for p in new_map.modbus_poll.points:
         if (old := stored.get(p.name)) is not None:
-            for key, fits in _POINT_OPTIONS.items():
+            for key, fits in (_POINT_OPTIONS if options is None else options).items():
                 if fits(p):
                     setattr(p, key, getattr(old, key))
 
@@ -702,6 +721,8 @@ FORM_BLOCKS_SINCE = {
     "point_options": (2, 9, 0),     # point keys of 2.9 (min, max, word_order ...), editor
     "value_format": (2, 9, 0),      # MQTT values as JSON
     "unit_status": (2, 9, 0),       # <topic>/unit<N>/status
+    "mqtt5": (3, 1, 0),             # MQTT version, clean start, session and message expiry
+    "point_safety": (3, 1, 0),      # point keys of 3.1: pulse_ms, safe_value, safe_after_s
 }
 
 
@@ -748,8 +769,9 @@ def _preserve_unmanaged_fields(new_map, existing, form=None) -> None:
     in_text_box), the stored MQTT password and TLS key password, which the form never
     shows, when it keeps them (mqtt_password_from_form; a blank key password field), the
     dual-stack choice of a form that doesn't offer it, the per-point Modbus fields a
-    form from before 2.8.0 leaves out and the points' options (min, max, ...) of a form
-    whose points JSON can't carry them (_keep_point_options). No-op when creating."""
+    form from before 2.8.0 leaves out and the points' options (min, max, ...; pulse_ms,
+    safe_value, safe_after_s) of a form whose points JSON can't carry them
+    (_keep_point_options). No-op when creating."""
     if existing is None:
         return
     posted = form is not None
@@ -791,6 +813,9 @@ def _preserve_unmanaged_fields(new_map, existing, form=None) -> None:
     # every 2.8.0+ form has the A side's USB-identity marker (its block is never hidden)
     if "serial_usb_match_shown" not in form:
         _keep_point_fields(new_map, existing)
+    # (after "writable" is back: the keys of 3.1 are kept for a writable point only)
+    if "modbus_point_safety_shown" not in form and "modbus_points" in form:
+        _keep_point_options(new_map, existing, _POINT_OPTIONS_3_1)  # a form from before 3.1
 
 
 def _keep_point_fields(new_map, existing) -> None:

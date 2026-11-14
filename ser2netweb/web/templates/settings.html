@@ -470,6 +470,7 @@
         'unit_back': _("Modbus unit answering again"),
         'cert_expiring': _("TLS certificate about to expire (the admin UI’s and each TLS mapping’s: 30, 7 and 1 days before, and once it has ended; checked daily)"),
         'clock_step': _("System clock stepped while ser2netweb runs (set by hand or by time sync, by 1 s or more: the times in logs and traces jump there)"),
+        'safe_values': _("Safe values written (a gateway’s points with a safe value: the broker or the Sparkplug primary host was away for their safe_after_s)"),
       } %}
       {% set event_hints = {
         'client_connected': _("sends the client’s IP address"),

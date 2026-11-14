@@ -1,4 +1,4 @@
-"""A minimal MQTT 3.1.1 broker for tests, in threads on 127.0.0.1 (an OS-assigned port).
+"""A minimal MQTT 3.1.1 / 5.0 broker for tests, in threads on 127.0.0.1 (an OS-assigned port).
 
     from _mqtt_broker import MqttBroker
     with MqttBroker() as broker:              # ssl=<server SSLContext> for TLS
@@ -18,6 +18,17 @@ broker does after every (re)subscribe. ``messages`` holds what was published, in
 ended without a DISCONNECT), and what ``publish()`` injected. ``connects``: each CONNECT, as
 a dict (client id, username, password, will, keepalive). ``subscriptions``: each filter
 subscribed to. ``tls_errors``: handshakes that failed.
+
+MQTT 5 (a CONNECT with protocol level 5; each connection speaks the version it asked for):
+``connects`` also has "protocol" (4 or 5), "clean" (clean session / clean start) and
+"properties" ({"session_expiry": seconds, ...}, by the names in PROPERTIES; others by their
+number); ``properties`` holds each published message's properties, in step with
+``messages``. A retained message with a message expiry is not handed out once that has
+passed (and with what is left of it before). ``connack`` and a refused filter's SUBACK are
+reason codes then (give ``connack`` as the version's own code; a refused filter gets 0x87,
+not authorized); ``puback``: the reason code of every PUBACK / PUBREC to an MQTT 5 client
+(0x87: the publication is refused, and neither recorded nor routed); ``disconnect(reason)``
+sends every MQTT 5 client a DISCONNECT with that reason code and closes the connections.
 """
 from __future__ import annotations
 
@@ -33,6 +44,7 @@ class _Client:
 
     def __init__(self, conn) -> None:
         self.conn = conn
+        self.v5 = False                  # it connected with protocol level 5
         self.subs: dict[str, int] = {}   # topic filter -> granted QoS
         self.send_lock = threading.Lock()
         self.next_id = 0
@@ -44,12 +56,15 @@ class _Client:
             except OSError:
                 pass  # it is going away; its own thread notices
 
-    def deliver(self, topic: str, payload: bytes, qos: int, retain: bool) -> None:
+    def deliver(self, topic: str, payload: bytes, qos: int, retain: bool,
+                expiry: int | None = None) -> None:
         body = len(topic.encode()).to_bytes(2, "big") + topic.encode()
         if qos:
             with self.send_lock:
                 self.next_id = self.next_id % 0xFFFF + 1
                 body += self.next_id.to_bytes(2, "big")
+        if self.v5:  # its properties: the message expiry left, if it has one
+            body += b"\x00" if expiry is None else b"\x05\x02" + expiry.to_bytes(4, "big")
         self.send(_packet(0x30 | (qos << 1) | int(retain), body + payload))
 
 
@@ -57,17 +72,20 @@ class MqttBroker:
     __test__ = False   # not a test class
 
     def __init__(self, ssl: _ssl.SSLContext | None = None, connack: int = 0,
-                 refuse=()):
+                 refuse=(), puback: int = 0):
         self.ssl = ssl
         self.connack = connack
         self.refuse = set(refuse)
+        self.puback = puback
         self.sock = socket.create_server(("127.0.0.1", 0))
         self.port = self.sock.getsockname()[1]
         self.connects: list[dict] = []
         self.messages: list[tuple] = []
+        self.properties: list[dict] = []   # of each of ``messages`` (MQTT 5; else {})
         self.subscriptions: list[str] = []
         self.tls_errors: list[str] = []
-        self.retained: dict[str, tuple[bytes, int]] = {}  # topic -> (payload, qos)
+        # topic -> (payload, qos, when its message expiry ends (time.monotonic()) or None)
+        self.retained: dict[str, tuple[bytes, int, float | None]] = {}
         self._conns: set = set()
         self._clients: list[_Client] = []
         self._lock = threading.Condition()
@@ -96,9 +114,20 @@ class MqttBroker:
                 pass
             c.close()
 
-    def publish(self, topic: str, payload: bytes, qos: int = 0, retain: bool = False) -> None:
+    def disconnect(self, reason: int = 0x8B) -> None:
+        """Send every MQTT 5 client a DISCONNECT with ``reason`` (0x8B: server shutting
+        down), then cut every connection."""
+        with self._lock:
+            clients = list(self._clients)
+        for c in clients:
+            if c.v5:
+                c.send(bytes((0xE0, 2, reason, 0)))
+        self.drop()
+
+    def publish(self, topic: str, payload: bytes, qos: int = 0, retain: bool = False,
+                properties: dict | None = None) -> None:
         """Publish as another client would: recorded, kept if retained, and routed."""
-        self._published(topic, bytes(payload), qos, retain)
+        self._published(topic, bytes(payload), qos, retain, properties)
 
     def topics(self, topic: str) -> list[tuple]:
         """(payload, qos, retain) of each message published to ``topic``."""
@@ -132,19 +161,24 @@ class MqttBroker:
             getattr(self, attr).append(value)
             self._lock.notify_all()
 
-    def _published(self, topic: str, payload: bytes, qos: int, retain: bool) -> None:
+    def _published(self, topic: str, payload: bytes, qos: int, retain: bool,
+                   properties: dict | None = None) -> None:
+        properties = dict(properties or {})
+        expiry = properties.get("message_expiry")
         with self._lock:
             self.messages.append((topic, payload, qos, retain))
+            self.properties.append(properties)
             if retain:
                 if payload:
-                    self.retained[topic] = (payload, qos)
+                    ends = None if expiry is None else time.monotonic() + expiry
+                    self.retained[topic] = (payload, qos, ends)
                 else:
                     self.retained.pop(topic, None)
             targets = [(c, max(q for f, q in c.subs.items() if matches(f, topic)))
                        for c in self._clients if any(matches(f, topic) for f in c.subs)]
             self._lock.notify_all()
         for client, granted in targets:  # live: without the retain flag (3.3.1.3)
-            client.deliver(topic, payload, min(qos, granted), False)
+            client.deliver(topic, payload, min(qos, granted), False, expiry)
 
     def _serve(self, conn: socket.socket) -> None:
         conn.settimeout(30)
@@ -158,7 +192,8 @@ class MqttBroker:
         client = _Client(conn)
         with self._lock:
             self._conns.add(conn)
-        will, clean, joined = None, False, False
+        will, clean, joined, v5 = None, False, False, False
+        info: dict = {}
         try:
             f = conn.makefile("rb")
             while True:
@@ -177,8 +212,10 @@ class MqttBroker:
                 if kind == 1:  # CONNECT
                     info = _parse_connect(body)
                     will = info["will"]
+                    v5 = client.v5 = info["protocol"] == 5
                     self._record("connects", info)
-                    client.send(bytes((0x20, 2, 0, self.connack)))
+                    client.send(bytes((0x20, 3, 0, self.connack, 0) if v5
+                                      else (0x20, 2, 0, self.connack)))
                     if self.connack:
                         clean = True  # a refused connection publishes no Will
                         break
@@ -189,44 +226,57 @@ class MqttBroker:
                     qos, retain = (flags >> 1) & 3, bool(flags & 1)
                     tlen = int.from_bytes(body[:2], "big")
                     topic, pos = body[2:2 + tlen].decode(), 2 + tlen
+                    refused = bytes((self.puback, 0)) if v5 and self.puback else b""
                     if qos:
                         mid, pos = body[pos:pos + 2], pos + 2
-                        client.send(bytes((0x40 if qos == 1 else 0x50, 2)) + mid)
-                    self._published(topic, bytes(body[pos:]), qos, retain)
+                        client.send(_packet(0x40 if qos == 1 else 0x50, mid + refused))
+                    props: dict = {}
+                    if v5:
+                        props, pos = _properties(body, pos)
+                    if not refused:
+                        self._published(topic, bytes(body[pos:]), qos, retain, props)
                 elif kind == 6:  # PUBREL
                     client.send(b"\x70\x02" + body[:2])
                 elif kind == 8:  # SUBSCRIBE
                     mid, pos, codes, taken = body[:2], 2, bytearray(), []
+                    if v5:
+                        _props, pos = _properties(body, pos)
                     while pos < len(body):
                         tlen = int.from_bytes(body[pos:pos + 2], "big")
                         topic = body[pos + 2:pos + 2 + tlen].decode()
-                        qos = body[pos + 2 + tlen]
+                        qos = body[pos + 2 + tlen] & 3  # (MQTT 5: the options' low bits)
                         pos += 3 + tlen
                         self._record("subscriptions", topic)
                         if topic in self.refuse:
-                            codes.append(0x80)
+                            codes.append(0x87 if v5 else 0x80)
                         else:
                             codes.append(min(qos, 1))
                             taken.append((topic, min(qos, 1)))
+                    now = time.monotonic()
                     with self._lock:
                         client.subs.update(taken)
-                        kept = [(t, p, q, g) for f, g in taken
-                                for t, (p, q) in self.retained.items() if matches(f, t)]
-                    client.send(_packet(0x90, mid + bytes(codes)))
-                    for t, p, q, g in kept:  # what the broker keeps, flagged retained
-                        client.deliver(t, p, min(q, g), True)
+                        kept = [(t, p, q, g, None if ends is None else max(1, round(ends - now)))
+                                for f, g in taken
+                                for t, (p, q, ends) in self.retained.items()
+                                if matches(f, t) and (ends is None or ends > now)]
+                    client.send(_packet(0x90, mid + (b"\x00" if v5 else b"") + bytes(codes)))
+                    for t, p, q, g, left in kept:  # what the broker keeps, flagged retained
+                        client.deliver(t, p, min(q, g), True, left)
                 elif kind == 10:  # UNSUBSCRIBE
-                    pos = 2
+                    pos, count = 2, 0
+                    if v5:
+                        _props, pos = _properties(body, pos)
                     with self._lock:
                         while pos < len(body):
                             tlen = int.from_bytes(body[pos:pos + 2], "big")
                             client.subs.pop(body[pos + 2:pos + 2 + tlen].decode(), None)
                             pos += 2 + tlen
-                    client.send(b"\xb0\x02" + body[:2])
+                            count += 1
+                    client.send(_packet(0xB0, body[:2] + (bytes(1 + count) if v5 else b"")))
                 elif kind == 12:  # PINGREQ
                     client.send(b"\xd0\x00")
-                elif kind == 14:  # DISCONNECT
-                    clean = True
+                elif kind == 14:  # DISCONNECT (MQTT 5, reason 4: with the Will)
+                    clean = not (v5 and body[:1] == b"\x04")
                     break
                 # PUBACK (4) for what was delivered at QoS 1: nothing to do
         except (OSError, IndexError, ValueError):
@@ -238,7 +288,7 @@ class MqttBroker:
                     self._clients.remove(client)
             conn.close()
             if will is not None and not clean:
-                self._published(*will)
+                self._published(*will, info.get("will_properties"))
 
 
 def matches(pattern: str, topic: str) -> bool:
@@ -262,17 +312,82 @@ def _packet(header: int, body: bytes) -> bytes:
     return bytes((header,)) + bytes(size) + body
 
 
+# MQTT 5 properties, by their identifier: (name, how the value is encoded)
+PROPERTIES = {
+    0x01: ("payload_format", 1), 0x02: ("message_expiry", 4), 0x03: ("content_type", "text"),
+    0x08: ("response_topic", "text"), 0x09: ("correlation_data", "bytes"),
+    0x0B: ("subscription_id", "varint"), 0x11: ("session_expiry", 4),
+    0x12: ("assigned_client_id", "text"), 0x13: ("server_keepalive", 2),
+    0x15: ("auth_method", "text"), 0x16: ("auth_data", "bytes"),
+    0x17: ("request_problem_info", 1), 0x18: ("will_delay", 4),
+    0x19: ("request_response_info", 1), 0x1A: ("response_info", "text"),
+    0x1C: ("server_reference", "text"), 0x1F: ("reason_string", "text"),
+    0x21: ("receive_maximum", 2), 0x22: ("topic_alias_maximum", 2), 0x23: ("topic_alias", 2),
+    0x24: ("maximum_qos", 1), 0x25: ("retain_available", 1), 0x26: ("user_property", "pair"),
+    0x27: ("maximum_packet_size", 4), 0x28: ("wildcard_subscription_available", 1),
+    0x29: ("subscription_id_available", 1), 0x2A: ("shared_subscription_available", 1),
+}
+
+
+def _varint(body: bytes, pos: int) -> tuple[int, int]:
+    n, shift = 0, 0
+    while True:
+        byte = body[pos]
+        pos += 1
+        n |= (byte & 0x7F) << shift
+        shift += 7
+        if not byte & 0x80:
+            return n, pos
+
+
+def _properties(body: bytes, pos: int) -> tuple[dict, int]:
+    """The MQTT 5 properties at ``pos`` ({name: value}; user properties as a list of
+    pairs), and where they end."""
+    size, pos = _varint(body, pos)
+    end, out = pos + size, {}
+    while pos < end:
+        name, how = PROPERTIES.get(body[pos], (body[pos], None))
+        pos += 1
+        if isinstance(how, int):
+            value, pos = int.from_bytes(body[pos:pos + how], "big"), pos + how
+        elif how == "varint":
+            value, pos = _varint(body, pos)
+        elif how in ("text", "bytes"):
+            n = int.from_bytes(body[pos:pos + 2], "big")
+            raw, pos = bytes(body[pos + 2:pos + 2 + n]), pos + 2 + n
+            value = raw.decode() if how == "text" else raw
+        elif how == "pair":
+            pair = []
+            for _ in range(2):
+                n = int.from_bytes(body[pos:pos + 2], "big")
+                pair.append(body[pos + 2:pos + 2 + n].decode())
+                pos += 2 + n
+            out.setdefault(name, []).append(tuple(pair))
+            continue
+        else:
+            raise ValueError(f"unknown property {name}")
+        out[name] = value
+    return out, end
+
+
 def _parse_connect(body: bytes) -> dict:
     def text(pos: int) -> tuple[bytes, int]:
         n = int.from_bytes(body[pos:pos + 2], "big")
         return bytes(body[pos + 2:pos + 2 + n]), pos + 2 + n
 
     _name, pos = text(0)
-    flags = body[pos + 1]
+    protocol, flags = body[pos], body[pos + 1]
     keepalive = int.from_bytes(body[pos + 2:pos + 4], "big")
-    client_id, pos = text(pos + 4)
+    pos += 4
+    properties: dict = {}
+    will_properties: dict = {}
+    if protocol == 5:
+        properties, pos = _properties(body, pos)
+    client_id, pos = text(pos)
     will = None
     if flags & 0x04:
+        if protocol == 5:
+            will_properties, pos = _properties(body, pos)
         wtopic, pos = text(pos)
         wpayload, pos = text(pos)
         will = (wtopic.decode(), wpayload, (flags >> 3) & 3, bool(flags & 0x20))
@@ -282,5 +397,7 @@ def _parse_connect(body: bytes) -> dict:
     if flags & 0x40:
         password, pos = text(pos)
     return {"client_id": client_id.decode(), "keepalive": keepalive, "will": will,
+            "protocol": protocol, "clean": bool(flags & 0x02), "properties": properties,
+            "will_properties": will_properties,
             "username": username.decode() if username is not None else None,
             "password": password.decode() if password is not None else None}

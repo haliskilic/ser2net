@@ -16,6 +16,7 @@
   'units_offline': _('polled Modbus units that gave no reply to any of their points in 3 polls in a row; they are polled with one point per cycle until they answer (see the mapping’s log)'),
   'mqtt_down': _('the mapping’s connection to its MQTT broker; it keeps trying (see the mapping’s log)'),
   'mqtt_off': _('MQTT publishing could not start (see the mapping’s log)'),
+  'safe_values': _('the broker (or the Sparkplug primary host) was away for longer than these points’ safe_after_s: they were written to their safe value and keep it until a command changes it'),
   'stop': _('Stop'), 'restart': _('Restart'), 'start': _('Start'), 'edit': _('Edit'), 'log': _('Log'),
   'monitor': _('Monitor'), 'trace': _('Trace'), 'duplicate': _('Copy'), 'delete': _('Delete'),
 } %}
@@ -96,6 +97,8 @@
         {% set mq = st.mqtt if st and st.mqtt else {} %}
         {% if mq.state == 'down' %}<div class="err-small" data-mqtt-down title="{{ t.mqtt_down }}">⚠ {{ _("MQTT: no connection to %(broker)s (%(error)s)", broker=mq.broker, error=mq.error) }}</div>
         {% elif mq.state == 'off' %}<div class="err-small" data-mqtt-down title="{{ t.mqtt_off }}">⚠ {{ _("MQTT off: %(error)s", error=mq.error) }}</div>{% endif %}
+        {% set safe_written = ((st.safe.points if st and st.safe else [])|selectattr('written')|map(attribute='name')|list) %}
+        {% if state == 'running' and safe_written %}<div class="warn-small" data-safe-values title="{{ t.safe_values }}">⚠ {{ ngettext("safe value written: %(names)s", "safe values written: %(names)s", safe_written|length, names=safe_written|join(', ')) }}</div>{% endif %}
       </td>
       <td data-label="{{ t.clients }}">
         {{ st.client_count if st else 0 }}{% if m.network.max_connections > 1 %}/{{ m.network.max_connections }}{% endif %}

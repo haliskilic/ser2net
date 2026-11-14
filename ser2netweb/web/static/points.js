@@ -2,6 +2,8 @@
 // JSON box (<textarea name="modbus_points">). The JSON stays the field the form posts — what
 // an older cluster node's form posts as well — and the editor only rewrites it; a point's
 // keys it has no field for (min, max, allowed, poll, a newer node's) are kept as they are.
+// The fields of 3.1 (pulse_ms, safe_value, safe_after_s) are there when the form names
+// them in data-texts (a form shown for an older node does not: that node would drop them).
 // CSP-friendly: no inline handlers, the texts come from the editor's data-texts.
 (function () {
   var DTYPES = ["uint16", "int16", "uint32", "int32", "float32", "int64", "uint64", "float64",
@@ -9,6 +11,9 @@
   var ORDERS = ["ABCD", "CDAB", "BADC", "DCBA"];
   var FIELDS = ["name", "unit", "fn", "address", "dtype", "bit", "length", "word_order",
                 "scale", "writable"];
+  var SAFETY = ["pulse_ms", "safe_value", "safe_after_s"];
+  function fieldsOf(T) { return T.pulse_ms ? FIELDS.concat(SAFETY) : FIELDS; }
+  function isCoil(p) { return Number(p.fn === undefined ? 3 : p.fn) === 1; }
   // numbers past 2**53 would come back changed from JSON.parse: such JSON stays text
   var LONG_NUMBER = /(^|[^\w.])-?\d{16,}/;
 
@@ -61,9 +66,11 @@
       input.checked = p.writable === true;
     } else {
       input = document.createElement("input");
-      input.type = key === "name" ? "text" : "number";
-      if (key !== "name") input.step = key === "scale" ? "any" : "1";
+      // a safe value is true / false for a coil, a number for a register: typed as text
+      input.type = key === "name" || key === "safe_value" ? "text" : "number";
+      if (input.type === "number") input.step = key === "scale" || key === "safe_after_s" ? "any" : "1";
       if (key === "name") { input.spellcheck = false; label.className = "wide"; }
+      if (key === "safe_value") { input.spellcheck = false; input.autocomplete = "off"; }
       var placeholder = {unit: "1", address: "0", scale: "1"}[key];
       if (placeholder) input.placeholder = placeholder;
       input.value = p[key] === undefined || p[key] === null ? "" : String(p[key]);
@@ -83,7 +90,9 @@
       var k = label.getAttribute("data-field");
       label.hidden = (k === "bit" && !(p.dtype === "bool" && register)) ||
                      (k === "length" && p.dtype !== "string") ||
-                     (k === "word_order" && (p.dtype === "bool" || !register));
+                     (k === "word_order" && (p.dtype === "bool" || !register)) ||
+                     (k === "pulse_ms" && !(p.writable === true && isCoil(p))) ||
+                     ((k === "safe_value" || k === "safe_after_s") && p.writable !== true);
       if (label.hidden && prune && k in p) {
         delete p[k];
         var input = label.querySelector("[data-k]");
@@ -92,8 +101,22 @@
     });
   }
 
-  function others(p) {
-    return Object.keys(p).filter(function (k) { return FIELDS.indexOf(k) === -1; });
+  function others(p, T) {
+    var shown = fieldsOf(T);
+    return Object.keys(p).filter(function (k) { return shown.indexOf(k) === -1; });
+  }
+
+  // a safe value as typed: true / false (1 / 0, on / off) for a coil, a number for a
+  // register; anything else stays text, for the server to say what is wrong with it
+  function safeValue(raw, p) {
+    var text = raw.toLowerCase();
+    if (isCoil(p)) {
+      if (text === "true" || text === "1" || text === "on") return true;
+      if (text === "false" || text === "0" || text === "off") return false;
+      return raw;
+    }
+    var n = Number(raw);
+    return isFinite(n) ? n : raw;
   }
 
   function render(ed, pts) {
@@ -103,10 +126,10 @@
       var row = document.createElement("div");
       row.className = "point-row";
       row.setAttribute("data-row", String(i));
-      FIELDS.forEach(function (k) { field(row, T, k, p); });
+      fieldsOf(T).forEach(function (k) { field(row, T, k, p); });
       var actions = document.createElement("div");
       actions.className = "point-actions";
-      var more = others(p);
+      var more = others(p, T);
       if (more.length) {
         var note = document.createElement("span");
         note.className = "muted";
@@ -170,12 +193,19 @@
     } else if (k === "dtype" || k === "word_order") {
       if (k === "word_order" && input.value === "ABCD") delete p.word_order;
       else p[k] = input.value;
+    } else if (k === "safe_value") {
+      if (input.value.trim() === "") delete p.safe_value;
+      else p.safe_value = safeValue(input.value.trim(), p);
     } else {
       var raw = input.value.trim();
       var n = Number(raw);
       if (raw === "" || !isFinite(n)) delete p[k]; else p[k] = n;
     }
-    showFields(row, p, k === "dtype" || k === "fn");
+    if (k === "fn" && "safe_value" in p) {  // a coil's is true / false, a register's a number
+      var safe = row.querySelector('[data-k="safe_value"]');
+      if (safe && safe.value.trim() !== "") p.safe_value = safeValue(safe.value.trim(), p);
+    }
+    showFields(row, p, k === "dtype" || k === "fn" || k === "writable");
     write(ed);
   }
 

@@ -60,6 +60,7 @@ PORTABLE = [
     "test_console_feed.py",   # console / hex-view feeds: bounds, batches, close, limits
     "test_mqtt_pub.py",
     "test_mqtt_link.py",      # MQTT connection log, status, /metrics; broker parts need paho
+    "test_mqtt5.py",          # MQTT 5: clean start, expiries, reason codes; broker parts need paho
     "test_mqtt_tls.py",       # MQTT TLS options; needs cryptography, broker parts paho
     "test_mqtt_identity.py",  # MQTT topics, client IDs, Sparkplug nodes apart; Copy
     "test_modbus_points.py",  # point types, the points JSON and its error path
@@ -132,6 +133,7 @@ PORTABLE = [
     "test_dashboard.py",
     "test_modbus_mqtt_write.py",
     "test_modbus_mqtt_broker.py",  # edge mode with real paho and a test broker; needs paho
+    "test_modbus_pulse_safe.py",   # a coil's pulse_ms, safe_value / safe_after_s
     "test_modbus_write.py",
     "test_sparkplug.py",
     "test_sparkplug_node.py",
