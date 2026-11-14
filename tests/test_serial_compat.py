@@ -371,22 +371,23 @@ def _musl_input_bits():
     import termios
 
     from serial import serialposix
-    real = termios.tcsetattr
+    real, ioctl = termios.tcsetattr, fcntl.ioctl  # (its own writes aren't _set_calls')
 
     def tcsetattr(fd, when, attrs):
         real(fd, when, attrs)
         buf = array.array("i", [0] * 64)
-        fcntl.ioctl(fd, serialposix.TCGETS2, buf)
+        ioctl(fd, serialposix.TCGETS2, buf)
         buf[2] = (buf[2] & ~termios.CIBAUD) | (0o17 << 16)  # (the kernel's B38400)
-        fcntl.ioctl(fd, serialposix.TCSETS2, buf)
+        ioctl(fd, serialposix.TCSETS2, buf)
 
     return mock.patch.object(termios, "tcsetattr", tcsetattr)
 
 
 def _set_calls(achieved=None):
     """fcntl.ioctl, counting the TCSETS2 calls (the port's settings written) in the list
-    it yields; with `achieved` {asked: got}, a driver that reports the rate it achieved
-    for both speeds instead of the one asked for (cp210x, pl2303: tty_encode_baud_rate)."""
+    it yields; with `achieved` {asked: got}, a driver that reports the rate it achieved for
+    the output speed as both speeds (cp210x, pl2303: tty_encode_baud_rate(tty, baud,
+    baud)), whatever the C library left the input speed at."""
     import fcntl
 
     from serial import serialposix
@@ -396,9 +397,8 @@ def _set_calls(achieved=None):
         if request == serialposix.TCSETS2:
             calls.append((arg[9], arg[10]))
         result = real(fd, request, arg, *rest)
-        if request == serialposix.TCGETS2 and achieved:
-            for i in (9, 10):
-                arg[i] = achieved.get(arg[i], arg[i])
+        if request == serialposix.TCGETS2 and achieved and arg[10] in achieved:
+            arg[9] = arg[10] = achieved[arg[10]]
         return result
 
     @contextlib.contextmanager
@@ -466,8 +466,7 @@ def test_custom_baud_rates_on_new_glibc():
                 with _set_calls() as calls:
                     ser.baudrate = 74880
                 assert _speeds(ser.fd) == (74880, 74880), _speeds(ser.fd)
-                # (the stand-in's own write of the 38400 bits, pyserial's, then ours)
-                assert calls == [(38400, 38400), (74880, 74880), (74880, 74880)], calls
+                assert calls == [(74880, 74880), (74880, 74880)], calls  # pyserial's, ours
             finally:
                 ser.close()
         # a driver that reports the rate it achieved for both speeds (249600 for 250000):
