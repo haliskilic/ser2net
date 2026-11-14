@@ -478,7 +478,8 @@ everything from a **password-protected web UI** — no CLI or hand-edited config
   to any of its points in 3 polls in a row) or answers again, a **TLS certificate about
   to expire** (the admin UI's and each enabled TLS mapping's, read once a day: one message
   when fewer than 30, 7 and 1 days are left and one once it has ended — once per
-  certificate and threshold, also across restarts; a renewed certificate starts afresh),
+  certificate and threshold, also across restarts; one that did not get through goes out
+  again at the next daily check; a renewed certificate starts afresh),
   the **system clock stepped** while ser2netweb runs (see *Time synchronisation*), and
   **safe values written** (a gateway wrote points to their `safe_value`: the broker or the
   Sparkplug primary host was away for their `safe_after_s`).
