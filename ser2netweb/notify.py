@@ -729,8 +729,10 @@ class Notifier:
             return tried, tried
         self._sent.append(now)
         warnings: list[str] = []
+        # (channels only when some are asked for: a deliver of its own, a test's, need
+        # not know them)
         errors = await self.deliver(event, mapping, detail, warnings=warnings,
-                                    channels=channels)
+                                    **({} if channels is None else {"channels": channels}))
         what = f"{event}, mapping {mapping!r}" if mapping else event
         for err in [str(e) for e in errors] + warnings:
             self.state.log(f"notifications: {err} ({what})")
