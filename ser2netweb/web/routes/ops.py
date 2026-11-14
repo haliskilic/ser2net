@@ -5,7 +5,8 @@ from __future__ import annotations
 import asyncio
 import dataclasses
 import itertools
-from typing import NamedTuple, Optional
+from collections.abc import Callable, Iterable
+from typing import TYPE_CHECKING, NamedTuple, Optional
 
 from ... import i18n, importer
 from ...config import (
@@ -15,6 +16,11 @@ from ...config import (
 from ...i18n import _
 from .forms import apply_usb_match as apply_usb_match  # where it was before 2.9.0
 from .forms import mapping_from_form
+
+if TYPE_CHECKING:
+    from ...config import AppConfig, PortPool
+    from ...state import AppState
+    from .forms import Form
 
 
 def _gone() -> str:
@@ -42,7 +48,7 @@ class Saved(NamedTuple):
     retrying: bool = False
 
 
-async def save_mapping_from_form(state, form) -> tuple[bool, str, Saved | None]:
+async def save_mapping_from_form(state: AppState, form: Form) -> tuple[bool, str, Saved | None]:
     """Parse a mapping form, validate, persist and (re)apply. Returns (True, name,
     Saved) on success or (False, error, None). Shared by the local UI save and the
     cluster remote-edit save (which runs the same form on the target node). A saved
@@ -57,7 +63,7 @@ async def save_mapping_from_form(state, form) -> tuple[bool, str, Saved | None]:
     posted_id = form.get("id") or ""
     posted_rev = form.get("rev") or ""
 
-    def stale(m) -> bool:
+    def stale(m: MappingConfig) -> bool:
         return bool(posted_rev) and posted_rev != mapping_revision(state.config.secret_key, m)
 
     try:
@@ -103,7 +109,7 @@ async def save_mapping_from_form(state, form) -> tuple[bool, str, Saved | None]:
     return True, mapping.name, Saved(mapping.id, "" if started else why, retrying)
 
 
-def edit_conflict(config, m: MappingConfig) -> str:
+def edit_conflict(config: AppConfig, m: MappingConfig) -> str:
     """Why mapping `m`, created or changed, can't be saved in `config` ("" when it can):
     it would listen on one of ser2netweb's own ports (AppConfig.own_port_conflict), share a
     serial port with another enabled mapping (serial_conflict), use the admin UI's TLS
@@ -115,13 +121,13 @@ def edit_conflict(config, m: MappingConfig) -> str:
             or config.admin_key_reuse(m) or mqtt_conflict(config, m))
 
 
-def mqtt_conflict(config, m: MappingConfig) -> str:
+def mqtt_conflict(config: AppConfig, m: MappingConfig) -> str:
     """What `m` would share on its MQTT broker with another enabled mapping of `config`
     that the edits refuse (config.check_mqtt_clashes), "" when nothing."""
     return next((c.text() for c in mqtt_clashes(m, config.mappings) if c.refused), "")
 
 
-def copy_of(config, m: MappingConfig) -> MappingConfig:
+def copy_of(config: AppConfig, m: MappingConfig) -> MappingConfig:
     """The dashboard's Copy: ``m``'s settings under a new id, disabled, and nothing in it
     that clashes with ``m`` (or another mapping) when it is enabled next to it, once its
     serial port is changed: the name "<name> (copy)" ("(copy 2)", … when taken), the next
@@ -193,13 +199,13 @@ class ActionResult(NamedTuple):
     changed: bool = False                # False: it ran (or was stopped) already
 
 
-async def apply_action(state, mid, action) -> ActionResult:
+async def apply_action(state: AppState, mid: str, action: str) -> ActionResult:
     """Start/stop/restart a local mapping by id. Shared by the UI action endpoint, the
     cluster remote-control endpoint and the REST API: apply_actions for one mapping."""
     return (await apply_actions(state, [mid], action))[0]
 
 
-async def apply_actions(state, ids, action) -> list[ActionResult]:
+async def apply_actions(state: AppState, ids: Iterable[str], action: str) -> list[ActionResult]:
     """Start/stop/restart the mappings with these ids (once each, in this order; the
     dashboard's bulk action) with one save.
 
@@ -254,14 +260,14 @@ async def apply_actions(state, ids, action) -> list[ActionResult]:
     return results
 
 
-def _start_clash(config, m: MappingConfig) -> str:
+def _start_clash(config: AppConfig, m: MappingConfig) -> str:
     """What a mapping just switched on would share with another enabled one: a serial port
     (AppConfig.serial_conflict, in any spelling of the port and by USB identity), or on its
     MQTT broker a client ID, Sparkplug B edge node or command topic (mqtt_conflict)."""
     return config.serial_conflict(m) or mqtt_conflict(config, m)
 
 
-def _refuse_clashes(config, started: list) -> dict[str, ConfigError]:
+def _refuse_clashes(config: AppConfig, started: list[MappingConfig]) -> dict[str, ConfigError]:
     """Mappings just switched on whose start would share a serial port or what an MQTT
     broker tells clients apart by with another enabled one (_start_clash), or that the
     save would refuse: each is switched off again, by id with the reason. One check when
@@ -269,7 +275,7 @@ def _refuse_clashes(config, started: list) -> dict[str, ConfigError]:
     first of two that share a port starts. (ser2netweb's own ports and the admin UI's TLS key
     are checked when a mapping is created or changed, not at a start: a stored clash must
     not stop one; nor does a clash between mappings enabled already.)"""
-    def refusal(m) -> Optional[ConfigError]:
+    def refusal(m: MappingConfig) -> Optional[ConfigError]:
         if clash := _start_clash(config, m):
             return ConfigError(clash)
         try:
@@ -295,7 +301,9 @@ def _refuse_clashes(config, started: list) -> dict[str, ConfigError]:
     return refused
 
 
-async def delete_mapping(state, mid, expected=None):
+async def delete_mapping(state: AppState, mid: str,
+                         expected: Callable[[MappingConfig], bool] | None = None,
+                         ) -> MappingConfig | None:
     """Remove a mapping from the config, stop it and drop its log and traces. Returns the removed
     MappingConfig, or None when no mapping has that id. Raises ConfigError when the deletion
     can't be saved (then nothing is deleted), StaleRevision when `expected` (a test of the
@@ -315,7 +323,8 @@ async def delete_mapping(state, mid, expected=None):
     return removed
 
 
-def import_preview(state, plan, mode: str) -> tuple[list[dict], str | None]:
+def import_preview(state: AppState, plan: importer.ImportPlan,
+                   mode: str) -> tuple[list[dict], str | None]:
     """What importing `plan` (importer.ImportPlan) in `mode` would do, without changing
     anything: the preview rows (importer.plan_rows, with each mapping's own warnings) and
     why the result could not be saved (None when it could). Shared by the import form's
@@ -336,7 +345,7 @@ def import_preview(state, plan, mode: str) -> tuple[list[dict], str | None]:
                   or _pools_conflict(result, plan) or None)
 
 
-def _pools_conflict(result, plan) -> str:
+def _pools_conflict(result: AppConfig, plan: importer.ImportPlan) -> str:
     """Why the port pools an import brings (a classic ser2net file's rotators) can't be
     added to ``result``, the configuration with the import's mappings ("" when they can,
     or it brings none)."""
@@ -345,7 +354,8 @@ def _pools_conflict(result, plan) -> str:
     return result.pools_problem(importer.merged_pools(result.pools, plan.pools))
 
 
-async def import_mappings(state, plan, mode: str) -> tuple[list[dict], list[MappingConfig], bool]:
+async def import_mappings(state: AppState, plan: importer.ImportPlan,
+                          mode: str) -> tuple[list[dict], list[MappingConfig], bool]:
     """Import `plan` in `mode` as one change: one save (so one backup of the configuration it
     replaces), then the mappings it added or changed are (re)started; replace restarts them
     all. A mapping a merge updates keeps what its file doesn't say (importer.apply_import).
@@ -375,7 +385,8 @@ async def import_mappings(state, plan, mode: str) -> tuple[list[dict], list[Mapp
     return rows, new_maps, edit.backed_up
 
 
-def import_conflict(config, mappings, result) -> str:
+def import_conflict(config: AppConfig, mappings: list[MappingConfig],
+                    result: list[MappingConfig]) -> str:
     """The first of ``mappings`` (an import's new and changed ones) that can't listen next
     to ser2netweb's own listeners (AppConfig.own_port_conflict) or would share a serial port
     with another enabled one of ``result`` (the mappings after the import; serial_conflict),
@@ -391,7 +402,7 @@ def import_counts(rows: list[dict]) -> dict[str, int]:
     return {a: sum(1 for r in rows if r["action"] == a) for a in ("add", "update", "same", "remove")}
 
 
-async def save_pools(state, pools: list) -> list[str]:
+async def save_pools(state: AppState, pools: list[PortPool]) -> list[str]:
     """Replace the port pools (config.PortPool) and run them as they are now: the Settings
     form and the REST API. Raises ConfigError when they can't be saved (AppConfig.
     pools_problem, a failed write): nothing changed then. Returns the warnings about them
@@ -404,7 +415,7 @@ async def save_pools(state, pools: list) -> list[str]:
     return pool_warnings(state)
 
 
-def pool_warnings(state, member=None) -> list[str]:
+def pool_warnings(state: AppState, member: MappingConfig | None = None) -> list[str]:
     """AppConfig.pool_exposures (of `member` only, when given), in the page's language;
     each is also a WARNING in all.log (in English)."""
     with i18n.english():
@@ -413,7 +424,7 @@ def pool_warnings(state, member=None) -> list[str]:
     return state.config.pool_exposures(member)
 
 
-def pool_rows(state) -> list[dict]:
+def pool_rows(state: AppState) -> list[dict]:
     """Every configured port pool with what it does now (engine.pool.PoolListener.status;
     a pool that is off or not started yet: state "stopped", its members from the config)."""
     running = state.supervisor.pools.status()

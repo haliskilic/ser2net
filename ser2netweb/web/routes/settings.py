@@ -14,9 +14,12 @@ import socket
 import time
 import types
 import unicodedata
+from collections.abc import Coroutine, Iterable, Mapping
+from typing import TYPE_CHECKING, Any
 from urllib.parse import urlencode
 
-from starlette.responses import PlainTextResponse, Response
+from starlette.datastructures import UploadFile
+from starlette.responses import PlainTextResponse, RedirectResponse, Response
 
 from ... import clock, console, envvars, i18n, importer, optional, reload, storage, tlsreload
 from ...config import (
@@ -44,6 +47,13 @@ from .forms import (
     _checkbox, _ldap_from_form, _oidc_from_form, _password_problem, _username_problem, json_text,
 )
 
+if TYPE_CHECKING:
+    from starlette.requests import Request
+    from starlette.routing import BaseRoute
+
+    from ...config import AdminUI, LdapSettings
+    from .forms import Form
+
 # a mappings file to import may be larger than other requests (server.MAX_BODY_BYTES):
 # the importer's file limit, plus the form's other fields
 IMPORT_MAX_BYTES = importer.MAX_FILE_BYTES + 64 * 1024
@@ -62,7 +72,7 @@ class _Flash:
     def __init__(self) -> None:
         self._items: dict[str, dict] = {}
 
-    def put(self, browser: str, user: str, **what) -> None:
+    def put(self, browser: str, user: str, **what: object) -> None:
         if not browser:
             return
         now = time.monotonic()
@@ -80,7 +90,7 @@ class _Flash:
         return item
 
 
-def routes(ctx: Ctx) -> list:
+def routes(ctx: Ctx) -> list[BaseRoute]:
     state, render = ctx.state, ctx.render
     current_user, require_role, set_session = ctx.current_user, ctx.require_role, ctx.set_session
 
@@ -98,13 +108,13 @@ def routes(ctx: Ctx) -> list:
                 "cluster_copies": state.cluster.copies(),
                 "cluster_legacy": state.cluster.legacy_nodes() if c.active else []}
 
-    def _package_problems():
+    def _package_problems() -> tuple[optional.Problem | None, optional.Problem | None]:
         """Why LDAP / OIDC sign-in can't work for want of its package, while it is on: a
         real import (find_spec would call a package that fails to import present)."""
         return (optional.load("ldap3", "ldap3")[1] if state.config.ldap.enabled else None,
                 optional.load("authlib.jose", "authlib")[1] if state.config.oidc.enabled else None)
 
-    def _sign_in_time(user) -> str:
+    def _sign_in_time(user: User) -> str:
         when = state.signins.last(user)
         return time.strftime("%Y-%m-%d %H:%M", time.localtime(when)) if when else "—"
 
@@ -137,16 +147,18 @@ def routes(ctx: Ctx) -> list:
         return {**_server_clock(admin), "tls_certificate": _tls_certificate() if admin else None}
     flash = _Flash()
 
-    def _browser(request) -> str:
+    def _browser(request: Request) -> str:
         """Which browser asks, for the flash: its CSRF token (a form's POST has one), as
         GuardMiddleware read it from the cookie under this port's name (or moved it from
         the name of 2.8), so the page the redirect leads to finds it under that name."""
         return (getattr(request.state, "csrf_token", None)
                 or auth.cookie(request, auth.CSRF_COOKIE) or "")
 
-    async def settings_get(request, ok=None, error=None, new_api_token=None, import_preview=None,
-                           new_cluster_key=None, restore_preview=None, section=None,
-                           status_code=200, submitted=None):
+    async def settings_get(request: Request, ok: str | None = None, error: str | None = None,
+                           new_api_token: str | None = None, import_preview: dict | None = None,
+                           new_cluster_key: str | None = None,
+                           restore_preview: dict | None = None, section: str | None = None,
+                           status_code: int = 200, submitted: dict | None = None) -> Response:
         """The Settings page. `section`: the id of the part whose form `ok` / `error` is
         about (shown there); `submitted`: what a refused form had, shown again in it."""
         me = current_user(request)
@@ -239,8 +251,8 @@ def routes(ctx: Ctx) -> list:
             resp.headers["Cache-Control"] = "no-store"   # shown once: kept by no cache either
         return resp
 
-    def _done(request, section: str, ok: str | None = None, error: str | None = None,
-              **once) -> Response:
+    def _done(request: Request, section: str, ok: str | None = None, error: str | None = None,
+              **once: object) -> RedirectResponse:
         """The answer to a Settings form that did its work (Post/Redirect/Get): a redirect
         to the page at the form's section, which then shows `ok` (or `error`: saved, but
         something after it failed) and `once` (a token or key shown only once) from the
@@ -250,21 +262,22 @@ def routes(ctx: Ctx) -> list:
         flash.put(_browser(request), _who(request), section=section, ok=ok, error=error, **once)
         return proxy.redirect(request, f"/settings#{section}")
 
-    async def _failed(request, section: str, error: str, **submitted) -> Response:
+    async def _failed(request: Request, section: str, error: str,
+                      **submitted: object) -> Response:
         """The answer to a Settings form that changed nothing: the page at once, as a 400,
         with the reason in the form's section and the form filled in with what was sent
         (`submitted`; never a password or key)."""
         return await settings_get(request, error=error, section=section, status_code=400,
                                   submitted=submitted)
 
-    def _typed_again(form, *names) -> str:
+    def _typed_again(form: Mapping[str, object], *names: str) -> str:
         """For the error of a form that is shown again: a password or key typed in it
         isn't (it never goes into a page)."""
         if any(str(form.get(n) or "").strip() for n in names):
             return " " + _("Passwords and keys you typed are not shown again: type them once more.")
         return ""
 
-    async def settings_page(request):
+    async def settings_page(request: Request) -> Response:
         """GET /settings; ?restore=<backup> shows what restoring that backup would change,
         ?import=<id> the preview of an uploaded mappings file (_import_preview)."""
         if (pending := request.query_params.get("import")) is not None \
@@ -286,7 +299,7 @@ def routes(ctx: Ctx) -> list:
         return await settings_get(request, restore_preview=_restore_preview(
             name, state.config, backup, current_user(request)))
 
-    async def settings_password_post(request):
+    async def settings_password_post(request: Request) -> Response:
         form = await read_form(request)
         if not auth.csrf_token_matches(request, form.get("_csrf")):
             return csrf_failed()
@@ -332,7 +345,7 @@ def routes(ctx: Ctx) -> list:
         set_session(resp, request, user)
         return resp
 
-    def _spellings(target) -> list:
+    def _spellings(target: User) -> list[User]:
         """The other accounts of an LDAP user, in another letter case (made by earlier
         versions, one per spelling; a sign-in now merges them): signing out or deleting
         that user covers them too."""
@@ -341,7 +354,7 @@ def routes(ctx: Ctx) -> list:
         return [u for u in state.config.external_accounts(target.username, "ldap")
                 if u is not target]
 
-    def _bump_sessions(username: str):
+    def _bump_sessions(username: str) -> User:
         """Sign every session of `username` out (pwd_version + 1), in a state.edit_config()
         block. Returns the user; raises ConfigError when there is none."""
         target = state.config.get_user(username)
@@ -351,7 +364,7 @@ def routes(ctx: Ctx) -> list:
             u.pwd_version += 1
         return target
 
-    async def settings_signout_others(request):
+    async def settings_signout_others(request: Request) -> Response:
         """Any signed-in user: end their own sessions elsewhere, keep this one. Nothing
         to do (no save) when no session was issued for the account since its last
         click (AppState.others_signed_out)."""
@@ -379,7 +392,7 @@ def routes(ctx: Ctx) -> list:
                                                   state.sessions_issued.get(user.username, 0))
         return resp
 
-    async def settings_tls_post(request):
+    async def settings_tls_post(request: Request) -> Response:
         if deny := require_role(request, "admin"):
             return deny
         form = await read_form(request)
@@ -422,7 +435,7 @@ def routes(ctx: Ctx) -> list:
         applied, switched = _tls_applied(request, prepared)
         return await _tls_answer(request, "tls", switched, ok=_("Admin TLS saved.") + " " + applied)
 
-    async def _admin_tls(admin):
+    async def _admin_tls(admin: AdminUI) -> tlsreload.Prepared:
         """The admin UI's TLS context for its settings (in an edit_config block): files
         that can't be used refuse the change, as they would stop the next start. Without
         a listener in this process the files are still loaded, to be checked."""
@@ -439,7 +452,7 @@ def routes(ctx: Ctx) -> list:
             raise ConfigError(_("The TLS certificate and key could not be loaded: {0}").format(why))
         return prepared
 
-    def _tls_applied(request, prepared) -> tuple[str, bool]:
+    def _tls_applied(request: Request, prepared: tlsreload.Prepared) -> tuple[str, bool]:
         """Hand a saved admin TLS change to the UI's listener, and say so: new connections
         use it at once (the one this page came over stays as it is). Also whether they use
         another scheme now (HTTPS for HTTP, or back)."""
@@ -456,7 +469,8 @@ def routes(ctx: Ctx) -> list:
             text = _("New connections to this UI use plain HTTP now: continue at {0}").format(url)
         return text, tls_on != was
 
-    async def _tls_answer(request, section: str, switched: bool, **flash) -> Response:
+    async def _tls_answer(request: Request, section: str, switched: bool,
+                          **flash: Any) -> Response:
         """The answer to a form that changed the admin UI's TLS: the redirect of every Settings
         form (_done), unless new connections use another scheme now: the browser would follow
         the redirect with the old one, which the UI no longer serves, so the page itself is
@@ -465,7 +479,7 @@ def routes(ctx: Ctx) -> list:
             return await settings_get(request, section=section, **flash)
         return _done(request, section, **flash)
 
-    async def settings_tls_generate(request):
+    async def settings_tls_generate(request: Request) -> Response:
         if deny := require_role(request, "admin"):
             return deny
         form = await read_form(request)
@@ -509,7 +523,7 @@ def routes(ctx: Ctx) -> list:
                         clock.utc_text(time.time())) if behind else None
         return await _tls_answer(request, "tls", switched, ok=ok, error=warning)
 
-    async def settings_tls_upload(request):
+    async def settings_tls_upload(request: Request) -> Response:
         """A certificate and its key uploaded for the admin UI (tlsupload.py): checked,
         kept in the data folder's tls/, set as the admin UI's pair and used for new
         connections at once, as *Save TLS* with their paths would."""
@@ -555,7 +569,7 @@ def routes(ctx: Ctx) -> list:
             + " " + applied)
 
     # ---------------- web-UI access (login requirement) ----------------
-    async def settings_access_post(request):
+    async def settings_access_post(request: Request) -> Response:
         if deny := require_role(request, "admin"):
             return deny
         form = await read_form(request)
@@ -607,7 +621,7 @@ def routes(ctx: Ctx) -> list:
         return _done(request, "access", ok=ok)
 
     # ---------------- the notice on the sign-in page ----------------
-    async def settings_login_notice_post(request):
+    async def settings_login_notice_post(request: Request) -> Response:
         if deny := require_role(request, "admin"):
             return deny
         form = await read_form(request)
@@ -635,7 +649,7 @@ def routes(ctx: Ctx) -> list:
                      _("Sign-in notice removed."))
 
     # ---------------- this instance's name ----------------
-    async def settings_node_name_post(request):
+    async def settings_node_name_post(request: Request) -> Response:
         if deny := require_role(request, "admin"):
             return deny
         form = await read_form(request)
@@ -661,7 +675,7 @@ def routes(ctx: Ctx) -> list:
         return _done(request, "admin-interface", ok=_("Instance name saved."))
 
     # ---------------- which web UI requests all.log records ----------------
-    async def settings_request_log_post(request):
+    async def settings_request_log_post(request: Request) -> Response:
         if deny := require_role(request, "admin"):
             return deny
         form = await read_form(request)
@@ -684,7 +698,7 @@ def routes(ctx: Ctx) -> list:
         return _done(request, "audit-log", ok=_("Saved: which web UI requests all.log records."))
 
     # ---------------- behind a reverse proxy ----------------
-    async def settings_proxy_post(request):
+    async def settings_proxy_post(request: Request) -> Response:
         if deny := require_role(request, "admin"):
             return deny
         form = await read_form(request)
@@ -723,7 +737,7 @@ def routes(ctx: Ctx) -> list:
         ctx.audit(request, "reverse_proxy_set", "; ".join(changes) or "unchanged")
         return _done(request, "reverse-proxy", ok=_("Reverse proxy settings saved."))
 
-    async def settings_sessions_revoke_all(request):
+    async def settings_sessions_revoke_all(request: Request) -> Response:
         """A new session key: every web UI session ends at once, including sessions
         signed with the key in an old copy of config.json or of a backup."""
         if deny := require_role(request, "admin"):
@@ -747,7 +761,7 @@ def routes(ctx: Ctx) -> list:
         return resp
 
     # ---------------- REST API token ----------------
-    async def settings_api_token_post(request):
+    async def settings_api_token_post(request: Request) -> Response:
         if deny := require_role(request, "admin"):
             return deny
         form = await read_form(request)
@@ -773,7 +787,7 @@ def routes(ctx: Ctx) -> list:
                      ok=_("New API token generated (role: {0}). Copy it now — it "
                           "is not shown again.").format(role))
 
-    async def settings_api_token_role(request):
+    async def settings_api_token_role(request: Request) -> Response:
         """Give the REST API token another role, keeping the token: what uses it goes on
         working (regenerating it to change the role broke every integration at once)."""
         if deny := require_role(request, "admin"):
@@ -798,7 +812,7 @@ def routes(ctx: Ctx) -> list:
         return _done(request, "api-token", ok=_("The REST API token’s role is now {0}; the token "
                                                 "stays the same.").format(role))
 
-    async def settings_api_token_revoke(request):
+    async def settings_api_token_revoke(request: Request) -> Response:
         if deny := require_role(request, "admin"):
             return deny
         form = await read_form(request)
@@ -830,7 +844,7 @@ def routes(ctx: Ctx) -> list:
                  "expires": day(t.expires), "expired": t.expired(), "last_used": _used(t.id)}
                 for t in state.config.api_tokens]
 
-    async def settings_api_tokens_create(request):
+    async def settings_api_tokens_create(request: Request) -> Response:
         """Another REST API token, with its own name, role and optional expiry; the token
         of api_token_hash stays as it is."""
         if deny := require_role(request, "admin"):
@@ -880,7 +894,7 @@ def routes(ctx: Ctx) -> list:
             "New API token '{0}' (role: {1}). Copy it now — it is not shown again.").format(
                 name, role))
 
-    async def settings_api_tokens_revoke(request):
+    async def settings_api_tokens_revoke(request: Request) -> Response:
         if deny := require_role(request, "admin"):
             return deny
         form = await read_form(request)
@@ -917,7 +931,7 @@ def routes(ctx: Ctx) -> list:
                            "off.").format(name)
         return ""
 
-    def _ca_file_problem(ldap) -> str | None:
+    def _ca_file_problem(ldap: LdapSettings) -> str | None:
         """Checked when the LDAP form is saved with LDAP on over TLS (the only time the
         file is used; switching LDAP off must work while it is missing): the CA
         certificate file can be read and holds a certificate."""
@@ -937,7 +951,7 @@ def routes(ctx: Ctx) -> list:
         for key in [k for k in state.group_warnings if k[0] == source]:
             del state.group_warnings[key]
 
-    async def settings_ldap_post(request):
+    async def settings_ldap_post(request: Request) -> Response:
         if deny := require_role(request, "admin"):
             return deny
         form = await read_form(request)
@@ -969,7 +983,7 @@ def routes(ctx: Ctx) -> list:
         return _done(request, "ldap", ok=_("LDAP settings saved.")
                      + _directory_off_note(old.enabled, state.config.ldap.enabled, "ldap", "LDAP"))
 
-    async def settings_oidc_post(request):
+    async def settings_oidc_post(request: Request) -> Response:
         if deny := require_role(request, "admin"):
             return deny
         form = await read_form(request)
@@ -996,25 +1010,25 @@ def routes(ctx: Ctx) -> list:
                      + _directory_off_note(old.enabled, state.config.oidc.enabled, "oidc", "OIDC"))
 
     # ---------------- user management (admin only) ----------------
-    def _target_name(request, form) -> str:
+    def _target_name(request: Request, form: Form) -> str:
         """The account a Users-panel form acts on: its `username` field (any name works
         there, also DOMAIN\\user or one with / # ?), or the older form's URL
         /settings/users/<name>/... (kept for scripts and older pages)."""
         return request.path_params.get("username") or str(form.get("username") or "")
 
-    def _is_me(request, username: str) -> bool:
+    def _is_me(request: Request, username: str) -> bool:
         """The signed-in account itself (never the open-access pseudo-user)."""
         me = current_user(request)
         return me is not None and me.source != "anonymous" and me.username == username
 
-    def _last_admin(target) -> bool:
+    def _last_admin(target: User) -> bool:
         """Would demoting / deleting this admin leave no admin, or none who can sign in
         (an LDAP/OIDC admin can't while that method is off)?"""
         cfg = state.config
         return cfg.admin_count() <= 1 or (cfg.source_enabled(target)
                                           and cfg.usable_admin_count() <= 1)
 
-    def _leaves_no_admin(gone) -> bool:
+    def _leaves_no_admin(gone: list[User]) -> bool:
         """Would deleting these accounts leave no admin, or none who can sign in?"""
         cfg = state.config
         admins = [u for u in gone if u.role == "admin"]
@@ -1022,7 +1036,7 @@ def routes(ctx: Ctx) -> list:
         return bool(admins) and (not rest or (any(cfg.source_enabled(u) for u in admins)
                                               and not any(cfg.source_enabled(u) for u in rest)))
 
-    async def settings_users_create(request):
+    async def settings_users_create(request: Request) -> Response:
         if deny := require_role(request, "admin"):
             return deny
         form = await read_form(request)
@@ -1032,7 +1046,7 @@ def routes(ctx: Ctx) -> list:
         role = form.get("role", "viewer")
         pw, pw2 = form.get("password", ""), form.get("password2", "")
 
-        def taken():
+        def taken() -> str | None:
             """Also an account of this name in another letter case: LDAP names compare
             that way, and two names that differ only in case are easily mistaken."""
             other = state.config.named(username)
@@ -1058,7 +1072,7 @@ def routes(ctx: Ctx) -> list:
         ctx.audit(request, "user_create", f"{username}:{role}")
         return _done(request, "users", ok=_("User '{0}' created.").format(username))
 
-    async def settings_users_role(request):
+    async def settings_users_role(request: Request) -> Response:
         if deny := require_role(request, "admin"):
             return deny
         form = await read_form(request)
@@ -1083,7 +1097,7 @@ def routes(ctx: Ctx) -> list:
         ctx.audit(request, "user_role", f"{username}:{role}")
         return _done(request, "users", ok=_("Role updated for '{0}'. They must sign in again.").format(username))
 
-    async def settings_users_delete(request):
+    async def settings_users_delete(request: Request) -> Response:
         if deny := require_role(request, "admin"):
             return deny
         form = await read_form(request)
@@ -1130,7 +1144,7 @@ def routes(ctx: Ctx) -> list:
                 "from them.", kept).format(kept)
         return _done(request, "users", ok=ok)
 
-    async def settings_users_expiry(request):
+    async def settings_users_expiry(request: Request) -> Response:
         """How many days without a sign-in an LDAP/OIDC account is kept (0: for ever)."""
         if deny := require_role(request, "admin"):
             return deny
@@ -1162,7 +1176,7 @@ def routes(ctx: Ctx) -> list:
             ok += " " + _("Removed now: {0}.").format(", ".join(u.username for u in gone))
         return _done(request, "users", ok=ok)
 
-    async def settings_retention(request):
+    async def settings_retention(request: Request) -> Response:
         """How many days a trace file is kept after it was last written (0: until it is
         deleted in its mapping's Trace panel, the default), and how many days log and audit
         records and configuration backups are kept (0: only their size and count limits,
@@ -1231,7 +1245,7 @@ def routes(ctx: Ctx) -> list:
                                       "Deleted now: {0} log files and backups.", gone).format(gone))
         return _done(request, "retention", ok=" ".join(parts) or _("Saved."))
 
-    async def settings_users_signout(request):
+    async def settings_users_signout(request: Request) -> Response:
         if deny := require_role(request, "admin"):
             return deny
         form = await read_form(request)
@@ -1250,7 +1264,7 @@ def routes(ctx: Ctx) -> list:
             set_session(resp, request, target)  # your own row: you stay signed in here
         return resp
 
-    async def settings_users_password(request):
+    async def settings_users_password(request: Request) -> Response:
         """An admin sets another local account's password (it forgot it, or it must
         be taken away from someone): the account is signed out everywhere."""
         if deny := require_role(request, "admin"):
@@ -1261,7 +1275,7 @@ def routes(ctx: Ctx) -> list:
         username = (form.get("username") or "").strip()
         pw, pw2 = form.get("password", ""), form.get("password2", "")
 
-        def problem():
+        def problem() -> str | None:
             target = state.config.get_user(username)
             if target is None:
                 return _("User not found.")
@@ -1292,7 +1306,7 @@ def routes(ctx: Ctx) -> list:
         return _done(request, "users", ok=_("New password set for '{0}'; they were signed out "
                                             "everywhere.").format(username))
 
-    async def settings_users_totp_reset(request):
+    async def settings_users_totp_reset(request: Request) -> Response:
         """An admin turns off another local account's two-factor sign-in (its authenticator
         was lost): it is signed out everywhere, and its password alone signs it in until
         it sets two-factor sign-in up again."""
@@ -1322,7 +1336,7 @@ def routes(ctx: Ctx) -> list:
                                             "signed out everywhere.").format(username))
 
     # ---------------- port pools ----------------
-    async def settings_pools(request):
+    async def settings_pools(request: Request) -> Response:
         """The port pools, one per line (config.pools_from_text): saved and run as a whole.
         Operators may, as they may change the mappings the pools hand clients to."""
         if deny := require_role(request, "operator"):
@@ -1345,7 +1359,7 @@ def routes(ctx: Ctx) -> list:
         return _done(request, "pools", ok=" ".join([saved, *warnings]))
 
     # ---------------- config export / import ----------------
-    async def config_export(request):
+    async def config_export(request: Request) -> Response:
         # mappings only — never export password_hash / secret_key. Mappings can carry
         # secrets (the MQTT password and client key password, the TLS key password), so —
         # like import — this needs operator+ (the UI only offers it to operators; a viewer,
@@ -1370,7 +1384,7 @@ def routes(ctx: Ctx) -> list:
     #      a classic ser2net file (which 2.7 did not take) only goes through the preview.
     PENDING_TTL_S = 900   # (time.monotonic(): a clock step neither ends nor extends it)
 
-    def _pending_put(user: str, plan, mode: str) -> str:
+    def _pending_put(user: str, plan: importer.ImportPlan, mode: str) -> str:
         now, pend = time.monotonic(), state.pending_imports
         for k in [k for k, v in pend.items() if now - v["created"] > PENDING_TTL_S]:
             del pend[k]
@@ -1380,17 +1394,17 @@ def routes(ctx: Ctx) -> list:
         pend[token] = {"created": now, "user": user, "plan": plan, "mode": mode}
         return token
 
-    def _pending_get(token: str, user: str):
+    def _pending_get(token: str, user: str) -> dict | None:
         item = state.pending_imports.get(token or "")
         if not item or item["user"] != user or time.monotonic() - item["created"] > PENDING_TTL_S:
             return None
         return item
 
-    def _who(request) -> str:
+    def _who(request: Request) -> str:
         u = current_user(request)
         return u.username if u is not None else ""
 
-    async def config_import(request):
+    async def config_import(request: Request) -> Response:
         if deny := require_role(request, "operator"):
             return deny
         form = await request.form(max_files=1)  # the mappings file
@@ -1399,7 +1413,8 @@ def routes(ctx: Ctx) -> list:
         upload = form.get("file")
         legacy = form.get("step") != "preview"
         try:
-            raw = await upload.read() if hasattr(upload, "read") else str(upload or "").encode()
+            raw = (await upload.read() if isinstance(upload, UploadFile)
+                   else str(upload or "").encode())
             # parsing is bounded, but a big file still takes a moment: not on the event loop
             plan = await asyncio.to_thread(importer.parse_for_preview, raw,
                                            getattr(upload, "filename", "") or "")
@@ -1421,14 +1436,15 @@ def routes(ctx: Ctx) -> list:
         # legacy one-step import: replace all mappings
         return await _apply_import(request, plan, "replace", legacy=True)
 
-    async def _import_preview(request, plan, mode):
+    async def _import_preview(request: Request, plan: importer.ImportPlan,
+                              mode: str) -> RedirectResponse:
         """Keep `plan` for this user, and lead to the page that shows what importing it
         would change (?import=<id>: a reload or the TR / EN switch shows it again; the id
         is good only for this user, for a while). Nothing changes until it is applied."""
         token = _pending_put(_who(request), plan, mode)
         return proxy.redirect(request, f"/settings?import={token}#import")
 
-    def _preview_of(token: str, item) -> dict:
+    def _preview_of(token: str, item: dict) -> dict:
         """What importing a pending plan would change, against the mappings as they are now
         (ops.import_preview, shared with the REST API's dry run)."""
         plan, mode = item["plan"], item["mode"]
@@ -1437,7 +1453,7 @@ def routes(ctx: Ctx) -> list:
         return {"token": token, "mode": mode, "rows": rows, "source": plan.source,
                 "warnings": general, "problem": problem, "count": len(plan.mappings)}
 
-    async def config_import_apply(request):
+    async def config_import_apply(request: Request) -> Response:
         if deny := require_role(request, "operator"):
             return deny
         form = await read_form(request)
@@ -1454,7 +1470,8 @@ def routes(ctx: Ctx) -> list:
         state.pending_imports.pop(token, None)
         return await _apply_import(request, item["plan"], mode)
 
-    async def _apply_import(request, plan, mode, legacy=False):
+    async def _apply_import(request: Request, plan: importer.ImportPlan, mode: str,
+                            legacy: bool = False) -> Response:
         """`legacy`: the one-step import of 2.7 scripts, answered with the page as before."""
         try:
             rows, new_maps, backed_up = await ops.import_mappings(state, plan, mode)
@@ -1486,7 +1503,7 @@ def routes(ctx: Ctx) -> list:
         return _done(request, "import", ok=ok)
 
     # ---------------- event notifications (admin) ----------------
-    def _notify_from_form(form, old: NotificationSettings) -> NotificationSettings:
+    def _notify_from_form(form: Form, old: NotificationSettings) -> NotificationSettings:
         try:
             port = int(form.get("notify_smtp_port") or 587)
             repeat = int(float(form.get("notify_repeat_min") or 5) * 60)
@@ -1516,7 +1533,7 @@ def routes(ctx: Ctx) -> list:
                                  else old.email_separately),
         })
 
-    async def settings_notifications_post(request):
+    async def settings_notifications_post(request: Request) -> Response:
         if deny := require_role(request, "admin"):
             return deny
         form = await read_form(request)
@@ -1560,7 +1577,8 @@ def routes(ctx: Ctx) -> list:
     # ---------------- audit log viewer (admin) ----------------
     AUDIT_PAGE = 100
 
-    async def _audit_records(request):
+    async def _audit_records(request: Request,
+                             ) -> tuple[list[dict], dict[str, str], list[str], list[str]]:
         params = request.query_params
         q = (params.get("q") or "").strip()
         action = (params.get("action") or "").strip()
@@ -1568,7 +1586,8 @@ def routes(ctx: Ctx) -> list:
         records, actions, users = await asyncio.to_thread(_audit_matching, q, action, user)
         return records, {"q": q, "action": action, "user": user}, actions, users
 
-    def _audit_matching(q: str, action: str, user: str):
+    def _audit_matching(q: str, action: str, user: str,
+                        ) -> tuple[list[dict], list[str], list[str]]:
         """(the audit records that match, every action, every user), in a worker thread:
         the search folds the text of each record (search_key: 'istanbul' finds
         'İstanbul', 'dairesi' 'DAİRESİ'). The fields are joined with NUL, which the fold
@@ -1585,7 +1604,7 @@ def routes(ctx: Ctx) -> list:
             records = [r for r in records if needle in search_key("\0".join(r.values()))]
         return records, actions, users
 
-    async def audit_page(request):
+    async def audit_page(request: Request) -> Response:
         if deny := require_role(request, "admin"):
             return deny
         records, filters, actions, users = await _audit_records(request)
@@ -1601,7 +1620,7 @@ def routes(ctx: Ctx) -> list:
                       actions=actions, users=users, me=current_user(request),
                       qs=urlencode({k: v for k, v in filters.items() if v}))
 
-    async def audit_csv(request):
+    async def audit_csv(request: Request) -> Response:
         if deny := require_role(request, "admin"):
             return deny
         records, filters, *_ = await _audit_records(request)
@@ -1628,7 +1647,7 @@ def routes(ctx: Ctx) -> list:
                         headers={"Content-Disposition": "attachment; filename=ser2netweb-audit.csv"})
 
     # ---------------- configuration backups (admin) ----------------
-    async def backup_download(request):
+    async def backup_download(request: Request) -> Response:
         if deny := require_role(request, "admin"):
             return deny
         name = request.path_params["name"]
@@ -1640,7 +1659,7 @@ def routes(ctx: Ctx) -> list:
         return Response(_without_session_key(text), media_type="application/json",
                         headers={"Content-Disposition": f"attachment; filename={name}"})
 
-    async def backup_restore(request):
+    async def backup_restore(request: Request) -> Response:
         """Restore a backup's mappings and settings. User accounts, the REST API token
         and the cluster key stay as they are unless `accounts` is ticked: a backup from
         before a password change, a deleted account or a revoked token would otherwise
@@ -1768,7 +1787,7 @@ def routes(ctx: Ctx) -> list:
             set_session(resp, request, mine)
         return resp
 
-    async def backup_delete(request):
+    async def backup_delete(request: Request) -> Response:
         """Delete one backup (`name`), or every one (`all`)."""
         if deny := require_role(request, "admin"):
             return deny
@@ -1796,7 +1815,7 @@ def routes(ctx: Ctx) -> list:
         ctx.audit(request, "config_backup_delete", name)
         return _done(request, "backups", ok=_("Backup of {0} UTC deleted.").format(backup_time(name)))
 
-    async def backup_remove_account(request):
+    async def backup_remove_account(request: Request) -> Response:
         """Take an account that no longer exists out of every backup that still has it."""
         if deny := require_role(request, "admin"):
             return deny
@@ -1822,7 +1841,7 @@ def routes(ctx: Ctx) -> list:
             "'{0}' was removed from {1} configuration backup.",
             "'{0}' was removed from {1} configuration backups.", changed).format(username, changed))
 
-    async def config_reload(request):
+    async def config_reload(request: Request) -> Response:
         """Read config.json again and apply it, as SIGHUP / `ser2netweb --reload` do
         (ser2netweb/reload.py): for an edit made outside the UI (by hand, Ansible ...)."""
         if deny := require_role(request, "admin"):
@@ -1839,7 +1858,7 @@ def routes(ctx: Ctx) -> list:
                                                    "configuration in use stays: {0}").format(
             message))
 
-    async def backup_restore_mappings(request):
+    async def backup_restore_mappings(request: Request) -> Response:
         """Restore only a backup's mappings, through the import preview (replace)."""
         if deny := require_role(request, "admin"):
             return deny
@@ -1856,13 +1875,13 @@ def routes(ctx: Ctx) -> list:
         plan.log_source = f"configuration backup ({backup_time(name)} UTC)"
         return await _import_preview(request, plan, "replace")
 
-    async def settings_cluster_post(request):
+    async def settings_cluster_post(request: Request) -> Response:
         if deny := require_role(request, "admin"):
             return deny
         form = await read_form(request)
         if not auth.csrf_token_matches(request, form.get("_csrf")):
             return csrf_failed()
-        def refused(problem: str):
+        def refused(problem: str) -> Coroutine[Any, Any, Response]:
             """The form again with what was sent - never the key (typed again)."""
             old, current_form = state.config.cluster, form.get("cluster_form") == "2"
             shown = types.SimpleNamespace(
@@ -1953,7 +1972,7 @@ def routes(ctx: Ctx) -> list:
             return _done(request, "cluster-settings", new_cluster_key=key, ok=ok)
         return _done(request, "cluster-settings", ok=ok)
 
-    async def settings_cluster_identity(request):
+    async def settings_cluster_identity(request: Request) -> Response:
         """Give this node a new cluster id and a new session key - the way out for a copy
         of another installation (its data folder, disk or VM image): the copies no longer
         hide each other in the cluster, and a sign-in to one is not valid on the other.
@@ -2047,7 +2066,7 @@ def _load_tls_pair(cert: str, key: str, password: str) -> None:
     tls.tls_context(server_side=True, cert=cert, key=key, password=password)
 
 
-def _keep_previous(paths) -> list[str]:
+def _keep_previous(paths: Iterable[str]) -> list[str]:
     """Copy each of `paths` that exists to <path>.bak (permissions kept: a private key
     stays private); the copies made."""
     kept = []
@@ -2074,19 +2093,19 @@ def _key_hint(key: str) -> str:
 
 
 # ---------------- what a restore changes for sign-in and access ----------------
-def _setting_changes(old, new) -> list[str]:
+def _setting_changes(old: AppConfig | types.SimpleNamespace, new: AppConfig) -> list[str]:
     """Sign-in / access settings and the cluster's that differ between two configurations
     (AppConfig or the same fields), as lines for the user (and, in English, the audit
     log)."""
-    def onoff(value) -> str:
+    def onoff(value: object) -> str:
         return _("enabled") if value else _("disabled")
 
-    def role(value) -> str:
+    def role(value: str) -> str:
         return value or _("— deny login —")
 
     out = []
 
-    def diff(label, a, b) -> None:
+    def diff(label: str, a: object, b: object) -> None:
         if a != b:
             out.append(f"{label}: {a} → {b}")
 
@@ -2108,24 +2127,25 @@ def _setting_changes(old, new) -> list[str]:
     diff(f"LDAP · {_('Server certificate check')}", onoff(old.ldap.tls_verify),
          onoff(new.ldap.tls_verify))
 
-    def days(value) -> str:
+    def days(value: int) -> str:
         return _("{0} days").format(value) if value else _("never")
 
     diff(_("Remove LDAP / OIDC accounts not signed in for"),
          days(old.external_users_expire_days), days(new.external_users_expire_days))
     # the cluster's settings (its keys are credentials: _account_changes)
-    o, n = old.cluster, new.cluster
+    oc, nc = old.cluster, new.cluster
     cluster = _("LAN cluster")
-    diff(cluster, onoff(o.enabled), onoff(n.enabled))
-    diff(f"{cluster} · {_('Legacy authentication')}", onoff(o.legacy_auth), onoff(n.legacy_auth))
-    diff(f"{cluster} · {_('Automatic discovery')}", onoff(o.discovery), onoff(n.discovery))
-    diff(f"{cluster} · {_('Discovery UDP port')}", o.discovery_port, n.discovery_port)
-    diff(f"{cluster} · {_('Advertise IP')}", o.advertise_ip or "—", n.advertise_ip or "—")
-    diff(f"{cluster} · {_('Manual peers')}", ", ".join(o.peers) or "—", ", ".join(n.peers) or "—")
+    diff(cluster, onoff(oc.enabled), onoff(nc.enabled))
+    diff(f"{cluster} · {_('Legacy authentication')}", onoff(oc.legacy_auth), onoff(nc.legacy_auth))
+    diff(f"{cluster} · {_('Automatic discovery')}", onoff(oc.discovery), onoff(nc.discovery))
+    diff(f"{cluster} · {_('Discovery UDP port')}", oc.discovery_port, nc.discovery_port)
+    diff(f"{cluster} · {_('Advertise IP')}", oc.advertise_ip or "—", nc.advertise_ip or "—")
+    diff(f"{cluster} · {_('Manual peers')}", ", ".join(oc.peers) or "—",
+         ", ".join(nc.peers) or "—")
     return out
 
 
-def _account_changes(old, new) -> list[str]:
+def _account_changes(old: AppConfig | types.SimpleNamespace, new: AppConfig) -> list[str]:
     """What restoring a backup's accounts and credentials would change."""
     before = {u.username: u for u in old.users}
     after = {u.username: u for u in new.users}
@@ -2152,11 +2172,12 @@ def _account_changes(old, new) -> list[str]:
     return out
 
 
-def _restore_changes(old, new, with_accounts: bool) -> list[str]:
+def _restore_changes(old: AppConfig | types.SimpleNamespace, new: AppConfig,
+                     with_accounts: bool) -> list[str]:
     return _setting_changes(old, new) + (_account_changes(old, new) if with_accounts else [])
 
 
-def _restore_preview(name: str, cur, backup, me) -> dict:
+def _restore_preview(name: str, cur: AppConfig, backup: AppConfig, me: User | None) -> dict:
     notes = []
     accounts_ok = bool(backup.users) and backup.admin_count() > 0
     if not accounts_ok:

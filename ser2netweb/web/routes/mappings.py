@@ -9,9 +9,11 @@ import json
 import os
 import time
 import urllib.parse
+from collections.abc import AsyncIterator
+from typing import TYPE_CHECKING, BinaryIO
 
 from starlette.responses import PlainTextResponse, Response, StreamingResponse
-from starlette.routing import Route
+from starlette.routing import BaseRoute, Route
 
 from .. import tlsupload
 from ..starlette_compat import Route as LimitedRoute
@@ -28,6 +30,11 @@ from .common import (
     reason, sees_to_device, start_failed,
 )
 from .forms import _form_error, _parse_modbus_points, form_context
+
+if TYPE_CHECKING:
+    from starlette.requests import Request
+
+    from .ops import ActionResult
 
 
 def _port_taken(error: str) -> bool:
@@ -66,7 +73,7 @@ _SHOWN = ("state", "device", "last_error", "client_count", "dropped_clients", "b
           "safe")  # a gateway's points written to their safe value
 
 
-def _shown_status(st, key):
+def _shown_status(st: dict, key: str) -> object:
     """What the row shows of a status field: of a gateway's units, which ones stopped
     answering (their read counts change at every poll); of the MQTT link, its state, broker
     and error (not its count of dropped messages)."""
@@ -80,7 +87,7 @@ def _shown_status(st, key):
     return value
 
 
-def _steady(st):
+def _steady(st: dict | None) -> tuple[tuple[object, ...], list[tuple[object, ...]]] | None:
     """What the table shows of a mapping's status, minus what changes all the time: the
     In / Out counters (patched on their own) and the clients' connection times (the
     browser counts them on from connected_at). Not what it doesn't show (the reconnect
@@ -91,14 +98,14 @@ def _steady(st):
             [(c.get("peer"), c.get("priority"), c.get("connected_at")) for c in st.get("clients") or ()])
 
 
-def _row_shape(m, st):
+def _row_shape(m: MappingConfig, st: dict | None) -> tuple[str, object, int]:
     """What a mapping's row shows, for LiveTable: its settings, its status (_steady) and how
     long its device has been silent past its no-data alarm (notify.no_data_for: 0 while not;
     the seconds change at every look while it is)."""
     return repr(m), _steady(st), no_data_for(m, st)
 
 
-def _in_out(st) -> str:
+def _in_out(st: dict | None) -> str:
     """The text of a row's In / Out cell, as _mappings_body.html renders it."""
     return f"{bytesize(st.get('bytes_in', 0) if st else 0)} / {bytesize(st.get('bytes_out', 0) if st else 0)}"
 
@@ -107,7 +114,7 @@ def _in_out(st) -> str:
 DOWNLOAD_CHUNK = 64 * 1024
 
 
-def snapshot_response(fh, filename: str, media_type: str, head: bool = False,
+def snapshot_response(fh: BinaryIO, filename: str, media_type: str, head: bool = False,
                       chunk_size: int = DOWNLOAD_CHUNK) -> StreamingResponse:
     """A download of the open binary file `fh` as it is now: exactly the size it has
     (taken on the open handle, so a rotation can't put another file in its place
@@ -117,7 +124,7 @@ def snapshot_response(fh, filename: str, media_type: str, head: bool = False,
     another program) ends the download early. Closes `fh`; `head`: headers only."""
     size = os.fstat(fh.fileno()).st_size
 
-    async def body():
+    async def body() -> AsyncIterator[bytes]:
         try:
             left = 0 if head else size
             while left > 0:
@@ -136,7 +143,7 @@ def snapshot_response(fh, filename: str, media_type: str, head: bool = False,
         "Content-Length": str(size), "Content-Disposition": disposition})
 
 
-def _bulk_refused(refused: list, total: int) -> str:
+def _bulk_refused(refused: list[ActionResult], total: int) -> str:
     """Why some mappings of a bulk start / restart were not changed (the others were)."""
     reasons = list(dict.fromkeys(str(r.error) for r in refused))  # once each, in order
     return ngettext("{0} of {1} selected mapping not changed: {2}",
@@ -144,11 +151,11 @@ def _bulk_refused(refused: list, total: int) -> str:
         len(refused), total, " ".join(reasons[:3]) + (" …" if len(reasons) > 3 else ""))
 
 
-def routes(ctx: Ctx) -> list:
+def routes(ctx: Ctx) -> list[BaseRoute]:
     state, render = ctx.state, ctx.render
     current_user, require_role, can_edit = ctx.current_user, ctx.require_role, ctx.can_edit
 
-    async def dashboard(request):
+    async def dashboard(request: Request) -> Response:
         return render(
             request, "dashboard.html",
             mappings=state.config.mappings,
@@ -158,7 +165,7 @@ def routes(ctx: Ctx) -> list:
             me=current_user(request), can_edit=can_edit(request),
         )
 
-    async def mapping_duplicate(request):
+    async def mapping_duplicate(request: Request) -> Response:
         if deny := require_role(request, "operator"):
             return deny
         mid = request.path_params["mid"]
@@ -179,21 +186,21 @@ def routes(ctx: Ctx) -> list:
 
     table = LiveTable(ctx, "_mappings_body.html")
 
-    async def api_status(request):
+    async def api_status(request: Request) -> Response:
         # polled every 2 s: 204 while unchanged, only the In / Out counters when only they
         # changed, else the table rendered off the event loop (see LiveTable). On a
         # snapshot: an edit replaces a mapping object, a delete removes it from the list.
         mappings, statuses = list(state.config.mappings), state.supervisor.all_status()
         edit = can_edit(request)
 
-        def snapshot():
+        def snapshot() -> tuple[object, dict[str, str]]:
             return ((edit, [_row_shape(m, statuses.get(m.id)) for m in mappings]),
                     {f"m-{m.id}-bytes": _in_out(statuses.get(m.id)) for m in mappings})
         # the server's clock: the browser counts the clients' connection times on from it
         return await table.answer(request, snapshot, headers={"X-Server-Time": f"{time.time():.3f}"},
                                   mappings=mappings, statuses=statuses, can_edit=edit)
 
-    async def mapping_bulk(request):
+    async def mapping_bulk(request: Request) -> Response:
         """Start / stop / restart several mappings at once (the dashboard's selection)."""
         if deny := require_role(request, "operator"):
             return deny
@@ -240,14 +247,14 @@ def routes(ctx: Ctx) -> list:
     # ---------------- mapping form ----------------
     # The form is for editing (operator+), so viewers get 403 — the UI never offers it to
     # them. It shows every setting but the MQTT password, which it only says is stored.
-    async def mapping_form_new(request):
+    async def mapping_form_new(request: Request) -> Response:
         if deny := require_role(request, "operator"):
             return deny
         return render(request, "_mapping_form.html", **form_context(
             MappingConfig(name=""), await state.ports.current(), netinfo.list_ip_candidates(),
             is_new=True))
 
-    async def mapping_form_edit(request):
+    async def mapping_form_edit(request: Request) -> Response:
         if deny := require_role(request, "operator"):
             return deny
         m = state.config.get_mapping(request.path_params["mid"])
@@ -260,7 +267,7 @@ def routes(ctx: Ctx) -> list:
             links=portlist.links(portlist.visible(ports), (m.serial.port, m.serial_b.port)),
             mqtt_stored=m.mqtt.password))
 
-    async def mapping_tls_upload(request):
+    async def mapping_tls_upload(request: Request) -> Response:
         """TLS files uploaded in the mapping form (admins; tlsupload.py): a certificate
         with its key, and / or a CA file for the field it stands next to. Checked and kept
         in the data folder's tls/; the answer names their paths (HX-Trigger: tlsUploaded),
@@ -298,7 +305,7 @@ def routes(ctx: Ctx) -> list:
             **notice(_("Uploaded and checked. The paths are in the form: save it to use "
                        "them."))})
 
-    async def mapping_modbus_read(request):
+    async def mapping_modbus_read(request: Request) -> Response:
         """The mapping form's test read: the points in the posted points JSON, as typed (not
         saved), read once now through the mapping's running gateway (its turn on the bus
         with the poll and the masters); nothing is published. A fragment for the form."""
@@ -329,7 +336,7 @@ def routes(ctx: Ctx) -> list:
                       rows=[{"name": p.name, "unit": p.unit, "value": v, "error": e}
                             for p, v, e in rows])
 
-    async def mapping_log(request):
+    async def mapping_log(request: Request) -> Response:
         mid = request.path_params["mid"]
         m = state.config.get_mapping(mid)
         if not m:
@@ -346,11 +353,12 @@ def routes(ctx: Ctx) -> list:
         return await ctx.arender(request, "_mapping_log.html", mid=mid, mapping_name=m.name,
                                  lines=lines, content_hash=digest)
 
-    def _trace_files(mid):
+    def _trace_files(mid: str) -> list[dict]:
         return [{**f, "size_text": bytesize(f["size"]), "time": clock.stamp(f["mtime"])}
                 for f in state.trace_list(mid)]
 
-    async def _traces_panel(request, m, ok="", error=""):
+    async def _traces_panel(request: Request, m: MappingConfig, ok: str = "",
+                            error: str = "") -> Response:
         files = await asyncio.to_thread(_trace_files, m.id)
         o = m.options
         st = state.supervisor.status(m.id) or {}
@@ -368,7 +376,7 @@ def routes(ctx: Ctx) -> list:
 
     # Traces record both directions, what clients type to the device included (see
     # common.sees_to_device): listing, downloading and deleting them needs operator+.
-    async def mapping_traces(request):
+    async def mapping_traces(request: Request) -> Response:
         if deny := require_role(request, "operator"):
             return deny
         m = state.config.get_mapping(request.path_params["mid"])
@@ -376,7 +384,7 @@ def routes(ctx: Ctx) -> list:
             return PlainTextResponse(_("Mapping not found"), status_code=404)
         return await _traces_panel(request, m)
 
-    async def mapping_traces_delete(request):
+    async def mapping_traces_delete(request: Request) -> Response:
         """Delete one of a mapping's trace files (a name of its own list) or, without a
         name, all of them; audited. Answers the trace panel with what was done (400 when
         something was not deleted: htmx shows it too)."""
@@ -401,7 +409,7 @@ def routes(ctx: Ctx) -> list:
             ok = _("No trace files to delete.")
         return await _traces_panel(request, m, ok=ok, error=error)
 
-    async def mapping_capture_start(request):
+    async def mapping_capture_start(request: Request) -> Response:
         """Trace the mapping for 15 minutes, 1 hour or 24 hours from now (capture.py);
         audited. Answers the trace panel."""
         if deny := require_role(request, "operator"):
@@ -431,7 +439,7 @@ def routes(ctx: Ctx) -> list:
         return await _traces_panel(request, m, ok=_(
             "Recording until {0}; it then stops by itself.").format(clock.stamp(until)))
 
-    async def mapping_capture_stop(request):
+    async def mapping_capture_stop(request: Request) -> Response:
         """End the mapping's timed capture now; audited. Answers the trace panel."""
         if deny := require_role(request, "operator"):
             return deny
@@ -449,7 +457,7 @@ def routes(ctx: Ctx) -> list:
         return await _traces_panel(request, m, error=error,
                                    ok=_("Recording stopped.") if ended and not error else "")
 
-    async def mapping_trace_file(request):
+    async def mapping_trace_file(request: Request) -> Response:
         """Download one of a mapping's trace files — only a name from its own list."""
         if deny := require_role(request, "operator"):
             return deny
@@ -466,7 +474,7 @@ def routes(ctx: Ctx) -> list:
         return snapshot_response(fh, name, "text/plain; charset=utf-8",
                                  head=request.method == "HEAD")
 
-    async def console_view(request):
+    async def console_view(request: Request) -> Response:
         mid = request.path_params["mid"]
         m = state.config.get_mapping(mid)
         if not m:
@@ -480,7 +488,7 @@ def routes(ctx: Ctx) -> list:
                       encoding=console_encoding(m.options),
                       charset=console_charset(console_encoding(m.options)))
 
-    async def mapping_save(request):
+    async def mapping_save(request: Request) -> Response:
         if deny := require_role(request, "operator"):
             return deny
         form = await read_form(request)
@@ -504,7 +512,7 @@ def routes(ctx: Ctx) -> list:
             note = notice(_("“{0}” saved.").format(msg), focus=focus)
         return Response("", headers={**TRIGGER, **note})
 
-    async def mapping_delete(request):
+    async def mapping_delete(request: Request) -> Response:
         if deny := require_role(request, "operator"):
             return deny
         try:
@@ -517,7 +525,7 @@ def routes(ctx: Ctx) -> list:
         ctx.audit(request, "mapping_delete", removed.name)
         return Response("", headers={**TRIGGER, **notice(_("“{0}” deleted.").format(removed.name))})
 
-    async def mapping_action(request):
+    async def mapping_action(request: Request) -> Response:
         if deny := require_role(request, "operator"):
             return deny
         mid = request.path_params["mid"]

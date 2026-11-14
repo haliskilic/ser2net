@@ -12,6 +12,8 @@ import difflib
 import json
 import math
 import re
+from collections.abc import Callable, Mapping
+from typing import TYPE_CHECKING, Any, TypeAlias
 
 from ...config import (
     MODBUS_TIMEOUT_DEFAULT_S, REDACTED, ConfigError, LdapSettings, MappingConfig, ModbusPoint,
@@ -19,6 +21,17 @@ from ...config import (
 )
 from ...engine import netinfo, portlist
 from ...i18n import _
+
+if TYPE_CHECKING:
+    from starlette.requests import Request
+    from starlette.responses import Response
+
+    from ...state import AppState
+
+# The fields of a posted form (common.read_form), or a dict of them
+Form: TypeAlias = Mapping[str, str]
+# a port list (portlist.snapshot)
+Ports: TypeAlias = "list[dict[str, Any]]"
 
 
 def _password_problem(pw: str, pw2: str) -> str | None:
@@ -29,7 +42,7 @@ def _password_problem(pw: str, pw2: str) -> str | None:
     return None
 
 
-def _ldap_from_form(form, old) -> LdapSettings:
+def _ldap_from_form(form: Form, old: LdapSettings) -> LdapSettings:
     pw = form.get("ldap_bind_password", "")
     return LdapSettings.from_dict({
         "enabled": _checkbox(form, "ldap_enabled"),
@@ -56,7 +69,7 @@ def _ldap_from_form(form, old) -> LdapSettings:
     })
 
 
-def _oidc_from_form(form, old) -> OidcSettings:
+def _oidc_from_form(form: Form, old: OidcSettings) -> OidcSettings:
     sec = form.get("oidc_client_secret", "")
     return OidcSettings.from_dict({
         "enabled": _checkbox(form, "oidc_enabled"),
@@ -93,7 +106,7 @@ def _username_problem(username: str) -> str | None:
     return None
 
 
-def _checkbox(form, name: str) -> bool:
+def _checkbox(form: Form, name: str) -> bool:
     return form.get(name) in ("on", "true", "1", "yes")
 
 
@@ -126,7 +139,8 @@ def _field_label(name: str) -> str:
     return _("{0} (serial port B)").format(label) if side_b else label
 
 
-def _num(form, name, default, *, strict, cast=int):
+def _num(form: Form, name: str, default: float, *, strict: bool,
+         cast: Callable[[Any], float] = int) -> float:
     """The number in the form field `name` (`default` when the form doesn't have it).
     strict: one that isn't a number is refused with a message naming the field (not
     Python's "invalid literal for int() with base 10: ''"); else it reads as `default`."""
@@ -143,7 +157,7 @@ def _num(form, name, default, *, strict, cast=int):
                            _("{0}: enter a number.")).format(_field_label(name))) from None
 
 
-def _serial_dict(form, prefix: str, strict: bool) -> dict:
+def _serial_dict(form: Form, prefix: str, strict: bool) -> dict:
     baud_field = prefix + "baudrate"
     baud = form.get(baud_field, "9600")
     if baud == "custom":
@@ -330,7 +344,7 @@ _TEXT_INPUTS = {
 _POINT_FIELDS_SINCE_2_8 = ("writable",)
 
 
-def _section(mapping, path: str):
+def _section(mapping: object, path: str) -> Any:
     for name in path.split("."):
         mapping = getattr(mapping, name)
     return mapping
@@ -344,7 +358,7 @@ MQTT_PASSWORD_WRITE_ONLY = "mqtt_password_write_only"  # noqa: S105 - a form fie
 MQTT_PASSWORD_CLEAR = "mqtt_password_clear"  # noqa: S105 - a form field name
 
 
-def mqtt_password_from_form(form, stored: str) -> str:
+def mqtt_password_from_form(form: Form, stored: str) -> str:
     """The MQTT password a mapping form sets, given the stored one: the posted value, except
     that a write-only form's blank field keeps the stored password (or, with the remove box,
     clears it), and so does the REST API's REDACTED mask."""
@@ -356,7 +370,7 @@ def mqtt_password_from_form(form, stored: str) -> str:
     return typed
 
 
-def mqtt_password_view(stored: str, form=None) -> dict:
+def mqtt_password_view(stored: str, form: Form | None = None) -> dict:
     """What _mapping_form.html shows of the MQTT password: whether one is stored, never
     the password itself; re-drawn after an error, what was typed and the remove box."""
     return {"mqtt_password_stored": bool(stored),
@@ -364,7 +378,7 @@ def mqtt_password_view(stored: str, form=None) -> dict:
             "mqtt_password_clear": form is not None and _checkbox(form, MQTT_PASSWORD_CLEAR)}
 
 
-def _build_mapping_dict(form, strict: bool) -> dict:
+def _build_mapping_dict(form: Form, strict: bool) -> dict:
     bind = form.get("network_bind_ip", "0.0.0.0")
     if bind == "custom":
         bind = form.get("network_bind_ip_custom", "").strip()
@@ -539,7 +553,7 @@ def _build_mapping_dict(form, strict: bool) -> dict:
     }
 
 
-def _modbus_points_json(mapping) -> str:
+def _modbus_points_json(mapping: MappingConfig) -> str:
     pts = [{"name": p.name, "unit": p.unit, "fn": p.fn, "address": p.address,
             "dtype": p.dtype, "scale": p.scale, **({"writable": True} if p.writable else {}),
             # the options only when set (their defaults keep a point as before)
@@ -552,7 +566,7 @@ def _modbus_points_json(mapping) -> str:
     return json_text(pts, indent=2) if pts else ""
 
 
-def json_text(value, **kwargs) -> str:
+def json_text(value: object, **kwargs: Any) -> str:
     """JSON with non-ASCII text as it is ("Sıcaklık", not S\\u0131cakl\\u0131k), so it can be
     read and edited; escaped only if it holds what UTF-8 can't carry (an unpaired surrogate,
     which an edit refuses: see config.unstorable_text)."""
@@ -564,7 +578,9 @@ def json_text(value, **kwargs) -> str:
     return text
 
 
-def _keep_point_options(new_map, existing, options=None) -> None:
+def _keep_point_options(new_map: MappingConfig, existing: MappingConfig,
+                        options: Mapping[str, Callable[[ModbusPoint], bool]] | None = None,
+                        ) -> None:
     """A form that can't carry the points' options (an older peer's): each point keeps the
     stored ones of the point with its name. ``options``: which (_POINT_OPTIONS)."""
     stored = {p.name: p for p in existing.modbus_poll.points}
@@ -642,7 +658,7 @@ def _parse_modbus_points(raw: str, strict: bool) -> list:
     return points
 
 
-def _mapping_from_form(form) -> dict:
+def _mapping_from_form(form: Form) -> dict:
     return _build_mapping_dict(form, strict=True)
 
 
@@ -673,8 +689,8 @@ def text_shown(field: str, value: str) -> str:
     return _TEXT_SHOWN.get(field, in_text_box)(value)
 
 
-def apply_usb_match(mapping: MappingConfig, form, ports: list, existing=None,
-                    strict: bool = True) -> None:
+def apply_usb_match(mapping: MappingConfig, form: Form, ports: Ports,
+                    existing: MappingConfig | None = None, strict: bool = True) -> None:
     """Set each serial side's stable USB identity (serial.match) from the form's
     "find this device by its USB identity" box: the selected port's VID/PID (+ serial
     number when it has one), so the engine re-finds the adapter after COMx / ttyUSBx
@@ -704,7 +720,7 @@ def apply_usb_match(mapping: MappingConfig, form, ports: list, existing=None,
             settings.match = dict(old.match) if old is not None else {}
 
 
-def mapping_from_form(form, existing, ports: list) -> MappingConfig:
+def mapping_from_form(form: Form, existing: MappingConfig | None, ports: Ports) -> MappingConfig:
     """The mapping a submitted mapping form describes: parsed (a value it can't read
     raises ValueError / TypeError ...), with the stored values of `existing` (None: a new
     mapping) kept for what the form doesn't post (_preserve_unmanaged_fields) and the USB
@@ -716,7 +732,8 @@ def mapping_from_form(form, existing, ports: list) -> MappingConfig:
     return mapping
 
 
-def mapping_for_rerender(form, existing, ports: list) -> MappingConfig:
+def mapping_for_rerender(form: Form, existing: MappingConfig | None,
+                         ports: Ports) -> MappingConfig:
     """The mapping to show again in a form that came back with an error (local or a
     cluster peer's): what was submitted, read leniently, with what a save would keep —
     the stored values for fields the form didn't post, the USB identity — so saving the
@@ -787,7 +804,7 @@ FORM_BLOCKS_SINCE = {
 }
 
 
-def blocks_not_read(version) -> frozenset[str]:
+def blocks_not_read(version: tuple[int, int, int] | None) -> frozenset[str]:
     """The FORM_BLOCKS_SINCE blocks a node running *version* (a (major, minor, patch);
     None: unknown) doesn't read."""
     if version is None:
@@ -795,9 +812,11 @@ def blocks_not_read(version) -> frozenset[str]:
     return frozenset(b for b, since in FORM_BLOCKS_SINCE.items() if version < since)
 
 
-def form_context(mapping: MappingConfig, ports: list, ips: list, *, is_new: bool,
-                 error=None, remote=None, hide=frozenset(), rev: str = "", links=None,
-                 mqtt_stored: str = "", tls_stored: str | None = None, form=None,
+def form_context(mapping: MappingConfig, ports: Ports, ips: list, *, is_new: bool,
+                 error: str | None = None, remote: dict | None = None,
+                 hide: frozenset[str] = frozenset(), rev: str = "",
+                 links: dict[str, str] | None = None, mqtt_stored: str = "",
+                 tls_stored: str | None = None, form: Form | None = None,
                  mqtt_key_stored: str | None = None) -> dict:
     """What _mapping_form.html is rendered with (every place that shows the form);
     `hide`: blocks the node that saves it doesn't read (blocks_not_read); `rev`: the
@@ -821,7 +840,8 @@ def form_context(mapping: MappingConfig, ports: list, ips: list, *, is_new: bool
     return out
 
 
-def _preserve_unmanaged_fields(new_map, existing, form=None) -> None:
+def _preserve_unmanaged_fields(new_map: MappingConfig, existing: MappingConfig | None,
+                               form: Form | None = None) -> None:
     """Carry over what an edit's form did not set, so editing an existing mapping never
     silently discards it: the settings the form doesn't have (_UNMANAGED_FIELDS), the
     not-always-posted fields the submitted `form` lacks (_OPTIONAL_FORM_FIELDS; no form
@@ -880,7 +900,7 @@ def _preserve_unmanaged_fields(new_map, existing, form=None) -> None:
         _keep_point_options(new_map, existing, _POINT_OPTIONS_3_1)  # a form from before 3.1
 
 
-def _keep_point_fields(new_map, existing) -> None:
+def _keep_point_fields(new_map: MappingConfig, existing: MappingConfig) -> None:
     """A form from before 2.8.0 (an older cluster node's) lists the Modbus points without
     "writable" (_POINT_FIELDS_SINCE_2_8): each point keeps the stored value of the point
     with the same name — "writable" only while it is still a coil or holding register."""
@@ -895,7 +915,7 @@ def _keep_point_fields(new_map, existing) -> None:
             p.writable = False
 
 
-def tls_password_view(stored: str, form=None) -> dict:
+def tls_password_view(stored: str, form: Form | None = None) -> dict:
     """What _mapping_form.html shows of a mapping's TLS key password: whether one is stored,
     never the password itself; re-drawn after an error, what was typed and the remove box
     (without these, the form goes by the mapping it shows)."""
@@ -904,14 +924,14 @@ def tls_password_view(stored: str, form=None) -> dict:
             "tls_pw_clear": form is not None and _checkbox(form, "network_tls_key_password_clear")}
 
 
-def mqtt_key_password_view(stored: str, form=None) -> dict:
+def mqtt_key_password_view(stored: str, form: Form | None = None) -> dict:
     """The same for the MQTT client key password (mqtt.client_key_password)."""
     return {"mqtt_key_pw_stored": bool(stored),
             "mqtt_key_pw_typed": form.get("mqtt_client_key_password", "") if form is not None else "",
             "mqtt_key_pw_clear": form is not None and _checkbox(form, "mqtt_client_key_password_clear")}
 
 
-def _reshown_points(form, mapping) -> str:
+def _reshown_points(form: Form, mapping: MappingConfig) -> str:
     """The points JSON of a refused form, to show it again: the text as it was posted (a
     typo in it is then fixed, not lost, and Save never stores the points it could not read
     as none), or the mapping's points when the form did not post them."""
@@ -920,7 +940,8 @@ def _reshown_points(form, mapping) -> str:
     return _modbus_points_json(mapping)
 
 
-def _form_error(render, request, state, form, message: str):
+def _form_error(render: Callable[..., Response], request: Request, state: AppState,
+                form: Form, message: str) -> Response:
     """Re-render the mapping form with the submitted values and an error banner. It
     carries the mapping's current revision: the save checks the revision before anything
     else, so the error is either that it changed (a second save then replaces the

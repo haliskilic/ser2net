@@ -184,7 +184,7 @@ def since(unix_time: Any) -> str:
         return ""
 
 
-def notice(text: str, kind: str = "ok", focus: str = "", detail: str = "") -> dict:
+def notice(text: str, kind: str = "ok", focus: str = "", detail: str = "") -> dict[str, str]:
     """The response header that has the dashboard (app.js, its feedback area) tell the
     user what an action did: "ok" as a status message, "warn" as an alert; `focus`: the
     id of the element that gets the keyboard focus when the form panel closes; `detail`:

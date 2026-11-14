@@ -5,6 +5,7 @@ import asyncio
 import re
 import secrets
 import time
+from typing import TYPE_CHECKING
 
 from starlette.responses import RedirectResponse
 
@@ -21,6 +22,14 @@ from . import totp
 from .common import Ctx, csrf_failed, local_path, read_form
 from .forms import _password_problem, _username_problem
 
+if TYPE_CHECKING:
+    from starlette.requests import Request
+    from starlette.responses import Response
+    from starlette.routing import BaseRoute
+
+    from ...config import LdapSettings, OidcSettings
+    from .forms import Form
+
 OIDC_COOKIE = "ser2net_oidc"
 # The sign-in, first-run setup and sign-out forms are a few short fields: a larger request
 # is refused (413) before it is read, a file (read_form) or a long field (400) while it is.
@@ -28,17 +37,17 @@ FORM_MAX_BYTES = 64 * 1024
 FORM_LIMITS = {"max_fields": 16, "max_part_size": 16 * 1024}
 
 
-def routes(ctx: Ctx) -> list:
+def routes(ctx: Ctx) -> list[BaseRoute]:
     state, render, client_ip, set_session = ctx.state, ctx.render, ctx.client_ip, ctx.set_session
 
-    async def login_get(request):
+    async def login_get(request: Request) -> Response:
         # ?next=: the page to go back to (GuardMiddleware sends a page request without a
         # session here with it; the dashboard's "session ended" link too)
         return render(request, "login.html", error=None,
                       oidc_enabled=state.config.oidc.enabled,
                       next=local_path(request.query_params.get("next"), ""))
 
-    def _typed(form) -> str:
+    def _typed(form: Form) -> str:
         """The user name a refused sign-in form had, to fill it in again: a retry that
         re-types only the password must not go to 'admin' (the field's default)."""
         return str(form.get("username") or "").strip()[:auth.LOGIN_NAME_MAX]
@@ -53,7 +62,8 @@ def routes(ctx: Ctx) -> list:
     def _person(source: str, username: str) -> tuple[str, str]:
         return source, fold(username) if source == "ldap" else username
 
-    def _directory_role(source: str, username: str, groups, settings) -> str | None:
+    def _directory_role(source: str, username: str, groups: list[str],
+                        settings: LdapSettings | OidcSettings) -> str | None:
         """The role the groups reported by the directory (LDAP) or the identity provider
         (OIDC) give `username`. Logs which groups they have when no group setting
         matched, and warns when a setting matched one only as part of its name."""
@@ -127,13 +137,13 @@ def routes(ctx: Ctx) -> list:
         state.notifier.emit("login_failed", ip, "", notify.sign_in_detail(
             state.config.notifications, user, ip, source, reason))
 
-    def _oidc_failed(request, reason: str, user: str = "") -> None:
+    def _oidc_failed(request: Request, reason: str, user: str = "") -> None:
         """An SSO sign-in that came back from the identity provider and failed: recorded
         (oidc_login_failed, with a short reason; all.log has the details) and notified
         like a failed local or LDAP sign-in."""
         _record_failure(client_ip(request), user, "OIDC", reason, "oidc_login_failed", reason)
 
-    def _name_refused(request, source: str, username: str) -> str | None:
+    def _name_refused(request: Request, source: str, username: str) -> str | None:
         """A sign-in through the directory (LDAP) or the identity provider (OIDC) that
         can't have an account under this name is refused: the name of a local account or
         of one of the other sign-in method, letter case aside — such a sign-in must never
@@ -174,8 +184,8 @@ def routes(ctx: Ctx) -> list:
         return _("Your user name from the directory or the identity provider can’t be used "
                  "here; an admin can see why in all.log.")
 
-    def _refusal_page(request, source: str, message: str | None, username: str = "",
-                      nxt: str = ""):
+    def _refusal_page(request: Request, source: str, message: str | None, username: str = "",
+                      nxt: str = "") -> Response:
         if source == "oidc":
             return render(request, "login.html", status_code=403, error=None, oidc_enabled=True,
                           oidc_error=message)
@@ -210,7 +220,7 @@ def routes(ctx: Ctx) -> list:
         return user
 
     # ---------------- OIDC single sign-on ----------------
-    async def oidc_login(request):
+    async def oidc_login(request: Request) -> Response:
         oidc = state.config.oidc
         if not oidc.enabled:
             return proxy.redirect(request, "/login")
@@ -245,17 +255,17 @@ def routes(ctx: Ctx) -> list:
                         max_age=600, path="/auth/oidc")
         return resp
 
-    def _same(given: str, expected) -> bool:
+    def _same(given: str, expected: object) -> bool:
         """The state from the URL is the one in the signed cookie (compared as bytes: a
         str with non-ASCII text would make compare_digest raise)."""
         return secrets.compare_digest(given.encode(), str(expected or "").encode())
 
-    def _provider_error(request, data, error: str):
+    def _provider_error(request: Request, data: dict | None, error: str) -> Response:
         """The provider sent the browser back with an error instead of a code (RFC 6749
         4.1.2.1, OIDC Core 3.1.2.6): logged with its description, shown by its code —
         never the provider's own text."""
         st = request.query_params.get("state", "")
-        ours = bool(data) and _same(st, data.get("s"))
+        ours = bool(data and _same(st, data.get("s")))
         desc = request.query_params.get("error_description", "")
         state.log(f"OIDC: the identity provider refused the sign-in: {error[:64]!r}"
                   + (f" ({desc[:200]!r})" if desc else "")
@@ -276,7 +286,7 @@ def routes(ctx: Ctx) -> list:
         return render(request, "login.html", status_code=status, error=None, oidc_enabled=True,
                       oidc_error=message)
 
-    async def oidc_callback(request):
+    async def oidc_callback(request: Request) -> Response:
         oidc = state.config.oidc
         if not oidc.enabled:
             return proxy.redirect(request, "/login")
@@ -366,12 +376,13 @@ def routes(ctx: Ctx) -> list:
                 return
         state.log(f"the password hash of {user.username!r} was renewed with today's scrypt cost")
 
-    def _too_many(request, typed: str, nxt: str):
+    def _too_many(request: Request, typed: str, nxt: str) -> Response:
         return render(request, "login.html", status_code=429,
                       error=_("Too many attempts. Wait a few minutes and try again."),
                       oidc_enabled=state.config.oidc.enabled, username=typed, next=nxt)
 
-    def _login_failed(request, ip: str, username: str, typed: str, nxt: str):
+    def _login_failed(request: Request, ip: str, username: str, typed: str,
+                      nxt: str) -> Response:
         """Log, record and notify a failed sign-in (login_post counted it already); the
         sign-in page again, with the name typed (`typed`) and the page to go back to
         (`nxt`). A name that is no account's is recorded as auth.UNKNOWN_USER: what was
@@ -384,7 +395,7 @@ def routes(ctx: Ctx) -> list:
                       error=_("Invalid username or password."),
                       oidc_enabled=state.config.oidc.enabled, username=typed, next=nxt)
 
-    async def login_post(request):
+    async def login_post(request: Request) -> Response:
         ip = client_ip(request)
         form = await read_form(request, **FORM_LIMITS)
         if not auth.csrf_token_matches(request, form.get("_csrf")):
@@ -479,7 +490,7 @@ def routes(ctx: Ctx) -> list:
         state.log(f"{username!r} signed out everywhere: too many of its sessions were ended "
                   "by a logout to remember each one")
 
-    async def logout_post(request):
+    async def logout_post(request: Request) -> Response:
         form = await read_form(request, **FORM_LIMITS)
         if not auth.csrf_token_matches(request, form.get("_csrf")):
             return csrf_failed()
@@ -502,7 +513,8 @@ def routes(ctx: Ctx) -> list:
     # machine's (auth.claims_own_host, the DNS-rebinding guard). Through another name
     # (a reverse proxy, Docker's host name) the page asks for the one-time code that
     # AppState.prepare_first_run wrote to setup-code.txt. No redirect: every path leads here.
-    def setup_page(request, status_code=200, error=None, username=""):
+    def setup_page(request: Request, status_code: int = 200, error: str | None = None,
+                   username: str = "") -> Response:
         # username: the admin name a refused form had (accounts can't be renamed, so one
         # that silently fell back to "admin" would stay so)
         return render(request, "setup.html", status_code=status_code, error=error,
@@ -510,11 +522,11 @@ def routes(ctx: Ctx) -> list:
                       locked=state.setup_locked, need_code=not auth.claims_own_host(request.headers),
                       host=auth.foreign_host(request.headers), username=username)
 
-    async def setup_get(request):
+    async def setup_get(request: Request) -> Response:
         trusted = auth.claims_own_host(request.headers) and not state.setup_locked
         return setup_page(request, 200 if trusted else 403)
 
-    async def setup_post(request):
+    async def setup_post(request: Request) -> Response:
         form = await read_form(request, **FORM_LIMITS)
         if not auth.csrf_token_matches(request, form.get("_csrf")):
             return csrf_failed()

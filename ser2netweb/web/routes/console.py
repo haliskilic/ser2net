@@ -24,15 +24,27 @@ import collections
 import contextlib
 import struct
 import time
+from collections.abc import Callable, Coroutine
+from typing import TYPE_CHECKING, Any
 
 from starlette.responses import PlainTextResponse, Response
-from starlette.routing import Route, WebSocketRoute
+from starlette.routing import BaseRoute, Route, WebSocketRoute
 
 from ...engine import netguard
 from ...engine.bridge import TO_DEVICE
 from ...i18n import _
 from .. import auth, proxy
 from .common import Ctx, client_ip, console_interactive, current_user, notice, sees_to_device
+
+if TYPE_CHECKING:
+    from starlette.requests import Request
+    from starlette.websockets import WebSocket
+
+    from ...config import MappingConfig, User
+    from ...engine.supervisor import Runner
+
+    # a viewer's sender or receiver task (_serve)
+    _Task = Callable[[], Coroutine[Any, Any, None]]
 
 # the protocols whose runner sends a serial BREAK (not a Modbus gateway: an RTU bus)
 _BREAK_PROTOCOLS = ("raw", "telnet", "rfc2217")
@@ -62,14 +74,14 @@ CLOSE_SLOW = 4003     # took nothing for STALL_S while its traffic was being dro
 CLOSE_GONE = 4004     # no such mapping (deleted)
 
 
-def routes(ctx: Ctx) -> list:
+def routes(ctx: Ctx) -> list[BaseRoute]:
     state = ctx.state
 
     # refused WebSockets of another site's page: logged at most once a minute (a client
     # other than a browser can send any Origin)
     cross_site_note = netguard.LogEvery(lambda msg: state.log(msg))
 
-    async def _authorize(websocket):
+    async def _authorize(websocket: WebSocket) -> tuple[User | None, str | None]:
         """The user a WebSocket acts as, or None (after closing it). BaseHTTPMiddleware
         does NOT run for the WebSocket scope, so authenticate here; a WebSocket that a
         page of another site opens is rejected (CSWSH guard), by the same rule as the
@@ -101,19 +113,20 @@ def routes(ctx: Ctx) -> list:
     viewers = _Viewers()
     refused = netguard.LogEvery(lambda msg: state.log(msg))  # past a VIEWERS_* limit: once a minute
 
-    def _who(websocket) -> tuple:
+    def _who(websocket: WebSocket) -> tuple:
         """Whose viewer it is, for the limits and the audit records: the account — an
         open-access visitor: per address."""
         return ctx.actor(websocket), client_ip(websocket) if ctx.is_anonymous(websocket) else ""
 
-    def _record_open(websocket, action: str, mapping, detail: str) -> None:
+    def _record_open(websocket: WebSocket, action: str, mapping: MappingConfig,
+                     detail: str) -> None:
         """The audit record of a console or hex view opened, bounded (AppState.view_records):
         per account — an open-access visitor: per address —, mapping and kind."""
         state.view_records.open(client_ip(websocket), ctx.actor(websocket), action,
                                 f"{mapping.name} ({detail})",
                                 key=(*_who(websocket), action, mapping.id))
 
-    async def _admit(websocket, kind: str) -> _Accepted | None:
+    async def _admit(websocket: WebSocket, kind: str) -> _Accepted | None:
         """The handshake of a console or hex view (`kind`, for the log): accepted and
         counted in (_end counts it out), or None once it has been refused and closed."""
         ws_user, token = await _authorize(websocket)
@@ -137,14 +150,15 @@ def routes(ctx: Ctx) -> list:
         return _Accepted(ws_user, token, mapping, runner, peer, who,
                          v2=websocket.query_params.get("v") == "2")
 
-    async def _serve(websocket, v: _Accepted, mon, sender, receiver) -> tuple[int, str]:
+    async def _serve(websocket: WebSocket, v: _Accepted, mon: _Feed, sender: _Task,
+                     receiver: _Task) -> tuple[int, str]:
         """Serve an accepted viewer until it ends: `sender` returns (its feed ended: the
         mapping stopped), `receiver` returns (the browser closed it), its access changed,
         or it stalled (_Feed.stalled). The close code and reason for that."""
         if v.v2 and v.runner.status.state in ("stopped", "error"):
             await websocket.send_json({"state": "stopped"})  # nothing comes until it starts
 
-        async def access_watch():
+        async def access_watch() -> None:
             # A viewer outlives the check at connect: end it once its access is gone (login
             # switched back on, session revoked by a password change, role changed) instead
             # of letting it keep watching — or writing to — the device.
@@ -174,7 +188,7 @@ def routes(ctx: Ctx) -> list:
                 return end
         return 1000, ""
 
-    async def _end(websocket, kind: str, v: _Accepted, code: int, reason: str,
+    async def _end(websocket: WebSocket, kind: str, v: _Accepted, code: int, reason: str,
                    written: int = 0) -> None:
         """After its monitor is gone: count the viewer out and close it, saying why (and
         how many bytes were typed to the device, `written`)."""
@@ -185,7 +199,7 @@ def routes(ctx: Ctx) -> list:
                   + (f": {reason}" if reason else ""))
 
     # ---------------- console (xterm over WebSocket) ----------------
-    async def console_ws(websocket):
+    async def console_ws(websocket: WebSocket) -> None:
         v = await _admit(websocket, "console")
         if v is None:
             return
@@ -194,7 +208,7 @@ def routes(ctx: Ctx) -> list:
         mon, (code, reason) = _Monitor(), (1000, "")
         written = [0]  # how many bytes were typed to the device (never what)
 
-        async def sender():
+        async def sender() -> None:
             while True:
                 chunks, dropped, ended = await mon.take()
                 if dropped and v.v2:
@@ -205,7 +219,7 @@ def routes(ctx: Ctx) -> list:
                 if ended:  # mapping stopped
                     return
 
-        async def receiver():
+        async def receiver() -> None:
             while True:
                 msg = await websocket.receive()
                 if msg.get("type") == "websocket.disconnect":
@@ -232,7 +246,7 @@ def routes(ctx: Ctx) -> list:
                                          f"{v.mapping.name} ({written[0]} bytes written)")
 
     # ---------------- traffic feed for the hex view (read-only) ----------------
-    async def traffic_ws(websocket):
+    async def traffic_ws(websocket: WebSocket) -> None:
         """A mapping's traffic, as records [direction: 1 byte (0 = from the device, 1 = to
         it)][time: float64 BE][length: uint32 BE][bytes], several to a binary message
         (protocol 1: one per message, without the length; see the module docstring).
@@ -244,7 +258,7 @@ def routes(ctx: Ctx) -> list:
         to_device = sees_to_device(v.user, v.mapping)
         mon, (code, reason) = _TrafficMonitor(to_device=to_device), (1000, "")
 
-        async def sender():
+        async def sender() -> None:
             while True:
                 records, dropped, ended = await mon.take()
                 if dropped and v.v2:
@@ -261,7 +275,7 @@ def routes(ctx: Ctx) -> list:
                 if ended:  # mapping stopped
                     return
 
-        async def receiver():  # nothing is accepted from the browser; notice a close
+        async def receiver() -> None:  # nothing is accepted from the browser; notice a close
             while (await websocket.receive()).get("type") != "websocket.disconnect":
                 pass
 
@@ -276,7 +290,7 @@ def routes(ctx: Ctx) -> list:
             await _end(websocket, "hex view", v, code, reason)
 
     # ---------------- serial BREAK (the console's "Send BREAK") ----------------
-    async def send_break(request):
+    async def send_break(request: Request) -> Response:
         """POST /api/mappings/{mid}/break: a serial BREAK on the mapping's port (as a telnet
         client's IAC BRK: the line held in the break condition for bridge.BREAK_S). For
         whoever may type in the console (operators and admins, a network mapping that is
@@ -319,13 +333,13 @@ class _Accepted:
 
     __slots__ = ("user", "token", "mapping", "runner", "peer", "who", "v2")
 
-    def __init__(self, user, token, mapping, runner, peer: str, who: tuple,
-                 v2: bool = False) -> None:
+    def __init__(self, user: User, token: str | None, mapping: MappingConfig, runner: Runner,
+                 peer: str, who: tuple, v2: bool = False) -> None:
         self.user, self.token, self.mapping, self.runner = user, token, mapping, runner
         self.peer, self.who, self.v2 = peer, who, v2
 
 
-async def _close(websocket, code: int = 1000, reason: str = "") -> None:
+async def _close(websocket: WebSocket, code: int = 1000, reason: str = "") -> None:
     """Close a WebSocket, giving up after CLOSE_WAIT_S: a client that takes nothing would
     hold the close, and the handler, for good."""
     with contextlib.suppress(Exception):
@@ -381,7 +395,7 @@ class _Feed:
         self.closed = False
         self.stalled = asyncio.Event()
 
-    def put(self, item, size: int) -> None:
+    def put(self, item: object, size: int) -> None:
         if self.closed:
             return
         items = self._items

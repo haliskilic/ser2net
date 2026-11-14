@@ -21,7 +21,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 from urllib.parse import parse_qs
 
-from starlette.routing import Mount
+from starlette.routing import BaseRoute, Mount
 from starlette.staticfiles import StaticFiles
 
 from . import cluster, console, login, mappings, settings, system, totp
@@ -58,7 +58,8 @@ class StaticAssets(StaticFiles):
         return response
 
 
-def build_routes(templates: Jinja2Templates, state: AppState, static_dir: str) -> list:
+def build_routes(templates: Jinja2Templates, state: AppState,
+                 static_dir: str) -> list[BaseRoute]:
     from ..api import build_api_routes  # here: api imports .routes.ops (no import cycle)
 
     ctx = Ctx(templates, state)
