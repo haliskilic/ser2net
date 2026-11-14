@@ -22,7 +22,11 @@ updates:
       prefix: "deps"
   # the browser libraries vendored in ser2netweb/web/static (vendor/npm/package.json records
   # them; .github/workflows/refresh-pins.yml copies a bumped release's files in). A major
-  # version (xterm.js 6, htmx 4) changes the console / the pages: done by hand.
+  # version (xterm.js 7, htmx 4) changes the console / the pages: done by hand. xterm.js
+  # and its addons are released together (the addons are 0.x: a minor each time), and this
+  # group bumps them in one pull request; an addon proposed without its xterm.js (when that
+  # one is a major) is refused by tools/refresh_assets.py and stays red: close it, and do
+  # both with the major.
   - package-ecosystem: npm
     directory: /vendor/npm
     schedule:
@@ -33,10 +37,6 @@ updates:
     ignore:
       - dependency-name: "*"
         update-types: ["version-update:semver-major"]
-      # the xterm.js addons are 0.x: a minor release goes with an xterm.js major (fit
-      # 0.11 is for xterm.js 6, which reads options it doesn't have), so it comes with it
-      - dependency-name: "@xterm/addon-*"
-        update-types: ["version-update:semver-minor"]
     commit-message:
       prefix: "deps"
   - package-ecosystem: github-actions

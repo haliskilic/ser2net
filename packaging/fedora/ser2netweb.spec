@@ -5,8 +5,8 @@
 # the browser libraries in ser2netweb/web/static/ (vendor/npm/package.json); their npm
 # releases are the sources below, for the SRPM (the static files are those releases' own)
 %global htmx_version 2.0.11
-%global xterm_version 5.5.0
-%global xterm_fit_version 0.10.0
+%global xterm_version 6.0.0
+%global xterm_fit_version 0.11.0
 
 Name:           ser2netweb
 Version:        3.0.1

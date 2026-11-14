@@ -434,6 +434,28 @@ function initTerm(root) {
   setTimeout(refit, 30);          // after the panel finishes laying out
   el._onresize = refit;
   window.addEventListener("resize", refit);
+  // a finger scrolls the lines kept above: xterm.js 6 draws its own scrollbar, which
+  // takes the wheel and the pointer only (5.5's viewport was the browser's scroller).
+  // At the first or last line the drag is the page's, as with any scroller.
+  var touchY = null, touchRest = 0;
+  el.addEventListener("touchstart", function (ev) {
+    touchY = ev.touches.length === 1 ? ev.touches[0].clientY : null;
+    touchRest = 0;
+  }, { passive: true });
+  el.addEventListener("touchmove", function (ev) {
+    if (touchY === null || ev.touches.length !== 1 || !el._term) return;
+    var screen = el.querySelector(".xterm-screen"), buf = term.buffer.active;
+    var cell = screen ? screen.clientHeight / term.rows : 0;
+    var y = ev.touches[0].clientY;
+    touchRest += touchY - y;
+    touchY = y;
+    var room = touchRest < 0 ? buf.viewportY > 0 : buf.viewportY < buf.baseY;
+    // (not cancelable: the browser is scrolling the page with this drag already)
+    if (!cell || !room || !ev.cancelable) { touchY = null; return; }
+    ev.preventDefault();
+    var lines = touchRest < 0 ? Math.ceil(touchRest / cell) : Math.floor(touchRest / cell);
+    if (lines) { touchRest -= lines * cell; term.scrollLines(lines); }
+  }, { passive: false });
   if (el.getAttribute("data-interactive") === "1") {
     var cs = charset(el);
     term.onData(function (d) {
