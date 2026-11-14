@@ -399,7 +399,7 @@ def test_units():
             assert caps.left(far) <= CAPTURE_MAX_S
         finally:
             time.time = real
-        caps._ends["far"] = (far.options.trace_until, time.monotonic() - 1)  # its time has come
+        caps._ends["far"] = (far.options.trace_until, time.monotonic() - 2, 1.0)  # its time has come
         await caps.check()
         assert far.options.trace_until == 0 and st.retraced == ["far"], st.retraced
         assert st.audited == [("trace_capture_end", "far")], st.audited
@@ -435,7 +435,7 @@ def test_units():
 
         st.edit_config = edit_config
         caps = capture.Captures(st)
-        caps._ends["race"] = (m.options.trace_until, time.monotonic() - 1)  # its time has come
+        caps._ends["race"] = (m.options.trace_until, time.monotonic() - 2, 1.0)  # its time has come
         async with lock:  # (another edit holds the configuration meanwhile)
             extend = asyncio.create_task(caps.begin("race", 3600))
             await asyncio.sleep(0.05)
@@ -450,6 +450,23 @@ def test_units():
         assert await caps.end("race") and m.options.trace_until == 0
 
     asyncio.run(extended_while_ending())
+
+    async def frozen_clock():
+        # where the monotonic clock has not moved since the start (a coarse one, as on
+        # Windows), the time left is the length itself, never a hair over it
+        m = MappingConfig.from_dict({"id": "exact", "name": "exact"})
+        caps = capture.Captures(State([m]))
+        real = time.monotonic
+        try:
+            time.monotonic = lambda: 1000.1  # ((1000.1 + 3600) - 1000.1 > 3600 in floats)
+            await caps.begin("exact", 3600)
+            assert caps.left(m) == 3600.0, caps.left(m)
+            time.monotonic = lambda: 1000.1 + 1800
+            assert caps.left(m) == 1800.0, caps.left(m)
+        finally:
+            time.monotonic = real
+
+    asyncio.run(frozen_clock())
 
     async def hot_swap():
         # bridge.retrace opens and closes a runner's trace as its options ask for now

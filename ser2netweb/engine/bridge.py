@@ -802,7 +802,9 @@ class RunnerStatus:
             "queue_overflows": self.queue_overflows,
             "last_error": self.last_error,
             "retrying": bool(self.retry_at),
-            "next_retry_s": (max(0, math.ceil(self.retry_at - time.monotonic()))
+            # (rounded first: retry_at = now + pause, read back at once, can be a hair over
+            # the pause, which ceil would make a second more)
+            "next_retry_s": (max(0, math.ceil(round(self.retry_at - time.monotonic(), 6)))
                              if self.retry_at else 0),
             "link": self.link,
             "link_error": self.link_error,
