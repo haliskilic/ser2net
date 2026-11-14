@@ -16,7 +16,12 @@ clash. Checks:
     edit of that mapping is still refused;
   * config.json can't be written: the password, the API token, a deletion stay as they
     were, with "Could not save config.json" (REST: 500 save_failed); a stop still stops
-    (with a warning), and the next save that works keeps it.
+    (with a warning), and the next save that works keeps it;
+  * config.json in use for a moment (Windows refuses to replace a file that is open, as
+    an antivirus scan or ser2netweb's own look for outside edits has it): the save waits
+    for it (config.REPLACE_WAIT_S) instead of failing, here with a stand-in for the
+    refusal; on Windows also with config.json really open (a form save used to answer
+    400 "Could not save config.json" then).
 
 Run: python3 tests/test_config_edits.py
 """
@@ -308,8 +313,77 @@ def test_server():
               "(REST 500 save_failed); a stop still stops, kept by the next save  OK")
 
 
+def test_replace_in_use():
+    d = tempfile.mkdtemp(prefix="s2n_inuse_")
+    real_replace, real_wait = os.replace, config_module.REPLACE_WAIT_S
+    holder = None
+    try:
+        store = ConfigStore(os.path.join(d, "config.json"))
+        cfg = AppConfig.from_dict({"mappings": [{
+            "id": "e00000000003", "name": "A", "serial": {"port": "/dev/s2n-e3"},
+            "network": {"mode": "server", "bind_ip": "127.0.0.1", "port": 4303}}]})
+        store.save(cfg)
+
+        def name_on_disk():
+            return json.loads(read(store.path))["mappings"][0]["name"]
+
+        refusals = []
+
+        def in_use(src, dst):  # what Windows says while another handle has dst open
+            if dst == store.path and len(refusals) < 3:
+                refusals.append(dst)
+                raise PermissionError(13, "Access is denied", dst)
+            return real_replace(src, dst)
+
+        os.replace = in_use
+        config_module.REPLACE_WAIT_S = 5.0
+        cfg.mappings[0].name = "B"
+        store.save(cfg)
+        assert len(refusals) == 3 and name_on_disk() == "B", (refusals, name_on_disk())
+        refusals.clear()
+        config_module.REPLACE_WAIT_S = 0.0  # (POSIX: a refused rename is the folder's own)
+        cfg.mappings[0].name = "C"
+        try:
+            store.save(cfg)
+            raise AssertionError("a refused rename was not raised")
+        except PermissionError:
+            pass
+        os.replace, config_module.REPLACE_WAIT_S = real_replace, real_wait
+        assert name_on_disk() == "B"
+        assert not [f for f in os.listdir(d) if f.endswith(".tmp")], "a temp file was left"
+        print("config.json in use for a moment: the save waits for it (REPLACE_WAIT_S)  OK")
+
+        if os.name != "nt":
+            print("config.json really open while saved: Windows only (skipped)")
+            return
+        assert real_wait > 1, real_wait
+        holder = open(store.path, encoding="utf-8")  # (no FILE_SHARE_DELETE, as Python's)
+        config_module.REPLACE_WAIT_S = 0.0
+        cfg.mappings[0].name = "D"
+        try:
+            store.save(cfg)
+            raise AssertionError("Windows replaced a config.json that was open")
+        except PermissionError:
+            pass  # what made a save fail before it waited
+        config_module.REPLACE_WAIT_S = real_wait
+        threading.Timer(0.5, holder.close).start()
+        began = time.monotonic()
+        cfg.mappings[0].name = "E"
+        store.save(cfg)
+        assert holder.closed and time.monotonic() - began >= 0.4
+        assert name_on_disk() == "E", name_on_disk()
+        print("config.json really open while saved (Windows): refused at once without the "
+              "wait, saved once it is closed with it  OK")
+    finally:
+        os.replace, config_module.REPLACE_WAIT_S = real_replace, real_wait
+        if holder is not None:
+            holder.close()
+        shutil.rmtree(d, ignore_errors=True)
+
+
 def main():
     asyncio.run(test_edit_config())
+    test_replace_in_use()
     test_server()
     print("\nPASS: configuration changes are all or nothing")
 
