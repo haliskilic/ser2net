@@ -15,10 +15,11 @@ import asyncio
 import contextlib
 import re
 import time
-from typing import Any
+from collections.abc import Callable, Iterator
+from typing import TYPE_CHECKING, Any, TypedDict
 
 from markupsafe import escape
-from starlette.datastructures import FormData
+from starlette.datastructures import ImmutableMultiDict
 from starlette.responses import HTMLResponse, JSONResponse, PlainTextResponse, Response
 
 from ... import __version__
@@ -40,6 +41,13 @@ from .forms import (
     _parse_modbus_points, blocks_not_read, form_context, mapping_for_rerender,
     mqtt_password_from_form, text_shown,
 )
+
+if TYPE_CHECKING:
+    from starlette.requests import Request
+    from starlette.routing import BaseRoute
+
+    from ...engine.cluster import PeerAuth
+    from .forms import Form
 
 # The mapping form's own field names (bare ones + these prefixes). cluster_peer_save
 # forwards only these to a peer, so a value the browser adds beyond the form is never
@@ -64,7 +72,7 @@ _READ_BEFORE_2_8_1 = {
 }
 
 
-def _peer_version(version) -> tuple[int, int, int] | None:
+def _peer_version(version: object) -> tuple[int, int, int] | None:
     """(2, 8, 1) for a peer's reported "2.8.1" ("v2.8.1", "2.8.1rc1" ...); None when it
     reports none (a node before 2.6.0) or something else."""
     parts = re.findall(r"\d+", version if isinstance(version, str) else "")
@@ -74,7 +82,7 @@ def _peer_version(version) -> tuple[int, int, int] | None:
     return major, minor, patch
 
 
-def _peer_older(version, than: tuple[int, int, int]) -> bool:
+def _peer_older(version: object, than: tuple[int, int, int]) -> bool:
     """True when a peer's reported version is older than *than*, or unknown."""
     v = _peer_version(version)
     return v is None or v < than
@@ -85,7 +93,38 @@ def _peer_older(version, than: tuple[int, int, int]) -> bool:
 CAPS = ("control", "edit")
 
 
-def peer_caps(payload) -> frozenset[str]:
+class MappingRow(TypedDict):
+    """One mapping in a node's /api/cluster/local answer (NodePayload)."""
+    id: str
+    name: str
+    enabled: bool
+    kind: str          # _mapping_kind_label
+    endpoint: str      # _mapping_endpoint
+    serial: str
+    state: str
+    link: str          # connect-out: connecting / up / down
+    client_count: int
+    bytes_in: int
+    bytes_out: int
+
+
+class NodePayload(TypedDict):
+    """A node's /api/cluster/local answer, which the fleet view of every other node reads
+    (_node_from: a peer of any version may leave keys out or send others)."""
+    id: str
+    name: str
+    ip: str
+    port: int
+    scheme: str
+    version: str
+    caps: list[str]
+    uptime_s: int
+    mapping_count: int
+    running_count: int
+    mappings: list[MappingRow]
+
+
+def peer_caps(payload: object) -> frozenset[str]:
     """What a peer can be asked to do, by its /api/cluster/local answer: its "caps" list
     (2.9.0+), else what its version could do: start/stop/restart ("control") since 2.6.0,
     edit since 2.6.1; a node before 2.6.0 reports no version and can only be shown."""
@@ -100,7 +139,7 @@ def peer_caps(payload) -> frozenset[str]:
     return frozenset({"control"} if v < (2, 6, 1) else {"control", "edit"})
 
 
-def _version_label(version) -> str:
+def _version_label(version: object) -> str:
     """How a peer's version compares to this node's: "older", "newer" or ""."""
     v, mine = _peer_version(version), _peer_version(__version__)
     if v is None or mine is None or v == mine:
@@ -108,7 +147,7 @@ def _version_label(version) -> str:
     return "older" if v < mine else "newer"
 
 
-def _leaves(d: dict, path: str = ""):
+def _leaves(d: dict, path: str = "") -> Iterator[tuple[str, Any]]:
     """(path, value) of every setting in a mapping dict: "serial.advanced.nobreak",
     "modbus_poll.points[2].fn"; a USB identity (match) is one value."""
     for k, v in d.items():
@@ -135,13 +174,14 @@ def not_kept(sent: MappingConfig, stored: dict) -> list[str]:
             and p in mine and mine[p] != theirs.get(p)]
 
 
-def _peer_below_2_8(version: str) -> bool:
+def _peer_below_2_8(version: object) -> bool:
     """True when a peer's reported version is older than 2.8 (or unknown): such a node
     stores a trace file name as a path and opens it, so it must not be handed a new one."""
     return _peer_older(version, (2, 8, 0))
 
 
-def _peer_save_fields(form, peer_mapping, peer_version):
+def _peer_save_fields(form: ImmutableMultiDict[str, str], peer_mapping: object,
+                      peer_version: object) -> tuple[list[tuple[str, str]] | None, str | None]:
     """The fields cluster_peer_save forwards to a peer's key-guarded mapping-save, or an
     error to show instead. Only the known mapping-form fields are forwarded (never a raw
     value the browser added), the submission is validated locally (so a URL serial port
@@ -152,9 +192,17 @@ def _peer_save_fields(form, peer_mapping, peer_version):
     A one-line field posted back unchanged keeps the peer's stored value (line breaks
     the field can't show), and a peer before 2.8.1 gets its stored values for the fields
     it reads from every form but this form leaves out (_READ_BEFORE_2_8_1).
-    Returns (fields, None) or (None, error)."""
+    `peer_mapping`: the mapping of the peer's mapping-data answer, as it came (a section
+    of it that is not an object counts as empty). Returns (fields, None) or (None, error)."""
     if not peer_mapping:
         return None, _("This mapping no longer exists on the peer; reload the fleet view.")
+    if not isinstance(peer_mapping, dict):
+        return None, _("Could not load the peer's mapping.")
+
+    def stored(section: str, attr: str) -> Any:
+        values = peer_mapping.get(section)
+        return values.get(attr) if isinstance(values, dict) else None
+
     try:
         # the points as strictly as the peer reads them: an older peer would store a
         # top-level object as no points
@@ -162,7 +210,7 @@ def _peer_save_fields(form, peer_mapping, peer_version):
         MappingConfig.from_dict(_build_mapping_dict(form, strict=False)).validate_input()
     except (ValueError, ConfigError) as e:
         return None, str(e)
-    peer_raw = str(((peer_mapping.get("options") or {}).get("trace_both")) or "").strip()
+    peer_raw = str(stored("options", "trace_both") or "").strip()
     submitted = form.get("opt_trace_both", "").strip()
     if submitted == trace_file_name(peer_raw):
         out_trace = peer_raw  # unchanged: keep the peer's own stored value (legacy path too)
@@ -172,11 +220,7 @@ def _peer_save_fields(form, peer_mapping, peer_version):
             return None, _("This cluster node is older than 2.8 and would store a trace file "
                            "name as a path. Upgrade it to 2.8 or newer before setting a trace "
                            "file for it here.")
-    def stored(section, attr):
-        return (peer_mapping.get(section) or {}).get(attr)
-
-    mqtt = peer_mapping.get("mqtt")
-    stored_password = str(mqtt.get("password") or "") if isinstance(mqtt, dict) else ""
+    stored_password = str(stored("mqtt", "password") or "")
     unchanged = {field: value for field, (section, attr) in _TEXT_INPUTS.items()
                  if isinstance(value := stored(section, attr), str)
                  and form.get(field) == text_shown(field, value)}
@@ -191,7 +235,7 @@ def _peer_save_fields(form, peer_mapping, peer_version):
     return fields, None
 
 
-def _peer_actor(a, form) -> str:
+def _peer_actor(a: PeerAuth | None, form: Form) -> str:
     """The user column of the audit record of a peer's remote action: "cluster-peer", or
     "cluster-peer:NODE/USER" when the request names who acted on the sending node — what
     that node says (it signed the request with the cluster key, so no one else could
@@ -204,7 +248,7 @@ def _peer_actor(a, form) -> str:
     return f"cluster-peer:{node or a.sender[:16] or '?'}/{user}"
 
 
-def _remote(target, peer_id, mapping, version="") -> dict:
+def _remote(target: dict, peer_id: object, mapping: MappingConfig, version: object = "") -> dict:
     """The fleet view's edit form for a peer's mapping: the peer's host + port it posts
     back (resolved again on save), the address it shows, and the id it is saved under.
     That is the id the peer itself keys the mapping by, sent back to it unchanged: a
@@ -228,7 +272,8 @@ def _remote(target, peer_id, mapping, version="") -> dict:
             "version_note": note}
 
 
-def _peer_form(target, mapping, version, peer_id, data) -> dict:
+def _peer_form(target: dict, mapping: MappingConfig, version: object, peer_id: object,
+               data: object) -> dict:
     """form_context's arguments for a peer's mapping: its remote settings, the blocks a
     peer running *version* doesn't read left out, and the revision of the mapping its
     mapping-data answer (*data*) gave (2.9.0+)."""
@@ -238,7 +283,7 @@ def _peer_form(target, mapping, version, peer_id, data) -> dict:
             "rev": rev if isinstance(rev, str) else ""}
 
 
-def _peer_links(data) -> dict:
+def _peer_links(data: dict | None) -> dict:
     """The "links" of a peer's mapping-data (older peers send none), as {name: device}."""
     raw = (data or {}).get("links")
     if not isinstance(raw, dict):
@@ -246,13 +291,13 @@ def _peer_links(data) -> dict:
     return {k: v for k, v in raw.items() if isinstance(k, str) and isinstance(v, str)}
 
 
-def _mapping_kind_label(m) -> str:
+def _mapping_kind_label(m: MappingConfig) -> str:
     if m.kind == "serialbridge":
         return "serial↔serial"
     return f"{m.network.mode}/{m.network.protocol}"
 
 
-def _mapping_endpoint(m) -> str:
+def _mapping_endpoint(m: MappingConfig) -> str:
     if m.kind == "serialbridge":
         return f"{m.serial.port} ↔ {m.serial_b.port}"
     if m.network.mode == "client":
@@ -260,7 +305,7 @@ def _mapping_endpoint(m) -> str:
     return f"{m.network.bind_shown}:{m.network.port}"
 
 
-def _fmt_uptime(seconds) -> str:
+def _fmt_uptime(seconds: Any) -> str:
     try:
         s = int(max(0, seconds))
     except (TypeError, ValueError):
@@ -286,7 +331,7 @@ def _peer_done(action: str, name: str, addr: str) -> str:
     return _("“{0}” restarted on {1}.").format(name, addr)
 
 
-def _fleet_snapshot(view: dict):
+def _fleet_snapshot(view: dict) -> tuple[object, dict[str, str] | None]:
     """(shape, counter spans) of the fleet view for LiveTable: the spans by the ids
     _cluster_body.html gives them. Without them (two rows with one id: a peer's odd
     mapping ids), the counters stay part of the shape."""
@@ -305,19 +350,20 @@ def _fleet_snapshot(view: dict):
     return (nodes, {k: v for k, v in view.items() if k != "nodes"}), spans
 
 
-def routes(ctx: Ctx) -> list:
+def routes(ctx: Ctx) -> list[BaseRoute]:
     state, render, client_ip = ctx.state, ctx.render, ctx.client_ip
     can_edit, is_anonymous = ctx.can_edit, ctx.is_anonymous
     require_peer_access = ctx.require_peer_access
 
     # ---------------- LAN cluster (federated view + remote control) ----------------
-    def local_node_payload() -> dict:
+    def local_node_payload() -> NodePayload:
         """This node's identity, health and a status row per mapping — the unit other
         nodes aggregate. No secrets: just what the unified dashboard table shows."""
         cfg = state.config
         ip, port, scheme = state.cluster.advertised()
         statuses = state.supervisor.all_status()
-        maps, running = [], 0
+        maps: list[MappingRow] = []
+        running = 0
         for m in cfg.mappings:
             st = statuses.get(m.id) or {}
             if st.get("state") == "running":
@@ -337,7 +383,7 @@ def routes(ctx: Ctx) -> list:
                 "uptime_s": int(time.monotonic() - state.started_mono),
                 "mapping_count": len(maps), "running_count": running, "mappings": maps}
 
-    async def _peer_auth(request):
+    async def _peer_auth(request: Request) -> tuple[PeerAuth | None, JSONResponse | None]:
         """The one check every key-guarded endpoint makes: (auth, None) when the request
         is signed with this node's cluster key for this node (or carries the raw key of a
         node running 2.8.0 or older while that is allowed), else (None, the 403 to answer). A refusal
@@ -363,14 +409,14 @@ def routes(ctx: Ctx) -> list:
             state.audit(ip, "cluster_auth_failed", f"{where}: {a.reason}", user="cluster-peer")
         return None, _peer_json(a, {"error": "forbidden", "reason": a.reason}, 403)
 
-    def _peer_json(a, payload, status_code=200):
+    def _peer_json(a: PeerAuth | None, payload: object, status_code: int = 200) -> JSONResponse:
         """A peer-facing JSON answer; for a signed request (also a refusal of one with a
         valid signature) signed for that request, so the caller can trust it."""
         resp = JSONResponse(payload, status_code=status_code)
         resp.headers[AUTH_HEADER] = state.cluster.reply_auth(a, status_code, bytes(resp.body))
         return resp
 
-    async def cluster_local(request):
+    async def cluster_local(request: Request) -> Response:
         """Peer-facing: returns this node's mappings to another cluster node that
         presents the matching shared key. Guarded by the key, not a user session
         (added to PUBLIC_PATHS) — read-only, exposes no credentials."""
@@ -379,7 +425,7 @@ def routes(ctx: Ctx) -> list:
             return deny
         return _peer_json(a, local_node_payload())
 
-    def _node_from(target, data) -> dict:
+    def _node_from(target: dict, data: dict | None) -> dict:
         """Build a fleet-table node entry from a fetch target + the peer's payload
         (data is None when the peer is unreachable). The address shown, the Open link
         and the actions are the target's - where this node found the peer: its beacon
@@ -412,7 +458,7 @@ def routes(ctx: Ctx) -> list:
 
     fleet = LiveTable(ctx, "_cluster_body.html")
 
-    async def cluster_status(request):
+    async def cluster_status(request: Request) -> Response:
         """Aggregated view for the browser: local node + every discovered/manual peer,
         fetched server-side with the shared key. Renders the unified table."""
         if not state.config.cluster.active:
@@ -443,7 +489,7 @@ def routes(ctx: Ctx) -> list:
                 "discovery_error": state.cluster.discovery_error, "notes": notes}
         return await fleet.answer(request, lambda: _fleet_snapshot(view), **view)
 
-    async def cluster_control(request):
+    async def cluster_control(request: Request) -> Response:
         """Peer-facing remote control: another cluster node (presenting the shared key)
         asks us to start/stop/restart one of OUR mappings. Key-guarded, no session."""
         a, deny = await _peer_auth(request)
@@ -468,7 +514,7 @@ def routes(ctx: Ctx) -> list:
         return _peer_json(a, {"ok": True, "name": name, "changed": res.changed,
                               **({"start_error": why} if why else {})})
 
-    async def cluster_control_peer(request):
+    async def cluster_control_peer(request: Request) -> Response:
         """Browser-facing proxy: an operator on THIS node controls a mapping on a peer.
         The peer must be a discovered or configured one (so the browser can't aim this
         at an arbitrary host); the call goes to its address with the shared key."""
@@ -478,9 +524,9 @@ def routes(ctx: Ctx) -> list:
         action, mid = form.get("action", ""), form.get("mid", "")
         if action not in ("start", "stop", "restart"):
             return PlainTextResponse(_("Unknown action"), status_code=400)
-        target, err = _peer_target(form.get)
-        if err:
-            return err
+        target = _peer_target(form.get)
+        if isinstance(target, PlainTextResponse):
+            return target
         res = await state.cluster.control_peer(target, mid, action, actor=ctx.actor(request))
         if not res or not res.get("ok"):
             why = res.get("error") if res and res.get("ok") is False else None
@@ -503,7 +549,7 @@ def routes(ctx: Ctx) -> list:
 
     # ---- remote EDIT: peer renders no UI; THIS node renders the form (so the CSRF
     #      token + form action belong to the browser's session) and proxies the save.
-    async def cluster_mapping_data(request):
+    async def cluster_mapping_data(request: Request) -> Response:
         """Peer-facing: a mapping's full config + this node's serial ports + IP
         candidates, so the controlling node can render the edit form, and which listed port
         the mapping's ports lead to when one is a link elsewhere (/dev/serial0; "links",
@@ -524,7 +570,7 @@ def routes(ctx: Ctx) -> list:
                               "version": __version__, "caps": list(CAPS),
                               "rev": mapping_revision(cfg.secret_key, m)})
 
-    async def cluster_mapping_save(request):
+    async def cluster_mapping_save(request: Request) -> Response:
         """Peer-facing: validate + persist + apply an edited mapping on THIS node, run
         from the same form the controlling node rendered. Key-guarded."""
         a, deny = await _peer_auth(request)
@@ -541,21 +587,21 @@ def routes(ctx: Ctx) -> list:
         return _peer_json(a, {"ok": True, "name": msg,
                               **({"start_error": saved.start_error} if saved.start_error else {})})
 
-    def _peer_target(getter):
+    def _peer_target(getter: Callable[[str, str], str]) -> dict | PlainTextResponse:
         """The peer a browser request names by host + port (as the fleet view shows them)
-        — a discovered or configured one — or (None, error response). The address and
+        — a discovered or configured one — or the error response. The address and
         scheme used, and so where the shared key goes, are that peer's own; nothing else
         in the request picks them."""
         try:
             port = int(getter("port", "0"))
         except (TypeError, ValueError):
-            return None, PlainTextResponse(_("Bad peer port"), status_code=400)
+            return PlainTextResponse(_("Bad peer port"), status_code=400)
         target = state.cluster.find_target(getter("host", ""), port)
         if target is None:
-            return None, PlainTextResponse(_("Unknown cluster peer"), status_code=403)
-        return target, None
+            return PlainTextResponse(_("Unknown cluster peer"), status_code=403)
+        return target
 
-    async def cluster_peer_form(request):
+    async def cluster_peer_form(request: Request) -> Response:
         """Browser-facing proxy: load a peer's mapping into the edit form (rendered
         here so the CSRF token is the browser's). Submits to /api/cluster/peer-save."""
         if deny := require_peer_access(request):
@@ -565,23 +611,26 @@ def routes(ctx: Ctx) -> list:
         # make this node call a peer with the key.
         if not auth.csrf_token_matches(request, request.headers.get("x-csrf-token")):
             return csrf_failed()
-        target, err = _peer_target(request.query_params.get)
-        if err:
-            return err
+        target = _peer_target(request.query_params.get)
+        if isinstance(target, PlainTextResponse):
+            return target
         data = await state.cluster.get_peer(target, "/api/cluster/mapping-data",
                                             {"mid": request.query_params.get("mid", "")})
         if not data or not isinstance(data.get("mapping"), dict):
             return PlainTextResponse(_("Could not load the peer's mapping."), status_code=502)
+        try:
+            mapping = MappingConfig.from_dict(data["mapping"])
+        except Exception:  # (a section of it that is not an object)
+            return PlainTextResponse(_("Could not load the peer's mapping."), status_code=502)
         # its version: in the answer since 2.9.0, else what the fleet view was told
         version = data.get("version") or (await state.cluster.fetch_peer(target) or {}).get(
             "version", "")
-        mapping = MappingConfig.from_dict(data["mapping"])
         return render(request, "_mapping_form.html", **form_context(
             mapping, data.get("ports", []), data.get("ips", []), is_new=False,
             links=_peer_links(data), mqtt_stored=mapping.mqtt.password,
             **_peer_form(target, mapping, version, data["mapping"].get("id"), data)))
 
-    async def cluster_peer_save(request):
+    async def cluster_peer_save(request: Request) -> Response:
         """Browser-facing proxy: forward an edited mapping to the peer's key-guarded save.
         Only the known mapping-form fields are relayed, validated locally first, and the
         trace file is reduced to a sanitised name (see _peer_save_fields); the mapping must
@@ -589,9 +638,9 @@ def routes(ctx: Ctx) -> list:
         if deny := require_peer_access(request):
             return deny
         form = await read_form(request)
-        target, err = _peer_target(form.get)
-        if err:
-            return err
+        target = _peer_target(form.get)
+        if isinstance(target, PlainTextResponse):
+            return target
 
         # Fetch the peer's current mapping (for the stored trace value + to confirm it
         # exists — the fleet view only edits) and its version, concurrently.
@@ -602,7 +651,7 @@ def routes(ctx: Ctx) -> list:
 
         version = (data or {}).get("version") or (local or {}).get("version", "")
 
-        def _reload(msg):
+        def _reload(msg: str | None) -> Response:
             peer = data or {}
             try:
                 stored = (MappingConfig.from_dict(peer["mapping"])
@@ -621,8 +670,12 @@ def routes(ctx: Ctx) -> list:
         if not data:
             return _reload(_("The peer rejected the change or was unreachable."))
         fields, ferr = _peer_save_fields(form, data.get("mapping"), version)
-        if ferr:
+        if ferr or fields is None:
             return _reload(ferr)
+        try:  # the peer's mapping as this node reads it, for the read-back after the save
+            peer_mapping = MappingConfig.from_dict(data["mapping"])
+        except Exception:  # (a section of it that is not an object): nothing is sent
+            return _reload(_("Could not load the peer's mapping."))
         res = await state.cluster.post_peer(target, "/api/cluster/mapping-save", fields,
                                             actor=ctx.actor(request))
         if res and res.get("ok"):
@@ -641,8 +694,7 @@ def routes(ctx: Ctx) -> list:
                                                  {"mid": form.get("id", "")})
             lost = []
             if after and isinstance(after.get("mapping"), dict):
-                stored = MappingConfig.from_dict(data["mapping"])
-                lost = not_kept(mapping_for_rerender(FormData(fields), stored,
+                lost = not_kept(mapping_for_rerender(ImmutableMultiDict(fields), peer_mapping,
                                                      data.get("ports", [])), after["mapping"])
             if not lost:
                 return Response("", headers={"HX-Trigger": "refreshCluster", **note})

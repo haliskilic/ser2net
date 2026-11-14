@@ -16,6 +16,7 @@ only admin, and with ser2netweb stopped.
 """
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
 
 from ... import notify
 from ...config import ConfigError
@@ -23,8 +24,15 @@ from ...i18n import _
 from .. import auth, proxy, totp
 from ..auth import LoginRateLimiter
 from ..starlette_compat import Route
-from .common import Ctx, csrf_failed, local_path
+from .common import Ctx, csrf_failed, local_path, read_form
 from .settings import _Flash
+
+if TYPE_CHECKING:
+    from starlette.requests import Request
+    from starlette.responses import RedirectResponse, Response
+    from starlette.routing import BaseRoute
+
+    from ...config import User
 
 PAGE = "/settings/totp"          # Settings → Two-factor sign-in
 PENDING_COOKIE = "ser2net_2fa"   # its name for a request: auth.set_cookie (proxy.cookie_name)
@@ -33,13 +41,13 @@ PENDING_TTL_S = 300          # from the password to the code
 ENROL_TTL_S = 1800           # from showing a new key to confirming it with a code
 CODE_ATTEMPTS = 5            # wrong codes for one account ...
 CODE_WINDOW_S = 300          # ... in this many seconds, then it must wait
-# the code forms are a few short fields
+# the code forms are a few short fields (and no file: read_form)
 FORM_MAX_BYTES = 64 * 1024
-FORM_LIMITS = {"max_files": 0, "max_fields": 8, "max_part_size": 16 * 1024}
+FORM_LIMITS = {"max_fields": 8, "max_part_size": 16 * 1024}
 NO_STORE = {"Cache-Control": "no-store"}  # a page with a key or a code step
 
 
-def challenge(ctx: Ctx, request, user, nxt: str = ""):
+def challenge(ctx: Ctx, request: Request, user: User, nxt: str = "") -> RedirectResponse:
     """`user`'s password was right and their account takes a code too: no session yet,
     the pending cookie for the code step instead (/auth/totp). `nxt`: the page the
     sign-in goes on to (/login?next=, a path without the base path), carried in the
@@ -58,7 +66,7 @@ def challenge(ctx: Ctx, request, user, nxt: str = ""):
     return resp
 
 
-def routes(ctx: Ctx) -> list:
+def routes(ctx: Ctx) -> list[BaseRoute]:
     state, render, client_ip = ctx.state, ctx.render, ctx.client_ip
     current_user, set_session = ctx.current_user, ctx.set_session
     code_limiter = LoginRateLimiter(CODE_ATTEMPTS, CODE_WINDOW_S)   # per account
@@ -67,7 +75,7 @@ def routes(ctx: Ctx) -> list:
     flash = _Flash()
     last_step: dict[str, int] = {}   # account -> the time step of its last accepted code
 
-    def _check(user, code) -> bool:
+    def _check(user: User, code: object) -> bool:
         """Is `code` a valid code of `user`'s secret now, and not one used before? Then it
         is used up."""
         step = totp.verify(user.totp_secret, code, last_step.get(user.username, -1))
@@ -77,18 +85,18 @@ def routes(ctx: Ctx) -> list:
         return True
 
     # ---------------- the code step of a sign-in ----------------
-    def _pending(request) -> dict | None:
+    def _pending(request: Request) -> dict | None:
         data = auth.read_payload(state.config.secret_key,
                                  auth.cookie(request, PENDING_COOKIE, PENDING_PATH, legacy=False))
         return data if data and data.get("p") == "totp" else None
 
-    def _pending_next(request) -> str:
+    def _pending_next(request: Request) -> str:
         """Where the sign-in goes on to once the code is right (challenge's `nxt`); "" for
         the dashboard (also a cookie from before it was carried)."""
         data = _pending(request)
         return local_path(data.get("x"), "") if data else ""
 
-    def _pending_user(request):
+    def _pending_user(request: Request) -> User | None:
         """The account whose password the pending cookie vouches for, while it still takes
         a code: same password version (no password change or sign-out since) and two-factor
         sign-in still on. None otherwise."""
@@ -100,24 +108,25 @@ def routes(ctx: Ctx) -> list:
             return None
         return user
 
-    def _code_page(request, user, status_code=200, error=None):
+    def _code_page(request: Request, user: User, status_code: int = 200,
+                   error: str | None = None) -> Response:
         return render(request, "login_totp.html", status_code=status_code, error=error,
                       username=user.username, headers=NO_STORE)
 
-    def _start_again(request, status_code, error):
+    def _start_again(request: Request, status_code: int, error: str) -> Response:
         resp = render(request, "login.html", status_code=status_code, error=error,
                       oidc_enabled=state.config.oidc.enabled, next=_pending_next(request))
         auth.delete_cookie(resp, request, state.config, PENDING_COOKIE, PENDING_PATH)
         return resp
 
-    async def code_get(request):
+    async def code_get(request: Request) -> Response:
         user = _pending_user(request)
         if user is None:
             return proxy.redirect(request, "/login")
         return _code_page(request, user)
 
-    async def code_post(request):
-        form = await request.form(**FORM_LIMITS)
+    async def code_post(request: Request) -> Response:
+        form = await read_form(request, **FORM_LIMITS)
         if not auth.csrf_token_matches(request, form.get("_csrf")):
             return csrf_failed()
         ip = client_ip(request)
@@ -153,10 +162,10 @@ def routes(ctx: Ctx) -> list:
         return resp
 
     # ---------------- setting it up / turning it off (Settings) ----------------
-    def _browser(request) -> str:
+    def _browser(request: Request) -> str:
         return getattr(request.state, "csrf_token", None) or ""
 
-    def _done(request, me, ok: str):
+    def _done(request: Request, me: User, ok: str) -> RedirectResponse:
         """A form that did its work: back to the page (a reload doesn't post it again, the
         TR / EN switch has a page to go back to), which says `ok`; the session renewed
         (it ended the account's other sessions)."""
@@ -165,7 +174,8 @@ def routes(ctx: Ctx) -> list:
         set_session(resp, request, me)
         return resp
 
-    def _page(request, status_code=200, ok=None, error=None, secret=None):
+    def _page(request: Request, status_code: int = 200, ok: str | None = None,
+              error: str | None = None, secret: str | None = None) -> Response:
         """Settings → Two-factor sign-in: a new key to set up (or `secret`, the one being
         set up), or, while it is on, the form to turn it off. A page answered to a form
         (refused) names the page's own address (page_url)."""
@@ -192,15 +202,15 @@ def routes(ctx: Ctx) -> list:
         return render(request, "totp.html", status_code=status_code, headers=NO_STORE,
                       page_url=None if request.method == "GET" else PAGE, **ctx_vars)
 
-    async def settings_page(request):
+    async def settings_page(request: Request) -> Response:
         return _page(request)
 
-    async def _password_ok(me, password) -> bool:
+    async def _password_ok(me: User, password: object) -> bool:
         # (scrypt: with the sign-ins' limit on such work at a time, AppState.password_work)
         return await state.password_work.run(auth.verify_password, str(password or ""),
                                              me.password_hash)
 
-    async def _store(request, me, secret: str):
+    async def _store(request: Request, me: User, secret: str) -> Response | None:
         """Save `secret` ("" = off) for the signed-in account and end its other sessions
         (pwd_version + 1); None when saved, else the page with the error."""
         try:
@@ -214,8 +224,8 @@ def routes(ctx: Ctx) -> list:
             return _page(request, 400, error=str(e))
         return None
 
-    async def enable_post(request):
-        form = await request.form(**FORM_LIMITS)
+    async def enable_post(request: Request) -> Response:
+        form = await read_form(request, **FORM_LIMITS)
         if not auth.csrf_token_matches(request, form.get("_csrf")):
             return csrf_failed()
         me = current_user(request)
@@ -245,8 +255,8 @@ def routes(ctx: Ctx) -> list:
         return _done(request, me, _("Two-factor sign-in is on: signing in now takes a code from "
                                     "your app too. Your other sessions were signed out."))
 
-    async def disable_post(request):
-        form = await request.form(**FORM_LIMITS)
+    async def disable_post(request: Request) -> Response:
+        form = await read_form(request, **FORM_LIMITS)
         if not auth.csrf_token_matches(request, form.get("_csrf")):
             return csrf_failed()
         me = current_user(request)

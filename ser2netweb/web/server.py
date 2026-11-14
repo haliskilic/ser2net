@@ -36,6 +36,11 @@ from .routes.forms import escaped_text, in_text_box
 from .starlette_compat import RequestBodyLimitMiddleware
 
 if TYPE_CHECKING:
+    from starlette.middleware.base import RequestResponseEndpoint
+    from starlette.requests import Request
+    from starlette.responses import Response
+
+    from ..config import ApiToken, AppConfig
     from ..state import AppState
 
 TEMPLATES_DIR = os.path.join(os.path.dirname(__file__), "templates")
@@ -44,7 +49,7 @@ STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
 _SOFT_BREAK_AFTER = re.compile(r"([/\\_.:@-])")
 
 
-def softbreak(value) -> Markup:
+def softbreak(value: object) -> Markup:
     """Escape *value* and allow a line break after / \\ _ . : @ - so a long device
     path or name wraps at a separator instead of mid-word (<wbr> adds no text,
     so copy/paste is unchanged). Safe: the separators never occur in entities."""
@@ -93,11 +98,11 @@ def logs_request(mode: str, method: str, path: str, status: int) -> bool:
                                      or (path in MONITORING_PATHS and status < 400)))
 
 
-def _wants_json(request) -> bool:
+def _wants_json(request: Request) -> bool:
     return proxy.route_path(request).startswith("/api")
 
 
-def _login_url(request) -> str:
+def _login_url(request: Request) -> str:
     """The sign-in page for a page request without a session, as proxy.redirect takes it
     (a path under the base path): with ?next= (where the sign-in leads back to: the page's
     path without the base path, then also given to proxy.redirect) for a page other than
@@ -109,7 +114,7 @@ def _login_url(request) -> str:
     return "/login?next=" + urllib.parse.quote(here, safe="")
 
 
-def _monitoring_refusal(request, path: str):
+def _monitoring_refusal(request: Request, path: str) -> PlainTextResponse | None:
     """The answer for MONITORING_PATHS without a session to a client that is not a browser
     (it sends credentials, or doesn't ask for HTML): 401, which a Prometheus scrape reports
     as such, instead of the redirect to the sign-in page, which it follows and then can't
@@ -124,7 +129,8 @@ def _monitoring_refusal(request, path: str):
                              headers={"WWW-Authenticate": 'Bearer realm="ser2netweb"'})
 
 
-async def _answer(request, call_next, state):
+async def _answer(request: Request, call_next: RequestResponseEndpoint,
+                  state: AppState) -> Response:
     """The handler's answer. One that failed with an exception (answered 500 by
     server_error) is logged here, as the request line it would have had; its traceback
     reaches all.log through uvicorn's error log (logsetup.LibraryLogHandler)."""
@@ -143,13 +149,13 @@ class GuardMiddleware(BaseHTTPMiddleware):
 
     _cross_site_log: netguard.LogEvery | None = None
 
-    def _cross_site_note(self, state):
+    def _cross_site_note(self, state: AppState) -> netguard.LogEvery:
         """Refused cross-site requests are logged at most once a minute."""
         if self._cross_site_log is None:
             self._cross_site_log = netguard.LogEvery(lambda msg: state.log(msg))
         return self._cross_site_log
 
-    async def dispatch(self, request, call_next):
+    async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
         state = request.app.state.appstate
         cfg = state.config
         # the path the UI's routes see: without the public URL's path when the request came
@@ -174,7 +180,8 @@ class GuardMiddleware(BaseHTTPMiddleware):
         self._security_headers(response, state, path, request)  # also on a refusal or a redirect
         return response
 
-    async def _dispatch_ui(self, request, call_next, state, cfg, path):
+    async def _dispatch_ui(self, request: Request, call_next: RequestResponseEndpoint,
+                           state: AppState, cfg: AppConfig, path: str) -> Response:
         ip = client_ip(request)
         early = self._gate_ui(request, state, cfg, path)
         if early is not None:  # refused or sent elsewhere before any handler ran
@@ -212,7 +219,8 @@ class GuardMiddleware(BaseHTTPMiddleware):
             auth.move_session(response, request, cfg, request.state.legacy_session)
         return response
 
-    def _gate_ui(self, request, state, cfg, path):
+    def _gate_ui(self, request: Request, state: AppState, cfg: AppConfig,
+                 path: str) -> Response | None:
         """The answer for a UI request that may not reach its handler (a request of another
         site, a CSRF failure, first-run setup, no session), or None. Sets
         request.state.csrf_token (csrf_cookie: the one the browser sent under this
@@ -282,7 +290,8 @@ class GuardMiddleware(BaseHTTPMiddleware):
                 request.state.user = user  # available to handlers for role checks
         return None
 
-    async def _dispatch_api(self, request, call_next, cfg, path):
+    async def _dispatch_api(self, request: Request, call_next: RequestResponseEndpoint,
+                            cfg: AppConfig, path: str) -> Response:
         """Gate for the JSON REST API: bearer-token auth, no cookies/CSRF, JSON errors.
         The token found (config.ApiToken) is request.state.api_token: its role and its
         name for the audit log. Requests are logged to all.log (but the successful polls
@@ -304,7 +313,8 @@ class GuardMiddleware(BaseHTTPMiddleware):
         return response
 
     @staticmethod
-    def _gate_api(request, cfg, state, path):
+    def _gate_api(request: Request, cfg: AppConfig, state: AppState,
+                  path: str) -> tuple[JSONResponse | None, ApiToken | None]:
         """(the answer for a REST API request that may not reach its handler, or None;
         the API token it presented, also an expired one, or None)."""
         if path in ("/api/v1/health", "/api/v1/openapi.json"):
@@ -342,7 +352,8 @@ class GuardMiddleware(BaseHTTPMiddleware):
         return None, token
 
     @staticmethod
-    def _security_headers(response, state, path: str, request=None) -> None:
+    def _security_headers(response: Response, state: AppState, path: str,
+                          request: Request | None = None) -> None:
         # Nothing but the static files may be stored by the browser: pages show a new API
         # token or cluster key once, the mapping form an MQTT password, a download a
         # backup or the export, and a copy in the disk cache or the back/forward cache
@@ -374,7 +385,7 @@ class GuardMiddleware(BaseHTTPMiddleware):
                                         f"max-age={cfg.admin_ui.hsts_max_age}")
 
 
-def _page_context(request) -> dict:
+def _page_context(request: Request) -> dict:
     """What every template gets: base, the path prefix of the request, which its links go
     under (ser2netweb/web/proxy.py); node_name, this instance's name ('' = none: Settings -> Admin
     interface), which the signed-in pages (_shell.html) show in the title and the top bar;
@@ -457,7 +468,7 @@ def make_templates() -> Jinja2Templates:
     return templates
 
 
-async def server_error(request, exc) -> PlainTextResponse | JSONResponse:
+async def server_error(request: Request, exc: Exception) -> PlainTextResponse | JSONResponse:
     """The answer to a request that failed with an unexpected exception (the server logs
     its traceback): JSON under the REST API, whose clients expect nothing else, else the
     usual plain text."""

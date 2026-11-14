@@ -33,9 +33,20 @@ import socket
 import time
 import unicodedata
 from collections import OrderedDict, deque
+from collections.abc import Callable, Iterable, Mapping
+from typing import TYPE_CHECKING, ParamSpec, TypeVar
 
 from ..engine.netguard import address_key  # an IPv6 address by its /64, as the connection caps
 from . import proxy
+
+if TYPE_CHECKING:
+    from starlette.requests import HTTPConnection
+    from starlette.responses import Response
+
+    from ..config import ApiToken, AppConfig, User
+
+_P = ParamSpec("_P")
+_T = TypeVar("_T")
 
 SESSION_COOKIE = "ser2net_session"
 CSRF_COOKIE = "ser2net_csrf"
@@ -74,7 +85,7 @@ def _cost(scheme: str) -> tuple[int, int, int] | None:
     return n, r, p
 
 
-def _parse(stored) -> tuple[tuple[int, int, int], bytes, bytes] | None:
+def _parse(stored: object) -> tuple[tuple[int, int, int], bytes, bytes] | None:
     """(cost, salt, hash) of a hash_password() result (of any version), or None."""
     parts = str(stored).split("$")
     if len(parts) != 3:
@@ -174,7 +185,7 @@ def _payload_secret(secret: str) -> str:
     return hmac.new(secret.encode("utf-8"), b"ser2net signed payload", hashlib.sha256).hexdigest()
 
 
-def _is_int(value) -> bool:
+def _is_int(value: object) -> bool:
     return isinstance(value, int) and not isinstance(value, bool)
 
 
@@ -300,7 +311,8 @@ def read_payload(secret: str, token: str | None) -> dict | None:
     return data
 
 
-def session_user(cfg, token: str | None, revoked: RevokedSessions | None = None):
+def session_user(cfg: AppConfig, token: str | None,
+                 revoked: RevokedSessions | None = None) -> User | None:
     """Resolve a session cookie to the live User it authenticates, or None.
     Confirms the signed username still exists, its pwd_version is current and its
     sign-in method (LDAP/OIDC) is still on, and that the session was not ended by a
@@ -365,7 +377,7 @@ def is_own_host(host_header: str | None) -> bool:
 _FORWARDED_HOST = re.compile(r'(?:^|[;,\s])host="?([^";,\s]+)', re.IGNORECASE)
 
 
-def _claimed_hosts(headers) -> list:
+def _claimed_hosts(headers: Mapping[str, str]) -> list[str]:
     """Every host name the request claims: Host, plus X-Forwarded-Host / Forwarded
     host= when a reverse proxy sets them. All must be this machine for open access
     (requiring more names to match can only narrow it, so a client-supplied header
@@ -380,13 +392,13 @@ def _claimed_hosts(headers) -> list:
     return hosts
 
 
-def claims_own_host(headers) -> bool:
+def claims_own_host(headers: Mapping[str, str]) -> bool:
     """Every host name the request claims is this machine (is_own_host): the
     DNS-rebinding guard of open access and first-run setup."""
     return all(is_own_host(h) for h in _claimed_hosts(headers))
 
 
-def foreign_host(headers) -> str:
+def foreign_host(headers: Mapping[str, str]) -> str:
     """The first claimed host name that is not this machine ('' if there is none)."""
     return next((h for h in _claimed_hosts(headers) if not is_own_host(h)), "")
 
@@ -431,7 +443,7 @@ PROXY_HINT = ("behind a reverse proxy, pass the browser's address on as Host (ng
               "X-Forwarded-Host")
 
 
-def cross_site(headers, also=()) -> str:
+def cross_site(headers: Mapping[str, str], also: Iterable[str] = ()) -> str:
     """Why the browser says a request was made by a page of another site, or '' when it
     doesn't: the forms and changes of the web UI, and its WebSockets (the console, the
     hex view). Sec-Fetch-Site (sent to HTTPS and localhost) must be same-origin or none;
@@ -457,7 +469,7 @@ def cross_site(headers, also=()) -> str:
             + ", ".join(repr(h[:100]) for h in claimed))
 
 
-def anonymous_user(cfg, headers):
+def anonymous_user(cfg: AppConfig, headers: Mapping[str, str]) -> User | None:
     """The pseudo-user for a visitor without a session, or None when login is
     required (the default), setup isn't done yet, or a claimed host isn't this
     machine. Note: a reverse proxy that rewrites Host to 127.0.0.1 without passing
@@ -472,7 +484,8 @@ def anonymous_user(cfg, headers):
     return User(username=ANONYMOUS_USERNAME, role=ui.anonymous_role, source="anonymous")
 
 
-def request_user(cfg, token: str | None, headers, revoked: RevokedSessions | None = None):
+def request_user(cfg: AppConfig, token: str | None, headers: Mapping[str, str],
+                 revoked: RevokedSessions | None = None) -> User | None:
     """The user a request acts as: its session's user, else the anonymous pseudo-user
     when the login requirement is off, else None (must sign in). ``headers`` is the
     request's (or WebSocket's) header mapping; ``revoked`` the logged-out sessions."""
@@ -502,7 +515,7 @@ def verify_token(token: str, stored_hash: str) -> bool:
     return hmac.compare_digest(hash_token(token), stored_hash)
 
 
-def find_api_token(cfg, token: str):
+def find_api_token(cfg: AppConfig, token: str) -> ApiToken | None:
     """The API token (config.ApiToken) a request's bearer token is: the one of
     cfg.api_token_hash — as an ApiToken without an id, named 'api-token' in the audit log
     like before there were others — or one of cfg.api_tokens. None when it is none of them.
@@ -522,7 +535,7 @@ def find_api_token(cfg, token: str):
     return found
 
 
-def bearer_token(request) -> str:
+def bearer_token(request: HTTPConnection) -> str:
     """Extract the token from an `Authorization: Bearer <token>` header."""
     header = request.headers.get("authorization", "")
     if header[:7].lower() == "bearer ":
@@ -533,7 +546,7 @@ def bearer_token(request) -> str:
 # --------------------------------------------------------------------------
 # cookies
 # --------------------------------------------------------------------------
-def is_https(request, cfg) -> bool:
+def is_https(request: HTTPConnection, cfg: AppConfig) -> bool:
     """Did the browser use HTTPS for this request? With admin TLS as the UI's listener
     serves it (AppState.serving_tls: a TLS change applies to new connections at once;
     without the app's state, as config.json sets it); when the request's scheme is https
@@ -548,7 +561,8 @@ def is_https(request, cfg) -> bool:
     return served or proxy.browser_https(request)
 
 
-def set_cookie(response, request, cfg, name: str, value: str, max_age: int,
+def set_cookie(response: Response, request: HTTPConnection, cfg: AppConfig, name: str,
+               value: str, max_age: int,
                path: str = "/") -> None:
     """One of the UI's cookies: HttpOnly, SameSite=Lax, Secure whenever the browser used
     HTTPS (is_https), under the request's path prefix and with its name for the request
@@ -558,13 +572,15 @@ def set_cookie(response, request, cfg, name: str, value: str, max_age: int,
                         secure=is_https(request, cfg))
 
 
-def delete_cookie(response, request, cfg, name: str, path: str = "/") -> None:
+def delete_cookie(response: Response, request: HTTPConnection, cfg: AppConfig, name: str,
+                  path: str = "/") -> None:
     response.delete_cookie(proxy.cookie_name(request, name, path),
                            path=proxy.cookie_path(request, path),
                            httponly=True, samesite="lax", secure=is_https(request, cfg))
 
 
-def cookie(request, name: str, path: str = "/", legacy: bool = True) -> str | None:
+def cookie(request: HTTPConnection, name: str, path: str = "/",
+           legacy: bool = True) -> str | None:
     """The value of one of the UI's cookies (its name for this request: set_cookie); when
     the request has none under that name, the one under the name 2.8 and older gave it
     (proxy.legacy_cookie_name), unless `legacy` is False. Such a session cookie is moved to
@@ -575,7 +591,8 @@ def cookie(request, name: str, path: str = "/", legacy: bool = True) -> str | No
     return value
 
 
-def legacy_session(request, cfg, revoked: RevokedSessions | None = None) -> str | None:
+def legacy_session(request: HTTPConnection, cfg: AppConfig,
+                   revoked: RevokedSessions | None = None) -> str | None:
     """A session cookie of this UI under the name of 2.8 and older (a sign-in from before
     the upgrade), when the request has none under its name now: the token, only when it
     is a valid session here. Another instance on this host name may still use that name
@@ -588,7 +605,8 @@ def legacy_session(request, cfg, revoked: RevokedSessions | None = None) -> str 
     return token if session_user(cfg, token, revoked) is not None else None
 
 
-def move_session(response, request, cfg, token: str) -> None:
+def move_session(response: Response, request: HTTPConnection, cfg: AppConfig,
+                 token: str) -> None:
     """Move a legacy_session to the session cookie's name now (the same token, until it
     expires anyway) - unless the response sets or deletes that cookie itself (a sign-in, a
     sign-out) - and delete it under the old name."""
@@ -609,7 +627,7 @@ def new_csrf_token() -> str:
     return secrets.token_urlsafe(32)
 
 
-def csrf_token_matches(request, token) -> bool:
+def csrf_token_matches(request: HTTPConnection, token: object) -> bool:
     """Compare a supplied token (header or form field) against the CSRF cookie.
 
     Deliberately does NOT read the request body — reading it inside a
@@ -638,7 +656,8 @@ class LoginRateLimiter:
 
     MAX_ADDRESSES = 4096
 
-    def __init__(self, max_attempts: int = 8, window_s: int = 300, key=None):
+    def __init__(self, max_attempts: int = 8, window_s: int = 300,
+                 key: Callable[[str], str] | None = None) -> None:
         self.max_attempts = max_attempts
         self.window_s = window_s
         self._key = key or address_key
@@ -690,7 +709,7 @@ class SlowWork:
     def busy(self) -> bool:
         return self._pending >= self.limit + self.queue
 
-    async def run(self, fn, /, *args, **kwargs):
+    async def run(self, fn: Callable[_P, _T], /, *args: _P.args, **kwargs: _P.kwargs) -> _T:
         self._pending += 1
         try:
             async with self._slots:

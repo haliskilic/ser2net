@@ -6,6 +6,16 @@ versions follow [Semantic Versioning](https://semver.org/). Detailed notes for e
 
 ## [Unreleased]
 
+### Fixed
+- Opening or saving a peer's mapping in the fleet view no longer fails with HTTP 500 when the
+  peer's answer holds the mapping, or one of its sections, as something other than a JSON
+  object: the edit form answers *Could not load the peer's mapping.*, a save shows the form
+  again with that message, and nothing is sent to the peer (#121).
+
+### Changed
+- The web layer (`ser2netweb.web`) is fully type-annotated, and CI's mypy checks it with
+  `disallow_untyped_defs` on Linux and Windows (#121).
+
 ## [3.1.0] — 2026-11-14
 Device-server features from classic ser2net (packing, one writer, opening the port only while
 a client is connected, port pools, connect-out failover), MQTT 5 with Modbus pulses and safe

@@ -12,11 +12,11 @@ from __future__ import annotations
 import asyncio
 import dataclasses
 import typing
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Any, Optional
 
 from starlette.exceptions import HTTPException
 from starlette.requests import Request
-from starlette.responses import JSONResponse, PlainTextResponse
+from starlette.responses import JSONResponse, PlainTextResponse, Response
 
 from .. import __version__, capture, config, importer
 from ..config import (REDACTED, ROLE_RANK, ConfigError, ConfigWriteError, MappingConfig,
@@ -29,6 +29,7 @@ from .routes.mappings import snapshot_response
 from .routes.system import METRICS_TYPE, metrics_text
 
 if TYPE_CHECKING:
+    from ..config import AdminUI
     from ..state import AppState
 
 API_PREFIX = "/api/v1"
@@ -40,14 +41,14 @@ _BOOLEANS = {"true": True, "1": True, "yes": True, "false": False, "0": False, "
 API_VERSION = "1.2.0"
 API_FEATURES = ("warnings", "changed", "if-match", "traces", "capture", "pools")
 
-def _caller(request) -> str:
+def _caller(request: Request) -> str:
     """Who calls, for the audit log: the token's name (api-token:<name>), 'api-token' for
     the token of api_token_hash."""
     token = getattr(request.state, "api_token", None)
     return token.audit_label if token is not None else "api-token"
 
 
-def _operator_token(request, state) -> bool:
+def _operator_token(request: Request, state: AppState) -> bool:
     """Is the calling token an operator's or an admin's? (GuardMiddleware refuses a viewer
     token's POST, PUT, PATCH and DELETE itself; a GET that only they may make asks here.)"""
     token = getattr(request.state, "api_token", None)
@@ -81,14 +82,18 @@ def _mapping_view(mapping: MappingConfig, state: AppState,
     return view
 
 
-async def _check_tls_files(mapping) -> None:
+async def _check_tls_files(mapping: MappingConfig) -> None:
     """MappingConfig.check_tls_files and check_mqtt_tls_files, off the event loop (they
     read the files)."""
     await asyncio.to_thread(mapping.check_tls_files)
     await asyncio.to_thread(mapping.check_mqtt_tls_files)
 
 
-def merge_patch(target, patch):
+@typing.overload
+def merge_patch(target: object, patch: dict) -> dict: ...
+@typing.overload
+def merge_patch(target: object, patch: object) -> object: ...
+def merge_patch(target: object, patch: object) -> object:
     """RFC 7396 JSON merge patch: `patch` applied to `target` (neither is changed). An
     object in the patch is merged key by key into the target's (a missing or non-object
     target counts as empty), null removes a key, anything else replaces the value."""
@@ -103,7 +108,8 @@ def merge_patch(target, patch):
     return out
 
 
-def _edit_view(mapping, state, request=None) -> dict:
+def _edit_view(mapping: MappingConfig, state: AppState,
+               request: Optional[Request] = None) -> dict:
     """The response to a create / update: the mapping as stored (_mapping_view), and when
     there are any, the `warnings` about what was sent (keys that are no setting, a setting
     replaced by a supported one) and about settings it has that do nothing
@@ -122,12 +128,12 @@ def _edit_view(mapping, state, request=None) -> dict:
 _BAD_INPUT = (ValueError, TypeError, AttributeError, OverflowError)
 
 
-def _etag(state, mapping) -> str:
+def _etag(state: AppState, mapping: MappingConfig) -> str:
     """A mapping's ETag: its revision (config.mapping_revision), as a strong entity tag."""
     return f'"{mapping_revision(state.config.secret_key, mapping)}"'
 
 
-def _if_match(request, state, mapping) -> bool:
+def _if_match(request: Request, state: AppState, mapping: MappingConfig) -> bool:
     """True unless the request has an If-Match header that names neither the mapping's
     current ETag nor "*" (RFC 9110: strong comparison, so a weak tag never matches). A
     client that sends no If-Match changes the mapping whatever its revision, as before."""
@@ -152,16 +158,16 @@ def _not_saved(e: ConfigError) -> JSONResponse:
 
 
 def build_api_routes(state: AppState) -> list[Route]:
-    async def list_mappings(request):
+    async def list_mappings(request: Request) -> JSONResponse:
         return JSONResponse({"mappings": [_mapping_view(m, state, request) for m in state.config.mappings]})
 
-    async def get_mapping(request):
+    async def get_mapping(request: Request) -> JSONResponse:
         m = state.config.get_mapping(request.path_params["mid"])
         if not m:
             return JSONResponse({"error": "not_found"}, status_code=404)
         return JSONResponse(_mapping_view(m, state, request), headers={"ETag": _etag(state, m)})
 
-    async def create_mapping(request):
+    async def create_mapping(request: Request) -> Response:
         try:
             body = await request.json()
         except HTTPException:  # a body over the size limit: 413
@@ -196,7 +202,7 @@ def build_api_routes(state: AppState) -> list[Route]:
                                                            f"{API_PREFIX}/mappings/{mapping.id}"),
                                      "ETag": _etag(state, mapping)})
 
-    async def update_mapping(request):
+    async def update_mapping(request: Request) -> Response:
         mid = request.path_params["mid"]
         if not valid_mapping_id(mid):  # no mapping can have it (ids are checked on load)
             return JSONResponse({"error": "not_found"}, status_code=404)
@@ -250,7 +256,7 @@ def build_api_routes(state: AppState) -> list[Route]:
         view["changed"] = not same or restarted  # False: the same settings, still running
         return JSONResponse(view, headers={"ETag": _etag(state, mapping)})
 
-    async def patch_mapping(request):
+    async def patch_mapping(request: Request) -> Response:
         """PATCH: an RFC 7396 JSON merge patch on the stored mapping. Only what the body
         names changes (an object is merged into the one it replaces, a list or a value
         replaces it, null resets a field to its default), unlike PUT, which replaces the
@@ -309,7 +315,7 @@ def build_api_routes(state: AppState) -> list[Route]:
         view["changed"] = not same or restarted
         return JSONResponse(view, headers={"ETag": _etag(state, mapping)})
 
-    async def delete_mapping(request):
+    async def delete_mapping(request: Request) -> Response:
         mid = request.path_params["mid"]
         try:
             removed = await ops.delete_mapping(
@@ -324,7 +330,7 @@ def build_api_routes(state: AppState) -> list[Route]:
         state.audit(_client_ip(request), "api_mapping_delete", removed.name, user=_caller(request))
         return JSONResponse({"deleted": mid})
 
-    async def mapping_action(request):
+    async def mapping_action(request: Request) -> Response:
         mid = request.path_params["mid"]
         action = request.path_params["action"]
         if action not in ("start", "stop", "restart"):
@@ -343,7 +349,7 @@ def build_api_routes(state: AppState) -> list[Route]:
         return JSONResponse(out)
 
     # ---------------- trace files, timed capture ----------------
-    async def _trace_view(m) -> dict:
+    async def _trace_view(m: MappingConfig) -> dict:
         """A mapping's trace files and whether it is traced now: what GET .../traces
         answers (and the capture calls, with the capture as it is then)."""
         files = await asyncio.to_thread(state.trace_list, m.id)
@@ -354,7 +360,7 @@ def build_api_routes(state: AppState) -> list[Route]:
                 "traces": [{"name": f["name"], "size": f["size"], "time": f["mtime"]}
                            for f in files]}
 
-    async def list_traces(request):
+    async def list_traces(request: Request) -> JSONResponse:
         """A mapping's trace files. Operator and admin tokens only, as the web UI's Trace
         panel: listing, downloading and deleting traces is for operators and up."""
         if not _operator_token(request, state):
@@ -364,7 +370,7 @@ def build_api_routes(state: AppState) -> list[Route]:
             return JSONResponse(_NOT_FOUND, status_code=404)
         return JSONResponse(await _trace_view(m))
 
-    async def get_trace(request):
+    async def get_trace(request: Request) -> Response:
         """Download one trace file, as it is now. Traces hold what is sent to the device
         too (what a viewer does not see in the web UI either): operator and admin tokens
         only. Audited."""
@@ -385,7 +391,7 @@ def build_api_routes(state: AppState) -> list[Route]:
         return snapshot_response(fh, name, "text/plain; charset=utf-8",
                                  head=request.method == "HEAD")
 
-    async def delete_traces(request):
+    async def delete_traces(request: Request) -> JSONResponse:
         """DELETE .../traces: all of the mapping's trace files; .../traces/{name}: that
         one (404 when the mapping has none of that name). A trace that is on goes on in a
         new file. Audited."""
@@ -407,7 +413,7 @@ def build_api_routes(state: AppState) -> list[Route]:
         # one file that could not be deleted (Windows: it is open for a download)
         return JSONResponse(answer, status_code=409 if name is not None and failed else 200)
 
-    async def start_capture(request):
+    async def start_capture(request: Request) -> Response:
         """POST .../capture {"minutes": n}: trace the mapping for that long from now (a
         capture under way gets the new end), then stop by itself."""
         mid = request.path_params["mid"]
@@ -441,7 +447,7 @@ def build_api_routes(state: AppState) -> list[Route]:
         state.audit(_client_ip(request), "api_trace_capture_start", detail, user=_caller(request))
         return JSONResponse(await _trace_view(m) if m is not None else _NOT_FOUND)
 
-    async def stop_capture(request):
+    async def stop_capture(request: Request) -> JSONResponse:
         """DELETE .../capture: end the mapping's timed capture now (`changed`: false when
         it had none). A trace that is on by options.trace_both is not touched."""
         mid = request.path_params["mid"]
@@ -463,7 +469,7 @@ def build_api_routes(state: AppState) -> list[Route]:
             view["warning"] = warning
         return JSONResponse(view)
 
-    async def import_mappings(request):
+    async def import_mappings(request: Request) -> JSONResponse:
         """POST /import: many mappings in one change. The body is a mappings export
         ({"mappings": [...]}, which is also what GET /mappings answers), a whole
         config.json (only its mappings are used) or a classic ser2net.yaml / ser2net.conf.
@@ -511,10 +517,10 @@ def build_api_routes(state: AppState) -> list[Route]:
         return JSONResponse({**answer, "rows": rows, "summary": count, "valid": True,
                              "problem": None, "applied": True})
 
-    async def list_pools(request):
+    async def list_pools(request: Request) -> JSONResponse:
         return JSONResponse({"pools": ops.pool_rows(state)})
 
-    async def put_pools(request):
+    async def put_pools(request: Request) -> Response:
         """PUT /pools: the body's pools ({"pools": [{"name", "port", "bind_ip",
         "enabled", "rotate"}, ...]}) replace all of them; they listen (or stop) at once."""
         try:
@@ -541,27 +547,27 @@ def build_api_routes(state: AppState) -> list[Route]:
         return JSONResponse({"pools": ops.pool_rows(state),
                              **({"warnings": warnings} if warnings else {})})
 
-    async def metrics(request):
+    async def metrics(request: Request) -> PlainTextResponse:
         return PlainTextResponse(await metrics_text(state), media_type=METRICS_TYPE)
 
-    async def status(request):
+    async def status(request: Request) -> JSONResponse:
         certificates = [c.view() for c in await state.certwatch.current()]
         return JSONResponse({"mappings": state.supervisor.all_status(),
                              "pools": state.supervisor.pools.status(),
                              "certificates": certificates,
                              "clock_steps": state.clockwatch.steps})
 
-    async def ports(request):
+    async def ports(request: Request) -> JSONResponse:
         return JSONResponse({"ports": await state.ports.current()})
 
-    async def health(request):
+    async def health(request: Request) -> JSONResponse:
         return JSONResponse({"status": "ok", "mappings": len(state.config.mappings)})
 
-    async def info(request):
+    async def info(request: Request) -> JSONResponse:
         return JSONResponse({"version": __version__, "api": API_VERSION,
                              "features": list(API_FEATURES)})
 
-    async def openapi(request):
+    async def openapi(request: Request) -> JSONResponse:
         return JSONResponse(openapi_spec(state.config.admin_ui, proxy.base(request)))
 
     return [
@@ -695,7 +701,7 @@ _READ_ONLY = {("MappingOptions", "trace_until")}
 _JSON_TYPES = {str: "string", int: "integer", float: "number", bool: "boolean"}
 
 
-def _field_schema(cls, f, hint) -> dict:
+def _field_schema(cls: type, f: dataclasses.Field, hint: Any) -> dict:
     """The schema of one config dataclass field: a $ref for a nested config class, else
     its JSON type with the default, the allowed values and a note where there are any."""
     if dataclasses.is_dataclass(hint):
@@ -732,7 +738,7 @@ def _field_schema(cls, f, hint) -> dict:
     return out
 
 
-def _schema_name(cls) -> str:
+def _schema_name(cls: object) -> str:
     return next(name for name, c in _MAPPING_CLASSES.items() if c is cls)
 
 
@@ -778,7 +784,7 @@ def _json(schema_ref: str, description: str) -> dict:
         "schema": {"$ref": f"#/components/schemas/{schema_ref}"}}}}
 
 
-def openapi_spec(admin, base: str = "") -> dict:
+def openapi_spec(admin: AdminUI | None, base: str = "") -> dict:
     """The OpenAPI 3.0 description of the REST API, written by hand (Starlette has no
     auto-generation) except for the mapping schemas (mapping_schemas). Every route in
     build_api_routes is in it (tests/test_rest_patch.py checks). `base`: the path prefix
@@ -999,8 +1005,9 @@ def openapi_spec(admin, base: str = "") -> dict:
     def ref(name: str) -> dict:
         return {"$ref": f"#/components/responses/{name}"}
 
-    def op(summary: str, ok: tuple, *errors: str, write: bool = False, body=None,
-           description: str = "", parameters=None, operator: bool = False) -> dict:
+    def op(summary: str, ok: tuple[str, str, str], *errors: str, write: bool = False,
+           body: dict | None = None, description: str = "", parameters: list[dict] | None = None,
+           operator: bool = False) -> dict:
         """One operation: its 2xx answer, the errors it can give, and the token errors
         every authenticated call can (403 for a call that changes something, or
         `operator`: one only operator and admin tokens may make)."""
@@ -1023,7 +1030,8 @@ def openapi_spec(admin, base: str = "") -> dict:
             out["parameters"] = parameters
         return out
 
-    def mapping_body(schema: str = "Mapping", types=("application/json",)) -> dict:
+    def mapping_body(schema: str = "Mapping", types: tuple[str, ...] = ("application/json",),
+                     ) -> dict:
         return {"required": True, "content": {
             t: {"schema": {"$ref": f"#/components/schemas/{schema}"}} for t in types}}
 

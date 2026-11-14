@@ -4,9 +4,10 @@ from __future__ import annotations
 import asyncio
 import platform
 import sys
+from typing import TYPE_CHECKING
 
-from starlette.responses import JSONResponse, PlainTextResponse
-from starlette.routing import Route
+from starlette.responses import JSONResponse, PlainTextResponse, RedirectResponse, Response
+from starlette.routing import BaseRoute, Route
 
 from ... import __version__, i18n, licences, storage
 from ...notify import no_data_for
@@ -15,28 +16,34 @@ from ...i18n import _
 from .. import auth, proxy
 from .common import Ctx, local_path, unchanged_or
 
+if TYPE_CHECKING:
+    from starlette.requests import Request
+
+    from ...config import MappingConfig
+    from ...state import AppState
+
 # the serial sides of a mapping form (GET /api/ports/select?prefix=)
 _PORT_FIELDS = ("serial_", "serial_b_")
 
 
-def routes(ctx: Ctx) -> list:
+def routes(ctx: Ctx) -> list[BaseRoute]:
     state, render = ctx.state, ctx.render
 
-    async def healthz(request):
+    async def healthz(request: Request) -> PlainTextResponse:
         return PlainTextResponse("ok")
 
-    async def licenses_page(request):
+    async def licenses_page(request: Request) -> Response:
         """The licence texts this copy carries (ser2netweb/licences.py), for any signed-in role."""
         texts = await asyncio.to_thread(licences.texts)
         return render(request, "licenses.html", texts=texts)
 
-    async def metrics(request):
+    async def metrics(request: Request) -> PlainTextResponse:
         return PlainTextResponse(await metrics_text(state), media_type=METRICS_TYPE)
 
-    async def api_ports_json(request):
+    async def api_ports_json(request: Request) -> JSONResponse:
         return JSONResponse(await state.ports.current())
 
-    async def api_ports_select(request):
+    async def api_ports_select(request: Request) -> Response:
         """An open mapping form's Device field again, with the serial ports there are now
         (its ↻ button): ?prefix=serial_|serial_b_&selected=<what the form has chosen>. For
         operators, as the form is."""
@@ -50,7 +57,7 @@ def routes(ctx: Ctx) -> list:
         return render(request, "_serial_port_select.html", fragment=True, prefix=prefix,
                       selected=selected, ports=ports, links=portlist.links(ports, (selected,)))
 
-    async def api_ports_table(request):
+    async def api_ports_table(request: Request) -> Response:
         ports = await state.ports.current()
         show_all = request.query_params.get("all") == "1"
         shown = portlist.visible(ports, show_all)
@@ -61,7 +68,7 @@ def routes(ctx: Ctx) -> list:
             hidden=len(ports) - len(portlist.visible(ports)),
             in_use=portlist.used(shown, state.supervisor.devices_in_use())))
 
-    async def set_language(request):
+    async def set_language(request: Request) -> RedirectResponse:
         """/lang/tr?next=/settings: remember the visitor's UI language (a cookie), then
         go back. Only a local path is followed (no open redirect), under the path prefix
         the request came under (`next` is the page's path without it)."""
@@ -86,7 +93,7 @@ def routes(ctx: Ctx) -> list:
 METRICS_TYPE = "text/plain; version=0.0.4"
 
 
-async def metrics_text(state) -> str:
+async def metrics_text(state: AppState) -> str:
     """The Prometheus metrics (text exposition format: exposition()): served at /metrics to
     a web UI session and at /api/v1/metrics to an API token."""
     statuses = state.supervisor.all_status()
@@ -247,7 +254,7 @@ METRIC_INFO = {
 MAPPING_STATES = ("running", "reconnecting", "device-missing", "error", "stopped")
 
 
-def process_metrics(state) -> list[str]:
+def process_metrics(state: AppState) -> list[str]:
     """The version that runs, when it started and how its event loop keeps up."""
     labels = (f'version="{_metric_label(__version__)}",'
               f'python="{_metric_label(platform.python_version())}",'
@@ -266,7 +273,7 @@ def process_metrics(state) -> list[str]:
     return lines
 
 
-def mapping_state_metrics(mapping, status: dict, lbl: str) -> list[str]:
+def mapping_state_metrics(mapping: MappingConfig, status: dict, lbl: str) -> list[str]:
     """Whether the mapping is enabled (a mapping stopped on purpose is not; one that
     failed is) and its state, one-hot."""
     now = status.get("state") or "stopped"
@@ -276,7 +283,7 @@ def mapping_state_metrics(mapping, status: dict, lbl: str) -> list[str]:
         for s in states]
 
 
-def device_traffic_metrics(mapping, status: dict, lbl: str) -> list[str]:
+def device_traffic_metrics(mapping: MappingConfig, status: dict, lbl: str) -> list[str]:
     """When the device last sent something, and, with its no-data alarm on, whether it is
     past it (notify.no_data_for)."""
     lines = [f"ser2net_mapping_last_rx_timestamp_seconds{{{lbl}}} "
@@ -309,11 +316,11 @@ def exposition(lines: list[str]) -> str:
     return "\n".join(out) + "\n"
 
 
-def _label(mapping) -> str:
+def _label(mapping: MappingConfig) -> str:
     return f'mapping="{_metric_label(mapping.name)}",id="{_metric_label(mapping.id)}"'
 
 
-def _unit_label(mapping, unit: dict) -> str:
+def _unit_label(mapping: MappingConfig, unit: dict) -> str:
     return (f'mapping="{_metric_label(mapping.name)}",id="{_metric_label(mapping.id)}",'
             f'unit="{unit.get("unit")}"')
 

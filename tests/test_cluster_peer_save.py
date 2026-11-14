@@ -8,21 +8,30 @@ locally, reduces the trace field to a sanitised file name (kept as the peer stor
 when unchanged, refused as a new name for a pre-2.8 peer), and requires the mapping to
 exist on the peer. The form never holds the peer's MQTT password: the peer is sent the
 password to store (its own when the field was left blank), so a 2.8 peer, which stores
-what it gets, keeps it. Pure unit test (no sockets); the two-node proxy path is in
-tests/test_cluster.py.
+what it gets, keeps it. A peer's mapping this node can't read (it, or a section of it,
+is not a JSON object) is refused by the edit form and its save, and nothing is posted to
+the peer. No sockets: the routes run in this process (tests/_asgi.py) with a stand-in for
+the peer; the two-node proxy path is in tests/test_cluster.py.
 
 Run: python3 tests/test_cluster_peer_save.py
 """
+import html
 import os
 import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "lib"))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
+from _asgi import App, cookies
 from starlette.datastructures import FormData
 
 from ser2netweb.config import MappingConfig
+from ser2netweb.web.auth import hash_password
 from ser2netweb.web.routes.cluster import _peer_below_2_8, _peer_save_fields, not_kept
+
+PW = "peer-save-pass-1"
+CSRF = "peer-save-csrf"
+PEER = {"ip": "10.0.0.9", "port": 8080, "scheme": "http"}
 
 
 def form(**kw):
@@ -139,6 +148,86 @@ def test_older_peer_keeps_what_the_form_leaves_out():
           "an unchanged close-on keeps its line breaks  OK")
 
 
+def test_odd_peer_mapping():
+    # a peer's mapping-data answer whose mapping, or a section of it, is not an object (a
+    # damaged answer, another version's): the form gets an error, or that section counts
+    # as empty - the save is not ended by an exception (an HTTP 500 for the fleet view)
+    for peer in (["odd"], "odd", 5):
+        fields, err = _peer_save_fields(form(), peer, "2.8.0")
+        assert fields is None and err == "Could not load the peer's mapping.", (peer, err)
+    for peer in ({"options": "odd"}, {"options": {}, "network": ["odd"]},
+                 {"options": ["odd"], "network": "odd", "mqtt": 5}):
+        fields, err = _peer_save_fields(form(opt_trace_both="plc1.trace", opt_closeon="BYE"),
+                                        peer, "2.8.0")
+        assert err is None, (peer, err)
+        sent = dict(fields)
+        assert sent["opt_trace_both"] == "plc1.trace" and sent["opt_closeon"] == "BYE", sent
+        assert "network_client_queue_max" not in sent, sent   # (none stored to send)
+    print("a peer mapping, or a section of it, that is not an object: an error or an "
+          "empty section, never an exception  OK")
+
+
+class FakeCluster:
+    """state.cluster for the fleet view's edit form: one peer, whose mapping-data answer
+    holds `mapping`; what is posted to it is kept in `posted`."""
+
+    def __init__(self, mapping):
+        self.mapping, self.posted = mapping, []
+
+    def find_target(self, host, port):
+        return dict(PEER) if (host, port) == (PEER["ip"], PEER["port"]) else None
+
+    async def get_peer(self, target, path, query=None, timeout=3.0):
+        if path == "/api/cluster/mapping-data":
+            return {"mapping": self.mapping, "ports": [], "ips": [], "version": "3.1.0"}
+        return {"version": "3.1.0"}
+
+    async def fetch_peer(self, peer, timeout=2.5):
+        return {"version": "3.1.0"}
+
+    async def post_peer(self, target, path, fields, timeout=6.0, actor=""):
+        self.posted.append(path)
+        return {"ok": True, "name": "m"}
+
+    def forget(self, peer=None):
+        pass
+
+
+def test_odd_peer_mapping_routes():
+    # through the routes: the edit form of a mapping this node can't read is refused
+    # (502), its save gets the form back with the reason (400) before anything is posted
+    # to the peer - not an HTTP 500, nor one after the peer has saved the change
+    good = MappingConfig.from_dict({"id": "abc", "name": "m", "serial": {"port": "/dev/ttyS0"},
+                                    "network": {"bind_ip": "127.0.0.1", "port": 4001}}).to_dict()
+    users = [{"username": "admin", "password_hash": hash_password(PW), "role": "admin",
+              "pwd_version": 1}]
+    with App({"users": users}) as a:
+        st, h, _ = a.call("POST", "/login", headers={"Cookie": f"ser2net_csrf={CSRF}"},
+                          fields={"username": "admin", "password": PW, "_csrf": CSRF})
+        assert st == 303, st
+        h = {"Cookie": f"ser2net_csrf={CSRF}; ser2net_session={cookies(h)['ser2net_session'][0]}",
+             "X-CSRF-Token": CSRF, "HX-Request": "true", "Accept-Language": "en"}
+        save = dict(form(), host=PEER["ip"], port=str(PEER["port"]))
+        for mapping, readable in ((good, True), (dict(good, options="odd"), False),
+                                  (dict(good, network=["odd"]), False),
+                                  (dict(good, mqtt=5), False), (["odd"], False)):
+            a.state.cluster = peer = FakeCluster(mapping)
+            st, _h, page = a.call("GET", f"/api/cluster/peer-form?host={PEER['ip']}"
+                                         f"&port={PEER['port']}&mid=abc", headers=h)
+            assert (st == 200) if readable else (
+                st == 502 and page == "Could not load the peer's mapping."), (mapping, st, page)
+            st, _h, page = a.call("POST", "/api/cluster/peer-save", fields=save, headers=h)
+            if readable:
+                assert st == 200 and peer.posted == ["/api/cluster/mapping-save"], (st, page)
+                continue
+            assert st == 400 and "Could not load the peer's mapping." in html.unescape(page), \
+                (mapping, st, page[:400])
+            assert 'name="network_port"' in page, "the form again, with what was posted"
+            assert peer.posted == [], ("nothing may be posted to the peer", mapping)
+    print("a peer mapping this node can't read: its edit form 502, its save the form with "
+          "the reason, nothing posted to the peer  OK")
+
+
 def test_not_kept():
     # what a fleet-view save sent, against what the peer stores afterwards (read back):
     # only the settings the peer has are compared, the trace and the id never
@@ -167,6 +256,8 @@ def main():
     test_unchanged_trace_kept_as_stored()
     test_mqtt_password_sent_to_store()
     test_older_peer_keeps_what_the_form_leaves_out()
+    test_odd_peer_mapping()
+    test_odd_peer_mapping_routes()
     test_not_kept()
     print("\nPASS: fleet-view edit proxy forwards only known, validated fields")
 
