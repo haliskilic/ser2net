@@ -323,6 +323,8 @@ def test_capture_survives_restart():
         wait(lambda: stored(srv, B)["trace_until"] == 0, "the capture ends by itself")
         assert time.time() >= now + 3.5, "not before its time"
         wait(lambda: stored(srv, A)["trace_until"] == 0, "the other one too")
+        # (an end is audited once its trace is closed, after config.json keeps it)
+        wait(lambda: len(audit(srv, "trace_capture_end")) == 3, "each end audited")
         assert os.path.isfile(b_file)
         if open_files(srv) is not None:  # (closed right after config.json keeps the end)
             wait(lambda: b_file not in open_files(srv), "its file is closed")
