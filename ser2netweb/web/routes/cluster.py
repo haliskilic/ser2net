@@ -174,14 +174,14 @@ def not_kept(sent: MappingConfig, stored: dict) -> list[str]:
             and p in mine and mine[p] != theirs.get(p)]
 
 
-def _peer_below_2_8(version: str) -> bool:
+def _peer_below_2_8(version: object) -> bool:
     """True when a peer's reported version is older than 2.8 (or unknown): such a node
     stores a trace file name as a path and opens it, so it must not be handed a new one."""
     return _peer_older(version, (2, 8, 0))
 
 
 def _peer_save_fields(form: ImmutableMultiDict[str, str], peer_mapping: object,
-                      peer_version: str) -> tuple[list[tuple[str, str]] | None, str | None]:
+                      peer_version: object) -> tuple[list[tuple[str, str]] | None, str | None]:
     """The fields cluster_peer_save forwards to a peer's key-guarded mapping-save, or an
     error to show instead. Only the known mapping-form fields are forwarded (never a raw
     value the browser added), the submission is validated locally (so a URL serial port
@@ -248,7 +248,7 @@ def _peer_actor(a: PeerAuth | None, form: Form) -> str:
     return f"cluster-peer:{node or a.sender[:16] or '?'}/{user}"
 
 
-def _remote(target: dict, peer_id: object, mapping: MappingConfig, version: str = "") -> dict:
+def _remote(target: dict, peer_id: object, mapping: MappingConfig, version: object = "") -> dict:
     """The fleet view's edit form for a peer's mapping: the peer's host + port it posts
     back (resolved again on save), the address it shows, and the id it is saved under.
     That is the id the peer itself keys the mapping by, sent back to it unchanged: a
@@ -272,7 +272,7 @@ def _remote(target: dict, peer_id: object, mapping: MappingConfig, version: str 
             "version_note": note}
 
 
-def _peer_form(target: dict, mapping: MappingConfig, version: str, peer_id: object,
+def _peer_form(target: dict, mapping: MappingConfig, version: object, peer_id: object,
                data: object) -> dict:
     """form_context's arguments for a peer's mapping: its remote settings, the blocks a
     peer running *version* doesn't read left out, and the revision of the mapping its
