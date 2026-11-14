@@ -21,11 +21,16 @@ from __future__ import annotations
 import contextlib
 import re
 import ssl
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
-from typing import Any
+from types import ModuleType
+from typing import TYPE_CHECKING, Any
 
 from .. import optional
 from ..config import ROLE_RANK, User, fold  # fold: how group names compare
+
+if TYPE_CHECKING:
+    from ..config import AppConfig, LdapSettings, OidcSettings
 
 # LDAP_MATCHING_RULE_IN_CHAIN: Active Directory follows nested groups for this filter
 IN_CHAIN_RULE = "1.2.840.113556.1.4.1941"
@@ -49,7 +54,7 @@ _DN_TYPE = re.compile(r"[A-Za-z][A-Za-z0-9-]*|[0-9]+(?:\.[0-9]+)*")
 _HEX = frozenset("0123456789abcdefABCDEF")
 
 
-def _split_dn(text) -> list[list[tuple[str, str]]] | None:
+def _split_dn(text: object) -> list[list[tuple[str, str]]] | None:
     """The RDNs of an RFC 4514 DN, each a list of (attribute type, value) with the
     escapes (\\, \\2C, UTF-8 bytes such as \\C4\\B0) decoded, or None when `text` is not
     a DN."""
@@ -83,13 +88,13 @@ def _split_dn(text) -> list[list[tuple[str, str]]] | None:
         i += 1
 
 
-def _dn_key(text) -> tuple[frozenset[tuple[str, str]], ...] | None:
+def _dn_key(text: object) -> tuple[frozenset[tuple[str, str]], ...] | None:
     rdns = _split_dn(text)
     return None if rdns is None else tuple(frozenset((t, fold(v)) for t, v in rdn)
                                            for rdn in rdns)
 
 
-def group_matches(setting, group) -> bool:
+def group_matches(setting: str | None, group: str) -> bool:
     """Does this group setting name this group? (the rules above)"""
     want = fold(setting or "")
     if not want:
@@ -112,7 +117,7 @@ def group_matches(setting, group) -> bool:
     return False
 
 
-def group_name(group) -> str:
+def group_name(group: object) -> str:
     """A group's own name: a DN's first RDN value, a path's last segment, the part
     after DOMAIN\\ — what to enter as the group setting."""
     rdns = _split_dn(group)
@@ -124,7 +129,7 @@ def group_name(group) -> str:
     return text.rstrip("/").rsplit("/", 1)[-1] if "/" in text else text
 
 
-def group_names(groups, limit: int = 10) -> str:
+def group_names(groups: Iterable[object], limit: int = 10) -> str:
     """The groups for a log line: their own names, at most `limit`, each cut at 64
     characters."""
     groups = list(groups)
@@ -146,7 +151,8 @@ class RoleDecision:
     partial_role: str = ""
 
 
-def role_decision(groups, settings) -> RoleDecision:
+def role_decision(groups: Iterable[str],
+                  settings: LdapSettings | OidcSettings) -> RoleDecision:
     """The highest role a user's groups give (LDAP group DNs or OIDC claim values):
     admin_group, then operator_group, then viewer_group, else default_role (blank:
     None, refused)."""
@@ -168,13 +174,14 @@ def role_decision(groups, settings) -> RoleDecision:
     return decision
 
 
-def role_for_groups(groups, settings) -> str | None:
+def role_for_groups(groups: Iterable[str],
+                    settings: LdapSettings | OidcSettings) -> str | None:
     """Highest ser2netweb role granted by a user's groups, or None to deny (the user
     authenticated but is in no mapped group and no default_role is set)."""
     return role_decision(groups, settings).role
 
 
-def upsert_ldap_user(config, username: str, role: str) -> User:
+def upsert_ldap_user(config: AppConfig, username: str, role: str) -> User:
     """Create or refresh the shadow account for an LDAP user."""
     return config.upsert_external_user(username, role, "ldap")
 
@@ -183,12 +190,12 @@ def upsert_ldap_user(config, username: str, role: str) -> User:
 class CaFileError(ValueError):
     """ldap.ca_file can't be used: unreadable, or no certificate in it."""
 
-    def __init__(self, path: str, reason: str, unreadable: bool):
+    def __init__(self, path: str, reason: str, unreadable: bool) -> None:
         super().__init__(f"{path!r}: {reason}")
         self.path, self.reason, self.unreadable = path, reason, unreadable
 
 
-def tls_context(settings) -> ssl.SSLContext:
+def tls_context(settings: LdapSettings) -> ssl.SSLContext:
     """How an LDAPS / StartTLS connection checks the directory server: its certificate
     must chain to a CA this system trusts (its CA bundle; Windows: its certificate
     store) — or, with ca_file set, to a certificate in that file only (PEM, or DER as
@@ -221,7 +228,7 @@ def tls_context(settings) -> ssl.SSLContext:
     return trusted
 
 
-def _tls(settings, ldap3):
+def _tls(settings: LdapSettings, ldap3: ModuleType) -> object:
     """The ldap3 Tls for both LDAPS and StartTLS: the handshake runs with tls_context()
     and the host of the server URI, so Python's own certificate and host-name check
     applies (ldap3 2.9.1's default Tls checks nothing, its optional check rejects IP
@@ -230,7 +237,7 @@ def _tls(settings, ldap3):
     base: Any = ldap3.Tls
 
     class VerifyingTls(base):
-        def wrap_socket(self, connection, do_handshake=False):
+        def wrap_socket(self, connection: Any, do_handshake: bool = False) -> None:
             connection.socket = context.wrap_socket(
                 connection.socket, server_side=False, do_handshake_on_connect=do_handshake,
                 server_hostname=connection.server.host)
@@ -245,7 +252,7 @@ _INSECURE = ("Not checking the certificate (ldap.tls_verify: false) is insecure:
              "the network between ser2netweb and the directory could read the passwords.")
 
 
-def tls_failure(exc) -> str | None:
+def tls_failure(exc: object) -> str | None:
     """OpenSSL's reason for refusing the server's certificate, from what a failed
     connection raised, or None if it wasn't that. ldap3 re-raises the ssl error as its
     own exception whose text is the repr of the original's arguments (quotes escaped),
@@ -302,7 +309,7 @@ class TlsProblem:
         return f"{head}{fix} {_INSECURE} {_RECOVERY}"
 
 
-def _tls_problem(exc, settings) -> TlsProblem | None:
+def _tls_problem(exc: BaseException, settings: LdapSettings) -> TlsProblem | None:
     if isinstance(exc, CaFileError):
         return TlsProblem("ca_file", exc.reason, settings.server_uri, exc.path, exc.unreadable)
     reason = tls_failure(exc) if settings.uses_tls else None
@@ -313,7 +320,7 @@ def _tls_problem(exc, settings) -> TlsProblem | None:
                       settings.ca_file.strip())
 
 
-def _result_text(result) -> str:
+def _result_text(result: Mapping[str, Any]) -> str:
     """An LDAP error answer for a log line: description (code): message; referrals."""
     text = f"{result.get('description')} ({result['result']})"
     if result.get("message"):
@@ -332,7 +339,7 @@ class DirectoryGroups(list[str]):
     lookup_failed = False
 
 
-def _values(entry, attr) -> list[str]:
+def _values(entry: Any, attr: str) -> list[str]:
     try:
         return [str(v) for v in entry[attr].values]
     except Exception:
@@ -347,7 +354,9 @@ def _dns_domain(dn: str) -> str:
 class _GroupLookup:
     """Reads the groups of the user who signed in, over an ldap3 connection."""
 
-    def __init__(self, conn, settings, username, log, ldap3, escape):
+    def __init__(self, conn: Any, settings: LdapSettings, username: str,
+                 log: Callable[[str], None], ldap3: ModuleType,
+                 escape: Callable[[str], str]) -> None:
         self.conn, self.settings, self.username, self.log = conn, settings, username, log
         self.ldap3, self.escape = ldap3, escape
         self._root: dict[str, str] | None = None
@@ -408,7 +417,7 @@ class _GroupLookup:
             groups.lookup_failed = True
         return groups
 
-    def find_account(self, bind_name: str):
+    def find_account(self, bind_name: str) -> Any:
         """The entry of an AD sign-in name: user@domain by userPrincipalName (an account
         without one also by sAMAccountName, when the base is that domain) under the user
         search base, else the server's domain; DOMAIN\\user by sAMAccountName in that
@@ -476,8 +485,11 @@ class _GroupLookup:
             groups.lookup_failed = True
 
 
-def authenticate(settings, username: str, password: str, logger=None,
-                 server=None, conn_factory=None, on_tls_problem=None) -> list[str] | None:
+def authenticate(settings: LdapSettings, username: str, password: str,
+                 logger: Callable[[str], None] | None = None, server: Any = None,
+                 conn_factory: Callable[[Any, str, str], Any] | None = None,
+                 on_tls_problem: Callable[[TlsProblem], None] | None = None,
+                 ) -> list[str] | None:
     """Bind to LDAP as `username`/`password`; return the user's group DNs (a
     DirectoryGroups) on success or None on failure. Never raises on a bad bind.
     `server`/`conn_factory` are injection points for tests (an ldap3 MOCK_SYNC
@@ -495,14 +507,14 @@ def authenticate(settings, username: str, password: str, logger=None,
         log(f"LDAP login disabled: {optional.problem(e, 'ldap3')}")
         return None
 
-    def _default_factory(srv, user, pw):
+    def _default_factory(srv: Any, user: str, pw: str) -> Any:
         ab = ldap3.AUTO_BIND_TLS_BEFORE_BIND if settings.start_tls else ldap3.AUTO_BIND_NO_TLS
         # over TLS, ldap3 would follow a referral to another server (with these
         # credentials) without checking its certificate, or in plain text: it doesn't
         return ldap3.Connection(srv, user=user, password=pw, auto_bind=ab,
                                 auto_referrals=not settings.uses_tls)
 
-    def _unbind(conn) -> None:
+    def _unbind(conn: Any) -> None:
         with contextlib.suppress(Exception):
             conn.unbind()
 

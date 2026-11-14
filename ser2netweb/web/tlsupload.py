@@ -28,11 +28,16 @@ import hashlib
 import os
 import re
 import tempfile
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
+
+from starlette.datastructures import UploadFile
 
 from ..config import data_path, lock_down_dir, replace_when_free
 from ..engine import tls
 from ..i18n import _
+
+if TYPE_CHECKING:
+    from starlette.datastructures import FormData
 
 MAX_FILE_BYTES = 256 * 1024      # one uploaded file (a certificate chain is a few KB)
 MAX_BODY_BYTES = 1024 * 1024     # the whole upload request
@@ -240,11 +245,11 @@ def _write_aside(folder: str, data: bytes) -> str:
     return path
 
 
-async def read_file(form, name: str) -> Optional[bytes]:
+async def read_file(form: FormData, name: str) -> Optional[bytes]:
     """The bytes of the file a multipart form has as `name`: None when there is none (no
     part, a text field, or the browser's empty part of a file input left blank). Reads at
     most MAX_FILE_BYTES + 1 bytes (store() refuses a longer one)."""
     part = form.get(name)
-    if not hasattr(part, "read") or not getattr(part, "filename", ""):
+    if not isinstance(part, UploadFile) or not part.filename:
         return None
     return bytes(await part.read(MAX_FILE_BYTES + 1))

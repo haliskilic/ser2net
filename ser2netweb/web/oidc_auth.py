@@ -28,10 +28,19 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from collections.abc import Callable, Mapping
+from typing import IO, TYPE_CHECKING, Any
 
 from .. import optional, user_agent
 from ..config import external_name
 from .ldap_auth import role_for_groups  # shared group/claim -> role mapping
+
+if TYPE_CHECKING:
+    from http.client import HTTPMessage
+
+    from starlette.requests import HTTPConnection
+
+    from ..config import OidcSettings
 
 # issuer -> (its discovery document, time.monotonic() when it was fetched)
 _DISCOVERY_CACHE: dict[str, tuple[dict, float]] = {}
@@ -65,7 +74,7 @@ def _loopback(host: str) -> bool:
 CALLBACK_PATH = "/auth/oidc/callback"
 
 
-def redirect_uri(settings, request, public_url: str = "") -> str:
+def redirect_uri(settings: OidcSettings, request: HTTPConnection, public_url: str = "") -> str:
     """The redirect URI a sign-in sends to the identity provider, which must have it
     registered: oidc.redirect_uri when set; else, with a public URL (Settings -> Reverse
     proxy), that URL and CALLBACK_PATH; else made from the request as it has been since
@@ -101,18 +110,19 @@ def redirect_uri_is_plain_http(uri: str) -> bool:
     return parts.scheme.lower() == "http" and not _loopback(host)
 
 
-def secure_url(url, what: str) -> str:
+def secure_url(url: object, what: str) -> str:
     """`url` if it is https://, or http:// to a loopback address (127.0.0.0/8, ::1,
     localhost: nothing leaves this machine — a provider on the same host). Raises
     InsecureEndpoint for anything else, such as the http:// addresses a Keycloak behind a
     TLS-terminating proxy advertises when its proxy settings are missing."""
+    text = url if isinstance(url, str) else ""
     try:
-        parts = urllib.parse.urlsplit(url if isinstance(url, str) else "")
+        parts = urllib.parse.urlsplit(text)
         host = parts.hostname
     except ValueError:   # such as an unclosed [IPv6 address
         host = None
     if host and (parts.scheme == "https" or (parts.scheme == "http" and _loopback(host))):
-        return url
+        return text
     raise InsecureEndpoint(
         f"the identity provider's {what} {url!r} is not an https:// address, so OIDC sign-in "
         "is refused (the client secret, the code or the signing keys would go in clear "
@@ -123,7 +133,8 @@ def secure_url(url, what: str) -> str:
 class _SecureRedirects(urllib.request.HTTPRedirectHandler):
     """Follows a redirect only to an address secure_url() allows."""
 
-    def redirect_request(self, req, fp, code, msg, headers, newurl):
+    def redirect_request(self, req: urllib.request.Request, fp: IO[bytes], code: int, msg: str,
+                         headers: HTTPMessage, newurl: str) -> urllib.request.Request | None:
         secure_url(newurl, "redirect")
         return super().redirect_request(req, fp, code, msg, headers, newurl)
 
@@ -136,14 +147,14 @@ def _opener() -> urllib.request.OpenerDirector:
     return urllib.request.build_opener(_SecureRedirects)
 
 
-def _get_json(url: str, timeout: float = 8):
+def _get_json(url: str, timeout: float = 8) -> Any:
     req = urllib.request.Request(  # noqa: S310 - https (secure_url)
         url, headers={"Accept": "application/json", "User-Agent": user_agent()})
     with _opener().open(req, timeout=timeout) as r:
         return json.loads(r.read())
 
 
-def _post_form(url: str, data: dict, timeout: float = 8):
+def _post_form(url: str, data: dict, timeout: float = 8) -> Any:
     body = urllib.parse.urlencode(data).encode()
     req = urllib.request.Request(url, data=body, method="POST",  # noqa: S310 - https (secure_url)
                                  headers={"Content-Type": "application/x-www-form-urlencoded",
@@ -171,7 +182,7 @@ def _error_text(body: bytes) -> str:
     return repr(body[:200].decode("utf-8", "replace"))
 
 
-def discover(issuer: str, fetch=_get_json) -> dict:
+def discover(issuer: str, fetch: Callable[[str], Any] = _get_json) -> dict:
     issuer = issuer.rstrip("/")
     cached = _DISCOVERY_CACHE.get(issuer)
     if cached and (time.monotonic() - cached[1] < _DISCOVERY_TTL):
@@ -194,8 +205,8 @@ def code_challenge(verifier: str) -> str:
     return base64.urlsafe_b64encode(digest).rstrip(b"=").decode("ascii")
 
 
-def build_authorize_url(settings, redirect_uri: str, state: str, nonce: str, fetch=_get_json,
-                        code_verifier: str = "") -> str:
+def build_authorize_url(settings: OidcSettings, redirect_uri: str, state: str, nonce: str,
+                        fetch: Callable[[str], Any] = _get_json, code_verifier: str = "") -> str:
     doc = discover(settings.issuer, fetch=fetch)
     params = {
         "response_type": "code",
@@ -211,7 +222,7 @@ def build_authorize_url(settings, redirect_uri: str, state: str, nonce: str, fet
     return endpoint + ("&" if "?" in endpoint else "?") + urllib.parse.urlencode(params)
 
 
-def _expected_issuer(settings, doc: dict, log) -> str:
+def _expected_issuer(settings: OidcSettings, doc: dict, log: Callable[[str], None]) -> str:
     """The iss the ID token must carry: the discovery document's issuer. One that is not
     the configured issuer URL is logged once (reaching a provider through another URL than
     its public one is common, so it is no reason to refuse)."""
@@ -226,8 +237,11 @@ def _expected_issuer(settings, doc: dict, log) -> str:
     return issuer
 
 
-def complete(settings, redirect_uri: str, code: str, nonce: str, logger=None,
-             fetch=_get_json, post=_post_form, code_verifier: str = "") -> dict | None:
+def complete(settings: OidcSettings, redirect_uri: str, code: str, nonce: str,
+             logger: Callable[[str], None] | None = None,
+             fetch: Callable[[str], Any] = _get_json,
+             post: Callable[[str, dict], Any] = _post_form,
+             code_verifier: str = "") -> dict | None:
     """Exchange the auth code for tokens and validate the id_token. Returns the
     verified claims, or None on any failure (never raises). code_verifier: the PKCE
     verifier of this sign-in (none for a state cookie from before PKCE was sent)."""
@@ -274,7 +288,7 @@ def complete(settings, redirect_uri: str, code: str, nonce: str, logger=None,
         return None
 
 
-def _clock_hint(claims) -> str:
+def _clock_hint(claims: Mapping[str, Any]) -> str:
     """How far this host's clock seems off the provider's, for a token refused for its
     times. The provider issued it (iat, under a signature already checked) a moment ago
     by its own clock, so now - iat is about the difference between the two clocks."""
@@ -288,11 +302,11 @@ def _clock_hint(claims) -> str:
             f"provider")
 
 
-def _says_false(value) -> bool:
+def _says_false(value: object) -> bool:
     return value is False or (isinstance(value, str) and value.strip().lower() == "false")
 
 
-def _username(claims: dict, settings) -> tuple[str, str]:
+def _username(claims: dict, settings: OidcSettings) -> tuple[str, str]:
     """(the user's name, "") or ("", why the ID token gives none)."""
     for key in (settings.username_claim, "preferred_username", "email", "sub"):
         value = claims.get(key)
@@ -305,7 +319,7 @@ def _username(claims: dict, settings) -> tuple[str, str]:
     return "", "the ID token names no user"
 
 
-def username_from_claims(claims: dict, settings) -> str:
+def username_from_claims(claims: dict, settings: OidcSettings) -> str:
     """The user's name: the username_claim, else preferred_username, email or sub,
     spelled as LDAP/OIDC account names are kept (config.external_name). An e-mail address
     the provider says it has not verified (email_verified: false; a missing claim is
@@ -313,12 +327,12 @@ def username_from_claims(claims: dict, settings) -> str:
     return _username(claims, settings)[0]
 
 
-def no_username_reason(claims: dict, settings) -> str:
+def no_username_reason(claims: dict, settings: OidcSettings) -> str:
     """Why username_from_claims() gave "", for the log."""
     return _username(claims, settings)[1] or "the ID token names no user"
 
 
-def groups_from_claims(claims: dict, settings) -> list[str]:
+def groups_from_claims(claims: dict, settings: OidcSettings) -> list[str]:
     """The values of the groups claim (a list, or one value)."""
     groups = claims.get(settings.groups_claim) or []
     if not isinstance(groups, (list, tuple)):
@@ -326,5 +340,5 @@ def groups_from_claims(claims: dict, settings) -> list[str]:
     return [str(g) for g in groups]
 
 
-def role_from_claims(claims: dict, settings):
+def role_from_claims(claims: dict, settings: OidcSettings) -> str | None:
     return role_for_groups(groups_from_claims(claims, settings), settings)

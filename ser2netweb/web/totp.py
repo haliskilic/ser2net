@@ -33,7 +33,7 @@ def new_secret() -> str:
     return base64.b32encode(secrets.token_bytes(SECRET_BYTES)).decode("ascii").rstrip("=")
 
 
-def is_secret(value) -> bool:
+def is_secret(value: object) -> bool:
     """Is `value` a secret verify() can use (base32, at least 80 bits)?"""
     return isinstance(value, str) and _BASE32.fullmatch(value) is not None
 
@@ -59,12 +59,13 @@ def code_at(secret: str, when: float) -> str:
     return hotp(_key(secret), step_at(when))
 
 
-def normalize_code(code) -> str:
+def normalize_code(code: object) -> str:
     """What was typed, without the spaces or dashes some apps show in the middle."""
     return re.sub(r"[\s-]", "", str(code or ""))
 
 
-def verify(secret: str, code, last_step: int = -1, now: float | None = None) -> int | None:
+def verify(secret: str, code: object, last_step: int = -1,
+           now: float | None = None) -> int | None:
     """The time step `code` belongs to — the current one or WINDOW steps either side, and
     later than `last_step` (the replay guard) — or None when it is not a valid code now.
     An unusable secret matches nothing."""

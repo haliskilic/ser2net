@@ -30,7 +30,8 @@ import hashlib
 import ipaddress
 import os
 import re
-from typing import Mapping, Optional
+from collections.abc import Collection
+from typing import TYPE_CHECKING, Any, Mapping, Optional
 
 from starlette.responses import RedirectResponse
 
@@ -39,6 +40,15 @@ from ..config import (
     AdminUI, normalize_public_url, proxy_entry_problem, public_url_problem, split_proxy_entries,
 )
 from ..engine import netguard
+
+if TYPE_CHECKING:
+    from starlette.requests import HTTPConnection
+    from starlette.types import ASGIApp, Receive, Scope, Send
+
+    from ..state import AppState
+
+    # a request or WebSocket, or its ASGI scope
+    Conn = HTTPConnection | dict[str, Any]
 
 # (SER2NET_TRUSTED_PROXIES / SER2NET_PUBLIC_URL, their names up to 2.9.x, too: envvars)
 TRUSTED_ENV = "SER2NETWEB_TRUSTED_PROXIES"
@@ -59,7 +69,7 @@ class Trusted:
     """A set of trusted proxy addresses and networks; '*' (FORWARDED_ALLOW_IPS only) trusts
     every address."""
 
-    def __init__(self, entries) -> None:
+    def __init__(self, entries: Collection[str]) -> None:
         self.everyone = "*" in entries
         self.networks = [ipaddress.ip_network(e, strict=False) for e in entries
                          if e != "*" and proxy_entry_problem(e) is None]
@@ -67,7 +77,7 @@ class Trusted:
     def __bool__(self) -> bool:
         return self.everyone or bool(self.networks)
 
-    def __contains__(self, host) -> bool:
+    def __contains__(self, host: object) -> bool:
         if self.everyone:
             return True
         ip = _address(host)
@@ -82,7 +92,8 @@ def _trusted(entries: tuple[str, ...]) -> Trusted:
     return Trusted(entries)
 
 
-def trusted_entries(admin, env: Optional[Mapping[str, str]] = None) -> tuple[list[str], str]:
+def trusted_entries(admin: AdminUI,
+                    env: Optional[Mapping[str, str]] = None) -> tuple[list[str], str]:
     """(the trusted proxy entries in effect, where they come from): SER2NETWEB_TRUSTED_PROXIES
     (or SER2NET_TRUSTED_PROXIES: the name as it is set), else admin_ui.trusted_proxies, else
     FORWARDED_ALLOW_IPS, else none ([], '')."""
@@ -98,11 +109,11 @@ def trusted_entries(admin, env: Optional[Mapping[str, str]] = None) -> tuple[lis
     return [], ""
 
 
-def trusted(admin) -> Trusted:
+def trusted(admin: AdminUI) -> Trusted:
     return _trusted(tuple(trusted_entries(admin)[0]))
 
 
-def _address(text) -> str | None:
+def _address(text: object) -> str | None:
     """The IP address in an X-Forwarded-For entry or a peer address ('1.2.3.4',
     '1.2.3.4:5678', '[2001:db8::1]:443', '::ffff:1.2.3.4' -> '1.2.3.4'), or None."""
     t = str(text or "").strip()
@@ -161,7 +172,7 @@ def public_url_from_env(env: Optional[Mapping[str, str]] = None) -> str:
     return _usable_url(envvars.text(PUBLIC_URL_ENV, env))
 
 
-def public_url(admin, env: Optional[Mapping[str, str]] = None) -> str:
+def public_url(admin: AdminUI, env: Optional[Mapping[str, str]] = None) -> str:
     """The public URL in effect ('' = none): SER2NETWEB_PUBLIC_URL when it is usable, else
     admin_ui.public_url (both kept as normalize_public_url spells them)."""
     return public_url_from_env(env) or admin.public_url
@@ -179,14 +190,14 @@ def path_of(url: str) -> str:
     return "/" + rest.split("/", 1)[1] if sep and "/" in rest else ""
 
 
-def published_origins(admin) -> tuple[str, ...]:
+def published_origins(admin: AdminUI) -> tuple[str, ...]:
     """The origins whose pages are this UI's own besides the address a request names:
     the public URL's (auth.cross_site's `also`)."""
     url = public_url(admin)
     return (origin_of(url),) if url else ()
 
 
-def start_notes(admin, env: Optional[Mapping[str, str]] = None) -> list[str]:
+def start_notes(admin: AdminUI, env: Optional[Mapping[str, str]] = None) -> list[str]:
     """Lines for the start-up log: what is trusted and published, and settings from the
     environment that can't be used."""
     env = _env(env)
@@ -217,37 +228,37 @@ def start_notes(admin, env: Optional[Mapping[str, str]] = None) -> list[str]:
 # --------------------------------------------------------------------------
 # per request: the path prefix it came under, links, redirects, cookies
 # --------------------------------------------------------------------------
-def _scope(conn) -> dict:
+def _scope(conn: Conn) -> Scope:
     return conn if isinstance(conn, dict) else conn.scope
 
 
-def base(conn) -> str:
+def base(conn: Conn) -> str:
     """The path prefix a request (a Request, WebSocket or ASGI scope) came under: the
     public URL's path, or '' at '/'."""
     s = _scope(conn)
     return s.get("app_root_path", s.get("root_path", "")) or ""
 
 
-def route_path(conn) -> str:
+def route_path(conn: Conn) -> str:
     """A request's path without base(): what the UI's routes are matched against."""
     s = _scope(conn)
-    path, prefix = s["path"], base(s)
+    path, prefix = s["path"], base(conn)
     if prefix and (path == prefix or path.startswith(prefix + "/")):
         return path[len(prefix):] or "/"
     return path
 
 
-def url(conn, path: str) -> str:
+def url(conn: Conn, path: str) -> str:
     """The address of the UI's page `path` ('/login') for a request: under its base()."""
     return base(conn) + path
 
 
-def redirect(conn, path: str, status_code: int = 303) -> RedirectResponse:
+def redirect(conn: Conn, path: str, status_code: int = 303) -> RedirectResponse:
     """A redirect to the UI's page `path`, under the request's base()."""
     return RedirectResponse(url(conn, path), status_code=status_code)
 
 
-def _header(conn, name: bytes) -> str | None:
+def _header(conn: Conn, name: bytes) -> str | None:
     """The first value of a request header (`name` in lower case), or None."""
     for key, value in _scope(conn).get("headers") or ():
         if key == name:
@@ -258,7 +269,7 @@ def _header(conn, name: bytes) -> str | None:
 _FORWARDED_PROTO = re.compile(r'(?:^|[;\s])proto="?([a-z]+)', re.IGNORECASE)
 
 
-def browser_https(conn) -> bool:
+def browser_https(conn: Conn) -> bool:
     """Did the browser use HTTPS, as the request shows it? Its scheme is https (uvicorn's
     TLS, or X-Forwarded-Proto from a trusted proxy), or the first X-Forwarded-Proto or
     Forwarded proto= says so, whoever sent it: that only makes cookies stricter (Secure,
@@ -277,7 +288,7 @@ def browser_https(conn) -> bool:
 _PLAIN_PORT = str(AdminUI.port)
 
 
-def _host_port(conn) -> str | None:
+def _host_port(conn: Conn) -> str | None:
     """The port in a request's Host header as the browser wrote it ('8081'), '' when it
     names none (the scheme's default), None without a Host header."""
     host = _header(conn, b"host")
@@ -292,7 +303,7 @@ def _host_port(conn) -> str | None:
     return str(int(port)) if port.isascii() and port.isdigit() else ""
 
 
-def cookie_tag(conn) -> str:
+def cookie_tag(conn: Conn) -> str:
     """What the names of the UI's cookies end with for a request: '' at '/' on port 8080
     (or without a Host header), else '_' and 8 hex digits of a hash of the port in the
     address (but 8080) and the path it came under (base())."""
@@ -301,7 +312,7 @@ def cookie_tag(conn) -> str:
     return f"_{hashlib.sha256(key.encode()).hexdigest()[:8]}" if key else ""
 
 
-def cookie_name(conn, name: str, path: str = "/") -> str:
+def cookie_name(conn: Conn, name: str, path: str = "/") -> str:
     """The name of one of the UI's cookies for a request: `name` and its cookie_tag, with
     the __Host- prefix when the browser used HTTPS (browser_https) - __Secure- for a cookie
     whose Path isn't '/' (cookie_path) - so that a Secure cookie of an https:// address
@@ -312,7 +323,7 @@ def cookie_name(conn, name: str, path: str = "/") -> str:
     return ("__Host-" if cookie_path(conn, path) == "/" else "__Secure-") + tagged
 
 
-def legacy_cookie_name(conn, name: str, path: str = "/") -> str | None:
+def legacy_cookie_name(conn: Conn, name: str, path: str = "/") -> str | None:
     """The name 2.8 and older gave the cookie (`name` itself), when a request might carry
     one under it: at '/' only (they had no base path), and when it isn't the name the
     cookie has now (cookie_name), else None."""
@@ -321,7 +332,7 @@ def legacy_cookie_name(conn, name: str, path: str = "/") -> str | None:
     return name
 
 
-def cookie_path(conn, path: str = "/") -> str:
+def cookie_path(conn: Conn, path: str = "/") -> str:
     """A cookie's Path for a request: `path` under its base()."""
     prefix = base(conn)
     return (prefix + ("" if path == "/" else path)) if prefix else path
@@ -337,13 +348,13 @@ class ProxyMiddleware:
     BaseHTTPMiddleware doesn't); the settings are read for each request, so a change in
     Settings applies at once."""
 
-    def __init__(self, app, state) -> None:
+    def __init__(self, app: ASGIApp, state: AppState) -> None:
         self.app = app
         self.state = state
         # an X-Forwarded-For from an address that isn't trusted: noted once an hour
         self._ignored = netguard.LogEvery(lambda msg: state.log(msg), interval=3600)
 
-    async def __call__(self, scope, receive, send):
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] in ("http", "websocket"):
             admin = self.state.config.admin_ui
             self._forwarded(scope, trusted(admin))
@@ -352,7 +363,7 @@ class ProxyMiddleware:
                 _under(scope, prefix)
         await self.app(scope, receive, send)
 
-    def _forwarded(self, scope, proxies: Trusted) -> None:
+    def _forwarded(self, scope: Scope, proxies: Trusted) -> None:
         client = scope.get("client")
         peer = _address(client[0]) if client else None
         if peer is None:
@@ -377,7 +388,7 @@ class ProxyMiddleware:
             scope["scheme"] = _SCHEMES[plain][scope["type"] == "websocket"]
 
 
-def _under(scope, prefix: str) -> None:
+def _under(scope: Scope, prefix: str) -> None:
     """root_path for a request under the public URL's path `prefix`: its path starts with
     it (the proxy passed it on), or X-Forwarded-Prefix is exactly it (the proxy stripped
     it; it is put back, as ASGI wants root_path to be part of the path)."""

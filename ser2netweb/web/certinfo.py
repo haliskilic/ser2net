@@ -136,7 +136,7 @@ def _with_ssl(path: str) -> CertInfo:
         raise CertReadError("not_pem") from None
 
 
-def _ip(value) -> str:
+def _ip(value: object) -> str:
     """An IP address as cryptography writes it ('::1', not '0:0:0:0:0:0:0:1')."""
     text = str(value).strip()
     with contextlib.suppress(ValueError):
