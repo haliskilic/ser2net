@@ -892,9 +892,9 @@ Depolar `B587 60E7 C0B0 515E 81D2  50F9 8164 D694 711B B799` anahtarıyla imzal�
 dnf ilk kurulumda onu gösterir, yalnızca bu parmak iziyle onaylayın. Depodaki `.rpm`
 dosyaları da bu anahtarla imzalıdır; dnf ve zypper ikisini de denetler: her paketin
 SHA-256'sını taşıyan depo meta verisini ve her paketin kendi imzasını (`repo_gpgcheck=1`,
-`gpgcheck=1`). Paketler henüz imzalanmazken indirilmiş bir `ser2netweb.repo` `gpgcheck=0`
-der ve çalışmaya devam eder (meta veri yine denetlenir); dosyayı yeniden indirmek paket
-denetimini de açar.
+`gpgcheck=1`). Paketler imzalanmaya başlamadan önce indirilmiş bir `ser2netweb.repo`
+`gpgcheck=0` der ve çalışmaya devam eder (meta veri yine denetlenir); dosyayı yeniden
+indirmek paket denetimini de açar.
 GitHub'daki sürümün `.rpm` dosyaları aynı paketlerin imzasız derlemesidir (`SHA256SUMS`,
 `gh attestation verify`); ayrıntılar [docs/PACKAGES.md](docs/PACKAGES.md)'de.
 
