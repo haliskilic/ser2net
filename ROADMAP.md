@@ -1,6 +1,6 @@
 # ser2netweb — Roadmap
 
-> Current release: **v3.0.1**. CI is green across Linux + Windows × Python 3.10–3.14.
+> Current release: **v3.1.0**. CI is green across Linux + Windows × Python 3.10–3.14.
 
 ## Shipped
 
@@ -234,6 +234,16 @@
   is published under the old path too.
 - **Packages (#107):** `.deb` / `.rpm` packages for amd64 and arm64, and `pipx install
   ser2netweb` from PyPI.
+
+### v3.1.0 — device server, MQTT 5, traces and TLS from the browser (issues [#102](https://github.com/haliskilic/ser2netweb/issues/102), [#118](https://github.com/haliskilic/ser2netweb/issues/118)–[#120](https://github.com/haliskilic/ser2netweb/issues/120), PRs [#125](https://github.com/haliskilic/ser2netweb/pull/125)–[#128](https://github.com/haliskilic/ser2netweb/pull/128))
+- **Device server (#120):** packing, one writer with read-only listeners, opening the port
+  only while a client is connected, port pools, connect-out failover, and more of a classic
+  ser2net configuration imported.
+- **MQTT and Modbus (#118):** MQTT 5 per mapping, Modbus pulses and safe values written when
+  the broker is away.
+- **Operations (#119):** trace files and timed recordings through the REST API, the TLS
+  certificate expiry notification, TLS files uploaded in the browser, the clock-step watch.
+- **Web console (#102):** xterm.js 6.
 
 ---
 

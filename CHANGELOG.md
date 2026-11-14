@@ -6,6 +6,121 @@ versions follow [Semantic Versioning](https://semver.org/). Detailed notes for e
 
 ## [Unreleased]
 
+## [3.1.0] — 2026-11-14
+Device-server features from classic ser2net (packing, one writer, opening the port only while
+a client is connected, port pools, connect-out failover), MQTT 5 with Modbus pulses and safe
+values, trace files and TLS files handled from the browser and the REST API, and xterm.js 6 in
+the web console. **Upgrading from 3.0.x:** nothing has to change; every new feature is off
+until it is turned on. **Going back to 3.0.x:** 3.0.x ignores the new settings and drops them
+on its next save (`backups/` keeps the file), so pulsed coils stay on, no safe value is written
+and a running timed recording stops; delete `cert-notices.json` from the data folder first, or
+3.0.x warns at start that the folder is not its own.
+
+### Added
+- **Packing for raw TCP and UDP mappings:** `options.pack_gap_ms`, `pack_delimiter` and
+  `pack_max_bytes` forward the device's output as frames (a gap without a byte, a delimiter, or
+  a frame size, whichever comes first); a UDP mapping sends one datagram per frame. Off by
+  default (#120).
+- **One writer, read-only listeners:** with `network.writer_client_ips` only clients from those
+  addresses send to the device; the others only receive its output, and what they send is
+  dropped, counted and logged once. It works with the allow-list, priority clients and
+  read-only mappings; at max connections a listener (with *kick old client*, or as a priority
+  client) only takes another listener's place, never a writer's, and over UDP only a writer's
+  datagram decides where the device's output goes (#120).
+- **Open the serial port only while a client is connected** (`network.open_on_connect`, TCP
+  server): the port opens for the first client and closes `port_linger_s` (2 s) after the last
+  one, so another program can use it in between; the dashboard says *waiting for a client*. A
+  port that could not be opened stays shown as *device missing* with the reason: *device lost*
+  is notified once, and *device back* only after an open that works (#120).
+- **Port pools** (classic ser2net's rotators): one listening TCP port hands each new client to
+  the first free mapping of a named pool (Settings → Port pools, `GET`/`PUT /api/v1/pools`,
+  `network.pool`), optionally in turn; a client is refused with a Busy line when every mapping
+  is in use. A pool that listens more widely than a member's own port (a member on 127.0.0.1,
+  the pool on 0.0.0.0) is warned of when it or the member is saved. Pools belong to one node:
+  the configuration export and the cluster don't carry them (#120).
+- **Connect-out failover:** `network.remote_targets` are tried in order with back-off; the link
+  stays on the target that answers and, with `failover_return_s`, moves back to the first once
+  it answers again (#120).
+- Importing a classic ser2net configuration now carries UDP fixed remote addresses over as UDP
+  targets, `chardelay` as packing and rotators as port pools, each with a note in the preview,
+  so the same file gives different mappings than in 3.0.x (#120).
+- **MQTT 5, per mapping** (`mqtt.protocol` "5"; 3.1.1 stays the default), with paho-mqtt 2.x
+  and 1.6: clean start and session expiry, an optional message expiry for retained data so a
+  late subscriber doesn't take a stale value for a current one, and the broker's reason codes
+  in the log and the status (`reason_code`, `rejected`). Sparkplug B on MQTT 5 always starts a
+  clean session, as Sparkplug 3.0 asks (#118).
+- **Modbus pulses:** a writable coil with `pulse_ms` is switched off again that long after MQTT
+  switched it on; a mapping that stops during a pulse writes the off before it closes the port,
+  and an off that can't be written is retried and logged (#118).
+- **Modbus safe values:** a writable point with `safe_value` and `safe_after_s` is written to
+  that value once the broker connection (Sparkplug B with a primary host: that host) has been
+  away that long, once per outage. An outage counts from its first loss and ends once the
+  connection has stayed up for 10 s (or the shortest `safe_after_s`), so a broker that keeps
+  taking and dropping the client counts as away all along; nothing is written while it is
+  connected. Logged, shown on the dashboard and in the status (`safe`), and reported by the new
+  notification event *Safe values written* (off unless ticked). Never by a read-only mapping
+  (#118).
+- **Trace files in the REST API:** `GET /api/v1/mappings/{id}/traces` lists a mapping's trace
+  files, `GET …/traces/{name}` downloads one (recorded in the audit log), `DELETE
+  …/traces/{name}` and `DELETE …/traces` delete them; as in the web UI's Trace panel they need
+  an operator or admin token (#119).
+- **Timed recording:** the Trace panel records a mapping whose trace is off for 15 minutes,
+  1 hour or 24 hours and then turns the trace off by itself, without restarting the mapping
+  (`POST`/`DELETE /api/v1/mappings/{id}/capture`, 1 to 1440 minutes). The end time is stored,
+  so a restart keeps it (#119).
+- **TLS certificate about to expire** notification (opt-in `cert_expiring`): the admin UI's and
+  every enabled TLS mapping's certificate are read daily; one message when fewer than 30, 7 and
+  1 days are left and once it has ended, not repeated after a restart (a message that did not
+  get through goes out again at the next daily check). `/metrics` has
+  `ser2net_tls_certificate_expiry_seconds`, `GET /api/v1/status` lists the certificates (#119).
+- **Upload TLS files in the browser** (admins): the admin UI's certificate and key under
+  Settings → Admin TLS, a mapping's pair and CA files in its form. Each upload is loaded before
+  it is kept (the key must be the certificate's and open with its password; the admin UI's key
+  is refused for a mapping and the other way round), stored privately in the data folder's
+  `tls/`, set as a path relative to it (`tls/uploaded-…`) and recorded in the audit log; typed
+  paths work as before (#119).
+- **Clock-step watch:** a system clock set while ser2netweb runs is logged and audited (at most
+  once a minute), marked with a `!!` line in running traces, counted in `/metrics`
+  (`ser2net_clock_steps_total`) and sent as the opt-in `clock_step` notification; a resume from
+  suspend is not a step (#119).
+
+### Changed
+- **Web console: xterm.js 6.0.0 with `@xterm/addon-fit` 0.11.0** (from 5.5.0 / 0.10.0). The
+  console's scrollbar is drawn by xterm.js: it shows while the pointer is over the console or
+  while scrolling and fades otherwise, and one mouse-wheel step scrolls about 3 lines (before:
+  about 6; Alt + wheel scrolls five times as fast). Typing, Shift+Tab, the hex view and
+  scrolling with a finger work as before (#102).
+- xterm.js and its addons are updated together: `tools/refresh_assets.py` records the upstream
+  commit of each npm release and refuses an addon from another xterm.js release.
+  THIRD-PARTY-NOTICES.md and the Debian copyright file name the parts of Visual Studio Code's
+  base library (MIT) that xterm.js 6 includes (#102).
+- **REST API 1.2.0:** `/info` lists the features `traces`, `capture` and `pools`; `GET /status`
+  also has `pools`, `certificates`, `clock_steps` and `safe`, a mapping's status `waiting` and
+  `link_target`, a client `listen_only`; `options.trace_until` is read-only (a PUT, PATCH or
+  create ignores it); `PUT /pools` and a mapping's create / update answer `warnings` for a pool
+  that listens more widely than a member. The OpenAPI document types the optional Modbus point
+  keys (`min`, `max`, `allowed`, `bit`, `length`) as nullable numbers / arrays instead of
+  strings (#118, #119, #120).
+- The dashboard offers operators **Trace** for every mapping (a timed recording is started
+  there), not only while tracing is on or files are left (#119).
+- The snap is released to every channel (stable, candidate, beta and edge) for a release, so
+  edge no longer keeps an older version than stable.
+- Documentation: both READMEs describe the new features; docs/MODBUS-MQTT.md has MQTT version,
+  Pulses and Safe values sections; docs/PRIVACY.md names timed recordings;
+  docs/MIGRATING-FROM-SER2NET.md covers packing, open on connect and port pools;
+  docs/SIGNING.md notes that SignPath Foundation's free program is not open to ser2netweb
+  (#118, #119, #120).
+
+### Fixed
+- **Windows: a save no longer fails with "Could not save config.json"** (a 400 in the web UI)
+  when config.json is open for a moment, e.g. while an antivirus scans the file just written
+  or ser2netweb looks for an edit made outside it; the file is replaced as soon as it is free
+  (up to 5 s).
+- A mapping whose TLS key is the admin UI's is refused also when the key is a copy, or is
+  written another way with another certificate (the certificates' public keys are compared).
+- A note of the trace's own (`!! … bytes not traced`) is written as text in a hex trace too
+  (#119).
+
 ## [3.0.1] — 2026-11-13
 More ways to install ser2netweb, dependency ranges that distributions can meet, and fixes for
 3.0.0. **Upgrading from 3.0.0:** nothing has to change, except for Docker users of the old
@@ -1034,7 +1149,8 @@ Hardening and operations.
 ## [1.0] — 2026-06-06
 First release: serial↔TCP (raw, telnet, RFC 2217), web UI, access control, logs.
 
-[Unreleased]: https://github.com/haliskilic/ser2netweb/compare/v3.0.1...HEAD
+[Unreleased]: https://github.com/haliskilic/ser2netweb/compare/v3.1.0...HEAD
+[3.1.0]: https://github.com/haliskilic/ser2netweb/releases/tag/v3.1.0
 [3.0.1]: https://github.com/haliskilic/ser2netweb/releases/tag/v3.0.1
 [3.0.0]: https://github.com/haliskilic/ser2netweb/releases/tag/v3.0.0
 [2.9.0]: https://github.com/haliskilic/ser2netweb/releases/tag/v2.9.0

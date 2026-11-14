@@ -34,11 +34,12 @@ secret has to be added in all three files: `release.yml`'s `ci` job, `ci.yml`'s
 `workflow_call` secrets and `standalone` job, and the `secrets:` that `standalone.yml`
 declares.
 
-## Option A — SignPath (SignPath Foundation offers free signing to open-source projects)
+## Option A — SignPath
 
-1. Apply for the open-source program at <https://signpath.org> (the project must be
-   open source and built by CI from its public repository) or use a SignPath
-   subscription.
+1. Get a SignPath subscription. SignPath Foundation's free program for open-source
+   projects (<https://signpath.org>) is not open to ser2netweb: its terms ask for an
+   OSI-approved licence "without commercial dual-licensing", and ser2netweb also has a
+   commercial licence (`COMMERCIAL_LICENSE.md`). A fork under the AGPL-3.0 alone may apply.
 2. In SignPath: a project (e.g. `ser2netweb`), an artifact configuration, and a signing
    policy (e.g. `release-signing`); connect the GitHub repository as a trusted build
    system and create an API token for CI.
