@@ -127,12 +127,14 @@ _MQTT = {
     "tx_enabled": True, "sparkplug_primary_host_id": "scada-1", "unit_status": True,
     "ca_file": TLS_FILE, "client_cert": TLS_FILE, "client_key": TLS_FILE,
     "client_key_password": "kitchen-sink-mqtt-key-pw", "tls_check_hostname": False,
-    "retain": True, "value_format": "json"}
+    "retain": True, "value_format": "json", "protocol": "5", "clean_start": False,
+    "session_expiry_s": 600, "message_expiry_s": 90}
 _POINTS = [
     {"name": "run", "unit": 2, "fn": 1, "address": 5, "dtype": "bool", "scale": 1.0,
-     "writable": True},
+     "writable": True, "pulse_ms": 500, "safe_value": False, "safe_after_s": 30},
     {"name": "setpoint", "unit": 1, "fn": 3, "address": 10, "dtype": "int16", "scale": 0.1,
-     "writable": True, "min": -50, "max": 150.5, "word_order": "BADC"},
+     "writable": True, "min": -50, "max": 150.5, "word_order": "BADC", "safe_value": 20,
+     "safe_after_s": 60.5},
     {"name": "temp", "unit": 1, "fn": 4, "address": 0, "dtype": "float32", "scale": 0.5},
     {"name": "door", "unit": 3, "fn": 2, "address": 1, "dtype": "bool", "scale": 1.0},
     {"name": "label", "unit": 1, "fn": 3, "address": 20, "dtype": "string", "length": 4},
@@ -160,7 +162,7 @@ def mappings() -> list[dict]:
          "network": _with(_NETWORK, mode="client", protocol="telnet", bind_ip="127.0.0.1",
                           connect_timeout_s=7.5, tcp_keepalive=True, client_queue_max=4096),
          "options": _with(_OPTIONS, closeon="\x00END\r"),
-         "mqtt": _with(_MQTT, tls=False, qos=1, client_id=""),
+         "mqtt": _with(_MQTT, tls=False, qos=1, client_id="", clean_start=True),
          "modbus_poll": {"interval_s": 0.5, "points": []}},
         {"id": "sinkudp00001", "name": "UDP", "enabled": True, "kind": "net",
          "serial": _with(_SERIAL_A, port="/dev/ttyACM3", match={}, flowcontrol="none"),

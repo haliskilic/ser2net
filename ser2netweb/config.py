@@ -1345,6 +1345,8 @@ def modbus_unit_map(opts: MappingOptions) -> dict[int, int]:
 # Per-mapping MQTT publishing (optional northbound to an IIoT broker)
 # ---------------------------------------------------------------------------
 MQTT_VALUE_FORMATS = ("text", "json")  # plain-format Modbus values (mqtt.value_format)
+MQTT_PROTOCOLS = ("3.1.1", "5")        # mqtt.protocol (engine/mqtt_pub.PROTOCOLS)
+MQTT_EXPIRY_MAX_S = 0xFFFFFFFF         # an MQTT 5 expiry interval: 32 bits of seconds
 MQTT_FORMATS = ("plain", "sparkplug_b")
 # what ends a serial line published to MQTT (MqttSettings.line_end)
 MQTT_LINE_ENDS = ("lf", "cr", "any")
@@ -1414,6 +1416,22 @@ class MqttSettings:
     # read fails or whose unit stops answering. Edits refuse other values; a stored one
     # (a later version's) is published as text.
     value_format: str = "text"
+    # The MQTT version the connection speaks: "3.1.1" (as before) or "5". Edits refuse
+    # other values; a stored one (a later version's) connects with 3.1.1, and says so in
+    # the log. The three below are MQTT 5's and do nothing with 3.1.1:
+    protocol: str = "3.1.1"
+    # clean start: the broker begins a new session at every connect (as 3.1.1 always
+    # does here). Off, with a client ID and a session expiry: it keeps the session (the
+    # subscriptions, and the QoS 1/2 messages for them that came while the connection
+    # was away) for that long. Sparkplug B always starts clean and keeps no session (the
+    # specification asks so).
+    clean_start: bool = True
+    session_expiry_s: int = 0   # 0: the session ends with the connection
+    # retained data (serial lines, polled values with retain on) expires at the broker
+    # this many seconds after it was published: a subscriber that connects later does not
+    # get a value that old. 0: never (as before). Not for <base_topic>/status and the
+    # units' states.
+    message_expiry_s: int = 0
 
     @staticmethod
     def from_dict(d: dict[str, Any], notes: Optional[list[FieldNote]] = None,
@@ -1460,7 +1478,13 @@ MODBUS_BLOCK_GAP_MAX = 124    # block reads: unused registers between two points
 _POINT_INTS = ("unit", "fn", "address")
 # the keys of a point and of the poll that 2.9 added: typed from the start, so read as they
 # are (not through _read_fields), for an edit to refuse what it can't use (validate_input)
-_POINT_STRICT = ("min", "max", "allowed", "poll", "word_order", "bit", "length")
+_POINT_STRICT = ("min", "max", "allowed", "poll", "word_order", "bit", "length",
+                 "pulse_ms", "safe_value", "safe_after_s")  # (the last three: 3.1)
+# a coil's pulse (ModbusPoint.pulse_ms), in milliseconds, and how long the broker (or the
+# Sparkplug primary host) may be away before a point's safe value is written
+# (ModbusPoint.safe_after_s), in seconds: what an edit accepts
+MODBUS_PULSE_MS = (50, 600000)
+MODBUS_SAFE_AFTER_S = (1, 86400)
 _POLL_STRICT = ("block_reads", "block_gap")
 
 
@@ -1518,6 +1542,17 @@ class ModbusPoint:
     bit: Optional[int] = None
     # dtype "string": how many registers it takes (two characters each), 1-125
     length: Optional[int] = None
+    # A writable coil: a write of true from MQTT is followed by a write of false this many
+    # milliseconds later (MODBUS_PULSE_MS), also when the mapping stops meanwhile (then at
+    # once). None: a coil stays as it was written, as before.
+    pulse_ms: Optional[int] = None
+    # A writable point: once the broker connection (Sparkplug B with a primary host: that
+    # host) has been away for safe_after_s seconds (MODBUS_SAFE_AFTER_S; also when it
+    # never came after the mapping started), safe_value is written to it, once per outage:
+    # true / false for a coil, a number within the point's limits for a register. Both
+    # or neither; never written by a read-only mapping.
+    safe_value: Any = None
+    safe_after_s: Optional[float] = None
 
     @staticmethod
     def from_dict(d: dict[str, Any], notes: Optional[list[FieldNote]] = None,
@@ -1667,10 +1702,10 @@ class ModbusPoll:
                                     "can be written.").format(repr(p.name)))
 
     def validate_input(self) -> None:
-        """The point options an edit may set (min, max, allowed, poll, word_order) and the
-        types of the rest. validate() leaves them alone (a stored config has to keep
-        loading); one stored that can't be used is ignored, with a warning in the gateway's
-        log at start."""
+        """The point options an edit may set (min, max, allowed, poll, word_order, pulse_ms,
+        safe_value, safe_after_s) and the types of the rest. validate() leaves them alone (a
+        stored config has to keep loading); one stored that can't be used is ignored, with
+        a warning in the gateway's log at start."""
         if not isinstance(self.block_reads, bool):
             raise ConfigError(_("Block reads must be on or off (true or false)."))
         if not (_is_int(self.block_gap) and 0 <= self.block_gap <= MODBUS_BLOCK_GAP_MAX):
@@ -1729,6 +1764,49 @@ class ModbusPoll:
                 raise ConfigError(_("Point {0}: allowed must be a list of the values MQTT may "
                                     "write: true / false for a coil, numbers for a "
                                     "register.").format(name))
+            if p.pulse_ms is not None:
+                low, high = MODBUS_PULSE_MS
+                if not (p.writable and p.fn == 1):
+                    raise ConfigError(_("Point {0}: pulse_ms is for a writable coil (fn 1, "
+                                        "\"writable\": true).").format(name))
+                if not (_is_int(p.pulse_ms) and low <= p.pulse_ms <= high):
+                    raise ConfigError(_("Point {0}: pulse_ms must be a whole number of "
+                                        "milliseconds from {1} to {2}.").format(name, low, high))
+            if (p.safe_value is None) != (p.safe_after_s is None):
+                raise ConfigError(_("Point {0}: safe_value and safe_after_s belong together: "
+                                    "set both or neither.").format(name))
+            if p.safe_value is not None and p.safe_after_s is not None:
+                low, high = MODBUS_SAFE_AFTER_S
+                if not p.writable:
+                    raise ConfigError(_("Point {0}: a safe value is written to the point, so "
+                                        "it needs \"writable\": true.").format(name))
+                if not (_is_number(p.safe_after_s) and low <= p.safe_after_s <= high):
+                    raise ConfigError(_("Point {0}: safe_after_s must be a number of seconds "
+                                        "from {1} to {2}.").format(name, low, high))
+                if coil and not isinstance(p.safe_value, bool):
+                    raise ConfigError(_("Point {0}: a coil's safe_value is true or "
+                                        "false.").format(name))
+                if not coil and not (_is_number(p.safe_value) and math.isfinite(p.safe_value)):
+                    raise ConfigError(_("Point {0}: safe_value must be a number.").format(name))
+                if not coil:  # (as write_point encodes it: in the type's range, scaled)
+                    from .engine.modbus import encode_value
+                    try:
+                        encode_value(p.safe_value, p.dtype, point_scale(p) or 1.0,
+                                     point_order(p))
+                    except ValueError:
+                        raise ConfigError(_("Point {0}: safe_value {1} does not fit its type "
+                                            "{2}.").format(name, _shown(p.safe_value),
+                                                           p.dtype)) from None
+                if p.safe_value is True and p.pulse_ms is not None:
+                    raise ConfigError(_("Point {0}: a coil with pulse_ms goes back to false by "
+                                        "itself, so its safe_value can only be false.").format(
+                                            name))
+                if ((p.allowed is not None and not any(
+                        v is p.safe_value if coil else v == p.safe_value for v in p.allowed))
+                        or (p.min is not None and p.safe_value < p.min)
+                        or (p.max is not None and p.safe_value > p.max)):
+                    raise ConfigError(_("Point {0}: safe_value is outside the point's own "
+                                        "min, max or allowed.").format(name))
             if not isinstance(p.poll, bool):
                 raise ConfigError(_("Point {0}: poll must be true or false.").format(name))
             if not p.poll and not p.writable:
@@ -1865,6 +1943,15 @@ class MappingConfig:
         if self.kind == "net" and self.network.mode == "udp" and self.options.closeon:
             out.append(_("A close-on string is set, but a UDP mapping has no connections to "
                          "close: it is not used."))
+        mq = self.mqtt
+        if mq.enabled and self.kind == "net":
+            session = mq.clean_start is False or mq.session_expiry_s != 0
+            if mq.protocol != "5" and (session or mq.message_expiry_s != 0):
+                out.append(_("Clean start, session expiry and message expiry are MQTT 5 "
+                             "settings: with MQTT 3.1.1 they are not used."))
+            elif mq.protocol == "5" and session and not _plain_mqtt(self):
+                out.append(_("Sparkplug B always starts a clean MQTT session and keeps none: "
+                             "clean start off and the session expiry are not used."))
         if self.kind == "net":  # a list an edit would refuse: only in a hand-edited file
             nets, bad = client_networks(self.network.allowed_client_ips)
             if bad:
@@ -1962,6 +2049,8 @@ class MappingConfig:
                 if not isinstance(host, str) or any(c in host for c in "/+#"):
                     raise ConfigError(_("Sparkplug {0} must not contain '/', '+' or '#'.").format(
                         _("primary host ID")))
+        if self.kind == "net":
+            self._validate_mqtt_version()
         if self.kind == "net" and self.mqtt.enabled and _plain_mqtt(self):
             # (serial lines and their /tx writes too: a subscription to such a topic would
             # take every matching one)
@@ -1986,6 +2075,23 @@ class MappingConfig:
             mapping_context(net)
         except TlsFileError as e:
             raise ConfigError(tls_file_message(e)) from None
+
+    def _validate_mqtt_version(self) -> None:
+        """The MQTT version and MQTT 5's settings (an edit's rules: a stored protocol they
+        refuse connects with 3.1.1, a stored expiry they refuse reads as 0)."""
+        mq = self.mqtt
+        if mq.protocol not in MQTT_PROTOCOLS:
+            raise ConfigError(_("The MQTT protocol version must be one of {0}.").format(
+                _choices(MQTT_PROTOCOLS)))
+        for label, value in ((_("MQTT session expiry"), mq.session_expiry_s),
+                             (_("MQTT message expiry"), mq.message_expiry_s)):
+            if not (_is_int(value) and 0 <= value <= MQTT_EXPIRY_MAX_S):
+                raise ConfigError(_("{0} must be a whole number of seconds from 0 to "
+                                    "{1}.").format(label, MQTT_EXPIRY_MAX_S))
+        if (mq.enabled and mq.protocol == "5" and mq.clean_start is False
+                and _plain_mqtt(self) and not str(mq.client_id).strip()):
+            raise ConfigError(_("MQTT clean start off needs a client ID: the broker keeps a "
+                                "session for the client ID it knows."))
 
     def _validate_lines_and_poll(self) -> None:
         """A serial-to-network mapping's MQTT line end and its poll string (an edit's
@@ -3045,7 +3151,7 @@ class ClusterSettings:
 NOTIFY_EVENTS = ("device_lost", "device_back", "start_failed", "link_lost", "link_back",
                  "client_connected", "client_disconnected", "login_failed", "disk_low",
                  "no_data", "data_back", "peer_offline", "peer_back", "service_started",
-                 "unit_offline", "unit_back", "cert_expiring", "clock_step")
+                 "unit_offline", "unit_back", "cert_expiring", "clock_step", "safe_values")
 # (a saved events list is kept as it is: these are what a config without one gets)
 NOTIFY_DEFAULT_EVENTS = ("device_lost", "device_back", "start_failed", "link_lost", "link_back")
 WEBHOOK_FORMATS = ("json", "slack", "teams", "discord", "telegram")
