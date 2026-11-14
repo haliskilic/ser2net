@@ -15,8 +15,10 @@
               package in the system's site-packages, with the file DISTRO_FILE the recipe
               wrote into it before the build (pyproject.toml takes it into the wheel). It
               names the distribution, the data directory of the package's service
-              (/var/lib/ser2netweb, FreeBSD's /var/db/ser2netweb, ...), the default, and how
-              the distribution installs an optional package (the hint for a missing one).
+              (/var/lib/ser2netweb, FreeBSD's /var/db/ser2netweb, ...), the default (unless
+              it has no config.json and the user data folder has one: a package from
+              before the file, taken for pip's layout, kept a hand-run copy's data there),
+              and how the distribution installs an optional package (the hint).
               Without that file (a package of someone else's recipe) it is pip's layout
   homebrew    the Homebrew formula (haliskilic/tap/ser2netweb): pip's layout too, in the
               virtual environment of the formula's keg (<prefix>/Cellar/ser2netweb/<version>/
@@ -242,8 +244,9 @@ def snap_data_dir(environ: Optional[Mapping[str, str]] = None,
 def default_data_dir(app_dir: str, kind_: Optional[str] = None) -> str:
     """The data directory without --data-dir / --config: data/ in `app_dir` (a source
     checkout, or the folder of a standalone executable, also Scoop's), the package's
-    service's data directory (also a distribution's package's, as its recipe says), the
-    user data folder (a pip install; winget's and
+    service's data directory (also a distribution's package's, as its recipe says, unless
+    only the user data folder has a config.json: an older package's), the user data folder
+    (a pip install; winget's and
     Chocolatey's executable, unless `app_dir` has a data/ with a config.json already), the
     Homebrew formula's <prefix>/var/ser2netweb (unless only the user data folder has a
     config.json: 3.0.0's default there) or the snap's (snap_data_dir)."""
@@ -254,17 +257,11 @@ def default_data_dir(app_dir: str, kind_: Optional[str] = None) -> str:
         # (an absolute path of the system's, or a POSIX one: a recipe is for a POSIX system)
         folder = (distro_info() or {}).get("data_dir")
         if isinstance(folder, str) and (os.path.isabs(folder) or posixpath.isabs(folder)):
-            return folder
+            return _service_or_user(folder)
         return user_data_dir()
     if k == HOMEBREW:
-        prefix, user = homebrew_prefix(), user_data_dir()
-        if not prefix:
-            return user
-        var = os.path.join(prefix, "var", NAME)
-        if (not os.path.isfile(os.path.join(var, "config.json"))
-                and os.path.isfile(os.path.join(user, "config.json"))):
-            return user
-        return var
+        prefix = homebrew_prefix()
+        return _service_or_user(os.path.join(prefix, "var", NAME)) if prefix else user_data_dir()
     if k == PACKAGE:
         return PACKAGE_DATA_DIR
     if k == SNAP:
@@ -273,6 +270,18 @@ def default_data_dir(app_dir: str, kind_: Optional[str] = None) -> str:
     if k in (WINGET, CHOCOLATEY) and not os.path.isfile(os.path.join(here, "config.json")):
         return user_data_dir()
     return here
+
+
+def _service_or_user(service: str) -> str:
+    """`service`, the data directory of a package's service, unless it has no config.json
+    and the user data folder has one: there a copy run by hand kept its data while the
+    package was taken for pip's layout (the Homebrew formula's 3.0.0, a distribution's
+    package from a recipe without distro.json), and it stays the default."""
+    user = user_data_dir()
+    if (not os.path.isfile(os.path.join(service, "config.json"))
+            and os.path.isfile(os.path.join(user, "config.json"))):
+        return user
+    return service
 
 
 def licence_dir(package_dir: str = PACKAGE_DIR) -> Optional[str]:

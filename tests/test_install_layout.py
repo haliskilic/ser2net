@@ -517,6 +517,11 @@ def test_distribution_package():
                 assert console.reconfigure_hint("/d", environ={})[1] == \
                     "ser2netweb --reconfigure --data-dir /d"
                 assert dict(cli._known_roots({}))["<ser2netweb>"] == layout.PACKAGE_DIR
+        # data an older package left in the user data folder (one built from packaging/
+        # before distro.json, taken for pip's layout: its copy run by hand without
+        # --data-dir kept it there) stays the default while the service's folder has no
+        # config.json, as for the Homebrew formula
+        _distro_upgrade()
         # the hint for a missing optional package: the recipe's command, else the
         # distribution's package by name
         layout.distro_info = lambda *_a: DEBIAN
@@ -540,6 +545,28 @@ def test_distribution_package():
     print("a distribution's package (the recipe's file in pip's layout): its name in --about, "
           "its service's data directory, the distribution's command in hints; anything else "
           "pip's layout as before  OK")
+
+
+def _distro_upgrade():
+    saved = layout.distro_info, layout.user_data_dir
+    with tempfile.TemporaryDirectory() as tmp:
+        service, user = os.path.join(tmp, "var", "lib", "ser2netweb"), os.path.join(tmp, "user")
+        layout.distro_info = lambda *_a: dict(DEBIAN, data_dir=service)
+        layout.user_data_dir = lambda *_a: user
+        try:
+            with _Kind(layout.DISTRO):
+                assert layout.default_data_dir("/x") == service, "neither folder has data"
+                _touch(user, "all.log")
+                assert layout.default_data_dir("/x") == service, "no config.json in the user's"
+                _touch(user, "config.json")
+                assert layout.default_data_dir("/x") == user, "the older package's data"
+                assert cli.parse_args([]).data_dir == user
+                os.makedirs(service)  # (the package makes it)
+                assert layout.default_data_dir("/x") == user
+                _touch(service, "config.json")  # the service ran, or --data-dir was given
+                assert layout.default_data_dir("/x") == service, "the service's folder wins"
+        finally:
+            layout.distro_info, layout.user_data_dir = saved
 
 
 def test_distribution_package_end_to_end():

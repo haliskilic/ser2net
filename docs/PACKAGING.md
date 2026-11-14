@@ -30,6 +30,9 @@ packages it with the rest, and the check step's tests see it too):
 - `distribution` (required): the name `--about` gives, `Build: distribution package (Debian)`;
 - `data_dir`: the data directory of the package's service, the default without `--data-dir`
   (`sudo -u ser2netweb ser2netweb --set-password admin` then works on the service's data);
+  while it has no `config.json` and the user's data folder has one (a package built from a
+  recipe before the file was taken for a pip install, and a copy run by hand kept its data
+  there), that folder stays the default, as for the Homebrew formula;
   left out, the user's data folder, as for pip (nixpkgs, whose package also runs outside
   NixOS);
 - `optional`: how the distribution installs an optional package, for the hint about a missing
