@@ -23,7 +23,7 @@ from ...i18n import _
 from .. import auth, proxy, totp
 from ..auth import LoginRateLimiter
 from ..starlette_compat import Route
-from .common import Ctx, csrf_failed, local_path
+from .common import Ctx, csrf_failed, local_path, read_form
 from .settings import _Flash
 
 PAGE = "/settings/totp"          # Settings → Two-factor sign-in
@@ -33,9 +33,9 @@ PENDING_TTL_S = 300          # from the password to the code
 ENROL_TTL_S = 1800           # from showing a new key to confirming it with a code
 CODE_ATTEMPTS = 5            # wrong codes for one account ...
 CODE_WINDOW_S = 300          # ... in this many seconds, then it must wait
-# the code forms are a few short fields
+# the code forms are a few short fields (and no file: read_form)
 FORM_MAX_BYTES = 64 * 1024
-FORM_LIMITS = {"max_files": 0, "max_fields": 8, "max_part_size": 16 * 1024}
+FORM_LIMITS = {"max_fields": 8, "max_part_size": 16 * 1024}
 NO_STORE = {"Cache-Control": "no-store"}  # a page with a key or a code step
 
 
@@ -117,7 +117,7 @@ def routes(ctx: Ctx) -> list:
         return _code_page(request, user)
 
     async def code_post(request):
-        form = await request.form(**FORM_LIMITS)
+        form = await read_form(request, **FORM_LIMITS)
         if not auth.csrf_token_matches(request, form.get("_csrf")):
             return csrf_failed()
         ip = client_ip(request)
@@ -215,7 +215,7 @@ def routes(ctx: Ctx) -> list:
         return None
 
     async def enable_post(request):
-        form = await request.form(**FORM_LIMITS)
+        form = await read_form(request, **FORM_LIMITS)
         if not auth.csrf_token_matches(request, form.get("_csrf")):
             return csrf_failed()
         me = current_user(request)
@@ -246,7 +246,7 @@ def routes(ctx: Ctx) -> list:
                                     "your app too. Your other sessions were signed out."))
 
     async def disable_post(request):
-        form = await request.form(**FORM_LIMITS)
+        form = await read_form(request, **FORM_LIMITS)
         if not auth.csrf_token_matches(request, form.get("_csrf")):
             return csrf_failed()
         me = current_user(request)

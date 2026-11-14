@@ -239,12 +239,13 @@ def client_ip(request: HTTPConnection) -> str:
     return ip
 
 
-async def read_form(request: Request) -> ImmutableMultiDict[str, str]:
+async def read_form(request: Request, **limits: int) -> ImmutableMultiDict[str, str]:
     """The fields of a posted form, all text. None of these forms takes a file: one in
     the body is refused (400) while it is read, instead of reaching a handler that
-    expects a string where an upload turns up. (The mappings import, which takes one
-    file, reads its form itself.)"""
-    form = await request.form(max_files=0)
+    expects a string where an upload turns up. `limits`: Starlette's other limits
+    (max_fields, max_part_size) for a form of a few short fields, the sign-in forms. (The
+    mappings import, which takes one file, reads its form itself.)"""
+    form = await request.form(max_files=0, **limits)
     return ImmutableMultiDict([(k, v) for k, v in form.multi_items() if isinstance(v, str)])
 
 
