@@ -251,8 +251,11 @@ def default_data_dir(app_dir: str, kind_: Optional[str] = None) -> str:
     if k == PIP:
         return user_data_dir()
     if k == DISTRO:
+        # (an absolute path of the system's, or a POSIX one: a recipe is for a POSIX system)
         folder = (distro_info() or {}).get("data_dir")
-        return folder if isinstance(folder, str) and os.path.isabs(folder) else user_data_dir()
+        if isinstance(folder, str) and (os.path.isabs(folder) or posixpath.isabs(folder)):
+            return folder
+        return user_data_dir()
     if k == HOMEBREW:
         prefix, user = homebrew_prefix(), user_data_dir()
         if not prefix:
