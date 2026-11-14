@@ -114,7 +114,7 @@ jobs:
         with:
           name: recipes
           path: packaging
-      - uses: cachix/install-nix-action@448cde739abec1eaf0646249e3d25bb8d9bc7702  # v31.11.2
+      - uses: cachix/install-nix-action@91f6a0f59e94dfb2cfed0f4000f36a68ead1d20c  # v31.11.4
         with:
           extra_nix_config: |
             sandbox = true
@@ -296,7 +296,7 @@ jobs:
         with:
           name: recipes
           path: packaging
-      - uses: vmactions/freebsd-vm@c46abacb49f09938ca4e1702d15d836285d694cc  # v1.5.9
+      - uses: vmactions/freebsd-vm@811efaaac0668df8bfb8308c3ec997b5ab50037b  # v1.6.0
         env:
           PORTS_COMMIT: 5f37287767a4af77fa91ddbc314235709caa9b47  # main on 2026-11-13
           VERSION: ${{ needs.recipes.outputs.version }}
