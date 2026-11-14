@@ -495,8 +495,10 @@ düzenlemeye gerek yok.
   yanıt vermemesi) ve yeniden yanıt vermesi, **süresi dolmak üzere olan bir TLS
   sertifikası** (yönetim arayüzününki ve etkin her TLS eşlemesininki, günde bir kez okunur:
   30, 7 ve 1 günden az kaldığında birer mesaj, süresi dolduğunda bir mesaj daha — sertifika
-  ve eşik başına bir kez, yeniden başlatmalardan sonra da; ulaşamayan bir mesaj ertesi günkü
-  denetimde yeniden gönderilir; yenilenen sertifika baştan başlar), ser2netweb çalışırken **sistem saatinin değiştirilmesi** (bkz. *Saat
+  ve eşik ve kanal başına bir kez, yeniden başlatmalardan sonra da: mesajın ulaşmadığı bir
+  kanal (örneğin çalışmayan bir posta sunucusu) onu ertesi günkü denetimde alır, yalnızca o
+  kanal; eşlemesi bir süre devre dışı kalan ya da yönetim arayüzünün TLS'i kapatılan bir
+  sertifika yeniden bildirilmez; yenilenen sertifika baştan başlar), ser2netweb çalışırken **sistem saatinin değiştirilmesi** (bkz. *Saat
   senkronizasyonu*) ve **güvenli değerlerin yazılması** (bir gateway noktalarına
   `safe_value` değerini yazdı: broker ya da Sparkplug primary host, `safe_after_s` süresince
   yoktu). Tekrarlar bastırılır, test mesajı gönderilebilir. Bu olaylar gönderilsin ya da gönderilmesin all.log'a yazılır.

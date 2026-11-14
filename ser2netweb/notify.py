@@ -572,11 +572,14 @@ class Notifier:
         self._tasks = []
 
     def emit(self, event: str, key: str, mapping: str, detail: str = "",
-             sent: Optional[Callable[[bool], Awaitable[None]]] = None) -> bool:
+             sent: Optional[Callable[[list[str], list[str]], Awaitable[None]]] = None,
+             channels: Optional[list[str]] = None) -> bool:
         """Queue an event if it is enabled and not a repeat; True when queued. A client
         event's address is masked here (mask_personal_data); its repeat key stays the
-        address itself. `sent(ok)` is awaited once the worker has tried it: ok when every
-        channel took it (False also when the rate limit held it back)."""
+        address itself. `channels`: send it only to those of CHANNELS (None: to every one
+        configured). `sent(tried, failed)` is awaited once the worker has tried it: the
+        channels it was sent to and those that did not take it (all of them when the rate
+        limit held it back)."""
         s = self.settings
         if not s.enabled or event not in s.events:
             return False
@@ -591,7 +594,8 @@ class Notifier:
         if s.mask_personal_data and event in CLIENT_EVENTS:
             detail = mask_address(detail)
         try:
-            self._queue.put_nowait((event, mapping, detail) + ((sent,) if sent else ()))
+            self._queue.put_nowait((event, mapping, detail)
+                                   + ((sent, channels) if sent or channels else ()))
         except asyncio.QueueFull:
             return False
         return True
@@ -697,61 +701,71 @@ class Notifier:
 
     async def _worker(self) -> None:
         while True:
-            # (event, mapping, detail[, sent]): see emit
+            # (event, mapping, detail[, sent, channels]): see emit
             event, mapping, detail, *after = await self._queue.get()
+            sent, channels = (after + [None, None])[:2]
             try:
-                ok = await self._send(event, mapping, detail)
-                for sent in after:
+                tried, failed = await self._send(event, mapping, detail, channels)
+                if sent is not None:
                     try:
-                        await sent(ok)
+                        await sent(tried, failed)
                     except Exception as e:  # (its own: never the worker's end)
                         self.state.log(f"notifications: after {event}: {e}")
             finally:
                 self._queue.task_done()
 
-    async def _send(self, event: str, mapping: str, detail: str) -> bool:
-        """Send one event now; whether every channel took it."""
+    async def _send(self, event: str, mapping: str, detail: str,
+                    channels: Optional[list[str]] = None) -> tuple[list[str], list[str]]:
+        """Send one event now, to `channels` (None: every one configured); the channels
+        it was sent to and those that did not take it (each failure is logged)."""
+        tried = [c for c in configured_channels(self.settings)
+                 if channels is None or c in channels]
         now = time.monotonic()
         while self._sent and now - self._sent[0] > 60:
             self._sent.popleft()
         if len(self._sent) >= MAX_PER_MINUTE:
             self.state.log(f"notifications: rate limit ({MAX_PER_MINUTE}/min), "
                            f"not sent: {event} {mapping}")
-            return False
+            return tried, tried
         self._sent.append(now)
         warnings: list[str] = []
-        errors = await self.deliver(event, mapping, detail, warnings=warnings)
+        errors = await self.deliver(event, mapping, detail, warnings=warnings,
+                                    channels=channels)
         what = f"{event}, mapping {mapping!r}" if mapping else event
         for err in [str(e) for e in errors] + warnings:
             self.state.log(f"notifications: {err} ({what})")
-        return not errors
+        return tried, [f.channel for f in errors]
 
     async def deliver(self, event: str, mapping: str, detail: str,
-                      settings=None, warnings: Optional[list] = None) -> list["Failure"]:
+                      settings=None, warnings: Optional[list] = None,
+                      channels: Optional[list[str]] = None) -> list["Failure"]:
         """Send to every configured channel now; returns the channels that failed (empty
         = all sent), and adds to *warnings* what was sent but may not have arrived (a
         redirected webhook). Messages are in the UI's default language (Settings -> Web UI
         access), or English when that is "the browser's" (the test message too: an empty
         detail gives its text in that language), name the instance by its name (Settings ->
         Admin interface) or else the host name, and end with the UI's public URL when one is
-        set (Settings -> Reverse proxy)."""
+        set (Settings -> Reverse proxy). `channels`: only those of CHANNELS (None: every
+        one)."""
         s = settings or self.settings
         token = i18n.set_language(self.state.config.admin_ui.language)
         try:
             if event == "test" and not detail:
                 detail = _("If you can read this, ser2netweb can reach you.")
             return await self._deliver(s, event, mapping, detail,
-                                       [] if warnings is None else warnings)
+                                       [] if warnings is None else warnings, channels)
         finally:
             i18n.reset(token)
 
     async def _deliver(self, s, event: str, mapping: str, detail: str,
-                       warnings: list) -> list["Failure"]:
+                       warnings: list, channels: Optional[list[str]] = None) -> list["Failure"]:
         errors = []
         cfg = self.state.config
         url = proxy.public_url(cfg.admin_ui)
         name = configured_name(cfg.admin_ui)   # '' = the host name
-        if s.webhook_url.strip():
+        use = configured_channels(s) if channels is None else [
+            c for c in configured_channels(s) if c in channels]
+        if "webhook" in use:
             try:
                 if warning := await asyncio.to_thread(send_webhook, s, event, mapping, detail,
                                                       url, name=name,
@@ -759,13 +773,23 @@ class Notifier:
                     warnings.append(warning)
             except Exception as e:
                 errors.append(Failure("webhook", s.webhook_format, e, s.webhook_url.strip()))
-        if s.recipients:
+        if "e-mail" in use:
             try:
                 await asyncio.to_thread(send_email, s, event, mapping, detail, url, name=name)
             except Exception as e:
                 errors.append(Failure("e-mail", f"{s.smtp_host}:{s.smtp_port}", e,
                                       s.smtp_username + s.smtp_password))
         return errors
+
+
+CHANNELS = ("webhook", "e-mail")  # (as Failure.channel names them)
+
+
+def configured_channels(s) -> list[str]:
+    """The CHANNELS notification settings `s` send to: the webhook when it has a URL,
+    e-mail when it has recipients."""
+    return [c for c, on in (("webhook", bool(s.webhook_url.strip())),
+                            ("e-mail", bool(s.recipients))) if on]
 
 
 class Failure:
