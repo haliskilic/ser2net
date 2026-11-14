@@ -491,6 +491,7 @@ def test_nginx_examples() -> None:
         conf = nginx_proxy.nginx_conf("/t", blocks[location], map_line, 4443, "/t/c", "/t/k",
                                       18080)
         assert "listen 127.0.0.1:4443 ssl;" in conf and "ssl_certificate /t/c;" in conf, conf
+        assert "listen 127.0.0.1:4443 ssl default_server;\n" in conf and "return 444;" in conf
         assert "proxy_pass http://127.0.0.1:18080;" in conf and "8080;" not in conf.replace(
             "18080;", ""), conf
         for line in ("proxy_set_header Host $http_host;", "proxy_set_header Upgrade $http_upgrade;",

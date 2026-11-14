@@ -14,6 +14,8 @@ this user, with its files in a temporary folder. The client connects from 127.0.
 nginx to ser2netweb from 127.0.0.1, so the address ser2netweb names tells them apart.
 
 For each block, through nginx over HTTPS:
+  * the page's server_name takes the requests: another host name gets no answer (a
+    catch-all default_server added here returns 444);
   * the web UI: the sign-in page and a static file, signing in, a page with the mapping;
   * the client's address: nginx's (127.0.0.1) while Trusted proxies is empty, with all.log's
     note that X-Forwarded-For is ignored; Settings -> Reverse proxy -> Trusted proxies
@@ -101,10 +103,15 @@ def nginx_conf(tmp: str, block: str, map_line: str, port: int, cert: str, key: s
     block = _once(block, "proxy_pass http://127.0.0.1:8080;", f"proxy_pass http://127.0.0.1:{upstream};")
     temp = " ".join(f"{d}_temp_path {tmp}/{d};" for d in ("client_body", "proxy", "fastcgi",
                                                            "uwsgi", "scgi"))
+    # (any other host name gets no answer: a page's block without its server_name would
+    # leave the browser's requests to this one, and the test fails)
+    catch_all = (f"server {{\n    listen {PROXY}:{port} ssl default_server;\n"
+                 f"    ssl_certificate {cert};\n    ssl_certificate_key {key};\n"
+                 "    return 444;\n}\n")
     return (f"daemon off;\nworker_processes 1;\npid {tmp}/nginx.pid;\n"
             f"error_log {tmp}/error.log info;\nevents {{ worker_connections 128; }}\n"
             f"http {{\n    access_log {tmp}/access.log;\n    {temp}\n    {map_line}\n\n"
-            f"{block}}}\n")
+            f"{catch_all}\n{block}}}\n")
 
 
 def certificate(tmp: str) -> tuple[str, str]:
@@ -168,8 +175,9 @@ class Browser:
     """Requests to nginx from CLIENT with the browser's Host (the Public URL's), its Origin
     on what changes something, and the cookies the UI set."""
 
-    def __init__(self, host: str, port: int):
+    def __init__(self, host: str, port: int, answered: bool = True):
         self.host, self.port = host, port
+        self.answered = answered  # (False: no answer is expected, the catch-all's)
         self.origin = f"https://{host}:{port}"
         self.cookies: dict[str, str] = {}
 
@@ -191,7 +199,13 @@ class Browser:
             for k, v in (headers or {}).items():
                 conn.putheader(k, v)
             conn.endheaders(body)
-            r = conn.getresponse()
+            try:
+                r = conn.getresponse()
+            except http.client.RemoteDisconnected:
+                if self.answered:
+                    fail(f"nginx closed {method} {path} for {self.host} without an answer: the "
+                         "catch-all's 444, so no server block of the page has this server_name")
+                return 0, http.client.HTTPMessage(), ""
             data = r.read()
         finally:
             conn.close()
@@ -335,11 +349,28 @@ def run_variant(binary: str, tmp: str, location: str, host: str, prefix: str,
         pty.close()
 
 
+def logged(srv: Server, *needles: str, timeout: float = 10) -> str:
+    """The server's output once it has every one of `needles` (its console output is
+    written by a thread of its own, a moment after the request), else what it has after
+    `timeout` seconds."""
+    end = time.monotonic() + timeout
+    while True:
+        log = srv.output()
+        if all(n in log for n in needles) or time.monotonic() > end:
+            return log
+        time.sleep(0.1)
+
+
 def check_variant(srv: Server, nginx: Nginx, host: str, port: int, prefix: str, public: str,
                   pty: Pty) -> None:
     where = f"nginx at {public}"
-    log = srv.output()
+    log = logged(srv, f"published as {public} (admin_ui.public_url)")
     check(f"published as {public} (admin_ui.public_url)" in log, f"{where}: {log[-1500:]}")
+    # the page's server_name is what takes the browser's requests: another host name gets
+    # the catch-all's no answer
+    st, _h, _b = Browser("other.example.com", port, answered=False).request("GET",
+                                                                           f"{prefix}/login")
+    check(st == 0, f"{where}: another host name got {st}, not the catch-all's no answer")
     # the web UI
     b = Browser(host, port)
     st, _h, page = b.request("GET", f"{prefix}/login")
@@ -359,11 +390,10 @@ def check_variant(srv: Server, nginx: Nginx, host: str, port: int, prefix: str, 
     print(f"{where}: the sign-in page, app.css, sign-in ({name}), the dashboard and its "
           "mapping table  OK")
     # the client's address: nginx's until it is trusted
-    time.sleep(0.3)
-    log = srv.output()
+    ignored = f"X-Forwarded-For from {PROXY} is ignored: {PROXY} is not a trusted proxy"
+    log = logged(srv, f"login: admin (admin, local) from {PROXY}", ignored)
     check(f"login: admin (admin, local) from {PROXY}" in log, f"{where}: {log[-1500:]}")
-    check(f"X-Forwarded-For from {PROXY} is ignored: {PROXY} is not a trusted proxy" in log,
-          f"{where}: no note that X-Forwarded-For is ignored")
+    check(ignored in log, f"{where}: no note that X-Forwarded-For is ignored")
     b.form(f"{prefix}/settings/proxy", {"trusted_proxies": PROXY})
     check(srv.saved_config()["admin_ui"]["trusted_proxies"] == [PROXY], f"{where}: not saved")
     trusted = Browser(host, port)
@@ -371,8 +401,8 @@ def check_variant(srv: Server, nginx: Nginx, host: str, port: int, prefix: str, 
     page = trusted.form(f"{prefix}/settings/api-token", {})
     token = re.search(r"s2n_[A-Za-z0-9_\-]+", page)
     check(token, f"{where}: Settings -> REST API showed no new token")
-    time.sleep(0.3)
-    log = srv.output()
+    log = logged(srv, f"AUDIT {PROXY} reverse_proxy_set trusted proxies {PROXY}",
+                 f"login: admin (admin, local) from {CLIENT}", f"AUDIT {CLIENT} api_token")
     check(f"AUDIT {PROXY} reverse_proxy_set trusted proxies {PROXY}" in log,
           f"{where}: the change isn't audited from nginx's address: {log[-1500:]}")
     check(f"login: admin (admin, local) from {CLIENT}" in log, f"{where}: {log[-1500:]}")
