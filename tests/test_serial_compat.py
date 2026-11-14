@@ -14,7 +14,8 @@ whole process any more). Checked here, without a serial device:
   - a baud rate without a termios constant (250000, 74880, ...) opens and can be switched
     to while termios refuses pyserial 3.5's BOTHER placeholder, as glibc 2.42+ does for
     the standalone binary, with the input speed the same where tcsetattr leaves the input
-    speed's bits at 38400 (musl, Alpine); a setting the OS refuses is a readable
+    speed's bits at 38400 (musl, Alpine), and set once where a driver reports the rate it
+    achieved for both (cp210x, pl2303); a setting the OS refuses is a readable
     SerialException (Linux PTY, rates read back with TCGETS2);
   - Windows writes (serial_compat.OverlappedWrites, driven through a stand-in for
     pyserial's serial.win32 on any OS): each write has its own OVERLAPPED and keeps its data
@@ -382,6 +383,32 @@ def _musl_input_bits():
     return mock.patch.object(termios, "tcsetattr", tcsetattr)
 
 
+def _set_calls(achieved=None):
+    """fcntl.ioctl, counting the TCSETS2 calls (the port's settings written) in the list
+    it yields; with `achieved` {asked: got}, a driver that reports the rate it achieved
+    for both speeds instead of the one asked for (cp210x, pl2303: tty_encode_baud_rate)."""
+    import fcntl
+
+    from serial import serialposix
+    real, calls = fcntl.ioctl, []
+
+    def ioctl(fd, request, arg=0, *rest):
+        if request == serialposix.TCSETS2:
+            calls.append((arg[9], arg[10]))
+        result = real(fd, request, arg, *rest)
+        if request == serialposix.TCGETS2 and achieved:
+            for i in (9, 10):
+                arg[i] = achieved.get(arg[i], arg[i])
+        return result
+
+    @contextlib.contextmanager
+    def patched():
+        with mock.patch.object(fcntl, "ioctl", ioctl):
+            yield calls
+
+    return patched()
+
+
 def _speeds(fd):
     """(input, output) baud rate the kernel has for ``fd`` (TCGETS2)."""
     import array
@@ -436,10 +463,22 @@ def test_custom_baud_rates_on_new_glibc():
             ser = serial_compat.PosixSerial(pty.path, 250000, timeout=0, write_timeout=0)
             try:
                 assert _speeds(ser.fd) == (250000, 250000), _speeds(ser.fd)
-                ser.baudrate = 74880
+                with _set_calls() as calls:
+                    ser.baudrate = 74880
                 assert _speeds(ser.fd) == (74880, 74880), _speeds(ser.fd)
+                # (the stand-in's own write of the 38400 bits, pyserial's, then ours)
+                assert calls == [(38400, 38400), (74880, 74880), (74880, 74880)], calls
             finally:
                 ser.close()
+        # a driver that reports the rate it achieved for both speeds (249600 for 250000):
+        # the input follows the output, so nothing more is written (the UART is set once)
+        with _set_calls({250000: 249600, 74880: 74843}) as calls:
+            ser = serial_compat.PosixSerial(pty.path, 250000, timeout=0, write_timeout=0)
+            try:
+                ser.baudrate = 74880
+            finally:
+                ser.close()
+        assert calls == [(250000, 250000), (74880, 74880)], calls  # pyserial's alone
         with mock.patch.object(termios, "tcsetattr",
                                side_effect=termios.error(22, "Invalid argument")):
             try:
@@ -453,8 +492,8 @@ def test_custom_baud_rates_on_new_glibc():
         pty.close()
     print("PosixSerial: 250000 / 74880 / 31250 / 7200 / 100000 baud open and switch where "
           "glibc 2.42+ refuses pyserial's BOTHER placeholder, the input speed too where "
-          "tcsetattr left it at 38400 (musl); a refused setting is a readable "
-          "SerialException  OK")
+          "tcsetattr left it at 38400 (musl), once only where a driver reports the rate it "
+          "achieved; a refused setting is a readable SerialException  OK")
 
 
 def stand_in_unused(distro_build=None):

@@ -284,20 +284,22 @@ if os.name == "posix" and sys.platform != "win32":
 
 
     def _input_speed_too(port: Any, rate: int) -> None:
-        """The input speed of `port` at `rate` too, after pyserial's _set_special_baudrate
-        gave the custom rate to the output speed (CBAUD = BOTHER) and left the input
-        speed's bits (CIBAUD) as the C library's tcsetattr() did: glibc's leave the input
-        following the output, musl's (Alpine) the 38400 placeholder, so the port read at
-        38400. Those bits are set to BOTHER and the input speed to `rate` (TCSETS2); a
-        port whose input speed is `rate` already is left alone."""
+        """The input speed of `port` the same as its output speed, after pyserial's
+        _set_special_baudrate gave the custom `rate` to the output speed (CBAUD = BOTHER)
+        and left the input speed's bits (CIBAUD) as the C library's tcsetattr() did:
+        glibc's leave the input following the output, musl's (Alpine) the 38400
+        placeholder, so the port read at 38400. Then those bits are set to BOTHER and the
+        input speed to the output's (TCSETS2). A port whose input speed is its output
+        speed already is left alone, also when a driver reports the rate it achieved
+        instead of `rate` for both (cp210x, pl2303: 249600 for 250000)."""
         buf = array.array("i", [0] * 64)
         try:
             fcntl.ioctl(port.fd, serialposix.TCGETS2, buf)
-            if buf[9] == rate:  # (struct termios2: c_ispeed, then c_ospeed)
+            if buf[9] == buf[10]:  # (struct termios2: c_ispeed, then c_ospeed)
                 return
             cibaud = getattr(termios, "CIBAUD", termios.CBAUD << 16)
             buf[2] = (buf[2] & ~cibaud) | (serialposix.BOTHER << 16)  # (IBSHIFT)
-            buf[9] = rate
+            buf[9] = buf[10]
             fcntl.ioctl(port.fd, serialposix.TCSETS2, buf)
         except OSError as e:  # (as pyserial's _set_special_baudrate says it)
             raise ValueError(f"Failed to set custom baud rate ({rate}): {e}") from e
