@@ -618,10 +618,13 @@ def routes(ctx: Ctx) -> list[BaseRoute]:
                                             {"mid": request.query_params.get("mid", "")})
         if not data or not isinstance(data.get("mapping"), dict):
             return PlainTextResponse(_("Could not load the peer's mapping."), status_code=502)
+        try:
+            mapping = MappingConfig.from_dict(data["mapping"])
+        except Exception:  # (a section of it that is not an object)
+            return PlainTextResponse(_("Could not load the peer's mapping."), status_code=502)
         # its version: in the answer since 2.9.0, else what the fleet view was told
         version = data.get("version") or (await state.cluster.fetch_peer(target) or {}).get(
             "version", "")
-        mapping = MappingConfig.from_dict(data["mapping"])
         return render(request, "_mapping_form.html", **form_context(
             mapping, data.get("ports", []), data.get("ips", []), is_new=False,
             links=_peer_links(data), mqtt_stored=mapping.mqtt.password,
@@ -669,6 +672,10 @@ def routes(ctx: Ctx) -> list[BaseRoute]:
         fields, ferr = _peer_save_fields(form, data.get("mapping"), version)
         if ferr or fields is None:
             return _reload(ferr)
+        try:  # the peer's mapping as this node reads it, for the read-back after the save
+            peer_mapping = MappingConfig.from_dict(data["mapping"])
+        except Exception:  # (a section of it that is not an object): nothing is sent
+            return _reload(_("Could not load the peer's mapping."))
         res = await state.cluster.post_peer(target, "/api/cluster/mapping-save", fields,
                                             actor=ctx.actor(request))
         if res and res.get("ok"):
@@ -687,8 +694,7 @@ def routes(ctx: Ctx) -> list[BaseRoute]:
                                                  {"mid": form.get("id", "")})
             lost = []
             if after and isinstance(after.get("mapping"), dict):
-                stored = MappingConfig.from_dict(data["mapping"])
-                lost = not_kept(mapping_for_rerender(ImmutableMultiDict(fields), stored,
+                lost = not_kept(mapping_for_rerender(ImmutableMultiDict(fields), peer_mapping,
                                                      data.get("ports", [])), after["mapping"])
             if not lost:
                 return Response("", headers={"HX-Trigger": "refreshCluster", **note})
