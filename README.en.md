@@ -871,9 +871,16 @@ sudo systemctl enable --now ser2netweb             # installing it doesn't start
 They are signed with the key `B587 60E7 C0B0 515E 81D2  50F9 8164 D694 711B B799` (RSA
 4096, until 2031-11-12; `ser2netweb-archive-keyring.asc` / `.gpg` on the site and
 [`packaging/ser2netweb-archive-keyring.asc`](packaging/ser2netweb-archive-keyring.asc)):
-dnf shows it on the first install, accept it only with this fingerprint. The `.rpm` files themselves aren't signed;
-dnf and zypper check the signed repository metadata, which holds the SHA-256 of every
-package (`repo_gpgcheck=1`, `gpgcheck=0`).
+dnf shows it on the first install, accept it only with this fingerprint. The `.rpm` files
+in the repository are signed with it too, and dnf and zypper check both: the repository
+metadata, which holds the SHA-256 of every package, and each package's own signature
+(`repo_gpgcheck=1`; `gpgcheck=1` for dnf, `pkg_gpgcheck=1` for zypper, which otherwise
+skips a package's signature once the metadata's is good). A `ser2netweb.repo` fetched while
+the packages weren't signed yet says `gpgcheck=0` and keeps working (the metadata is still
+checked); fetching it again (for zypper: removing the repository and adding it again) turns
+the package check on. The release's `.rpm` assets on GitHub are the unsigned build of the
+same packages (`SHA256SUMS`, `gh attestation verify`); [docs/PACKAGES.md](docs/PACKAGES.md)
+has the details.
 
 ### pipx / pip
 The PyPI package `ser2netweb`, for any OS and CPU with Python 3.10 or newer:
@@ -972,7 +979,7 @@ works and runs the same, so units and scripts that name it need no change:
 
 | Option | What it does |
 |---|---|
-| `--data-dir DIR` | where `config.json`, its backups, the logs and traces live (default: `data/` next to `ser2netweb.py` or the binary, for Scoop's in its persist folder; `/var/lib/ser2netweb` for the `.deb` / `.rpm` / AUR package's; the user's data folder for a pip / pipx, winget or Chocolatey install, see *pipx / pip* and *Windows package managers*; `$(brew --prefix)/var/ser2netweb` for Homebrew's, or the user's data folder that 3.0.0 used there, see *Homebrew*; `/var/snap/ser2netweb/common/data` for the snap's, as root); give ser2netweb a folder of its own |
+| `--data-dir DIR` | where `config.json`, its backups, the logs and traces live (default: `data/` next to `ser2netweb.py` or the binary, for Scoop's in its persist folder; `/var/lib/ser2netweb` for the `.deb` / `.rpm` / AUR package's; the data directory of its service for a distribution's package built from the recipes in `packaging/` (`/var/lib/ser2netweb`; FreeBSD `/var/db/ser2netweb`, MacPorts `/opt/local/var/db/ser2netweb`, or the user's data folder while only that has a `config.json`, as an older package left it; `--about` then says `Build: distribution package (<its name>)`, see [docs/PACKAGING.md](docs/PACKAGING.md)); the user's data folder for a pip / pipx, winget or Chocolatey install, see *pipx / pip* and *Windows package managers*; `$(brew --prefix)/var/ser2netweb` for Homebrew's, or the user's data folder that 3.0.0 used there, see *Homebrew*; `/var/snap/ser2netweb/common/data` for the snap's, as root); give ser2netweb a folder of its own |
 | `--config FILE` | a `config.json` elsewhere; its folder is the data directory then |
 | `--reconfigure` | ask again for the admin UI's address and port on the console, then start |
 | `--online` | let the dependency bootstrap fall back to PyPI for a wheel `vendor/wheels/` lacks (source installs) |

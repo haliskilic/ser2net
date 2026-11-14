@@ -13,6 +13,7 @@ ser2netweb --version
 ser2netweb --version | grep -qx 'ser2netweb [0-9][0-9.a-z~+-]*'
 ser2netweb --about
 ser2netweb --about | grep -q '^ *pyserial-asyncio-fast'
+ser2netweb --about | grep -Eqx 'Build: distribution package \((Debian|Ubuntu)\)'
 
 # (its own folder, made by the user it runs as: root may not make one for another account)
 mkdir -m 0700 "$data"

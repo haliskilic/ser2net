@@ -891,9 +891,16 @@ sudo systemctl enable --now ser2netweb             # kurulum servisi kendisi ba�
 Depolar `B587 60E7 C0B0 515E 81D2  50F9 8164 D694 711B B799` anahtarıyla imzalıdır
 (RSA 4096, 2031-11-12'ye kadar; sitede `ser2netweb-archive-keyring.asc` / `.gpg`, depoda
 [`packaging/ser2netweb-archive-keyring.asc`](packaging/ser2netweb-archive-keyring.asc)):
-dnf ilk kurulumda onu gösterir, yalnızca bu parmak iziyle onaylayın. `.rpm` dosyalarının kendisi imzalı değildir;
-dnf ve zypper her paketin SHA-256'sını taşıyan imzalı depo meta verisini denetler
-(`repo_gpgcheck=1`, `gpgcheck=0`).
+dnf ilk kurulumda onu gösterir, yalnızca bu parmak iziyle onaylayın. Depodaki `.rpm`
+dosyaları da bu anahtarla imzalıdır; dnf ve zypper ikisini de denetler: her paketin
+SHA-256'sını taşıyan depo meta verisini ve her paketin kendi imzasını (`repo_gpgcheck=1`;
+dnf için `gpgcheck=1`, zypper için `pkg_gpgcheck=1`: zypper bu olmadan, meta verinin imzası
+geçerliyse paketin imzasına bakmaz). Paketler imzalanmaya başlamadan önce indirilmiş bir
+`ser2netweb.repo` `gpgcheck=0` der ve çalışmaya devam eder (meta veri yine denetlenir);
+dosyayı yeniden indirmek (zypper'da depoyu kaldırıp yeniden eklemek) paket denetimini de
+açar.
+GitHub'daki sürümün `.rpm` dosyaları aynı paketlerin imzasız derlemesidir (`SHA256SUMS`,
+`gh attestation verify`); ayrıntılar [docs/PACKAGES.md](docs/PACKAGES.md)'de.
 
 ### pipx / pip
 PyPI paketi `ser2netweb`, Python 3.10 ya da daha yenisinin olduğu her işletim sistemi ve
@@ -995,7 +1002,7 @@ unit'ler ve script'ler değişiklik gerektirmez:
 
 | Seçenek | Ne yapar |
 |---|---|
-| `--data-dir KLASÖR` | `config.json`, yedekleri, log'lar ve trace'lerin yeri (varsayılan: `ser2netweb.py`'nin ya da binary'nin yanındaki `data/`, Scoop'unki için onun persist klasöründe; `.deb` / `.rpm` / AUR paketininki için `/var/lib/ser2netweb`; pip / pipx, winget ya da Chocolatey kurulumu için kullanıcının veri klasörü, bkz. *pipx / pip* ve *Windows paket yöneticileri*; Homebrew'unki için `$(brew --prefix)/var/ser2netweb` ya da 3.0.0'ın orada kullandığı kullanıcı veri klasörü, bkz. *Homebrew*; snap'inki için, root olarak, `/var/snap/ser2netweb/common/data`); ser2netweb'e kendine ait bir klasör verin |
+| `--data-dir KLASÖR` | `config.json`, yedekleri, log'lar ve trace'lerin yeri (varsayılan: `ser2netweb.py`'nin ya da binary'nin yanındaki `data/`, Scoop'unki için onun persist klasöründe; `.deb` / `.rpm` / AUR paketininki için `/var/lib/ser2netweb`; `packaging/` içindeki tariflerle derlenmiş bir dağıtım paketi için o paketin servisinin veri dizini (`/var/lib/ser2netweb`; FreeBSD'de `/var/db/ser2netweb`, MacPorts'ta `/opt/local/var/db/ser2netweb`; daha eski bir paketin bıraktığı gibi yalnızca kullanıcının veri klasöründe bir `config.json` varken o klasör; `--about` o zaman `Build: distribution package (<dağıtımın adı>)` der, bkz. [docs/PACKAGING.md](docs/PACKAGING.md)); pip / pipx, winget ya da Chocolatey kurulumu için kullanıcının veri klasörü, bkz. *pipx / pip* ve *Windows paket yöneticileri*; Homebrew'unki için `$(brew --prefix)/var/ser2netweb` ya da 3.0.0'ın orada kullandığı kullanıcı veri klasörü, bkz. *Homebrew*; snap'inki için, root olarak, `/var/snap/ser2netweb/common/data`); ser2netweb'e kendine ait bir klasör verin |
 | `--config DOSYA` | başka bir yerdeki `config.json`; veri klasörü o zaman onun klasörüdür |
 | `--reconfigure` | yönetim arayüzünün adresini ve portunu konsolda yeniden sorar, sonra başlar |
 | `--online` | bağımlılık kurulumu `vendor/wheels/`'te olmayan bir wheel için PyPI'ye başvurabilir (kaynak kurulum) |
