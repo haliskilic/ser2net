@@ -121,6 +121,7 @@ WINDOWS_SERIAL_ENV = "SER2NETWEB_WINDOWS_SERIAL"  # (or SER2NET_WINDOWS_SERIAL, 
 # (sys.platform too, which mypy --platform reads; os.name alone decides at run time, as
 # tests/_windows_transport.py relies on: it imports this module with sys.platform "win32")
 if os.name == "posix" and sys.platform != "win32":
+    import array
     import fcntl
     import termios
 
@@ -203,8 +204,9 @@ if os.name == "posix" and sys.platform != "win32":
             which glibc 2.42 and later refuse through the cfsetispeed() / cfsetospeed() of
             an executable built for an older glibc (the standalone Linux binary). The port
             is set to 38400 first, then to the real rate with the TCSETS2 ioctl, which
-            glibc has no part in. A termios error (the driver refused a setting) is raised
-            as SerialException, with what was asked for."""
+            glibc has no part in, the input speed too (_input_speed_too). A termios error
+            (the driver refused a setting) is raised as SerialException, with what was
+            asked for."""
             rate = self._baudrate
             try:
                 if _needs_placeholder(self, rate):
@@ -214,6 +216,7 @@ if os.name == "posix" and sys.platform != "win32":
                     finally:
                         self._baudrate = rate
                     self._set_special_baudrate(rate)
+                    _input_speed_too(self, rate)
                 else:
                     super()._reconfigure_port(force_update)
             except termios.error as e:
@@ -278,6 +281,26 @@ if os.name == "posix" and sys.platform != "win32":
             return False  # pyserial refuses it with its own message
         return (not hasattr(termios, f"B{rate}")
                 and rate not in getattr(port, "BAUDRATE_CONSTANTS", {}))
+
+
+    def _input_speed_too(port: Any, rate: int) -> None:
+        """The input speed of `port` at `rate` too, after pyserial's _set_special_baudrate
+        gave the custom rate to the output speed (CBAUD = BOTHER) and left the input
+        speed's bits (CIBAUD) as the C library's tcsetattr() did: glibc's leave the input
+        following the output, musl's (Alpine) the 38400 placeholder, so the port read at
+        38400. Those bits are set to BOTHER and the input speed to `rate` (TCSETS2); a
+        port whose input speed is `rate` already is left alone."""
+        buf = array.array("i", [0] * 64)
+        try:
+            fcntl.ioctl(port.fd, serialposix.TCGETS2, buf)
+            if buf[9] == rate:  # (struct termios2: c_ispeed, then c_ospeed)
+                return
+            cibaud = getattr(termios, "CIBAUD", termios.CBAUD << 16)
+            buf[2] = (buf[2] & ~cibaud) | (serialposix.BOTHER << 16)  # (IBSHIFT)
+            buf[9] = rate
+            fcntl.ioctl(port.fd, serialposix.TCSETS2, buf)
+        except OSError as e:  # (as pyserial's _set_special_baudrate says it)
+            raise ValueError(f"Failed to set custom baud rate ({rate}): {e}") from e
 
 
 def _win_error(code: int) -> OSError:
