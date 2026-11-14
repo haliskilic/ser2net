@@ -55,11 +55,11 @@ and a running timed recording stops; delete `cert-notices.json` from the data fo
 - **Modbus safe values:** a writable point with `safe_value` and `safe_after_s` is written to
   that value once the broker connection (Sparkplug B with a primary host: that host) has been
   away that long, once per outage. An outage counts from its first loss and ends once the
-  connection has stayed up for 10 s (or the shortest `safe_after_s`), so a broker that keeps
-  taking and dropping the client counts as away all along; nothing is written while it is
-  connected. Logged, shown on the dashboard and in the status (`safe`), and reported by the new
-  notification event *Safe values written* (off unless ticked). Never by a read-only mapping
-  (#118).
+  connection has stayed up for 10 s (or for the longest `safe_after_s` of the mapping's points,
+  when that is less), so a broker that keeps taking and dropping the client counts as away all
+  along; nothing is written while it is connected. Logged, shown on the dashboard and in the
+  status (`safe`), and reported by the new notification event *Safe values written* (off
+  unless ticked). Never by a read-only mapping (#118).
 - **Trace files in the REST API:** `GET /api/v1/mappings/{id}/traces` lists a mapping's trace
   files, `GET …/traces/{name}` downloads one (recorded in the audit log), `DELETE
   …/traces/{name}` and `DELETE …/traces` delete them; as in the web UI's Trace panel they need
@@ -70,8 +70,9 @@ and a running timed recording stops; delete `cert-notices.json` from the data fo
   so a restart keeps it (#119).
 - **TLS certificate about to expire** notification (opt-in `cert_expiring`): the admin UI's and
   every enabled TLS mapping's certificate are read daily; one message when fewer than 30, 7 and
-  1 days are left and once it has ended, not repeated after a restart (a message that did not
-  get through goes out again at the next daily check). `/metrics` has
+  1 days are left and once it has ended, not repeated after a restart, nor when its mapping
+  was disabled or the admin UI's TLS was off for a while; a channel the message did not reach
+  (the mail server down, say) gets it at the next daily check, and only that channel. `/metrics` has
   `ser2net_tls_certificate_expiry_seconds`, `GET /api/v1/status` lists the certificates (#119).
 - **Upload TLS files in the browser** (admins): the admin UI's certificate and key under
   Settings → Admin TLS, a mapping's pair and CA files in its form. Each upload is loaded before
