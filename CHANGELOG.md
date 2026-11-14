@@ -9,8 +9,9 @@ versions follow [Semantic Versioning](https://semver.org/). Detailed notes for e
 ## [3.1.0] — 2026-11-14
 Device-server features from classic ser2net (packing, one writer, opening the port only while
 a client is connected, port pools, connect-out failover), MQTT 5 with Modbus pulses and safe
-values, trace files and TLS files handled from the browser and the REST API, and xterm.js 6 in
-the web console. **Upgrading from 3.0.x:** nothing has to change; every new feature is off
+values, trace files and TLS files handled from the browser and the REST API, xterm.js 6 in
+the web console, and signed RPM packages and recipe builds that know they are distribution
+packages. **Upgrading from 3.0.x:** nothing has to change; every new feature is off
 until it is turned on. **Going back to 3.0.x:** 3.0.x ignores the new settings and drops them
 on its next save (`backups/` keeps the file), so pulsed coils stay on, no safe value is written
 and a running timed recording stops; delete `cert-notices.json` from the data folder first, or
@@ -84,6 +85,23 @@ and a running timed recording stops; delete `cert-notices.json` from the data fo
   once a minute), marked with a `!!` line in running traces, counted in `/metrics`
   (`ser2net_clock_steps_total`) and sent as the opt-in `clock_step` notification; a resume from
   suspend is not a step (#119).
+- **Signed RPM packages in the package repositories:** every `.rpm` on
+  <https://haliskilic.github.io/ser2netweb/> carries the package signing key's signature, and
+  `ser2netweb.repo` has dnf (`gpgcheck=1`) and zypper (`pkg_gpgcheck=1`) check it as well as
+  the signed repository metadata. A `ser2netweb.repo` fetched before keeps working, with the
+  metadata checked; fetch it again (zypper: remove the repository and add it again) to have
+  each package checked. Each package is signed the same way on every deployment; the first
+  deployment with signatures changes every `.rpm` once, so `sudo dnf clean metadata` or `sudo
+  zypper refresh` if dnf or zypper says a package doesn't match what it downloaded (#117).
+- **Distribution packages know what they are:** a package built from the recipes in
+  `packaging/` says `Build: distribution package (<distribution>)` in `--about`, keeps its data
+  in its service's data directory without `--data-dir` (`/var/lib/ser2netweb`; FreeBSD
+  `/var/db/ser2netweb`, MacPorts `/opt/local/var/db/ser2netweb`; the user's data folder stays
+  in use while only it has a `config.json`, as an older package left it), and names the
+  distribution's package for a missing optional feature, instead of being taken for a pip
+  install (#117).
+- **conda-forge recipe** (`packaging/conda-forge/`, submitted to conda-forge), built and tested
+  in CI with rattler-build (#117).
 
 ### Changed
 - **Web console: xterm.js 6.0.0 with `@xterm/addon-fit` 0.11.0** (from 5.5.0 / 0.10.0). The
@@ -111,6 +129,15 @@ and a running timed recording stops; delete `cert-notices.json` from the data fo
   docs/MIGRATING-FROM-SER2NET.md covers packing, open on connect and port pools;
   docs/SIGNING.md notes that SignPath Foundation's free program is not open to ser2netweb
   (#118, #119, #120).
+- The Fedora recipe builds on EPEL 10 (RHEL 10's setuptools 69), and that build has to pass in
+  CI (#117).
+- The distributions' builds run the checks of the dependencies' code ser2netweb builds on
+  again, naming instead of failing what only a distribution's packages do (a patched release, a
+  module left out) (#117).
+- CI runs `docs/REVERSE-PROXY.md`'s nginx configurations as they are, at `/` and under a path
+  (#117).
+- `docs/REVERSE-PROXY.md` gives the nginx block for a path in full; `docs/PACKAGES.md` says to
+  run a rollback of the package repositories from `main` with the tag (#117).
 
 ### Fixed
 - **Windows: a save no longer fails with "Could not save config.json"** (a 400 in the web UI)
@@ -121,6 +148,9 @@ and a running timed recording stops; delete `cert-notices.json` from the data fo
   written another way with another certificate (the certificates' public keys are compared).
 - A note of the trace's own (`!! … bytes not traced`) is written as text in a hex trace too
   (#119).
+- A serial port at a baud rate without a termios constant (250000, 74880, …) got the input
+  speed 38400 on musl systems (Alpine); the input now gets the output's rate, and a port whose
+  driver reports the rate it achieved is set once (#117).
 
 ## [3.0.1] — 2026-11-13
 More ways to install ser2netweb, dependency ranges that distributions can meet, and fixes for

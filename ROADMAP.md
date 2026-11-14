@@ -244,6 +244,8 @@
 - **Operations (#119):** trace files and timed recordings through the REST API, the TLS
   certificate expiry notification, TLS files uploaded in the browser, the clock-step watch.
 - **Web console (#102):** xterm.js 6.
+- **Packaging (#117, PR [#131](https://github.com/haliskilic/ser2netweb/pull/131)):** signed RPMs, a distribution-package install kind,
+  EPEL 10, a conda-forge recipe, nginx reverse-proxy CI.
 
 ---
 
