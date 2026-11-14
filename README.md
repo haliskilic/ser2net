@@ -418,10 +418,10 @@ düzenlemeye gerek yok.
     dolduğunda bir dinleyici (**Eski istemciyi at** ile ya da öncelikli istemci olarak)
     yalnızca başka bir dinleyicinin yerini alır, hiçbir zaman yazanınkini almaz; bir telnet / RFC 2217 dinleyicisi
     BREAK de gönderemez, hat ayarlarını da değiştiremez. MQTT yazmaları ve web konsolu
-    istemci sayılmaz. UDP'de bir dinleyicinin datagramı onu yine de cihazın çıktısını alan
-    karşı taraf yapar (liste yokken olduğu gibi son gönderen); yani gönderen bir dinleyici
-    çıktıyı yazandan devralır: böyle bir eşlemeye bir yanıt adresi ya da UDP hedefleri
-    verin.
+    istemci sayılmaz. UDP'de cihazın çıktısı son gönderen yazana (ya da yanıt adresine)
+    gider: bir dinleyicinin datagramı onu karşı taraf yapmaz, yani bir dinleyici çıktıyı
+    yazandan devralamaz; dinleyicilere de çıktı gitsin isterseniz onları UDP hedefi olarak
+    ekleyin.
   - **Seri portu yalnızca bir istemci bağlıyken aç** (`network.open_on_connect`, TCP
     sunucu, raw / telnet / rfc2217): eşleme port kapalıyken dinler (pano *istemci
     bekleniyor* der, durumda `"waiting": true`), portu ilk istemci için açar (istemci port

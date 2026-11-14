@@ -6,8 +6,9 @@ others only listen.
     device's output; the status lists the listener as listen_only;
   - telnet: a listener's negotiation is still answered, its data and its BREAK are not
     passed on;
-  - UDP: a datagram from an address that is no writer makes it the peer (it gets the
-    output) but is not written; the log names the address once;
+  - UDP: a datagram from an address that is no writer is not written and does not make
+    it the peer (the device's output stays with the writer that sent last); the log names
+    the address once;
   - off (the default, and every config written without the key): everyone writes;
   - with read_only nobody writes; a connect-out mapping has one peer, which writes;
   - with the allow-list and priority clients: they decide who gets a connection, the
@@ -229,20 +230,29 @@ async def _udp():
     bridge.connection_made(transport)
     task = asyncio.create_task(bridge.run())
     try:
+        def output():
+            transport.sent.clear()
+            for c in list(runner._clients):
+                c.feed_from_serial(b"out")
+            return transport.sent
+
         bridge.datagram_received(b"from-a-listener", ("10.0.0.8", 5000))
         bridge.datagram_received(b"more", ("10.0.0.8", 5000))
         await asyncio.sleep(0.05)
         assert not runner._link.writer.data and runner.status.bytes_dropped == 19
         said = [ln for ln in logs if "not written to the device" in ln]
         assert len(said) == 1 and "10.0.0.8" in said[0], logs
-        # it is the peer all the same: the device's output goes to it
-        for c in list(runner._clients):
-            c.feed_from_serial(b"out")
-        assert transport.sent == [(b"out", ("10.0.0.8", 5000))], transport.sent
+        assert output() == [] and bridge.peer is None, "a listener is not made the peer"
         bridge.datagram_received(b"from-the-writer", ("10.0.0.7", 5001))
         await asyncio.sleep(0.05)
         assert bytes(runner._link.writer.data) == b"from-the-writer"
         assert runner.status.bytes_dropped == 19
+        assert output() == [(b"out", ("10.0.0.7", 5001))]
+        # a listener that sends now does not take the output away from the writer
+        bridge.datagram_received(b"mine", ("10.0.0.8", 5000))
+        await asyncio.sleep(0.05)
+        assert output() == [(b"out", ("10.0.0.7", 5001))], "the writer keeps the output"
+        assert runner.status.bytes_dropped == 23
     finally:
         task.cancel()
         try:

@@ -407,9 +407,10 @@ everything from a **password-protected web UI** — no CLI or hand-edited config
     **Kick old client**, or as a priority client) only ever takes another listener's place,
     never a writer's; a telnet / RFC 2217 listener can't send a BREAK or change the line
     settings either. MQTT writes and the web console are not clients.
-    Over UDP a listener's datagram still makes it the peer that gets the device's output
-    (the last sender, as without the list), so a listener that sends takes the output
-    over from the writer: give such a mapping a reply address or UDP targets.
+    Over UDP the device's output goes to the writer that sent last (or to the reply
+    address): a listener's datagram does not make it the peer, so a listener can't take
+    the output away from the writer; to give listeners the output, list them as UDP
+    targets.
   - **Open the serial port only while a client is connected** (`network.open_on_connect`,
     TCP server, raw / telnet / rfc2217): the mapping listens with the port closed (the
     dashboard says *waiting for a client*, `"waiting": true` in the status), opens it for

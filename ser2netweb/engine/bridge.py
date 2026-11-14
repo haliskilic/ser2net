@@ -2300,7 +2300,9 @@ class _UdpBridge(asyncio.DatagramProtocol):
         if not r._access.allowed(addr[0]):
             self._refused_log(f"rejected datagram from {_udp_label(addr)}: not in allowed list")
             return
-        if self.reply_to is None:
+        # (with writer_client_ips only a writer's datagram moves the peer: a listener that
+        # sends would take the device's output away from the writer)
+        if self.reply_to is None and r._access.may_write(addr[0]):
             self._heard_from(addr)
         if r.mapping.network.read_only or not data:
             return
@@ -2328,9 +2330,9 @@ class _UdpBridge(asyncio.DatagramProtocol):
         return peer
 
     def _heard_from(self, addr) -> None:
-        """No reply address: the sender of an allowed datagram gets the device's output
-        from now on. A new sender is logged (a change at most once a minute) and listed
-        with its own connection time."""
+        """No reply address: the sender of an allowed datagram (with writer_client_ips: a
+        writer's) gets the device's output from now on. A new sender is logged (a change
+        at most once a minute) and listed with its own connection time."""
         old = self.peer
         if old is not None and old.addr == addr:
             old.last_heard = time.monotonic()
