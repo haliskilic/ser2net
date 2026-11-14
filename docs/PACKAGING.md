@@ -252,7 +252,7 @@ side.
 | Distribution | Recipe | Built in CI in | Linter |
 |---|---|---|---|
 | Debian, Ubuntu | `packaging/debian/debian/` (source and binary package `ser2netweb`) | `debian:unstable`, `debian:trixie`, `ubuntu:26.04` | lintian; autopkgtest runs `debian/tests` |
-| Fedora, EPEL | `packaging/fedora/ser2netweb.spec` | `fedora:rawhide`, `fedora:latest`; `almalinux:10` with EPEL (may fail) | rpmlint |
+| Fedora, EPEL | `packaging/fedora/ser2netweb.spec` | `fedora:rawhide`, `fedora:latest`; `almalinux:10` with EPEL and CRB | rpmlint |
 | openSUSE | `packaging/opensuse/ser2netweb.spec`, `ser2netweb.changes` | `opensuse/tumbleweed` | rpmlint |
 | Arch Linux | `packaging/arch/ser2netweb/PKGBUILD`, `.SRCINFO` | `archlinux:latest` | namcap |
 | Alpine | `packaging/alpine/ser2netweb/APKBUILD` with an OpenRC service | `alpine:edge` | apkbuild-lint |
@@ -337,11 +337,15 @@ as in ser2netweb's own CI, where a changed pin still fails.
   `bundled(js-xterm-addon-fit)`, `bundled(python3dist(pyserial-asyncio-fast))`; the npm
   releases of the browser libraries are `Source4`–`Source6`, so the SRPM carries their
   sources.
-- **EPEL 10 is blocked:** RHEL 10's `python3-setuptools` is 69, and `pyproject.toml` needs
-  setuptools 77 (its licence fields, PEP 639): `%pyproject_buildrequires` finds no
-  `python3dist(setuptools) >= 77` (the CI leg on AlmaLinux 10 shows it and may fail).
-  `python3-authlib` 1.3.2 there is also below the OIDC extra's 1.4.0, a `Recommends` only.
-  RHEL 10 machines use the release's `.rpm` or the DNF repository meanwhile.
+- **EPEL 10:** RHEL 10's `python3-setuptools` is 69, older than the licence fields of
+  `pyproject.toml` (PEP 639's `license = "AGPL-3.0-only"` and `license-files`, setuptools
+  77). On RHEL 10 and older (`%bcond old_setuptools`) `%prep` takes them out of the build's
+  copy, as FreeBSD's port does (`license = {text = …}`, no `license-files`, `setuptools`
+  without a version), and `%install` puts the licence texts into the `.dist-info`'s
+  `licenses/`, where setuptools 77 would and the web UI's `/licenses` page reads them. The
+  PyPI files keep the PEP 639 metadata; `tests/test_distro_recipes.py` checks that the patch
+  changes nothing else. The AlmaLinux 10 leg has to pass like the others.
+  `python3-authlib` 1.3.2 there is below the OIDC extra's 1.4.0, a `Recommends` only.
 - **To submit:** a Fedora account (FAS), `fedora-review -b <bug>` locally, a review request
   in Red Hat Bugzilla (product Fedora, component Package Review) with links to
   the spec and SRPM (a Copr build or fedorapeople space), and a sponsor into the `packager`

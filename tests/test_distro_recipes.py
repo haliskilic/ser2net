@@ -31,7 +31,12 @@ containers: .github/workflows/distro-packages.yml):
     AGPL-3.0-only licence, a paragraph for every browser library and copied module;
     packaging/debian/missing_sources.py fetches the sources of every static file;
   * distro-packages.yml runs for a pull request that changes a recipe, by hand (a tag) and
-    weekly, builds every target, reads only and gates nothing (ci.yml doesn't run it).
+    weekly, builds every target, each of which has to pass, reads only and gates nothing
+    (ci.yml doesn't run it);
+  * Fedora's spec builds on RHEL 10's setuptools 69 (EPEL 10): %prep takes PEP 639's
+    licence fields out of pyproject.toml there only, as FreeBSD's port does, leaving a
+    pyproject.toml older setuptools reads with the same licence, and %install puts the
+    licence texts into the .dist-info's licenses/ as setuptools 77 would.
 Run: python3 tests/test_distro_recipes.py   (stdlib only; binds nothing)
 """
 import datetime as dt
@@ -432,6 +437,68 @@ def test_distro_file():
           "the command for each extra's package  OK")
 
 
+def _sed(script, text):
+    """`text` after the sed expressions `script` (s|a|b| and /a/,/b/d, BRE as GNU sed)."""
+    def bre(rx):
+        return rx.replace(r"\(", "(").replace(r"\)", ")")
+    lines = text.split("\n")
+    for expr in script:
+        m = re.fullmatch(r"s\|(.*)\|(.*)\|", expr)
+        if m:
+            rx, rep = bre(m.group(1)), m.group(2).replace("\\1", "\\g<1>")
+            lines = [re.sub(rx, rep, ln) for ln in lines]
+            continue
+        m = re.fullmatch(r"/(.*)/,/(.*)/d", expr)
+        assert m, expr
+        out, inside = [], False
+        for ln in lines:
+            if not inside and re.search(bre(m.group(1)), ln):
+                inside = True
+            if inside:
+                inside = not re.search(bre(m.group(2)), ln)
+                continue
+            out.append(ln)
+        lines = out
+    return "\n".join(lines)
+
+
+def test_old_setuptools():
+    spec = read("fedora", "ser2netweb.spec")
+    assert ("%if 0%{?rhel} && 0%{?rhel} <= 10\n%bcond_without old_setuptools\n%else\n"
+            "%bcond_with old_setuptools\n%endif\n") in spec, "EPEL 10 only"
+    prep = spec.split("\n%prep\n", 1)[1].split("\n%generate_buildrequires", 1)[0]
+    block = re.search(r"(?ms)^%if %\{with old_setuptools\}\n(?:#.*?\n)*sed -i (.*?) pyproject\.toml"
+                      r"\n%endif$", prep).group(1)
+    script = re.findall(r"-e '([^']*)'", block)
+    makefile = read("freebsd", "net", "ser2netweb", "Makefile").replace("$$", "$")
+    port = re.search(r"(?ms)^post-patch:\n\t@\$\{REINPLACE_CMD\} (.*?) \$\{WRKSRC\}/pyproject",
+                     makefile).group(1)
+    assert script == re.findall(r"-e '([^']*)'", port), "the same patch as FreeBSD's port"
+    with open(os.path.join(ROOT, "pyproject.toml"), encoding="utf-8") as fh:
+        original = fh.read()
+    patched = tomllib.loads(_sed(script, original))
+    want = tomllib.loads(original)
+    assert patched["build-system"]["requires"] == ["setuptools"], patched["build-system"]
+    assert patched["project"].pop("license") == {"text": want["project"].pop("license")}
+    assert "license-files" not in patched["project"]
+    licence_files = want["project"].pop("license-files")
+    assert patched["project"] == want["project"], "nothing else changes"
+    assert want["build-system"]["requires"] == ["setuptools>=77"], "(PyPI's stays as it is)"
+    # the licence texts where setuptools 77 would put them, and packaged
+    install = spec.split("\n%install\n", 1)[1].split("\n%check\n", 1)[0]
+    copied = re.search(r"(?ms)^%if %\{with old_setuptools\}\n(.*?)^%endif$", install).group(1)
+    assert "licenses=%{buildroot}%{python3_sitelib}/ser2netweb-%{version}.dist-info/licenses" \
+        in copied
+    named = re.findall(r"install -Dpm 0644 -t \$licenses(\S*) (.*)", copied)
+    sources = [(folder.strip("/"), n) for folder, names in named for n in names.split()]
+    assert all(folder == os.path.dirname(n) for folder, n in sources), "paths kept"
+    assert [n for _f, n in sources] == licence_files, sources
+    assert "%if %{with old_setuptools}\n%license %{python3_sitelib}/ser2netweb-%{version}" \
+           ".dist-info/licenses/\n%endif" in spec
+    print("Fedora's spec on EPEL 10: pyproject.toml without PEP 639's fields for setuptools "
+          "69, as FreeBSD's port, the licence texts in the .dist-info's licenses/  OK")
+
+
 def test_bump_check():
     now = dt.datetime(2026, 11, 13, tzinfo=dt.timezone.utc)
     recipes = br.debian_version(read("debian", "debian", "changelog"))  # (the recipes' release)
@@ -550,7 +617,7 @@ def test_workflow():
                   "fedora:latest", "almalinux:10", "opensuse/tumbleweed", "archlinux:latest",
                   "alpine:edge"):
         assert image in text, image
-    assert "continue-on-error: ${{ matrix.target == 'epel' }}" in all_jobs["rpm"]
+    assert "continue-on-error" not in text, "every target has to pass, EPEL 10 too"
     assert "distro-packages" not in read_workflow("ci.yml"), "a merge condition"
     with open(os.path.join(HERE, "distro_build.sh"), encoding="utf-8") as fh:
         script = fh.read()
@@ -567,6 +634,7 @@ if __name__ == "__main__":
     test_units()
     test_check_steps()
     test_distro_file()
+    test_old_setuptools()
     test_bump_check()
     test_debian_copyright()
     test_debian_layout()
